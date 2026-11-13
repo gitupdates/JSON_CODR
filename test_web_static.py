@@ -107,6 +107,20 @@ class WebStaticTests(unittest.TestCase):
             }.issubset(parser.ids)
         )
 
+    def test_automatic_dependencies_use_ordered_live_cli_queue(self):
+        html = self.client.get("/").text
+        javascript = self.client.get("/static/app.js").text
+
+        self.assertLess(
+            html.index('/static/dependency_install_queue.js'),
+            html.index('/static/app.js'),
+        )
+        self.assertIn("createDependencyInstallQueue(async (command)", javascript)
+        self.assertIn("runTerminalCommand(command)", javascript)
+        self.assertIn("suggestion.automatic", javascript)
+        self.assertIn("dependencyInstallQueue.enqueue(suggestion.command)", javascript)
+        self.assertIn('elements.terminalStatus.textContent = "Installing prerequisites..."', javascript)
+
     def test_skill_library_controls_are_present(self):
         response = self.client.get("/")
         parser = IdCollector()

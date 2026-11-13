@@ -74,6 +74,22 @@ let skillsChangeRevision = 0;
 let currentThemeMode = normalizeThemeMode(localStorage.getItem("json_codr_theme"));
 let persistedThemeMode = null;
 
+const dependencyInstallQueue = createDependencyInstallQueue(async (command) => {
+  if (elements.terminalPanel.hidden) {
+    elements.terminalPanel.hidden = false;
+    elements.terminalToggle.setAttribute("aria-expanded", "true");
+    localStorage.setItem("json_codr_terminal_open", "true");
+  }
+  elements.terminalStatus.textContent = "Installing prerequisites...";
+  appendTerminalOutput(`Installing prerequisites: ${command}\n`);
+  try {
+    await runTerminalCommand(command);
+  } catch (error) {
+    appendTerminalOutput(`Error: ${error.message}\n`);
+    throw error;
+  }
+});
+
 function normalizeThemeMode(mode) {
   return VALID_THEME_MODES.has(mode) ? mode : "dark";
 }
@@ -124,15 +140,16 @@ async function ensureTerminal() {
   terminalSocket.addEventListener("close", () => { elements.terminalStatus.textContent = "Disconnected"; });
 }
 
-async function runTerminalCommand() {
-  const command = elements.terminalInput.value;
+async function runTerminalCommand(command = null) {
+  const fromInput = command === null;
+  command = fromInput ? elements.terminalInput.value : command;
   if (!command.trim()) return;
   await ensureTerminal();
   if (terminalSocket.readyState !== WebSocket.OPEN) {
     await new Promise((resolve) => terminalSocket.addEventListener("open", resolve, { once: true }));
   }
   terminalSocket.send(JSON.stringify({ type: "input", data: `${command}\r\n` }));
-  elements.terminalInput.value = "";
+  if (fromInput) elements.terminalInput.value = "";
 }
 
 async function ensureSession() {
@@ -392,6 +409,7 @@ async function loadDependencies() {
     });
     row.append(details, send);
     elements.dependencyList.append(row);
+    if (suggestion.automatic) dependencyInstallQueue.enqueue(suggestion.command);
   }
 }
 

@@ -120,33 +120,33 @@ Commit: `git commit -m "Add dependency preflight checks"`
 - Produces: `createDependencyInstallQueue(runCommand)` with `enqueue(command) -> boolean`.
 - Produces: `runTerminalCommand(command?: string) -> Promise<void>` for manual and automatic execution.
 
-- [ ] **Step 1: Write failing queue behavior tests**
+- [x] **Step 1: Write failing queue behavior tests**
 
 Use Node from `test_dependency_install_queue.py` to prove duplicate commands dispatch once, distinct commands dispatch in input order, and a rejected command does not poison later queue entries.
 
-- [ ] **Step 2: Run the queue tests and verify RED**
+- [x] **Step 2: Run the queue tests and verify RED**
 
 Run: `python -m unittest -v test_dependency_install_queue`
 Expected: FAIL because `web/dependency_install_queue.js` does not exist.
 
-- [ ] **Step 3: Implement the queue module**
+- [x] **Step 3: Implement the queue module**
 
 Export through CommonJS for Node tests and `window.createDependencyInstallQueue` for the browser. Mark a command seen before running it; keep a caught tail promise so later commands continue after failure.
 
-- [ ] **Step 4: Write failing browser contract tests**
+- [x] **Step 4: Write failing browser contract tests**
 
 Assert the queue script loads before `app.js`, automatic suggestions are enqueued, the terminal panel opens, and the exact suggestion command reaches `runTerminalCommand(command)`.
 
-- [ ] **Step 5: Run browser tests and verify RED**
+- [x] **Step 5: Run browser tests and verify RED**
 
 Run: `python -m unittest -v test_web_static`
 Expected: FAIL because the app does not consume automatic suggestions.
 
-- [ ] **Step 6: Integrate automatic dispatch**
+- [x] **Step 6: Integrate automatic dispatch**
 
 Load the queue module before `app.js`; adapt `runTerminalCommand` to accept an optional command; enqueue each automatic suggestion after rendering; open the terminal panel, show an `Installing prerequisites` status, send the validated command, and leave failures visible without retry.
 
-- [ ] **Step 7: Run Task 2 tests and commit**
+- [x] **Step 7: Run Task 2 tests and commit**
 
 Run: `python -m unittest -v test_dependency_install_queue test_web_static`
 Expected: PASS.
