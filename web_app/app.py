@@ -1,4 +1,8 @@
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from web_app.models import ChatRequest, ChatResult
 from web_app.ollama_service import (
@@ -11,6 +15,12 @@ from web_app.ollama_service import (
 
 def create_app(service: OllamaService) -> FastAPI:
     application = FastAPI(title="JSON_CODR", version="V1.0.0")
+    web_root = Path(__file__).resolve().parent.parent / "web"
+    application.mount("/static", StaticFiles(directory=web_root), name="static")
+
+    @application.get("/", include_in_schema=False)
+    async def index():
+        return FileResponse(web_root / "index.html")
 
     @application.get("/api/health")
     async def health():

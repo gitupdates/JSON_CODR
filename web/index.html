@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>JSON_CODR · Local model console</title>
+    <link rel="stylesheet" href="/static/app.css" />
+  </head>
+  <body>
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="JSON CODR home">
+          <span class="brand-mark">{ }</span>
+          <span><strong>JSON_CODR</strong><small>V1.0.0 · local model console</small></span>
+        </a>
+        <div id="health-status" class="health" role="status" aria-live="polite">
+          <span class="health-dot"></span><span>Connecting</span>
+        </div>
+      </header>
+
+      <section class="hero">
+        <p class="eyebrow">STRUCTURED INFERENCE / LOCAL ONLY</p>
+        <h1>One prompt.<br /><span>One precise model.</span></h1>
+        <p class="intro">Choose a local coding model and receive a validated response with a clean summary and full result.</p>
+      </section>
+
+      <section class="workspace" aria-label="Model chat workspace">
+        <form id="chat-form" class="composer">
+          <div class="field-row">
+            <label for="model-select">Active model</label>
+            <span id="model-count" class="meta">Loading roster…</span>
+          </div>
+          <div class="select-wrap">
+            <select id="model-select" name="model" aria-describedby="model-detail" disabled></select>
+          </div>
+          <div id="model-detail" class="model-detail">Waiting for Ollama model metadata.</div>
+
+          <div class="field-row prompt-label">
+            <label for="prompt-input">Prompt</label>
+            <span class="meta"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> to run</span>
+          </div>
+          <textarea id="prompt-input" name="prompt" rows="9" placeholder="Describe the code, review, or explanation you need…" required></textarea>
+
+          <div class="actions">
+            <button id="submit-button" class="primary" type="submit" disabled>
+              <span>Run model</span><span aria-hidden="true">↗</span>
+            </button>
+            <button id="cancel-button" class="secondary" type="button" hidden>Cancel</button>
+            <span id="request-status" class="request-status" role="status" aria-live="polite"></span>
+          </div>
+        </form>
+
+        <section class="response" aria-label="Structured response">
+          <div class="response-head">
+            <span>MODEL RESPONSE</span><span id="response-model">Awaiting prompt</span>
+          </div>
+          <div id="empty-state" class="empty-state">
+            <div class="empty-glyph">_</div>
+            <p>Your validated response will appear here.</p>
+          </div>
+          <div id="result-state" hidden>
+            <article>
+              <p class="result-label">SUMMARY</p>
+              <h2 id="summary-output"></h2>
+            </article>
+            <article>
+              <p class="result-label">CONTENT</p>
+              <pre id="content-output"></pre>
+            </article>
+          </div>
+          <div id="error-output" class="error" role="alert" hidden></div>
+        </section>
+      </section>
+
+      <footer><span>Runs entirely on this machine</span><span>127.0.0.1 · Ollama</span></footer>
+    </main>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>
