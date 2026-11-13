@@ -116,6 +116,7 @@ class SkillPack(BaseModel):
 class SkillUpdateRequest(BaseModel):
     content: str
     enabled: bool = True
+    session_id: Optional[str] = None
 
 
 class SkillSelectionRequest(BaseModel):

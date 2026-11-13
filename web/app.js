@@ -202,7 +202,7 @@ async function loadSkills() {
       edit.type = "button";
       edit.textContent = "Edit";
       edit.addEventListener("click", () => {
-        editingSkill = { packId: pack.id, skillId: skill.id, enabled: skill.enabled };
+        editingSkill = { packId: pack.id, skillId: skill.id, name: skill.name, enabled: skill.enabled };
         elements.skillEditor.value = skill.content;
         elements.skillEditor.disabled = false;
         elements.skillEnabled.checked = skill.enabled;
@@ -408,12 +408,24 @@ elements.skillDeduplicate.addEventListener("click", async () => {
 });
 elements.skillSave.addEventListener("click", async () => {
   if (!editingSkill) return;
+  elements.skillSave.disabled = true;
   const response = await fetch(`/api/skills/${editingSkill.packId}/${editingSkill.skillId}`, {
     method: "PATCH", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content: elements.skillEditor.value, enabled: elements.skillEnabled.checked }),
+    body: JSON.stringify({
+      content: elements.skillEditor.value,
+      enabled: elements.skillEnabled.checked,
+      session_id: sessionId,
+    }),
   });
-  if (!response.ok) return showError((await response.json()).detail || "Unable to save skill");
+  if (!response.ok) {
+    elements.skillSave.disabled = false;
+    return showError((await response.json()).detail || "Unable to save skill");
+  }
+  elements.skillConversionStatus.textContent = elements.skillEnabled.checked
+    ? `Saved and applied ${editingSkill.name} to this session`
+    : `Saved and disabled ${editingSkill.name}`;
   await loadSkills();
+  elements.skillSave.disabled = false;
 });
 elements.skillRemovePack.addEventListener("click", async () => {
   if (!editingSkill || !confirm("Remove this installed skill pack? The imported archive will be preserved.")) return;

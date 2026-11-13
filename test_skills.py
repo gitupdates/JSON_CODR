@@ -146,6 +146,34 @@ class SkillLibraryTests(unittest.TestCase):
         self.assertEqual(client.delete(f'/api/skills/{installed["id"]}').status_code, 204)
         self.assertEqual(client.get("/api/skills").json(), [])
 
+    def test_api_save_and_apply_updates_skill_and_selects_it_for_session(self):
+        session = self.workspace.create_session()
+        attachments = AttachmentService(self.workspace)
+        record = attachments.import_stream(
+            session.id,
+            "skills.zip",
+            io.BytesIO(archive({"skills/review/SKILL.md": "---\nname: review\n---\nOriginal instructions"})),
+        )
+        client = TestClient(create_app(FakeOllamaService(), self.workspace, attachments))
+        installed = client.post(
+            f"/api/sessions/{session.id}/attachments/{record.id}/skill-install"
+        ).json()
+        skill_id = installed["skills"][0]["id"]
+
+        saved = client.patch(
+            f'/api/skills/{installed["id"]}/{skill_id}',
+            json={
+                "content": "Updated and applied instructions",
+                "enabled": True,
+                "session_id": session.id,
+            },
+        )
+
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(saved.json()["content"], "Updated and applied instructions")
+        selection = f'{installed["id"]}:{skill_id}'
+        self.assertEqual(client.get(f"/api/sessions/{session.id}").json()["selected_skill_ids"], [selection])
+
     def test_api_rejects_duplicate_install_and_exposes_cleanup(self):
         session = self.workspace.create_session()
         attachments = AttachmentService(self.workspace)

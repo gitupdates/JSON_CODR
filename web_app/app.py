@@ -207,9 +207,20 @@ def create_app(
     @application.patch("/api/skills/{pack_id}/{skill_id}")
     async def update_skill(pack_id: str, skill_id: str, request: SkillUpdateRequest):
         try:
-            return skill_library.update_skill(pack_id, skill_id, request.content, request.enabled)
+            updated = skill_library.update_skill(pack_id, skill_id, request.content, request.enabled)
+            if request.session_id:
+                session = workspace.get_session(request.session_id)
+                selection = f"{pack_id}:{skill_id}"
+                selected = [item for item in session.selected_skill_ids if item != selection]
+                if request.enabled:
+                    selected.append(selection)
+                session.selected_skill_ids = selected
+                workspace.save_manifest(session)
+            return updated
+        except InvalidSessionId as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
         except KeyError as error:
-            raise HTTPException(status_code=404, detail="Skill not found") from error
+            raise HTTPException(status_code=404, detail="Skill or session not found") from error
 
     @application.delete("/api/skills/{pack_id}", status_code=204)
     async def remove_skill_pack(pack_id: str):
