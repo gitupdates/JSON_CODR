@@ -73,6 +73,8 @@ class WebStaticTests(unittest.TestCase):
         javascript = self.client.get("/static/app.js").text
         self.assertIn("/api/sessions", javascript)
         self.assertIn("navigator.clipboard", javascript)
+        self.assertIn("/original", javascript)
+        self.assertIn("/retry", javascript)
 
 
 if __name__ == "__main__":

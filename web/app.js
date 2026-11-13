@@ -59,7 +59,22 @@ async function loadAttachments() {
       await fetch(`/api/sessions/${sessionId}/attachments/${item.id}`, { method: "DELETE" });
       await loadAttachments();
     });
-    row.append(label, remove);
+    const download = document.createElement("a");
+    download.textContent = "Download";
+    download.href = `/api/sessions/${sessionId}/attachments/${item.id}/original`;
+    download.className = "attachment-action";
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.textContent = "Retry";
+    retry.addEventListener("click", async () => {
+      const response = await fetch(`/api/sessions/${sessionId}/attachments/${item.id}/retry`, { method: "POST" });
+      if (!response.ok) showError((await response.json()).detail || "Extraction retry failed");
+      await loadAttachments();
+    });
+    const actions = document.createElement("div");
+    actions.className = "attachment-actions";
+    actions.append(download, retry, remove);
+    row.append(label, actions);
     elements.attachmentList.append(row);
   }
 }

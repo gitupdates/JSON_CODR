@@ -91,6 +91,28 @@ class AttachmentServiceTests(unittest.TestCase):
             204,
         )
 
+    def test_http_original_download_and_extraction_retry(self):
+        client = TestClient(create_app(FakeOllamaService(), self.workspace, self.service))
+        upload = client.post(
+            f"/api/sessions/{self.session.id}/attachments",
+            files={"file": ("review.txt", b"review me", "text/plain")},
+        )
+        attachment_id = upload.json()["id"]
+
+        original = client.get(
+            f"/api/sessions/{self.session.id}/attachments/{attachment_id}/original"
+        )
+        self.assertEqual(original.status_code, 200)
+        self.assertEqual(original.content, b"review me")
+        self.assertIn("attachment", original.headers["content-disposition"])
+        self.assertEqual(original.headers["x-content-type-options"], "nosniff")
+
+        retried = client.post(
+            f"/api/sessions/{self.session.id}/attachments/{attachment_id}/retry"
+        )
+        self.assertEqual(retried.status_code, 200)
+        self.assertEqual(retried.json()["extraction_state"], "ready")
+
 
 if __name__ == "__main__":
     unittest.main()

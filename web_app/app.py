@@ -103,6 +103,28 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Attachment not found") from error
 
+    @application.get("/api/sessions/{session_id}/attachments/{attachment_id}/original")
+    async def download_original(session_id: str, attachment_id: str):
+        try:
+            path, record = attachments.original_path(session_id, attachment_id)
+            return FileResponse(
+                path,
+                media_type="application/octet-stream",
+                filename=record.display_name,
+                headers={"X-Content-Type-Options": "nosniff"},
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Attachment not found") from error
+
+    @application.post("/api/sessions/{session_id}/attachments/{attachment_id}/retry")
+    async def retry_attachment(session_id: str, attachment_id: str):
+        try:
+            return attachments.retry(session_id, attachment_id)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Attachment not found") from error
+
     @application.patch("/api/sessions/{session_id}/attachments/{attachment_id}")
     async def update_attachment(session_id: str, attachment_id: str, request: AttachmentUpdate):
         try:

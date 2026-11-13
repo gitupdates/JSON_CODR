@@ -142,6 +142,31 @@ class AttachmentService:
         path = self.workspace.sessions_root / session_id / "extracted" / record.extracted_name
         return {"text": path.read_text(encoding="utf-8")}
 
+    def original_path(self, session_id: str, attachment_id: str) -> tuple[Path, AttachmentRecord]:
+        session = self.workspace.get_session(session_id)
+        record = self._find(session.attachments, attachment_id)
+        if not record.storage_name:
+            raise KeyError(attachment_id)
+        path = self.workspace.sessions_root / session_id / "originals" / record.storage_name
+        if not path.is_file():
+            raise KeyError(attachment_id)
+        return path, record
+
+    def retry(self, session_id: str, attachment_id: str) -> AttachmentRecord:
+        session = self.workspace.get_session(session_id)
+        record = self._find(session.attachments, attachment_id)
+        path, _ = self.original_path(session_id, attachment_id)
+        result = self.extraction.extract(path, record.detected_type or "text/plain")
+        extracted = self.workspace.sessions_root / session_id / "extracted"
+        extracted.mkdir(exist_ok=True)
+        record.extracted_name = record.extracted_name or f"{record.id}.txt"
+        (extracted / record.extracted_name).write_text(result.text, encoding="utf-8")
+        record.extraction_state = ExtractionState.ready
+        record.warnings = result.warnings
+        record.included = True
+        self.workspace.save_manifest(session)
+        return record
+
     def remove(self, session_id: str, attachment_id: str) -> None:
         session = self.workspace.get_session(session_id)
         record = self._find(session.attachments, attachment_id)
