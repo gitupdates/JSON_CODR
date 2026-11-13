@@ -1,6 +1,8 @@
 import hashlib
 import os
 import uuid
+import zipfile
+from io import BytesIO
 from pathlib import Path, PurePath
 from typing import BinaryIO
 
@@ -110,6 +112,10 @@ class AttachmentService:
             return "application/pdf"
         if suffix == ".rtf":
             return "application/rtf"
+        if suffix == ".zip":
+            return "application/zip"
+        if suffix == ".7z":
+            return "application/x-7z-compressed"
         image_types = {
             ".png": "image/png",
             ".jpg": "image/jpeg",
@@ -166,6 +172,27 @@ class AttachmentService:
         record.included = True
         self.workspace.save_manifest(session)
         return record
+
+    def export_zip(self, session_id: str) -> bytes:
+        session = self.workspace.get_session(session_id)
+        output = BytesIO()
+        used_names: set[str] = set()
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for record in session.attachments:
+                if not record.storage_name:
+                    continue
+                source = self.workspace.sessions_root / session_id / "originals" / record.storage_name
+                if not source.is_file():
+                    continue
+                candidate = record.display_name
+                stem, suffix = Path(candidate).stem, Path(candidate).suffix
+                number = 2
+                while candidate.casefold() in used_names:
+                    candidate = f"{stem}-{number}{suffix}"
+                    number += 1
+                used_names.add(candidate.casefold())
+                archive.writestr(candidate, source.read_bytes())
+        return output.getvalue()
 
     def remove(self, session_id: str, attachment_id: str) -> None:
         session = self.workspace.get_session(session_id)

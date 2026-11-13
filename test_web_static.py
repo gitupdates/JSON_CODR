@@ -76,6 +76,24 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("/original", javascript)
         self.assertIn("/retry", javascript)
 
+    def test_live_cli_bottom_panel_controls_are_present(self):
+        response = self.client.get("/")
+        parser = IdCollector()
+        parser.feed(response.text)
+        self.assertTrue(
+            {
+                "terminal-toggle",
+                "terminal-panel",
+                "terminal-output",
+                "terminal-input",
+                "terminal-run",
+                "terminal-stop",
+            }.issubset(parser.ids)
+        )
+        javascript = self.client.get("/static/app.js").text
+        self.assertIn("/api/terminals", javascript)
+        self.assertIn("/ws/terminals/", javascript)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,7 @@
 import io
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -112,6 +113,19 @@ class AttachmentServiceTests(unittest.TestCase):
         )
         self.assertEqual(retried.status_code, 200)
         self.assertEqual(retried.json()["extraction_state"], "ready")
+
+    def test_http_exports_original_attachments_as_zip(self):
+        client = TestClient(create_app(FakeOllamaService(), self.workspace, self.service))
+        self.service.import_text(self.session.id, "first", "notes.txt")
+        self.service.import_text(self.session.id, "second", "notes.txt")
+
+        response = client.get(f"/api/sessions/{self.session.id}/archive.zip")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "application/zip")
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            self.assertEqual(sorted(archive.namelist()), ["notes-2.txt", "notes.txt"])
+            self.assertEqual(archive.read("notes.txt"), b"first")
 
 
 if __name__ == "__main__":

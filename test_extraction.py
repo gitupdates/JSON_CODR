@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 from docx import Document
@@ -120,6 +121,47 @@ class ExtractionServiceTests(unittest.TestCase):
         self.assertIn("Review", result.text)
         self.assertIn("this", result.text)
         self.assertNotIn("\\b", result.text)
+
+    def test_extracts_supported_files_from_zip_without_writing_entries(self):
+        source = self.root / "project.zip"
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.writestr("src/main.py", "print('review me')")
+            archive.writestr("docs/notes.md", "# Review notes")
+            archive.writestr("assets/binary.exe", b"\x00\x01")
+
+        result = ExtractionService().extract(source, "application/zip")
+
+        self.assertIn("FILE: src/main.py", result.text)
+        self.assertIn("print('review me')", result.text)
+        self.assertIn("FILE: docs/notes.md", result.text)
+        self.assertNotIn("binary.exe\n\x00", result.text)
+
+    def test_rejects_zip_traversal_and_uncompressed_size_over_limit(self):
+        traversal = self.root / "traversal.zip"
+        with zipfile.ZipFile(traversal, "w") as archive:
+            archive.writestr("../outside.txt", "escape")
+        with self.assertRaisesRegex(ValueError, "unsafe path"):
+            ExtractionService().extract(traversal, "application/zip")
+
+        oversized = self.root / "oversized.zip"
+        with zipfile.ZipFile(oversized, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("large.txt", "x" * 101)
+        with self.assertRaisesRegex(ValueError, "uncompressed size"):
+            ExtractionService(max_archive_bytes=100).extract(oversized, "application/zip")
+
+    def test_extracts_supported_files_from_7z(self):
+        import py7zr
+
+        source = Path(self.temporary_directory.name) / "context.7z"
+        note = Path(self.temporary_directory.name) / "note.md"
+        note.write_text("seven zip context", encoding="utf-8")
+        with py7zr.SevenZipFile(source, "w") as archive:
+            archive.write(note, "docs/note.md")
+
+        result = ExtractionService().extract(source, "application/x-7z-compressed")
+
+        self.assertIn("FILE: docs/note.md", result.text)
+        self.assertIn("seven zip context", result.text)
 
 
 if __name__ == "__main__":

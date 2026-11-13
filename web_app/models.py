@@ -69,3 +69,8 @@ class ClipboardTextRequest(BaseModel):
 
 class AttachmentUpdate(BaseModel):
     included: bool
+
+
+class TerminalCreateRequest(BaseModel):
+    shell: Literal["powershell", "cmd"] = "powershell"
+    cwd: Optional[str] = None

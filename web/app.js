@@ -21,11 +21,62 @@ const elements = {
   pasteTextButton: document.querySelector("#paste-text-button"),
   attachmentList: document.querySelector("#attachment-list"),
   attachmentPreview: document.querySelector("#attachment-preview"),
+  exportArchive: document.querySelector("#export-archive"),
+  terminalToggle: document.querySelector("#terminal-toggle"),
+  terminalPanel: document.querySelector("#terminal-panel"),
+  terminalOutput: document.querySelector("#terminal-output"),
+  terminalInput: document.querySelector("#terminal-input"),
+  terminalRun: document.querySelector("#terminal-run"),
+  terminalStop: document.querySelector("#terminal-stop"),
+  terminalStatus: document.querySelector("#terminal-status"),
 };
 
 let models = [];
 let activeRequest = null;
 let sessionId = localStorage.getItem("json_codr_session");
+let terminalId = null;
+let terminalSocket = null;
+
+function appendTerminalOutput(text) {
+  elements.terminalOutput.textContent += text;
+  elements.terminalOutput.scrollTop = elements.terminalOutput.scrollHeight;
+}
+
+async function ensureTerminal() {
+  if (terminalSocket?.readyState === WebSocket.OPEN) return;
+  elements.terminalStatus.textContent = "Starting...";
+  const response = await fetch("/api/terminals", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
+    body: JSON.stringify({ shell: "powershell" }),
+  });
+  if (!response.ok) throw new Error((await response.json()).detail || "Unable to start terminal");
+  const terminal = await response.json();
+  terminalId = terminal.id;
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  terminalSocket = new WebSocket(`${protocol}//${location.host}/ws/terminals/${terminalId}`);
+  terminalSocket.addEventListener("open", () => {
+    elements.terminalStatus.textContent = `PowerShell · PID ${terminal.pid}`;
+    appendTerminalOutput(`PowerShell ready in ${terminal.cwd}\n`);
+  });
+  terminalSocket.addEventListener("message", (event) => {
+    const message = JSON.parse(event.data);
+    if (message.type === "output") appendTerminalOutput(message.data);
+    if (message.type === "exit") elements.terminalStatus.textContent = "Stopped";
+  });
+  terminalSocket.addEventListener("close", () => { elements.terminalStatus.textContent = "Disconnected"; });
+}
+
+async function runTerminalCommand() {
+  const command = elements.terminalInput.value;
+  if (!command.trim()) return;
+  await ensureTerminal();
+  if (terminalSocket.readyState !== WebSocket.OPEN) {
+    await new Promise((resolve) => terminalSocket.addEventListener("open", resolve, { once: true }));
+  }
+  terminalSocket.send(JSON.stringify({ type: "input", data: `${command}\r\n` }));
+  elements.terminalInput.value = "";
+}
 
 async function ensureSession() {
   if (sessionId && (await fetch(`/api/sessions/${sessionId}`)).ok) return sessionId;
@@ -37,6 +88,7 @@ async function ensureSession() {
 
 async function loadAttachments() {
   await ensureSession();
+  elements.exportArchive.href = `/api/sessions/${sessionId}/archive.zip`;
   const attachments = await fetch(`/api/sessions/${sessionId}/attachments`).then((response) => response.json());
   elements.contextCount.textContent = `${attachments.length} item${attachments.length === 1 ? "" : "s"}`;
   elements.attachmentList.replaceChildren();
@@ -200,7 +252,27 @@ elements.pasteTextButton.addEventListener("click", async () => {
   await fetch(`/api/sessions/${sessionId}/clipboard-text`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
   await loadAttachments();
 });
+elements.terminalToggle.addEventListener("click", async () => {
+  elements.terminalPanel.hidden = !elements.terminalPanel.hidden;
+  elements.terminalToggle.setAttribute("aria-expanded", String(!elements.terminalPanel.hidden));
+  localStorage.setItem("json_codr_terminal_open", String(!elements.terminalPanel.hidden));
+  if (!elements.terminalPanel.hidden) {
+    try { await ensureTerminal(); elements.terminalInput.focus(); }
+    catch (error) { appendTerminalOutput(`Error: ${error.message}\n`); }
+  }
+});
+elements.terminalRun.addEventListener("click", () => runTerminalCommand().catch((error) => appendTerminalOutput(`Error: ${error.message}\n`)));
+elements.terminalInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") runTerminalCommand().catch((error) => appendTerminalOutput(`Error: ${error.message}\n`));
+});
+elements.terminalStop.addEventListener("click", () => {
+  if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type: "interrupt" }));
+});
 document.addEventListener("keydown", (event) => {
+  if (event.ctrlKey && !event.altKey && event.key.toLowerCase() === "j") {
+    event.preventDefault();
+    elements.terminalToggle.click();
+  }
   if (event.ctrlKey && event.altKey && event.key.toLowerCase() === "b") {
     event.preventDefault();
     elements.contextToggle.click();

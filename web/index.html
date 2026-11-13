@@ -19,7 +19,10 @@
         <div id="health-status" class="health" role="status" aria-live="polite">
           <span class="health-dot"></span><span>Connecting</span>
         </div>
-        <button id="context-toggle" class="panel-toggle" type="button" aria-controls="context-panel" aria-expanded="true" title="Toggle context panel (Ctrl+Alt+B)">Context</button>
+        <div class="topbar-actions">
+          <button id="terminal-toggle" class="panel-toggle" type="button" aria-controls="terminal-panel" aria-expanded="false" title="Toggle terminal (Ctrl+J)">CLI</button>
+          <button id="context-toggle" class="panel-toggle" type="button" aria-controls="context-panel" aria-expanded="true" title="Toggle context panel (Ctrl+Alt+B)">Context</button>
+        </div>
       </header>
 
       <section class="hero">
@@ -82,10 +85,25 @@
           <label class="secondary file-button" for="attachment-input">Import files</label>
           <input id="attachment-input" type="file" multiple hidden />
           <button id="paste-text-button" class="secondary" type="button">Paste</button>
+          <a id="export-archive" class="secondary file-button" href="#">Export ZIP</a>
         </div>
         <div id="attachment-list" class="attachment-list"><p class="meta">No context attached.</p></div>
         <pre id="attachment-preview" class="attachment-preview" hidden></pre>
       </aside>
+
+      <section id="terminal-panel" class="terminal-panel" aria-label="Live command line" hidden>
+        <div class="terminal-head">
+          <div><span class="eyebrow">LOCAL POWERSHELL</span><strong>Live CLI passthrough</strong></div>
+          <span id="terminal-status" class="meta">Not started</span>
+        </div>
+        <pre id="terminal-output" class="terminal-output" aria-live="polite"></pre>
+        <div class="terminal-command">
+          <span aria-hidden="true">PS&gt;</span>
+          <input id="terminal-input" type="text" autocomplete="off" spellcheck="false" aria-label="PowerShell command" placeholder="Enter a command" />
+          <button id="terminal-run" class="primary" type="button">Run</button>
+          <button id="terminal-stop" class="secondary" type="button">Stop</button>
+        </div>
+      </section>
 
       <footer><span>Runs entirely on this machine</span><span>127.0.0.1 · Ollama</span></footer>
     </main>

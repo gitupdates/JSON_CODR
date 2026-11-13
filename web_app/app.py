@@ -1,12 +1,14 @@
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, Response, UploadFile
+import asyncio
+
+from fastapi import FastAPI, File, Header, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from web_app.attachments import AttachmentService, AttachmentTooLarge
 from web_app.context import ContextAssembler
-from web_app.models import AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest
+from web_app.models import AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, TerminalCreateRequest
 from web_app.ollama_service import (
     ModelOutputError,
     ModelTimeoutError,
@@ -14,17 +16,20 @@ from web_app.ollama_service import (
     OllamaUnavailableError,
 )
 from web_app.workspace import InvalidSessionId, WorkspaceService, default_data_root
+from web_app.terminal import TerminalService
 
 
 def create_app(
     service: OllamaService,
     workspace: WorkspaceService | None = None,
     attachments: AttachmentService | None = None,
+    terminals: TerminalService | None = None,
 ) -> FastAPI:
     application = FastAPI(title="JSON_CODR", version="V1.0.0")
     workspace = workspace or WorkspaceService(default_data_root())
     attachments = attachments or AttachmentService(workspace)
     context_assembler = ContextAssembler(attachments)
+    terminals = terminals or TerminalService()
     web_root = Path(__file__).resolve().parent.parent / "web"
     application.mount("/static", StaticFiles(directory=web_root), name="static")
 
@@ -125,6 +130,18 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Attachment not found") from error
 
+    @application.get("/api/sessions/{session_id}/archive.zip")
+    async def export_session_archive(session_id: str):
+        try:
+            payload = attachments.export_zip(session_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Session not found") from error
+        return Response(
+            content=payload,
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="json-codr-{session_id}.zip"'},
+        )
+
     @application.patch("/api/sessions/{session_id}/attachments/{attachment_id}")
     async def update_attachment(session_id: str, attachment_id: str, request: AttachmentUpdate):
         try:
@@ -139,6 +156,78 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Attachment not found") from error
         return Response(status_code=204)
+
+    def require_terminal_header(x_json_codr: str | None) -> None:
+        if x_json_codr != "1":
+            raise HTTPException(status_code=403, detail="Terminal request header required")
+
+    @application.get("/api/terminals")
+    async def list_terminals():
+        return terminals.list()
+
+    @application.post("/api/terminals", status_code=201)
+    async def create_terminal(request: TerminalCreateRequest, x_json_codr: str | None = Header(None)):
+        require_terminal_header(x_json_codr)
+        cwd = Path(request.cwd).resolve() if request.cwd else Path(__file__).resolve().parent.parent
+        try:
+            return terminals.create(request.shell, cwd)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @application.post("/api/terminals/{terminal_id}/interrupt", status_code=204)
+    async def interrupt_terminal(terminal_id: str, x_json_codr: str | None = Header(None)):
+        require_terminal_header(x_json_codr)
+        try:
+            terminals.interrupt(terminal_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Terminal not found") from error
+        return Response(status_code=204)
+
+    @application.delete("/api/terminals/{terminal_id}", status_code=204)
+    async def close_terminal(terminal_id: str, x_json_codr: str | None = Header(None)):
+        require_terminal_header(x_json_codr)
+        try:
+            terminals.close(terminal_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Terminal not found") from error
+        return Response(status_code=204)
+
+    @application.websocket("/ws/terminals/{terminal_id}")
+    async def terminal_socket(websocket: WebSocket, terminal_id: str):
+        expected_origin = f"http://{websocket.url.hostname}:{websocket.url.port}"
+        if websocket.headers.get("origin") != expected_origin:
+            await websocket.close(code=1008)
+            return
+        try:
+            terminals.get(terminal_id)
+        except KeyError:
+            await websocket.close(code=1008)
+            return
+        await websocket.accept()
+
+        async def send_output():
+            while terminals.get(terminal_id).status == "running":
+                output = await asyncio.to_thread(terminals.read, terminal_id, 0.2)
+                if output:
+                    await websocket.send_json({"type": "output", "data": output})
+            await websocket.send_json({"type": "exit"})
+
+        async def receive_input():
+            while True:
+                message = await websocket.receive_json()
+                if message.get("type") == "input":
+                    terminals.write(terminal_id, str(message.get("data", "")))
+                elif message.get("type") == "interrupt":
+                    terminals.interrupt(terminal_id)
+
+        sender = asyncio.create_task(send_output())
+        receiver = asyncio.create_task(receive_input())
+        try:
+            done, pending = await asyncio.wait({sender, receiver}, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+        except WebSocketDisconnect:
+            pass
 
     @application.post("/api/chat", response_model=ChatResult)
     async def chat(request: ChatRequest):
