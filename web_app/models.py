@@ -140,3 +140,30 @@ class SystemSettings(BaseModel):
 class SettingsUpdate(BaseModel):
     ui: Optional[UiSettings] = None
     skill_scan: Optional[SkillScanSettings] = None
+
+
+class SkillScanRequest(BaseModel):
+    directory: str
+
+
+class KnownSkillScanRequest(BaseModel):
+    fallback_token: str
+
+
+class DiscoveryInstallRequest(BaseModel):
+    discovery_id: str
+
+
+class SkillDiscovery(BaseModel):
+    id: str
+    name: str
+    source_format: Literal["claude", "codex", "generic"]
+    source_path: str
+    skill_count: int
+    already_installed: bool = False
+
+
+class SkillScanResult(BaseModel):
+    discoveries: List[SkillDiscovery] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    fallback_token: Optional[str] = None

@@ -6,9 +6,11 @@ import shutil
 import threading
 import uuid
 import zipfile
+import tempfile
+import time
 from pathlib import Path, PurePosixPath
 
-from web_app.models import SkillPack, SkillRecord
+from web_app.models import SkillDiscovery, SkillPack, SkillRecord, SkillScanResult
 
 
 class DuplicateSkillPack(ValueError):
@@ -96,7 +98,8 @@ class SkillConverterService:
         used: set[str] = set()
         candidates = {
             name: content for name, content in entries.items()
-            if name.endswith("/SKILL.md")
+            if name == "SKILL.md"
+            or name.endswith("/SKILL.md")
             or source_format == "generic"
             or (source_format == "claude" and any(part in PurePosixPath(name).parts for part in ("commands", "agents")))
         }
@@ -236,6 +239,24 @@ class SkillLibraryService:
                         return skill
         raise KeyError(f"{pack_id}:{skill_id}")
 
+    def documentation(self, pack_id: str, skill_id: str) -> str:
+        skill = self.get_skill(pack_id, skill_id)
+        capabilities = re.search(r"(?mi)^(?:capabilities|required-capabilities):\s*([^\n]+)", skill.content)
+        abilities = capabilities.group(1).strip() if capabilities else "Follow the documented instructions using capabilities available in JSON_CODR."
+        syntax = "Select this skill for the active session, then provide the task in the prompt."
+        if "{{arguments}}" in skill.content:
+            syntax += " The `{{arguments}}` placeholder represents the user's task input."
+        intent = skill.description or f"Apply the {skill.name} workflow to the active request."
+        return (
+            f"# {skill.name}\n\n## Intent\n\n{intent}\n\n"
+            f"## Abilities\n\n{abilities}\n\n"
+            f"## Command structure and syntax\n\n{syntax}\n\n"
+            f"## Example use cases\n\n- Select **{skill.name}**, enter a relevant task, and run the chosen local model.\n"
+            f"- Edit the instructions, save the skill, and apply it to the current session.\n\n"
+            "## Compatibility\n\nThis converted JSON_CODR skill is provider-neutral. Tool names are capability requirements and run only when the current system provides and authorizes them.\n\n"
+            f"## Instructions\n\n{skill.content}\n"
+        )
+
     def update_skill(self, pack_id: str, skill_id: str, content: str, enabled: bool) -> SkillRecord:
         with self._lock:
             packs = self.list()
@@ -257,3 +278,131 @@ class SkillLibraryService:
             if len(retained) == len(packs):
                 raise KeyError(pack_id)
             self._save(retained)
+
+
+class SkillDiscoveryService:
+    def __init__(self, library: SkillLibraryService, converter: SkillConverterService, data_root: Path, known_roots: list[Path] | None = None) -> None:
+        self.library = library
+        self.converter = converter
+        self.data_root = Path(data_root).resolve()
+        home = Path.home()
+        self.known_roots = known_roots or [home / ".codex" / "skills", home / ".claude" / "skills"]
+        self._previews: dict[str, dict] = {}
+        self._tokens: dict[str, float] = {}
+
+    @staticmethod
+    def _digest(path: Path) -> str:
+        digest = hashlib.sha256()
+        if path.is_file():
+            digest.update(path.read_bytes())
+        else:
+            for item in sorted(path.rglob("*")):
+                if item.is_file() and not item.is_symlink():
+                    digest.update(item.relative_to(path).as_posix().encode())
+                    digest.update(item.read_bytes())
+        return digest.hexdigest()
+
+    @staticmethod
+    def _folder_archive(path: Path) -> Path:
+        handle, filename = tempfile.mkstemp(suffix=".zip")
+        os.close(handle)
+        target = Path(filename)
+        with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as bundle:
+            for item in path.rglob("*"):
+                if item.is_file() and not item.is_symlink():
+                    bundle.write(item, item.relative_to(path).as_posix())
+        return target
+
+    def _convert_source(self, path: Path) -> SkillPack:
+        if path.is_dir():
+            archive = self._folder_archive(path)
+            try:
+                return self.converter.convert(archive, f"{path.name}.zip")
+            finally:
+                archive.unlink(missing_ok=True)
+        return self.converter.convert(path, path.name)
+
+    def _already_installed(self, pack: SkillPack) -> bool:
+        installed = {_skill_fingerprint(skill) for item in self.library.list() for skill in item.skills}
+        return all(_skill_fingerprint(skill) in installed for skill in pack.skills)
+
+    def scan(self, directory: Path | str) -> SkillScanResult:
+        root = Path(directory).resolve()
+        if not root.is_dir() or root.is_symlink():
+            raise ValueError("Skill scan path must be an existing local directory")
+        candidates: list[Path] = []
+        warnings: list[str] = []
+        entries = 0
+        for item in root.rglob("*"):
+            depth = len(item.relative_to(root).parts)
+            if depth > 5 or item.is_symlink():
+                continue
+            entries += 1
+            if entries > 500:
+                warnings.append("Scan stopped after 500 entries")
+                break
+            if item.is_file() and item.suffix.casefold() in {".zip", ".7z"}:
+                candidates.append(item)
+            elif item.is_file() and item.name == "SKILL.md":
+                candidates.append(item.parent)
+        if (root / "SKILL.md").is_file():
+            candidates.insert(0, root)
+        discoveries: list[SkillDiscovery] = []
+        seen: set[Path] = set()
+        for source in candidates:
+            if source in seen:
+                continue
+            seen.add(source)
+            try:
+                pack = self._convert_source(source)
+            except ValueError as error:
+                warnings.append(f"{source.name}: {error}")
+                continue
+            discovery_id = uuid.uuid4().hex
+            self._previews[discovery_id] = {
+                "path": source,
+                "digest": self._digest(source),
+                "expires": time.monotonic() + 600,
+            }
+            discoveries.append(SkillDiscovery(
+                id=discovery_id,
+                name=pack.name,
+                source_format=pack.source_format,
+                source_path=str(source),
+                skill_count=len(pack.skills),
+                already_installed=self._already_installed(pack),
+            ))
+        token = None
+        if not discoveries:
+            token = uuid.uuid4().hex
+            self._tokens[token] = time.monotonic() + 600
+        return SkillScanResult(discoveries=discoveries, warnings=warnings, fallback_token=token)
+
+    def scan_known(self, fallback_token: str) -> SkillScanResult:
+        expiry = self._tokens.pop(fallback_token, None)
+        if expiry is None or expiry < time.monotonic():
+            raise ValueError("Known-location scan requires a recent empty explicit scan")
+        combined = SkillScanResult()
+        for root in self.known_roots:
+            if not root.is_dir():
+                continue
+            result = self.scan(root)
+            combined.discoveries.extend(result.discoveries)
+            combined.warnings.extend(result.warnings)
+        return combined
+
+    def install(self, discovery_id: str) -> SkillPack:
+        preview = self._previews.pop(discovery_id, None)
+        if preview is None or preview["expires"] < time.monotonic():
+            raise ValueError("Discovery preview expired; scan again")
+        source = preview["path"]
+        if not source.exists() or self._digest(source) != preview["digest"]:
+            raise ValueError("Skill source changed after preview; scan again")
+        if source.is_dir():
+            archive = self._folder_archive(source)
+            try:
+                pack = self.converter.convert(archive, f"{source.name}.zip")
+                return self.library.install(pack)
+            finally:
+                archive.unlink(missing_ok=True)
+        return self.library.install(self.converter.convert(source, source.name))

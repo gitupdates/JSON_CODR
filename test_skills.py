@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from web_app.app import create_app
 from web_app.attachments import AttachmentService
-from web_app.skills import DuplicateSkillPack, SkillConverterService, SkillLibraryService
+from web_app.skills import DuplicateSkillPack, SkillConverterService, SkillDiscoveryService, SkillLibraryService
 from web_app.workspace import WorkspaceService
 
 
@@ -192,6 +192,66 @@ class SkillLibraryTests(unittest.TestCase):
         cleanup = client.post("/api/skills/deduplicate")
         self.assertEqual(cleanup.status_code, 200)
         self.assertEqual(cleanup.json()["removed_packs"], 0)
+
+    def test_legacy_skill_documentation_is_complete(self):
+        source = self.root / "skills.zip"
+        source.write_bytes(archive({"skills/review/SKILL.md": "---\nname: review\ndescription: Reviews code\ncapabilities: Read, Grep\n---\nReview {{arguments}} carefully."}))
+        pack = self.library.install(self.converter.convert(source, source.name))
+
+        document = self.library.documentation(pack.id, pack.skills[0].id)
+
+        for heading in ("# review", "## Intent", "## Abilities", "## Command structure and syntax", "## Example use cases", "## Compatibility", "## Instructions"):
+            self.assertIn(heading, document)
+
+    def test_discovery_scans_archive_and_folder_then_revalidates_source(self):
+        scan_root = self.root / "scan"
+        scan_root.mkdir()
+        archive_path = scan_root / "archive.zip"
+        archive_path.write_bytes(archive({"skills/archive/SKILL.md": "---\nname: archive\n---\nArchive skill"}))
+        folder = scan_root / "folder"
+        folder.mkdir()
+        (folder / "SKILL.md").write_text("---\nname: folder\n---\nFolder skill", encoding="utf-8")
+        discovery = SkillDiscoveryService(self.library, self.converter, self.root)
+
+        result = discovery.scan(scan_root)
+
+        self.assertEqual({item.name for item in result.discoveries}, {"archive", "folder"})
+        archive_item = next(item for item in result.discoveries if item.name == "archive")
+        archive_path.write_bytes(archive({"skills/archive/SKILL.md": "---\nname: archive\n---\nChanged"}))
+        with self.assertRaises(ValueError):
+            discovery.install(archive_item.id)
+
+    def test_empty_scan_authorizes_one_known_location_scan(self):
+        empty = self.root / "empty"
+        empty.mkdir()
+        known = self.root / "known"
+        known.mkdir()
+        (known / "SKILL.md").write_text("---\nname: known\n---\nKnown skill", encoding="utf-8")
+        discovery = SkillDiscoveryService(self.library, self.converter, self.root, known_roots=[known])
+
+        result = discovery.scan(empty)
+        self.assertIsNotNone(result.fallback_token)
+        self.assertEqual(discovery.scan_known(result.fallback_token).discoveries[0].name, "known")
+        with self.assertRaises(ValueError):
+            discovery.scan_known(result.fallback_token)
+
+    def test_api_scans_installs_and_downloads_documentation(self):
+        scan_root = self.root / "scan"
+        scan_root.mkdir()
+        (scan_root / "SKILL.md").write_text("---\nname: scanned\ndescription: Scanned skill\n---\nUse it", encoding="utf-8")
+        workspace = WorkspaceService(self.root)
+        client = TestClient(create_app(FakeOllamaService(), workspace))
+
+        preview = client.post("/api/skills/scan", json={"directory": str(scan_root)})
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(client.get("/api/skills").json(), [])
+        installed = client.post("/api/skills/install-discovery", json={"discovery_id": preview.json()["discoveries"][0]["id"]})
+        self.assertEqual(installed.status_code, 201)
+        pack = installed.json()
+        document = client.get(f'/api/skills/{pack["id"]}/{pack["skills"][0]["id"]}/documentation.md')
+        self.assertEqual(document.status_code, 200)
+        self.assertIn("attachment", document.headers["content-disposition"])
+        self.assertIn("## Intent", document.text)
 
 
 if __name__ == "__main__": unittest.main()

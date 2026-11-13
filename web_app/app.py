@@ -3,14 +3,14 @@ from pathlib import Path
 import asyncio
 
 from fastapi import FastAPI, File, Header, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from web_app.attachments import AttachmentService, AttachmentTooLarge
 from web_app.artifacts import ArtifactService
 from web_app.context import ContextAssembler
 from web_app.dependencies import DependencyService
-from web_app.models import AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, SettingsUpdate, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
+from web_app.models import AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, DiscoveryInstallRequest, KnownSkillScanRequest, SettingsUpdate, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
 from web_app.ollama_service import (
     ModelOutputError,
     ModelTimeoutError,
@@ -19,7 +19,7 @@ from web_app.ollama_service import (
 )
 from web_app.workspace import InvalidSessionId, WorkspaceService, default_data_root
 from web_app.terminal import TerminalService
-from web_app.skills import DuplicateSkillPack, SkillConverterService, SkillLibraryService
+from web_app.skills import DuplicateSkillPack, SkillConverterService, SkillDiscoveryService, SkillLibraryService
 from web_app.settings import SettingsService
 
 
@@ -35,6 +35,7 @@ def create_app(
     skill_library = SkillLibraryService(workspace.data_root)
     skill_converter = SkillConverterService()
     settings = SettingsService(workspace.data_root)
+    skill_discovery = SkillDiscoveryService(skill_library, skill_converter, workspace.data_root)
     context_assembler = ContextAssembler(attachments, skills=skill_library)
     dependency_service = DependencyService(attachments)
     artifact_service = ArtifactService(workspace)
@@ -162,6 +163,46 @@ def create_app(
     @application.get("/api/skills")
     async def list_skills():
         return skill_library.list()
+
+    @application.post("/api/skills/scan")
+    async def scan_skills(request: SkillScanRequest):
+        try:
+            result = skill_discovery.scan(request.directory)
+            current = settings.get()
+            if str(Path(request.directory).resolve()) not in current.skill_scan.approved_directories:
+                current.skill_scan.approved_directories.append(str(Path(request.directory).resolve()))
+                settings.update(SettingsUpdate(skill_scan=current.skill_scan))
+            return result
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @application.post("/api/skills/scan-known")
+    async def scan_known_skills(request: KnownSkillScanRequest):
+        try:
+            return skill_discovery.scan_known(request.fallback_token)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @application.post("/api/skills/install-discovery", status_code=201)
+    async def install_discovered_skill(request: DiscoveryInstallRequest):
+        try:
+            return skill_discovery.install(request.discovery_id)
+        except DuplicateSkillPack as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @application.get("/api/skills/{pack_id}/{skill_id}/documentation.md")
+    async def download_skill_documentation(pack_id: str, skill_id: str):
+        try:
+            document = skill_library.documentation(pack_id, skill_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Skill not found") from error
+        return PlainTextResponse(
+            document,
+            media_type="text/markdown",
+            headers={"Content-Disposition": f'attachment; filename="{skill_id}.md"'},
+        )
 
     def convert_attachment(session_id: str, attachment_id: str):
         path, record = attachments.original_path(session_id, attachment_id)
