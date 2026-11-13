@@ -10,7 +10,7 @@ from web_app.attachments import AttachmentService, AttachmentTooLarge
 from web_app.artifacts import ArtifactService
 from web_app.context import ContextAssembler
 from web_app.dependencies import DependencyService
-from web_app.models import AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
+from web_app.models import AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, SettingsUpdate, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
 from web_app.ollama_service import (
     ModelOutputError,
     ModelTimeoutError,
@@ -20,6 +20,7 @@ from web_app.ollama_service import (
 from web_app.workspace import InvalidSessionId, WorkspaceService, default_data_root
 from web_app.terminal import TerminalService
 from web_app.skills import DuplicateSkillPack, SkillConverterService, SkillLibraryService
+from web_app.settings import SettingsService
 
 
 def create_app(
@@ -33,6 +34,7 @@ def create_app(
     attachments = attachments or AttachmentService(workspace)
     skill_library = SkillLibraryService(workspace.data_root)
     skill_converter = SkillConverterService()
+    settings = SettingsService(workspace.data_root)
     context_assembler = ContextAssembler(attachments, skills=skill_library)
     dependency_service = DependencyService(attachments)
     artifact_service = ArtifactService(workspace)
@@ -55,6 +57,14 @@ def create_app(
             return {"models": await service.list_models()}
         except OllamaUnavailableError as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
+
+    @application.get("/api/settings")
+    async def get_settings():
+        return settings.get()
+
+    @application.patch("/api/settings")
+    async def update_settings(request: SettingsUpdate):
+        return settings.update(request)
 
     @application.post("/api/sessions", status_code=201)
     async def create_session():

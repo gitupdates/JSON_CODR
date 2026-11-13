@@ -121,3 +121,22 @@ class SkillUpdateRequest(BaseModel):
 
 class SkillSelectionRequest(BaseModel):
     selected: List[str] = Field(default_factory=list)
+
+
+class UiSettings(BaseModel):
+    skill_catalog_open: bool = True
+
+
+class SkillScanSettings(BaseModel):
+    approved_directories: List[str] = Field(default_factory=list)
+
+
+class SystemSettings(BaseModel):
+    version: int = 1
+    ui: UiSettings = Field(default_factory=UiSettings)
+    skill_scan: SkillScanSettings = Field(default_factory=SkillScanSettings)
+
+
+class SettingsUpdate(BaseModel):
+    ui: Optional[UiSettings] = None
+    skill_scan: Optional[SkillScanSettings] = None
