@@ -70,7 +70,9 @@ let settingsState = null;
 let skillFallbackToken = null;
 let settingsSaveQueue = Promise.resolve();
 let themeSaveRevision = 0;
+let skillsChangeRevision = 0;
 let currentThemeMode = normalizeThemeMode(localStorage.getItem("json_codr_theme"));
+let persistedThemeMode = null;
 
 function normalizeThemeMode(mode) {
   return VALID_THEME_MODES.has(mode) ? mode : "dark";
@@ -147,11 +149,18 @@ async function persistSettings(update) {
   });
   if (!response.ok) throw new Error((await response.json()).detail || "Unable to save settings");
   settingsState = await response.json();
+  persistedThemeMode = normalizeThemeMode(settingsState.ui.theme);
   renderApprovedDirectories();
 }
 
 function saveSettings(update) {
   const operation = settingsSaveQueue.then(() => persistSettings(update));
+  settingsSaveQueue = operation.catch(() => undefined);
+  return operation;
+}
+
+function queueSettingsLoad() {
+  const operation = settingsSaveQueue.then(() => loadSettings());
   settingsSaveQueue = operation.catch(() => undefined);
   return operation;
 }
@@ -176,16 +185,23 @@ function renderApprovedDirectories() {
 }
 
 async function loadSettings() {
+  const themeRevisionAtStart = themeSaveRevision;
+  const skillsRevisionAtStart = skillsChangeRevision;
   const response = await fetch("/api/settings");
   if (!response.ok) throw new Error("Unable to load settings");
   settingsState = await response.json();
-  const theme = normalizeThemeMode(settingsState.ui.theme);
+  persistedThemeMode = normalizeThemeMode(settingsState.ui.theme);
   const open = settingsState.ui.skill_catalog_open;
-  applyThemeMode(theme);
-  elements.skillsPanel.hidden = !open;
-  elements.skillsToggle.setAttribute("aria-expanded", String(open));
-  elements.settingSkillsOpen.checked = open;
-  elements.settingTheme.value = theme;
+  if (themeRevisionAtStart === themeSaveRevision) {
+    applyThemeMode(persistedThemeMode);
+  }
+  if (skillsRevisionAtStart === skillsChangeRevision) {
+    elements.skillsPanel.hidden = !open;
+    elements.skillsToggle.setAttribute("aria-expanded", String(open));
+    elements.settingSkillsOpen.checked = open;
+  }
+  elements.settingTheme.disabled = false;
+  elements.settingSkillsOpen.disabled = false;
   renderApprovedDirectories();
 }
 
@@ -424,7 +440,7 @@ async function scanSkillDirectory(directory = elements.skillScanDirectory.value)
   const payload = await response.json();
   if (!response.ok) return showError(payload.detail || "Skill scan failed");
   renderSkillDiscoveries(payload);
-  await loadSettings();
+  await queueSettingsLoad();
 }
 
 async function uploadFiles(files) {
@@ -546,6 +562,7 @@ elements.contextToggle.addEventListener("click", () => {
   localStorage.setItem("json_codr_context_open", String(!elements.contextPanel.hidden));
 });
 elements.skillsToggle.addEventListener("click", () => {
+  skillsChangeRevision += 1;
   const open = elements.skillsPanel.hidden;
   elements.skillsPanel.hidden = !open;
   elements.skillsToggle.setAttribute("aria-expanded", String(open));
@@ -563,6 +580,7 @@ elements.settingsToggle.addEventListener("click", () => {
   }
 });
 elements.settingSkillsOpen.addEventListener("change", () => {
+  skillsChangeRevision += 1;
   const open = elements.settingSkillsOpen.checked;
   elements.skillsPanel.hidden = !open;
   elements.skillsToggle.setAttribute("aria-expanded", String(open));
@@ -570,18 +588,13 @@ elements.settingSkillsOpen.addEventListener("change", () => {
 });
 elements.settingTheme.addEventListener("change", async () => {
   const revision = ++themeSaveRevision;
-  const previousThemeMode = currentThemeMode;
-  const previousCachedTheme = localStorage.getItem("json_codr_theme");
   const nextThemeMode = normalizeThemeMode(elements.settingTheme.value);
   applyThemeMode(nextThemeMode);
   try {
     await saveSettings({ ui: { theme: nextThemeMode } });
   } catch (error) {
     if (revision === themeSaveRevision) {
-      currentThemeMode = previousThemeMode;
-      if (previousCachedTheme === null) localStorage.removeItem("json_codr_theme");
-      else localStorage.setItem("json_codr_theme", previousCachedTheme);
-      applyThemeMode(previousThemeMode, { cache: false });
+      applyThemeMode(persistedThemeMode || "dark");
     }
     showError(error.message);
   }
@@ -653,6 +666,7 @@ elements.skillSave.addEventListener("click", async () => {
     elements.skillsPanel.hidden = false;
     elements.skillsToggle.setAttribute("aria-expanded", "true");
     elements.settingSkillsOpen.checked = true;
+    skillsChangeRevision += 1;
     await saveSettings({ ui: { skill_catalog_open: true } });
   }
   await loadSkills();
@@ -698,5 +712,5 @@ document.addEventListener("keydown", (event) => {
 });
 
 loadApplication();
-loadSettings().catch((error) => showError(error.message));
+queueSettingsLoad().catch((error) => showError(error.message));
 loadAttachments().catch((error) => showError(error.message));

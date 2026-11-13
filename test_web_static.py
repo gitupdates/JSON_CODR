@@ -142,11 +142,20 @@ class WebStaticTests(unittest.TestCase):
 
     def test_settings_saves_are_partial_and_serialized(self):
         javascript = self.client.get("/static/app.js").text
+        html = self.client.get("/").text
         self.assertIn("let settingsSaveQueue = Promise.resolve()", javascript)
         self.assertIn("settingsSaveQueue.then", javascript)
         self.assertNotIn("buildUiSettings", javascript)
         self.assertIn('ui: { theme: nextThemeMode }', javascript)
         self.assertIn('ui: { skill_catalog_open: open }', javascript)
+        self.assertIn("let persistedThemeMode = null", javascript)
+        self.assertIn("persistedThemeMode = normalizeThemeMode(settingsState.ui.theme)", javascript)
+        self.assertIn("applyThemeMode(persistedThemeMode", javascript)
+        self.assertIn("themeRevisionAtStart === themeSaveRevision", javascript)
+        self.assertIn("skillsRevisionAtStart === skillsChangeRevision", javascript)
+        self.assertIn("queueSettingsLoad().catch", javascript)
+        self.assertIn('id="setting-theme" class="setting-select" aria-describedby="setting-theme-help" disabled', html)
+        self.assertIn('id="setting-skills-open" type="checkbox" disabled', html)
 
 
     def test_theme_settings_and_runtime_hooks_are_present(self):
@@ -161,7 +170,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('matchMedia("(prefers-color-scheme: dark)")', javascript)
         self.assertIn('addEventListener("change"', javascript)
         self.assertIn("applyThemeMode", javascript)
-        self.assertIn("previousThemeMode", javascript)
+        self.assertIn("persistedThemeMode", javascript)
 
         css = self.client.get("/static/app.css").text
         self.assertIn(':root[data-theme="light"]', css)

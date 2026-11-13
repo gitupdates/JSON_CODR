@@ -97,5 +97,17 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(client.get("/api/settings").json()["ui"]["theme"], "dark")
 
+    def test_api_rejects_explicit_null_ui_values(self):
+        workspace = WorkspaceService(self.root)
+        client = TestClient(create_app(FakeService(), workspace))
+
+        for field in ("theme", "skill_catalog_open"):
+            with self.subTest(field=field):
+                response = client.patch("/api/settings", json={"ui": {field: None}})
+                self.assertEqual(response.status_code, 422)
+
+        current = client.get("/api/settings").json()["ui"]
+        self.assertEqual(current, {"skill_catalog_open": True, "theme": "dark"})
+
 
 if __name__ == "__main__": unittest.main()

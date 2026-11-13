@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ChatRequest(BaseModel):
@@ -135,6 +135,14 @@ class UiSettings(BaseModel):
 class UiSettingsUpdate(BaseModel):
     skill_catalog_open: Optional[bool] = None
     theme: Optional[Literal["light", "dark", "system"]] = None
+
+    @model_validator(mode="after")
+    def reject_explicit_nulls(self) -> "UiSettingsUpdate":
+        for field in ("skill_catalog_open", "theme"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} cannot be null")
+        return self
+
 
 
 class SkillScanSettings(BaseModel):
