@@ -161,7 +161,10 @@ class DependencyPreflightTests(unittest.TestCase):
 
         self.assertEqual(missing, ["vite@^7.0.0"])
         self.assertEqual(run.call_count, 3)
-        for package, call in zip(packages, run.call_args_list):
+        calls_by_package = {call.args[0][2]: call for call in run.call_args_list}
+        self.assertEqual(set(calls_by_package), set(packages))
+        for package in packages:
+            call = calls_by_package[package]
             self.assertEqual(call.args[0], ["npm", "ls", package, "--depth=0", "--json"])
             self.assertEqual(call.kwargs["cwd"], root)
             self.assertFalse(call.kwargs["shell"])
