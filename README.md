@@ -1,6 +1,6 @@
 # JSON_CODR
 
-JSON_CODR V1.0.1 is a localhost-only web and CLI interface for structured responses from local Ollama coding models.
+JSON_CODR V1.0.2 is a localhost-only web and CLI interface for structured responses from local Ollama coding models.
 
 ## Skill catalog and settings
 

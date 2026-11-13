@@ -29,7 +29,7 @@ def create_app(
     attachments: AttachmentService | None = None,
     terminals: TerminalService | None = None,
 ) -> FastAPI:
-    application = FastAPI(title="JSON_CODR", version="V1.0.1")
+    application = FastAPI(title="JSON_CODR", version="V1.0.2")
     workspace = workspace or WorkspaceService(default_data_root())
     attachments = attachments or AttachmentService(workspace)
     skill_library = SkillLibraryService(workspace.data_root)
