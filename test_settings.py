@@ -26,7 +26,9 @@ class SettingsTests(unittest.TestCase):
     def test_defaults_and_persistence_preserve_unknown_configuration(self):
         service = SettingsService(self.root)
         self.assertTrue(service.get().ui.skill_catalog_open)
+        self.assertEqual(service.get().ui.theme, "dark")
         service.path.write_text(json.dumps({"version": 1, "future": {"hook": "value"}, "ui": {"future_ui": "kept"}, "skill_scan": {"future_scan": 42}}), encoding="utf-8")
+        self.assertEqual(service.get().ui.theme, "dark")
 
         service.update(SettingsUpdate(
             ui=UiSettings(skill_catalog_open=False),
@@ -45,6 +47,7 @@ class SettingsTests(unittest.TestCase):
         workspace = WorkspaceService(self.root)
         client = TestClient(create_app(FakeService(), workspace))
 
+        self.assertEqual(client.get("/api/settings").json()["ui"]["theme"], "dark")
         self.assertTrue(client.get("/api/settings").json()["ui"]["skill_catalog_open"])
         updated = client.patch("/api/settings", json={
             "ui": {"skill_catalog_open": False},
@@ -53,6 +56,26 @@ class SettingsTests(unittest.TestCase):
 
         self.assertEqual(updated.status_code, 200)
         self.assertFalse(client.get("/api/settings").json()["ui"]["skill_catalog_open"])
+
+
+    def test_api_round_trips_supported_themes(self):
+        workspace = WorkspaceService(self.root)
+        client = TestClient(create_app(FakeService(), workspace))
+
+        for theme in ("light", "dark", "system"):
+            updated = client.patch("/api/settings", json={"ui": {"theme": theme}})
+            self.assertEqual(updated.status_code, 200)
+            self.assertEqual(updated.json()["ui"]["theme"], theme)
+            self.assertEqual(client.get("/api/settings").json()["ui"]["theme"], theme)
+
+    def test_api_rejects_unsupported_theme(self):
+        workspace = WorkspaceService(self.root)
+        client = TestClient(create_app(FakeService(), workspace))
+
+        response = client.patch("/api/settings", json={"ui": {"theme": "neon"}})
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(client.get("/api/settings").json()["ui"]["theme"], "dark")
 
 
 if __name__ == "__main__": unittest.main()

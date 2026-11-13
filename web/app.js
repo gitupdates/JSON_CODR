@@ -44,6 +44,7 @@ const elements = {
   skillScanKnown: document.querySelector("#skill-scan-known"),
   skillScanResults: document.querySelector("#skill-scan-results"),
   settingSkillsOpen: document.querySelector("#setting-skills-open"),
+  settingTheme: document.querySelector("#setting-theme"),
   approvedSkillDirectories: document.querySelector("#approved-skill-directories"),
   terminalToggle: document.querySelector("#terminal-toggle"),
   terminalPanel: document.querySelector("#terminal-panel"),
@@ -53,6 +54,9 @@ const elements = {
   terminalStop: document.querySelector("#terminal-stop"),
   terminalStatus: document.querySelector("#terminal-status"),
 };
+
+const VALID_THEME_MODES = new Set(["light", "dark", "system"]);
+const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
 let models = [];
 let activeRequest = null;
@@ -64,6 +68,35 @@ let editingSkill = null;
 let skillLoadGeneration = 0;
 let settingsState = null;
 let skillFallbackToken = null;
+let currentThemeMode = normalizeThemeMode(localStorage.getItem("json_codr_theme"));
+
+function normalizeThemeMode(mode) {
+  return VALID_THEME_MODES.has(mode) ? mode : "dark";
+}
+
+function applyThemeMode(mode, { cache = true } = {}) {
+  const normalized = normalizeThemeMode(mode);
+  const effective = normalized === "system" ? (systemThemeQuery.matches ? "dark" : "light") : normalized;
+  currentThemeMode = normalized;
+  document.documentElement.dataset.theme = effective;
+  document.documentElement.style.colorScheme = effective;
+  if (cache) localStorage.setItem("json_codr_theme", normalized);
+  if (elements.settingTheme) elements.settingTheme.value = normalized;
+  return effective;
+}
+
+function buildUiSettings(overrides = {}) {
+  return {
+    skill_catalog_open: settingsState?.ui?.skill_catalog_open ?? elements.settingSkillsOpen.checked,
+    theme: currentThemeMode,
+    ...overrides,
+  };
+}
+
+systemThemeQuery.addEventListener("change", () => {
+  if (currentThemeMode === "system") applyThemeMode("system", { cache: false });
+});
+applyThemeMode(currentThemeMode);
 
 function appendTerminalOutput(text) {
   elements.terminalOutput.textContent += text;
@@ -146,10 +179,13 @@ async function loadSettings() {
   const response = await fetch("/api/settings");
   if (!response.ok) throw new Error("Unable to load settings");
   settingsState = await response.json();
+  const theme = normalizeThemeMode(settingsState.ui.theme);
   const open = settingsState.ui.skill_catalog_open;
+  applyThemeMode(theme);
   elements.skillsPanel.hidden = !open;
   elements.skillsToggle.setAttribute("aria-expanded", String(open));
   elements.settingSkillsOpen.checked = open;
+  elements.settingTheme.value = theme;
   renderApprovedDirectories();
 }
 
@@ -514,17 +550,36 @@ elements.skillsToggle.addEventListener("click", () => {
   elements.skillsPanel.hidden = !open;
   elements.skillsToggle.setAttribute("aria-expanded", String(open));
   elements.settingSkillsOpen.checked = open;
-  saveSettings({ ui: { skill_catalog_open: open } }).catch((error) => showError(error.message));
+  saveSettings({ ui: buildUiSettings({ skill_catalog_open: open }) }).catch((error) => showError(error.message));
 });
 elements.settingsToggle.addEventListener("click", () => {
-  elements.settingsPanel.hidden = !elements.settingsPanel.hidden;
-  elements.settingsToggle.setAttribute("aria-expanded", String(!elements.settingsPanel.hidden));
+  const open = elements.settingsPanel.hidden;
+  elements.settingsPanel.hidden = !open;
+  elements.settingsToggle.setAttribute("aria-expanded", String(open));
+  if (open) {
+    elements.settingsPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 });
 elements.settingSkillsOpen.addEventListener("change", () => {
   const open = elements.settingSkillsOpen.checked;
   elements.skillsPanel.hidden = !open;
   elements.skillsToggle.setAttribute("aria-expanded", String(open));
-  saveSettings({ ui: { skill_catalog_open: open } }).catch((error) => showError(error.message));
+  saveSettings({ ui: buildUiSettings({ skill_catalog_open: open }) }).catch((error) => showError(error.message));
+});
+elements.settingTheme.addEventListener("change", async () => {
+  const previousThemeMode = currentThemeMode;
+  const previousCachedTheme = localStorage.getItem("json_codr_theme");
+  const nextThemeMode = normalizeThemeMode(elements.settingTheme.value);
+  applyThemeMode(nextThemeMode);
+  try {
+    await saveSettings({ ui: buildUiSettings({ theme: nextThemeMode }) });
+  } catch (error) {
+    currentThemeMode = previousThemeMode;
+    if (previousCachedTheme === null) localStorage.removeItem("json_codr_theme");
+    else localStorage.setItem("json_codr_theme", previousCachedTheme);
+    applyThemeMode(previousThemeMode, { cache: false });
+    showError(error.message);
+  }
 });
 elements.attachmentInput.addEventListener("change", () => uploadFiles(elements.attachmentInput.files));
 elements.pasteTextButton.addEventListener("click", async () => {
@@ -593,7 +648,7 @@ elements.skillSave.addEventListener("click", async () => {
     elements.skillsPanel.hidden = false;
     elements.skillsToggle.setAttribute("aria-expanded", "true");
     elements.settingSkillsOpen.checked = true;
-    await saveSettings({ ui: { skill_catalog_open: true } });
+    await saveSettings({ ui: buildUiSettings({ skill_catalog_open: true }) });
   }
   await loadSkills();
   elements.skillSave.disabled = false;

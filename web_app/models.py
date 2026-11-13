@@ -129,6 +129,7 @@ class SkillSelectionRequest(BaseModel):
 
 class UiSettings(BaseModel):
     skill_catalog_open: bool = True
+    theme: Literal["light", "dark", "system"] = "dark"
 
 
 class SkillScanSettings(BaseModel):

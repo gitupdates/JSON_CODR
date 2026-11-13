@@ -32,6 +32,7 @@ class SettingsService:
             current.skill_scan.approved_directories = resolved
         raw["version"] = current.version
         raw.setdefault("ui", {})["skill_catalog_open"] = current.ui.skill_catalog_open
+        raw.setdefault("ui", {})["theme"] = current.ui.theme
         raw.setdefault("skill_scan", {})["approved_directories"] = current.skill_scan.approved_directories
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.parent / f".settings-{uuid.uuid4().hex}.tmp"

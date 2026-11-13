@@ -134,5 +134,36 @@ class WebStaticTests(unittest.TestCase):
         )
 
 
+    def test_settings_toggle_brings_panel_into_view(self):
+        javascript = self.client.get("/static/app.js").text
+        self.assertIn("elements.settingsPanel.scrollIntoView", javascript)
+
+
+    def test_theme_settings_and_runtime_hooks_are_present(self):
+        response = self.client.get("/")
+        parser = IdCollector()
+        parser.feed(response.text)
+        self.assertIn("setting-theme", parser.ids)
+        self.assertIn("json_codr_theme", response.text)
+
+        javascript = self.client.get("/static/app.js").text
+        self.assertIn("const VALID_THEME_MODES", javascript)
+        self.assertIn('matchMedia("(prefers-color-scheme: dark)")', javascript)
+        self.assertIn('addEventListener("change"', javascript)
+        self.assertIn("applyThemeMode", javascript)
+        self.assertIn("previousThemeMode", javascript)
+
+        css = self.client.get("/static/app.css").text
+        self.assertIn(':root[data-theme="light"]', css)
+        for variable in (
+            "--focus-ring",
+            "--surface-input",
+            "--surface-panel",
+            "--terminal-bg",
+            "--error-text",
+        ):
+            self.assertIn(variable, css)
+
+
 if __name__ == "__main__":
     unittest.main()

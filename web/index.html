@@ -3,7 +3,19 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light dark" />
+    <script>
+      (() => {
+        const validModes = new Set(["light", "dark", "system"]);
+        const cachedMode = localStorage.getItem("json_codr_theme");
+        const mode = validModes.has(cachedMode) ? cachedMode : "dark";
+        const effectiveTheme = mode === "system"
+          ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+          : mode;
+        document.documentElement.dataset.theme = effectiveTheme;
+        document.documentElement.style.colorScheme = effectiveTheme;
+      })();
+    </script>
     <title>JSON_CODR · Local model console</title>
     <link rel="stylesheet" href="/static/app.css" />
   </head>
@@ -137,6 +149,13 @@
         <div class="context-head"><div><span class="eyebrow">SETTINGS</span><h2>System configuration</h2></div></div>
         <section class="dependency-review">
           <strong>Interface</strong>
+          <label class="setting-row" for="setting-theme">Appearance</label>
+          <select id="setting-theme" class="setting-select" aria-describedby="setting-theme-help">
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+            <option value="system">System</option>
+          </select>
+          <p id="setting-theme-help" class="meta setting-help">System follows your Windows appearance.</p>
           <label class="setting-row"><input id="setting-skills-open" type="checkbox" /> Reopen Skills panel on startup</label>
         </section>
         <section class="dependency-review">
