@@ -2,11 +2,12 @@ from pathlib import Path
 
 import asyncio
 
-from fastapi import FastAPI, File, Header, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Header, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from web_app.attachments import AttachmentService, AttachmentTooLarge
+from web_app.artifacts import ArtifactService
 from web_app.context import ContextAssembler
 from web_app.dependencies import DependencyService
 from web_app.models import AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, TerminalCreateRequest
@@ -31,6 +32,7 @@ def create_app(
     attachments = attachments or AttachmentService(workspace)
     context_assembler = ContextAssembler(attachments)
     dependency_service = DependencyService(attachments)
+    artifact_service = ArtifactService(workspace)
     terminals = terminals or TerminalService()
     web_root = Path(__file__).resolve().parent.parent / "web"
     application.mount("/static", StaticFiles(directory=web_root), name="static")
@@ -144,6 +146,18 @@ def create_app(
             headers={"Content-Disposition": f'attachment; filename="json-codr-{session_id}.zip"'},
         )
 
+    @application.get("/api/sessions/{session_id}/artifacts/{filename}")
+    async def download_artifact(session_id: str, filename: str):
+        try:
+            path = artifact_service.artifact_path(session_id, filename)
+            return FileResponse(path, media_type="application/zip", filename=filename)
+        except InvalidSessionId as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Artifact not found") from error
+
     @application.get("/api/sessions/{session_id}/dependencies")
     async def detect_dependencies(session_id: str):
         try:
@@ -239,7 +253,7 @@ def create_app(
             pass
 
     @application.post("/api/chat", response_model=ChatResult)
-    async def chat(request: ChatRequest):
+    async def chat(request: ChatRequest, http_request: Request):
         if not request.prompt.strip():
             raise HTTPException(status_code=400, detail="Prompt must not be empty")
         try:
@@ -251,7 +265,43 @@ def create_app(
                 model_prompt = context_assembler.build_prompt(session, original_prompt)
                 if await service.supports_vision(request.model):
                     model_images = context_assembler.image_paths(session)
-            result = await service.chat(request.model, model_prompt, images=model_images)
+            conversion_words = ("convert", "save", "archive")
+            wants_conversion = all(word in original_prompt.casefold() for word in conversion_words)
+            source_archive = next(
+                (
+                    item for item in (session.attachments if request.session_id else [])
+                    if item.included and item.detected_type in {"application/zip", "application/x-7z-compressed"}
+                ),
+                None,
+            )
+            if wants_conversion and source_archive:
+                bundle = await service.convert_archive(request.model, model_prompt)
+                artifact = artifact_service.save_conversion(
+                    request.session_id,
+                    source_archive.display_name,
+                    bundle.files,
+                )
+                artifact.url = str(
+                    http_request.url_for(
+                        "download_artifact",
+                        session_id=request.session_id,
+                        filename=artifact.filename,
+                    )
+                )
+                result = ChatResult(
+                    model=request.model,
+                    status="success",
+                    summary=bundle.summary,
+                    content=(
+                        f"Converted files: {len(bundle.files)}\n"
+                        f"Saved archive: {artifact.filename}\n"
+                        f"Hard drive: {artifact.path}\n"
+                        f"Download URL: {artifact.url}"
+                    ),
+                    artifact=artifact,
+                )
+            else:
+                result = await service.chat(request.model, model_prompt, images=model_images)
             if request.session_id:
                 workspace.append_message(request.session_id, ChatMessage(role="user", content=original_prompt))
                 workspace.append_message(

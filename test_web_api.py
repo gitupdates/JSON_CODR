@@ -1,11 +1,13 @@
 import unittest
 import tempfile
+import io
+import zipfile
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from web_app.app import create_app
-from web_app.models import ChatResult
+from web_app.models import ChatResult, ConversionBundle, GeneratedFile
 from web_app.ollama_service import ModelOutputError, ModelTimeoutError, OllamaUnavailableError
 from web_app.workspace import WorkspaceService
 
@@ -59,6 +61,16 @@ class FakeService:
         if model == "opencoder:8b":
             raise OllamaUnavailableError("Model is not installed")
         raise ValueError("Unknown or ambiguous model")
+
+    async def convert_archive(self, model, prompt):
+        self.last_prompt = prompt
+        return ConversionBundle(
+            summary="Converted Claude skills for local use.",
+            files=[
+                GeneratedFile(path="README-CONVERTED.md", content="# Converted usage"),
+                GeneratedFile(path="skills/example/SKILL.md", content="# Example skill"),
+            ],
+        )
 
 
 class WebApiTests(unittest.TestCase):
@@ -155,6 +167,38 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(self.service.last_images), 1)
         self.assertTrue(self.service.last_images[0].is_file())
+
+    def test_conversion_prompt_creates_new_archive_and_returns_locations(self):
+        from web_app.attachments import AttachmentService
+
+        session = self.workspace.create_session()
+        encoded = io.BytesIO()
+        with zipfile.ZipFile(encoded, "w") as archive:
+            archive.writestr("skills/example/SKILL.md", "# Claude skill")
+        source = AttachmentService(self.workspace).import_stream(
+            session.id,
+            "claude-skills.zip",
+            io.BytesIO(encoded.getvalue()),
+        )
+        original, _ = AttachmentService(self.workspace).original_path(session.id, source.id)
+        response = self.client.post(
+            "/api/chat",
+            json={
+                "model": "qwen",
+                "session_id": session.id,
+                "prompt": "Convert these Claude skills and save the updated files as a new ZIP archive",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        artifact = response.json()["artifact"]
+        self.assertEqual(artifact["filename"], "claude-skills-converted.zip")
+        self.assertTrue(Path(artifact["path"]).is_file())
+        self.assertTrue(artifact["url"].startswith("http://testserver/api/sessions/"))
+        self.assertTrue(original.is_file())
+        download = self.client.get(artifact["url"])
+        self.assertEqual(download.status_code, 200)
+        self.assertEqual(download.headers["content-type"], "application/zip")
 
     def test_unknown_model_is_rejected(self):
         response = self.client.post("/api/chat", json={"model": "missing", "prompt": "Hello"})

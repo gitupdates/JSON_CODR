@@ -17,6 +17,23 @@ class ChatResult(BaseModel):
     summary: str
     content: str
     error: Optional[str] = None
+    artifact: Optional["ArtifactRecord"] = None
+
+
+class GeneratedFile(BaseModel):
+    path: str
+    content: str
+
+
+class ConversionBundle(BaseModel):
+    summary: str
+    files: List[GeneratedFile] = Field(default_factory=list)
+
+
+class ArtifactRecord(BaseModel):
+    filename: str
+    path: str
+    url: Optional[str] = None
 
 
 class ModelInfo(BaseModel):

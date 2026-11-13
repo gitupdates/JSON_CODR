@@ -5,7 +5,7 @@ import ollama
 from pydantic import ValidationError
 
 from cli import StructuredCLIResponse, load_config, parse_response_content
-from web_app.models import ChatResult
+from web_app.models import ChatResult, ConversionBundle
 
 
 class OllamaUnavailableError(RuntimeError):
@@ -102,3 +102,38 @@ class OllamaService:
         except (ValidationError, KeyError, TypeError, AttributeError) as error:
             raise ModelOutputError("Malformed structured output") from error
         return ChatResult(model=resolved, **parsed.model_dump())
+
+    async def convert_archive(self, model: str, prompt: str) -> ConversionBundle:
+        resolved = self._resolve(model)
+        live = await self._live_models()
+        if resolved not in live:
+            raise OllamaUnavailableError("Model is not installed")
+        conversion_prompt = (
+            prompt
+            + "\n\nCONVERSION OUTPUT REQUIREMENTS:\n"
+            "Create new, self-contained files adapted for a generic local LLM system without Claude-specific "
+            "runtime assumptions. Include README-CONVERTED.md with detailed usage, syntax, compatibility notes, "
+            "and limitations. Include each converted skill as a separate relative file. Do not claim files were "
+            "installed or executed. Return only the requested structured conversion bundle."
+        )
+        try:
+            response = await asyncio.wait_for(
+                self.client.chat(
+                    model=resolved,
+                    messages=[{"role": "user", "content": conversion_prompt}],
+                    format=ConversionBundle.model_json_schema(),
+                ),
+                timeout=self.timeout_seconds,
+            )
+        except asyncio.TimeoutError as error:
+            raise ModelTimeoutError("Model conversion timed out") from error
+        except Exception as error:
+            raise OllamaUnavailableError("Ollama conversion failed") from error
+        try:
+            raw = response.message.content if hasattr(response, "message") else response["message"]["content"]
+            bundle = ConversionBundle.model_validate_json(raw)
+        except (ValidationError, KeyError, TypeError, AttributeError) as error:
+            raise ModelOutputError("Malformed conversion output") from error
+        if not bundle.files:
+            raise ModelOutputError("Conversion produced no files")
+        return bundle

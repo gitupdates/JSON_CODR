@@ -44,6 +44,7 @@ class WebStaticTests(unittest.TestCase):
                 "cancel-button",
                 "summary-output",
                 "content-output",
+                "artifact-output",
                 "error-output",
             }.issubset(parser.ids)
         )

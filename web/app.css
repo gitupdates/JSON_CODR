@@ -63,6 +63,8 @@ button:disabled { cursor: not-allowed; opacity: .4; }
 #result-state article { padding: 24px 0; border-bottom: 1px solid var(--line); }
 #summary-output { margin: 9px 0 0; font-size: 22px; line-height: 1.35; }
 #content-output { margin: 9px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: #d1d6dd; font: 13px/1.75 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.artifact-output { display: inline-flex; margin-top: 16px; padding: 11px 14px; color: #0b0d09; background: var(--lime); font-weight: 750; text-decoration: none; }
+.artifact-output[hidden] { display: none; }
 .error { margin: auto 0; padding: 17px; border: 1px solid rgba(255,118,118,.35); background: rgba(255,118,118,.07); color: #ffb0b0; font-size: 13px; line-height: 1.5; }
 footer { padding: 22px 0 34px; color: #616a76; font: 600 10px ui-monospace, monospace; text-transform: uppercase; letter-spacing: .11em; }
 

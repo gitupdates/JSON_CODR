@@ -13,6 +13,7 @@ const elements = {
   result: document.querySelector("#result-state"),
   summary: document.querySelector("#summary-output"),
   content: document.querySelector("#content-output"),
+  artifactOutput: document.querySelector("#artifact-output"),
   error: document.querySelector("#error-output"),
   contextToggle: document.querySelector("#context-toggle"),
   contextPanel: document.querySelector("#context-panel"),
@@ -262,6 +263,11 @@ async function submitPrompt(event) {
     elements.responseModel.textContent = payload.model;
     elements.summary.textContent = payload.summary;
     elements.content.textContent = payload.content;
+    elements.artifactOutput.hidden = !payload.artifact;
+    if (payload.artifact) {
+      elements.artifactOutput.href = payload.artifact.url;
+      elements.artifactOutput.textContent = `Download ${payload.artifact.filename}`;
+    }
   } catch (error) {
     showError(error.name === "AbortError" ? "Request cancelled." : error.message);
   } finally {
