@@ -125,10 +125,13 @@ def create_app(
         try:
             original_prompt = request.prompt.strip()
             model_prompt = original_prompt
+            model_images = []
             if request.session_id:
                 session = workspace.get_session(request.session_id)
                 model_prompt = context_assembler.build_prompt(session, original_prompt)
-            result = await service.chat(request.model, model_prompt)
+                if await service.supports_vision(request.model):
+                    model_images = context_assembler.image_paths(session)
+            result = await service.chat(request.model, model_prompt, images=model_images)
             if request.session_id:
                 workspace.append_message(request.session_id, ChatMessage(role="user", content=original_prompt))
                 workspace.append_message(

@@ -59,6 +59,16 @@ class OllamaService:
             )
         return result
 
+    async def supports_vision(self, model: str) -> bool:
+        resolved = self._resolve(model)
+        try:
+            response = await asyncio.wait_for(self.client.show(resolved), timeout=5)
+        except Exception:
+            return False
+        payload = response.model_dump() if hasattr(response, "model_dump") else response
+        capabilities = payload.get("capabilities", [])
+        return "vision" in capabilities
+
     def _resolve(self, requested: str) -> str:
         configured = self.config["jury_models"]
         if requested in configured:
@@ -68,7 +78,7 @@ class OllamaService:
             raise ValueError("Unknown or ambiguous model")
         return matches[0]
 
-    async def chat(self, model: str, prompt: str) -> ChatResult:
+    async def chat(self, model: str, prompt: str, images: Optional[List[Any]] = None) -> ChatResult:
         resolved = self._resolve(model)
         live = await self._live_models()
         if resolved not in live:
@@ -77,7 +87,7 @@ class OllamaService:
             response = await asyncio.wait_for(
                 self.client.chat(
                     model=resolved,
-                    messages=[{"role": "user", "content": prompt}],
+                    messages=[{"role": "user", "content": prompt, "images": images or None}],
                     format=StructuredCLIResponse.model_json_schema(),
                 ),
                 timeout=self.timeout_seconds,

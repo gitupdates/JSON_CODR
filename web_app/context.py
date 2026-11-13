@@ -31,3 +31,17 @@ class ContextAssembler:
             + "\n\n".join(framed)
             + f"\n\nUSER REQUEST:\n{prompt}"
         )
+
+    def image_paths(self, session: SessionRecord) -> list:
+        paths = []
+        for attachment in session.attachments:
+            if (
+                attachment.included
+                and attachment.detected_type
+                and attachment.detected_type.startswith("image/")
+                and attachment.storage_name
+            ):
+                path = self.attachments.workspace.sessions_root / session.id / "originals" / attachment.storage_name
+                if path.is_file():
+                    paths.append(path)
+        return paths

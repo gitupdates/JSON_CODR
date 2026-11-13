@@ -15,6 +15,8 @@ class FakeService:
         self.available = True
         self.error = None
         self.last_prompt = None
+        self.last_images = []
+        self.vision = False
 
     async def health(self):
         return {"ollama": self.available}
@@ -39,8 +41,12 @@ class FakeService:
             },
         ]
 
-    async def chat(self, model, prompt):
+    async def supports_vision(self, model):
+        return self.vision
+
+    async def chat(self, model, prompt, images=None):
         self.last_prompt = prompt
+        self.last_images = images or []
         if self.error:
             raise self.error
         if model in {"qwen", "qwen2.5-coder", "qwen2.5-coder:7b-instruct-q4_K_M"}:
@@ -127,6 +133,28 @@ class WebApiTests(unittest.TestCase):
         restored = self.workspace.get_session(session.id)
         self.assertEqual([message.role for message in restored.messages], ["user", "assistant"])
         self.assertEqual(restored.messages[0].content, "Review the attachment")
+
+    def test_session_chat_sends_original_images_to_vision_models(self):
+        import io
+        from PIL import Image
+        from web_app.attachments import AttachmentService
+
+        session = self.workspace.create_session()
+        encoded = io.BytesIO()
+        Image.new("RGB", (20, 10), "white").save(encoded, format="PNG")
+        AttachmentService(self.workspace).import_stream(
+            session.id, "screen.png", io.BytesIO(encoded.getvalue())
+        )
+        self.service.vision = True
+
+        response = self.client.post(
+            "/api/chat",
+            json={"model": "qwen", "prompt": "Review the image", "session_id": session.id},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(self.service.last_images), 1)
+        self.assertTrue(self.service.last_images[0].is_file())
 
     def test_unknown_model_is_rejected(self):
         response = self.client.post("/api/chat", json={"model": "missing", "prompt": "Hello"})

@@ -107,6 +107,12 @@ class ExtractionServiceTests(unittest.TestCase):
         self.assertEqual(result.text, "")
         self.assertIn("OCR unavailable", result.warnings)
 
+    def test_detects_standard_windows_tesseract_install(self):
+        executable = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+        if not executable.exists():
+            self.skipTest("Standard Windows Tesseract install is unavailable")
+        self.assertIsNotNone(ExtractionService().ocr)
+
     def test_extracts_basic_rtf_as_text(self):
         source = self.root / "notes.rtf"
         source.write_text(r"{\rtf1\ansi Review \b this\b0 document.}", encoding="utf-8")

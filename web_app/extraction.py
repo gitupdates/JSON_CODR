@@ -50,6 +50,10 @@ class ExtractionService:
         try:
             import pytesseract
 
+            standard_windows_path = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+            if standard_windows_path.is_file():
+                pytesseract.pytesseract.tesseract_cmd = str(standard_windows_path)
+
             pytesseract.get_tesseract_version()
             return pytesseract.image_to_string
         except Exception:
