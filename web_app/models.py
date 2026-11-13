@@ -78,6 +78,7 @@ class SessionRecord(BaseModel):
     updated_at: datetime
     messages: List[ChatMessage] = Field(default_factory=list)
     attachments: List[AttachmentRecord] = Field(default_factory=list)
+    selected_skill_ids: List[str] = Field(default_factory=list)
 
 
 class ClipboardTextRequest(BaseModel):
@@ -91,3 +92,30 @@ class AttachmentUpdate(BaseModel):
 class TerminalCreateRequest(BaseModel):
     shell: Literal["powershell", "cmd"] = "powershell"
     cwd: Optional[str] = None
+
+
+class SkillRecord(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    content: str
+    original_content: str = ""
+    enabled: bool = True
+
+
+class SkillPack(BaseModel):
+    id: str
+    name: str
+    source_format: Literal["claude", "codex", "generic"]
+    source_name: str
+    source_path: Optional[str] = None
+    skills: List[SkillRecord] = Field(default_factory=list)
+
+
+class SkillUpdateRequest(BaseModel):
+    content: str
+    enabled: bool = True
+
+
+class SkillSelectionRequest(BaseModel):
+    selected: List[str] = Field(default_factory=list)

@@ -97,6 +97,23 @@
           </div>
           <div id="dependency-list" class="dependency-list"><p class="meta">Import a requirements.txt or package.json file to detect dependencies.</p></div>
         </section>
+        <section id="skill-library" class="dependency-review" aria-label="Installed skill library">
+          <div class="dependency-head">
+            <div><span class="eyebrow">SKILL LIBRARY</span><strong>Installed &amp; selected skills</strong></div>
+            <button id="skill-preview" class="secondary" type="button" disabled>Preview conversion</button>
+            <button id="skill-install" class="secondary" type="button" disabled>Install reviewed pack</button>
+          </div>
+          <p id="skill-conversion-status" class="meta">Choose “Review as skills” on an imported ZIP to convert Claude, Codex, or generic skills.</p>
+          <div id="skill-list" class="skill-list"><p class="meta">No skills installed.</p></div>
+          <div class="skill-editor-wrap">
+            <label><input id="skill-enabled" type="checkbox" disabled /> Skill enabled</label>
+            <textarea id="skill-editor" rows="10" aria-label="Skill instructions" placeholder="Select Edit on a skill" disabled></textarea>
+            <div class="actions">
+              <button id="skill-save" class="primary" type="button" disabled>Save skill</button>
+              <button id="skill-remove-pack" class="secondary" type="button" disabled>Remove pack</button>
+            </div>
+          </div>
+        </section>
       </aside>
 
       <section id="terminal-panel" class="terminal-panel" aria-label="Live command line" hidden>

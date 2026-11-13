@@ -92,3 +92,17 @@ class WorkspaceService:
             destination.flush()
             os.fsync(destination.fileno())
         os.replace(temporary, manifest)
+
+    def clear_skill_pack(self, pack_id: str) -> None:
+        prefix = f"{pack_id}:"
+        for directory in self.sessions_root.iterdir():
+            if not directory.is_dir():
+                continue
+            try:
+                record = self.get_session(directory.name)
+            except (KeyError, InvalidSessionId, ValueError):
+                continue
+            selected = [item for item in record.selected_skill_ids if not item.startswith(prefix)]
+            if selected != record.selected_skill_ids:
+                record.selected_skill_ids = selected
+                self.save_manifest(record)

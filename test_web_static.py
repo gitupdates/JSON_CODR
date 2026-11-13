@@ -107,6 +107,22 @@ class WebStaticTests(unittest.TestCase):
             }.issubset(parser.ids)
         )
 
+    def test_skill_library_controls_are_present(self):
+        response = self.client.get("/")
+        parser = IdCollector()
+        parser.feed(response.text)
+        self.assertTrue(
+            {
+                "skill-library",
+                "skill-list",
+                "skill-preview",
+                "skill-install",
+                "skill-editor",
+                "skill-save",
+                "skill-remove-pack",
+            }.issubset(parser.ids)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

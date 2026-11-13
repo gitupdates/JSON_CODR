@@ -25,6 +25,14 @@ const elements = {
   exportArchive: document.querySelector("#export-archive"),
   dependencyList: document.querySelector("#dependency-list"),
   scanDependencies: document.querySelector("#scan-dependencies"),
+  skillList: document.querySelector("#skill-list"),
+  skillPreview: document.querySelector("#skill-preview"),
+  skillInstall: document.querySelector("#skill-install"),
+  skillEditor: document.querySelector("#skill-editor"),
+  skillEnabled: document.querySelector("#skill-enabled"),
+  skillSave: document.querySelector("#skill-save"),
+  skillRemovePack: document.querySelector("#skill-remove-pack"),
+  skillConversionStatus: document.querySelector("#skill-conversion-status"),
   terminalToggle: document.querySelector("#terminal-toggle"),
   terminalPanel: document.querySelector("#terminal-panel"),
   terminalOutput: document.querySelector("#terminal-output"),
@@ -39,6 +47,8 @@ let activeRequest = null;
 let sessionId = localStorage.getItem("json_codr_session");
 let terminalId = null;
 let terminalSocket = null;
+let skillAttachmentId = null;
+let editingSkill = null;
 
 function appendTerminalOutput(text) {
   elements.terminalOutput.textContent += text;
@@ -128,11 +138,74 @@ async function loadAttachments() {
     });
     const actions = document.createElement("div");
     actions.className = "attachment-actions";
-    actions.append(download, retry, remove);
+    const reviewSkills = document.createElement("button");
+    reviewSkills.type = "button";
+    reviewSkills.textContent = "Review as skills";
+    reviewSkills.addEventListener("click", () => {
+      skillAttachmentId = item.id;
+      elements.skillPreview.disabled = false;
+      elements.skillInstall.disabled = true;
+      elements.skillConversionStatus.textContent = `Ready to preview ${item.display_name}`;
+    });
+    actions.append(download, retry, reviewSkills, remove);
     row.append(label, actions);
     elements.attachmentList.append(row);
   }
   await loadDependencies();
+  await loadSkills();
+}
+
+async function saveSkillSelection() {
+  const selected = [...elements.skillList.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
+  const response = await fetch(`/api/sessions/${sessionId}/skills`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ selected }),
+  });
+  if (!response.ok) throw new Error((await response.json()).detail || "Unable to update skill selection");
+}
+
+async function loadSkills() {
+  await ensureSession();
+  const [packs, session] = await Promise.all([
+    fetch("/api/skills").then((response) => response.json()),
+    fetch(`/api/sessions/${sessionId}`).then((response) => response.json()),
+  ]);
+  const selected = new Set(session.selected_skill_ids || []);
+  elements.skillList.replaceChildren();
+  if (!packs.length) elements.skillList.innerHTML = '<p class="meta">No skills installed.</p>';
+  for (const pack of packs) {
+    const group = document.createElement("section");
+    group.className = "skill-pack";
+    const heading = document.createElement("strong");
+    heading.textContent = `${pack.name} · ${pack.source_format}`;
+    group.append(heading);
+    for (const skill of pack.skills) {
+      const row = document.createElement("div");
+      row.className = "skill-row";
+      const label = document.createElement("label");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.value = `${pack.id}:${skill.id}`;
+      checkbox.checked = selected.has(checkbox.value);
+      checkbox.disabled = !skill.enabled;
+      checkbox.addEventListener("change", () => saveSkillSelection().catch((error) => showError(error.message)));
+      label.append(checkbox, document.createTextNode(` ${skill.name}${skill.enabled ? "" : " · disabled"}`));
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.textContent = "Edit";
+      edit.addEventListener("click", () => {
+        editingSkill = { packId: pack.id, skillId: skill.id, enabled: skill.enabled };
+        elements.skillEditor.value = skill.content;
+        elements.skillEditor.disabled = false;
+        elements.skillEnabled.checked = skill.enabled;
+        elements.skillEnabled.disabled = false;
+        elements.skillSave.disabled = false;
+        elements.skillRemovePack.disabled = false;
+      });
+      row.append(label, edit);
+      group.append(row);
+    }
+    elements.skillList.append(group);
+  }
 }
 
 async function loadDependencies() {
@@ -296,6 +369,46 @@ elements.pasteTextButton.addEventListener("click", async () => {
   await loadAttachments();
 });
 elements.scanDependencies.addEventListener("click", () => loadDependencies().catch((error) => showError(error.message)));
+elements.skillPreview.addEventListener("click", async () => {
+  const response = await fetch(`/api/sessions/${sessionId}/attachments/${skillAttachmentId}/skill-preview`, { method: "POST" });
+  const payload = await response.json();
+  if (!response.ok) return showError(payload.detail || "Skill conversion preview failed");
+  elements.skillConversionStatus.textContent = `${payload.source_format} pack · ${payload.skills.length} skills · review complete`;
+  elements.skillEditor.value = payload.skills.map((skill) => `# ${skill.name}\n${skill.content}`).join("\n\n---\n\n");
+  elements.skillEditor.disabled = false;
+  elements.skillSave.disabled = true;
+  elements.skillRemovePack.disabled = true;
+  elements.skillInstall.disabled = false;
+});
+elements.skillInstall.addEventListener("click", async () => {
+  const response = await fetch(`/api/sessions/${sessionId}/attachments/${skillAttachmentId}/skill-install`, { method: "POST" });
+  const payload = await response.json();
+  if (!response.ok) return showError(payload.detail || "Skill installation failed");
+  elements.skillConversionStatus.textContent = `Installed ${payload.name} with ${payload.skills.length} skills`;
+  elements.skillInstall.disabled = true;
+  await loadSkills();
+});
+elements.skillSave.addEventListener("click", async () => {
+  if (!editingSkill) return;
+  const response = await fetch(`/api/skills/${editingSkill.packId}/${editingSkill.skillId}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content: elements.skillEditor.value, enabled: elements.skillEnabled.checked }),
+  });
+  if (!response.ok) return showError((await response.json()).detail || "Unable to save skill");
+  await loadSkills();
+});
+elements.skillRemovePack.addEventListener("click", async () => {
+  if (!editingSkill || !confirm("Remove this installed skill pack? The imported archive will be preserved.")) return;
+  const response = await fetch(`/api/skills/${editingSkill.packId}`, { method: "DELETE" });
+  if (!response.ok) return showError((await response.json()).detail || "Unable to remove skill pack");
+  editingSkill = null;
+  elements.skillEditor.value = "";
+  elements.skillEditor.disabled = true;
+  elements.skillEnabled.disabled = true;
+  elements.skillSave.disabled = true;
+  elements.skillRemovePack.disabled = true;
+  await loadSkills();
+});
 elements.terminalToggle.addEventListener("click", async () => {
   elements.terminalPanel.hidden = !elements.terminalPanel.hidden;
   elements.terminalToggle.setAttribute("aria-expanded", String(!elements.terminalPanel.hidden));

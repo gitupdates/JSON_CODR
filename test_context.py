@@ -27,6 +27,22 @@ class ContextAssemblerTests(unittest.TestCase):
         self.assertIn("ARCHIVE CONTENTS", prompt)
         self.assertNotIn("BEGIN UNTRUSTED ATTACHMENT", prompt)
 
+    def test_selected_skill_is_injected_in_full(self):
+        from web_app.models import SkillPack, SkillRecord
+        from web_app.skills import SkillLibraryService
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = WorkspaceService(Path(directory))
+            session = workspace.create_session()
+            library = SkillLibraryService(Path(directory))
+            library.install(SkillPack(id="pack", name="Pack", source_format="generic", source_name="pack.zip", skills=[SkillRecord(id="review", name="Review", content="FULL SKILL INSTRUCTIONS")]))
+            session.selected_skill_ids = ["pack:review"]
+            workspace.save_manifest(session)
+            prompt = ContextAssembler(AttachmentService(workspace), skills=library).build_prompt(session, "Review this")
+
+        self.assertIn("FULL SKILL INSTRUCTIONS", prompt)
+        self.assertIn("SELECTED SKILL pack:review", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

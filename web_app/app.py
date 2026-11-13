@@ -10,7 +10,7 @@ from web_app.attachments import AttachmentService, AttachmentTooLarge
 from web_app.artifacts import ArtifactService
 from web_app.context import ContextAssembler
 from web_app.dependencies import DependencyService
-from web_app.models import AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, TerminalCreateRequest
+from web_app.models import AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
 from web_app.ollama_service import (
     ModelOutputError,
     ModelTimeoutError,
@@ -19,6 +19,7 @@ from web_app.ollama_service import (
 )
 from web_app.workspace import InvalidSessionId, WorkspaceService, default_data_root
 from web_app.terminal import TerminalService
+from web_app.skills import SkillConverterService, SkillLibraryService
 
 
 def create_app(
@@ -30,7 +31,9 @@ def create_app(
     application = FastAPI(title="JSON_CODR", version="V1.0.0")
     workspace = workspace or WorkspaceService(default_data_root())
     attachments = attachments or AttachmentService(workspace)
-    context_assembler = ContextAssembler(attachments)
+    skill_library = SkillLibraryService(workspace.data_root)
+    skill_converter = SkillConverterService()
+    context_assembler = ContextAssembler(attachments, skills=skill_library)
     dependency_service = DependencyService(attachments)
     artifact_service = ArtifactService(workspace)
     terminals = terminals or TerminalService()
@@ -145,6 +148,68 @@ def create_app(
             media_type="application/zip",
             headers={"Content-Disposition": f'attachment; filename="json-codr-{session_id}.zip"'},
         )
+
+    @application.get("/api/skills")
+    async def list_skills():
+        return skill_library.list()
+
+    def convert_attachment(session_id: str, attachment_id: str):
+        path, record = attachments.original_path(session_id, attachment_id)
+        return skill_converter.convert(path, record.display_name)
+
+    @application.post("/api/sessions/{session_id}/attachments/{attachment_id}/skill-preview")
+    async def preview_skill_pack(session_id: str, attachment_id: str):
+        try:
+            return convert_attachment(session_id, attachment_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Attachment not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @application.post("/api/sessions/{session_id}/attachments/{attachment_id}/skill-install", status_code=201)
+    async def install_skill_pack(session_id: str, attachment_id: str):
+        try:
+            return skill_library.install(convert_attachment(session_id, attachment_id))
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Attachment not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @application.patch("/api/sessions/{session_id}/skills")
+    async def select_session_skills(session_id: str, request: SkillSelectionRequest):
+        try:
+            session = workspace.get_session(session_id)
+            for selection in request.selected:
+                if ":" not in selection:
+                    raise ValueError("Invalid skill selection")
+                skill = skill_library.get_skill(*selection.split(":", 1))
+                if not skill.enabled:
+                    raise ValueError("Disabled skills cannot be selected")
+            session.selected_skill_ids = list(dict.fromkeys(request.selected))
+            workspace.save_manifest(session)
+            return session
+        except InvalidSessionId as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Skill or session not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @application.patch("/api/skills/{pack_id}/{skill_id}")
+    async def update_skill(pack_id: str, skill_id: str, request: SkillUpdateRequest):
+        try:
+            return skill_library.update_skill(pack_id, skill_id, request.content, request.enabled)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Skill not found") from error
+
+    @application.delete("/api/skills/{pack_id}", status_code=204)
+    async def remove_skill_pack(pack_id: str):
+        try:
+            skill_library.remove(pack_id)
+            workspace.clear_skill_pack(pack_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Skill pack not found") from error
+        return Response(status_code=204)
 
     @application.get("/api/sessions/{session_id}/artifacts/{filename}")
     async def download_artifact(session_id: str, filename: str):
