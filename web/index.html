@@ -22,6 +22,8 @@
         <div class="topbar-actions">
           <button id="terminal-toggle" class="panel-toggle" type="button" aria-controls="terminal-panel" aria-expanded="false" title="Toggle terminal (Ctrl+J)">CLI</button>
           <button id="context-toggle" class="panel-toggle" type="button" aria-controls="context-panel" aria-expanded="true" title="Toggle context panel (Ctrl+Alt+B)">Context</button>
+          <button id="skills-toggle" class="panel-toggle" type="button" aria-controls="skills-panel" aria-expanded="true">Skills</button>
+          <button id="settings-toggle" class="panel-toggle" type="button" aria-controls="settings-panel" aria-expanded="false">Settings</button>
         </div>
       </header>
 
@@ -97,15 +99,19 @@
           </div>
           <div id="dependency-list" class="dependency-list"><p class="meta">Import a requirements.txt or package.json file to detect dependencies.</p></div>
         </section>
-        <section id="skill-library" class="dependency-review" aria-label="Installed skill library">
+      </aside>
+
+      <aside id="skills-panel" class="context-panel" aria-label="Active installed and saved skills">
+        <section id="skill-library" aria-label="Installed skill library">
           <div class="dependency-head">
-            <div><span class="eyebrow">SKILL LIBRARY</span><strong>Installed &amp; selected skills</strong></div>
+            <div><span class="eyebrow">SKILL LIBRARY</span><strong>Active installed &amp; saved skills</strong></div>
             <button id="skill-preview" class="secondary" type="button" disabled>Preview conversion</button>
             <button id="skill-install" class="secondary" type="button" disabled>Install reviewed pack</button>
             <button id="skill-deduplicate" class="secondary" type="button">Remove duplicates</button>
           </div>
           <p id="skill-conversion-status" class="meta">Choose “Review as skills” on an imported ZIP to convert Claude, Codex, or generic skills.</p>
           <div id="skill-list" class="skill-list"><p class="meta">No skills installed.</p></div>
+          <article id="skill-details" class="skill-details" hidden aria-live="polite"></article>
           <div class="skill-editor-wrap">
             <label><input id="skill-enabled" type="checkbox" disabled /> Skill enabled</label>
             <textarea id="skill-editor" rows="10" aria-label="Skill instructions" placeholder="Select Edit on a skill" disabled></textarea>
@@ -114,6 +120,27 @@
               <button id="skill-remove-pack" class="secondary" type="button" disabled>Remove pack</button>
             </div>
           </div>
+          <section class="skill-discovery" aria-label="Skill discovery">
+            <div><span class="eyebrow">DISCOVERY</span><strong>Scan an approved local folder</strong></div>
+            <div class="scan-controls">
+              <input id="skill-scan-directory" type="text" placeholder="D:\path\to\skills" aria-label="Skill scan directory" />
+              <button id="skill-scan" class="secondary" type="button">Scan folder</button>
+              <button id="skill-scan-known" class="secondary" type="button" hidden>Scan known locations</button>
+            </div>
+            <div id="skill-scan-results" class="skill-list"><p class="meta">No scan has run.</p></div>
+          </section>
+        </section>
+      </aside>
+
+      <aside id="settings-panel" class="context-panel" aria-label="JSON CODR settings" hidden>
+        <div class="context-head"><div><span class="eyebrow">SETTINGS</span><h2>System configuration</h2></div></div>
+        <section class="dependency-review">
+          <strong>Interface</strong>
+          <label class="setting-row"><input id="setting-skills-open" type="checkbox" /> Reopen Skills panel on startup</label>
+        </section>
+        <section class="dependency-review">
+          <strong>Approved skill directories</strong>
+          <div id="approved-skill-directories" class="dependency-list"><p class="meta">No folders approved.</p></div>
         </section>
       </aside>
 

@@ -113,13 +113,23 @@ class WebStaticTests(unittest.TestCase):
         parser.feed(response.text)
         self.assertTrue(
             {
+                "skills-toggle",
+                "settings-toggle",
+                "skills-panel",
+                "settings-panel",
                 "skill-library",
                 "skill-list",
+                "skill-details",
                 "skill-preview",
                 "skill-install",
                 "skill-editor",
                 "skill-save",
                 "skill-remove-pack",
+                "skill-scan-directory",
+                "skill-scan",
+                "skill-scan-results",
+                "skill-scan-known",
+                "approved-skill-directories",
             }.issubset(parser.ids)
         )
 

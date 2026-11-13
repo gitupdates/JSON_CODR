@@ -1,6 +1,7 @@
 from web_app.attachments import AttachmentService
 from web_app.models import SessionRecord
 from web_app.skills import SkillLibraryService
+import re
 
 
 class ContextAssembler:
@@ -21,8 +22,16 @@ class ContextAssembler:
                 except KeyError:
                     continue
                 if skill.enabled:
+                    capability_match = re.search(r"(?mi)^(?:capabilities|required-capabilities):\s*([^\n]+)", skill.content)
+                    capabilities = capability_match.group(1).strip() if capability_match else "Use only capabilities available and authorized in JSON_CODR"
                     selected_skills.append(
                         f"SELECTED SKILL {selection}: {skill.name}\n"
+                        "JSON_CODR_SKILL_SCHEMA: 1\n"
+                        f"INTENT: {skill.description or f'Apply the {skill.name} workflow to the user request'}\n"
+                        f"CAPABILITIES: {capabilities}\n"
+                        "SYNTAX: Treat {{arguments}} as the current user request when present.\n"
+                        "EXECUTION_DIRECTIVE: Apply this active skill automatically. Follow its instructions in order, "
+                        "use only available authorized capabilities, and report unavailable requirements honestly.\n"
                         f"--- BEGIN SKILL INSTRUCTIONS ---\n{skill.content}\n--- END SKILL INSTRUCTIONS ---"
                     )
         remaining = self.max_characters
@@ -53,7 +62,7 @@ class ContextAssembler:
             if framed else ""
         )
         skill_context = (
-            "Apply the selected skill instructions to the user request. Provider-specific tool names describe "
+            "Apply every active skill automatically to the user request. Provider-specific tool names describe "
             "capabilities only; use available JSON_CODR capabilities and ask before CLI mutations.\n\n"
             + "\n\n".join(selected_skills)
             if selected_skills else ""

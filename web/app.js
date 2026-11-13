@@ -17,6 +17,10 @@ const elements = {
   error: document.querySelector("#error-output"),
   contextToggle: document.querySelector("#context-toggle"),
   contextPanel: document.querySelector("#context-panel"),
+  skillsToggle: document.querySelector("#skills-toggle"),
+  skillsPanel: document.querySelector("#skills-panel"),
+  settingsToggle: document.querySelector("#settings-toggle"),
+  settingsPanel: document.querySelector("#settings-panel"),
   contextCount: document.querySelector("#context-count"),
   attachmentInput: document.querySelector("#attachment-input"),
   pasteTextButton: document.querySelector("#paste-text-button"),
@@ -34,6 +38,13 @@ const elements = {
   skillSave: document.querySelector("#skill-save"),
   skillRemovePack: document.querySelector("#skill-remove-pack"),
   skillConversionStatus: document.querySelector("#skill-conversion-status"),
+  skillDetails: document.querySelector("#skill-details"),
+  skillScanDirectory: document.querySelector("#skill-scan-directory"),
+  skillScan: document.querySelector("#skill-scan"),
+  skillScanKnown: document.querySelector("#skill-scan-known"),
+  skillScanResults: document.querySelector("#skill-scan-results"),
+  settingSkillsOpen: document.querySelector("#setting-skills-open"),
+  approvedSkillDirectories: document.querySelector("#approved-skill-directories"),
   terminalToggle: document.querySelector("#terminal-toggle"),
   terminalPanel: document.querySelector("#terminal-panel"),
   terminalOutput: document.querySelector("#terminal-output"),
@@ -51,6 +62,8 @@ let terminalSocket = null;
 let skillAttachmentId = null;
 let editingSkill = null;
 let skillLoadGeneration = 0;
+let settingsState = null;
+let skillFallbackToken = null;
 
 function appendTerminalOutput(text) {
   elements.terminalOutput.textContent += text;
@@ -99,6 +112,45 @@ async function ensureSession() {
   sessionId = session.id;
   localStorage.setItem("json_codr_session", sessionId);
   return sessionId;
+}
+
+async function saveSettings(update) {
+  const response = await fetch("/api/settings", {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(update),
+  });
+  if (!response.ok) throw new Error((await response.json()).detail || "Unable to save settings");
+  settingsState = await response.json();
+  renderApprovedDirectories();
+}
+
+function renderApprovedDirectories() {
+  elements.approvedSkillDirectories.replaceChildren();
+  const directories = settingsState?.skill_scan?.approved_directories || [];
+  if (!directories.length) {
+    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "No folders approved.";
+    elements.approvedSkillDirectories.append(empty); return;
+  }
+  for (const directory of directories) {
+    const row = document.createElement("div"); row.className = "dependency-row";
+    const path = document.createElement("code"); path.textContent = directory;
+    const actions = document.createElement("div"); actions.className = "attachment-actions";
+    const rescan = document.createElement("button"); rescan.type = "button"; rescan.textContent = "Rescan";
+    rescan.addEventListener("click", () => scanSkillDirectory(directory));
+    const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "Remove";
+    remove.addEventListener("click", () => saveSettings({ skill_scan: { approved_directories: directories.filter((item) => item !== directory) } }).catch((error) => showError(error.message)));
+    actions.append(rescan, remove); row.append(path, actions); elements.approvedSkillDirectories.append(row);
+  }
+}
+
+async function loadSettings() {
+  const response = await fetch("/api/settings");
+  if (!response.ok) throw new Error("Unable to load settings");
+  settingsState = await response.json();
+  const open = settingsState.ui.skill_catalog_open;
+  elements.skillsPanel.hidden = !open;
+  elements.skillsToggle.setAttribute("aria-expanded", String(open));
+  elements.settingSkillsOpen.checked = open;
+  renderApprovedDirectories();
 }
 
 async function loadAttachments() {
@@ -165,6 +217,24 @@ async function saveSkillSelection() {
   if (!response.ok) throw new Error((await response.json()).detail || "Unable to update skill selection");
 }
 
+function showSkillDetails(pack, skill, selected) {
+  elements.skillDetails.replaceChildren();
+  elements.skillDetails.hidden = false;
+  const title = document.createElement("h3"); title.textContent = skill.name;
+  const state = document.createElement("p"); state.className = "meta";
+  state.textContent = `${selected ? "Active in this session" : "Installed"} · ${skill.enabled ? "enabled" : "disabled"} · ${pack.source_format}`;
+  const intent = document.createElement("p"); intent.textContent = skill.description || `Apply the ${skill.name} workflow to the current request.`;
+  const abilities = document.createElement("pre");
+  const capability = skill.content.match(/^(?:capabilities|required-capabilities):\s*([^\n]+)/mi);
+  abilities.textContent = `ABILITIES\n${capability ? capability[1] : "Uses the instructions and capabilities available to the selected model."}\n\nCOMMAND STRUCTURE & SYNTAX\nSelect this skill, then describe the task in the prompt. {{arguments}} represents user input when present.\n\nEXAMPLE\nEnable the skill, save it, and run a relevant request with any installed LLM.`;
+  const download = document.createElement("a");
+  download.className = "secondary file-button";
+  download.href = `/api/skills/${pack.id}/${skill.id}/documentation.md`;
+  download.textContent = "Export documentation";
+  title.scrollIntoView({ block: "nearest" });
+  elements.skillDetails.append(title, state, intent, abilities, download);
+}
+
 async function loadSkills() {
   const generation = ++skillLoadGeneration;
   await ensureSession();
@@ -210,7 +280,12 @@ async function loadSkills() {
         elements.skillSave.disabled = false;
         elements.skillRemovePack.disabled = false;
       });
-      row.append(label, edit);
+      const details = document.createElement("button");
+      details.type = "button";
+      details.textContent = "Details";
+      details.addEventListener("click", () => showSkillDetails(pack, skill, selected.has(checkbox.value)));
+      const actions = document.createElement("div"); actions.className = "skill-actions"; actions.append(details, edit);
+      row.append(label, actions);
       group.append(row);
     }
     content.append(group);
@@ -251,6 +326,50 @@ async function loadDependencies() {
     row.append(details, send);
     elements.dependencyList.append(row);
   }
+}
+
+function renderSkillDiscoveries(payload) {
+  elements.skillScanResults.replaceChildren();
+  skillFallbackToken = payload.fallback_token || null;
+  elements.skillScanKnown.hidden = !skillFallbackToken;
+  if (!payload.discoveries.length) {
+    const empty = document.createElement("p"); empty.className = "meta";
+    empty.textContent = "No compatible skills found. You may scan known provider locations.";
+    elements.skillScanResults.append(empty); return;
+  }
+  for (const discovery of payload.discoveries) {
+    const row = document.createElement("div"); row.className = "dependency-row";
+    const description = document.createElement("div");
+    const name = document.createElement("strong"); name.textContent = discovery.name;
+    const metadata = document.createElement("span"); metadata.className = "meta";
+    metadata.textContent = `${discovery.source_format} · ${discovery.skill_count} skill(s)${discovery.already_installed ? " · already installed" : ""}`;
+    description.append(name, metadata);
+    const install = document.createElement("button"); install.type = "button"; install.className = "secondary"; install.textContent = "Install";
+    install.disabled = discovery.already_installed;
+    install.addEventListener("click", async () => {
+      const response = await fetch("/api/skills/install-discovery", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ discovery_id: discovery.id }),
+      });
+      const result = await response.json();
+      if (!response.ok) return showError(result.detail || "Unable to install discovered skill");
+      elements.skillConversionStatus.textContent = `Installed ${result.name} with ${result.skills.length} skills`;
+      await loadSkills();
+      install.disabled = true;
+    });
+    row.append(description, install); elements.skillScanResults.append(row);
+  }
+}
+
+async function scanSkillDirectory(directory = elements.skillScanDirectory.value) {
+  if (!directory.trim()) return showError("Enter a local skill directory to scan");
+  elements.skillScanDirectory.value = directory;
+  const response = await fetch("/api/skills/scan", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ directory }),
+  });
+  const payload = await response.json();
+  if (!response.ok) return showError(payload.detail || "Skill scan failed");
+  renderSkillDiscoveries(payload);
+  await loadSettings();
 }
 
 async function uploadFiles(files) {
@@ -371,6 +490,23 @@ elements.contextToggle.addEventListener("click", () => {
   elements.contextToggle.setAttribute("aria-expanded", String(!elements.contextPanel.hidden));
   localStorage.setItem("json_codr_context_open", String(!elements.contextPanel.hidden));
 });
+elements.skillsToggle.addEventListener("click", () => {
+  const open = elements.skillsPanel.hidden;
+  elements.skillsPanel.hidden = !open;
+  elements.skillsToggle.setAttribute("aria-expanded", String(open));
+  elements.settingSkillsOpen.checked = open;
+  saveSettings({ ui: { skill_catalog_open: open } }).catch((error) => showError(error.message));
+});
+elements.settingsToggle.addEventListener("click", () => {
+  elements.settingsPanel.hidden = !elements.settingsPanel.hidden;
+  elements.settingsToggle.setAttribute("aria-expanded", String(!elements.settingsPanel.hidden));
+});
+elements.settingSkillsOpen.addEventListener("change", () => {
+  const open = elements.settingSkillsOpen.checked;
+  elements.skillsPanel.hidden = !open;
+  elements.skillsToggle.setAttribute("aria-expanded", String(open));
+  saveSettings({ ui: { skill_catalog_open: open } }).catch((error) => showError(error.message));
+});
 elements.attachmentInput.addEventListener("change", () => uploadFiles(elements.attachmentInput.files));
 elements.pasteTextButton.addEventListener("click", async () => {
   await ensureSession();
@@ -380,6 +516,16 @@ elements.pasteTextButton.addEventListener("click", async () => {
   await loadAttachments();
 });
 elements.scanDependencies.addEventListener("click", () => loadDependencies().catch((error) => showError(error.message)));
+elements.skillScan.addEventListener("click", () => scanSkillDirectory().catch((error) => showError(error.message)));
+elements.skillScanKnown.addEventListener("click", async () => {
+  if (!skillFallbackToken || !confirm("No skills were found. Scan known Claude, Codex, and JSON_CODR locations now?")) return;
+  const response = await fetch("/api/skills/scan-known", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fallback_token: skillFallbackToken }),
+  });
+  const payload = await response.json();
+  if (!response.ok) return showError(payload.detail || "Known-location scan failed");
+  renderSkillDiscoveries(payload);
+});
 elements.skillPreview.addEventListener("click", async () => {
   const response = await fetch(`/api/sessions/${sessionId}/attachments/${skillAttachmentId}/skill-preview`, { method: "POST" });
   const payload = await response.json();
@@ -424,6 +570,12 @@ elements.skillSave.addEventListener("click", async () => {
   elements.skillConversionStatus.textContent = elements.skillEnabled.checked
     ? `Saved and applied ${editingSkill.name} to this session`
     : `Saved and disabled ${editingSkill.name}`;
+  if (elements.skillsPanel.hidden) {
+    elements.skillsPanel.hidden = false;
+    elements.skillsToggle.setAttribute("aria-expanded", "true");
+    elements.settingSkillsOpen.checked = true;
+    await saveSettings({ ui: { skill_catalog_open: true } });
+  }
   await loadSkills();
   elements.skillSave.disabled = false;
 });
@@ -467,4 +619,5 @@ document.addEventListener("keydown", (event) => {
 });
 
 loadApplication();
+loadSettings().catch((error) => showError(error.message));
 loadAttachments().catch((error) => showError(error.message));

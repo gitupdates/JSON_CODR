@@ -42,6 +42,10 @@ class ContextAssemblerTests(unittest.TestCase):
 
         self.assertIn("FULL SKILL INSTRUCTIONS", prompt)
         self.assertIn("SELECTED SKILL pack:review", prompt)
+        self.assertIn("JSON_CODR_SKILL_SCHEMA: 1", prompt)
+        self.assertIn("INTENT:", prompt)
+        self.assertIn("EXECUTION_DIRECTIVE:", prompt)
+        self.assertIn("Apply every active skill automatically", prompt)
 
 
 if __name__ == "__main__":

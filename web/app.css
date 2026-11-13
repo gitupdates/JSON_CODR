@@ -108,8 +108,18 @@ footer { padding: 22px 0 34px; color: #616a76; font: 600 10px ui-monospace, mono
 .skill-pack { padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
 .skill-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 8px; }
 .skill-row button { height: 32px; padding: 0 10px; color: var(--text); background: #242a33; }
+.skill-actions { display: flex; gap: 7px; }
+.skill-details { margin-top: 14px; padding: 18px; border: 1px solid rgba(92,225,230,.3); border-radius: 10px; background: #080c13; }
+.skill-details h3 { margin: 0 0 6px; }
+.skill-details pre { white-space: pre-wrap; color: #d1d6dd; font: 12px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .skill-editor-wrap { margin-top: 14px; }
 .skill-editor-wrap textarea { min-height: 160px; }
+.skill-discovery { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
+.skill-discovery strong { display: block; margin-top: 3px; }
+.scan-controls { display: flex; gap: 10px; margin-top: 12px; }
+.scan-controls input { flex: 1; min-width: 0; height: 44px; padding: 0 12px; color: var(--text); background: #0c1117; border: 1px solid var(--line); font: 12px ui-monospace, monospace; }
+.setting-row { display: block; margin-top: 12px; }
+#approved-skill-directories code { overflow-wrap: anywhere; color: var(--cyan); }
 .terminal-panel { position: sticky; bottom: 0; z-index: 10; margin-top: 18px; border: 1px solid rgba(92,225,230,.3); border-radius: 16px 16px 0 0; background: #090d12; box-shadow: 0 -18px 50px rgba(0,0,0,.45); overflow: hidden; }
 .terminal-panel[hidden] { display: none; }
 .terminal-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
@@ -118,3 +128,9 @@ footer { padding: 22px 0 34px; color: #616a76; font: 600 10px ui-monospace, mono
 .terminal-command { display: flex; align-items: center; gap: 10px; padding: 10px 12px; color: var(--lime); font: 13px ui-monospace, monospace; border-top: 1px solid var(--line); }
 .terminal-command input { min-width: 0; flex: 1; height: 40px; padding: 0 12px; color: var(--text); background: #0c1117; border: 1px solid var(--line); font: inherit; }
 .terminal-command button { height: 40px; min-width: auto; }
+
+@media (max-width: 700px) {
+  .topbar { flex-wrap: wrap; padding: 12px 0; }
+  .scan-controls { flex-direction: column; }
+  .skill-row { align-items: flex-start; }
+}
