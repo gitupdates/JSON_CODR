@@ -56,6 +56,24 @@ class WebStaticTests(unittest.TestCase):
         self.assertEqual(javascript.status_code, 200)
         self.assertIn("javascript", javascript.headers["content-type"])
 
+    def test_attachment_context_tray_controls_are_present(self):
+        response = self.client.get("/")
+        parser = IdCollector()
+        parser.feed(response.text)
+        self.assertTrue(
+            {
+                "context-toggle",
+                "context-panel",
+                "attachment-input",
+                "paste-text-button",
+                "attachment-list",
+                "attachment-preview",
+            }.issubset(parser.ids)
+        )
+        javascript = self.client.get("/static/app.js").text
+        self.assertIn("/api/sessions", javascript)
+        self.assertIn("navigator.clipboard", javascript)
+
 
 if __name__ == "__main__":
     unittest.main()

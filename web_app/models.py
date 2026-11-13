@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 class ChatRequest(BaseModel):
     model: str
     prompt: str
+    session_id: Optional[str] = None
 
 
 class ChatResult(BaseModel):
@@ -49,6 +50,8 @@ class AttachmentRecord(BaseModel):
     extraction_state: ExtractionState = ExtractionState.pending
     included: bool = True
     warnings: List[str] = Field(default_factory=list)
+    storage_name: Optional[str] = None
+    extracted_name: Optional[str] = None
 
 
 class SessionRecord(BaseModel):
@@ -58,3 +61,11 @@ class SessionRecord(BaseModel):
     updated_at: datetime
     messages: List[ChatMessage] = Field(default_factory=list)
     attachments: List[AttachmentRecord] = Field(default_factory=list)
+
+
+class ClipboardTextRequest(BaseModel):
+    text: str
+
+
+class AttachmentUpdate(BaseModel):
+    included: bool

@@ -14,10 +14,66 @@ const elements = {
   summary: document.querySelector("#summary-output"),
   content: document.querySelector("#content-output"),
   error: document.querySelector("#error-output"),
+  contextToggle: document.querySelector("#context-toggle"),
+  contextPanel: document.querySelector("#context-panel"),
+  contextCount: document.querySelector("#context-count"),
+  attachmentInput: document.querySelector("#attachment-input"),
+  pasteTextButton: document.querySelector("#paste-text-button"),
+  attachmentList: document.querySelector("#attachment-list"),
+  attachmentPreview: document.querySelector("#attachment-preview"),
 };
 
 let models = [];
 let activeRequest = null;
+let sessionId = localStorage.getItem("json_codr_session");
+
+async function ensureSession() {
+  if (sessionId && (await fetch(`/api/sessions/${sessionId}`)).ok) return sessionId;
+  const session = await fetch("/api/sessions", { method: "POST" }).then((response) => response.json());
+  sessionId = session.id;
+  localStorage.setItem("json_codr_session", sessionId);
+  return sessionId;
+}
+
+async function loadAttachments() {
+  await ensureSession();
+  const attachments = await fetch(`/api/sessions/${sessionId}/attachments`).then((response) => response.json());
+  elements.contextCount.textContent = `${attachments.length} item${attachments.length === 1 ? "" : "s"}`;
+  elements.attachmentList.replaceChildren();
+  if (!attachments.length) elements.attachmentList.innerHTML = '<p class="meta">No context attached.</p>';
+  for (const item of attachments) {
+    const row = document.createElement("div");
+    row.className = "attachment-row";
+    const label = document.createElement("button");
+    label.type = "button";
+    label.textContent = `${item.included ? "●" : "○"} ${item.display_name} · ${item.extraction_state}`;
+    label.addEventListener("click", async () => {
+      const preview = await fetch(`/api/sessions/${sessionId}/attachments/${item.id}/preview`).then((response) => response.json());
+      elements.attachmentPreview.textContent = preview.text;
+      elements.attachmentPreview.hidden = false;
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", async () => {
+      await fetch(`/api/sessions/${sessionId}/attachments/${item.id}`, { method: "DELETE" });
+      await loadAttachments();
+    });
+    row.append(label, remove);
+    elements.attachmentList.append(row);
+  }
+}
+
+async function uploadFiles(files) {
+  await ensureSession();
+  for (const file of files) {
+    const body = new FormData();
+    body.append("file", file);
+    const response = await fetch(`/api/sessions/${sessionId}/attachments`, { method: "POST", body });
+    if (!response.ok) showError((await response.json()).detail || `Unable to import ${file.name}`);
+  }
+  await loadAttachments();
+}
 
 function selectedModel() {
   return models.find((model) => model.name === elements.model.value);
@@ -91,7 +147,7 @@ async function submitPrompt(event) {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: elements.model.value, prompt }),
+      body: JSON.stringify({ model: elements.model.value, prompt, session_id: sessionId }),
       signal: activeRequest.signal,
     });
     const payload = await response.json();
@@ -116,5 +172,25 @@ elements.model.addEventListener("change", updateModelDetail);
 elements.prompt.addEventListener("keydown", (event) => {
   if (event.ctrlKey && event.key === "Enter") elements.form.requestSubmit();
 });
+elements.contextToggle.addEventListener("click", () => {
+  elements.contextPanel.hidden = !elements.contextPanel.hidden;
+  elements.contextToggle.setAttribute("aria-expanded", String(!elements.contextPanel.hidden));
+  localStorage.setItem("json_codr_context_open", String(!elements.contextPanel.hidden));
+});
+elements.attachmentInput.addEventListener("change", () => uploadFiles(elements.attachmentInput.files));
+elements.pasteTextButton.addEventListener("click", async () => {
+  await ensureSession();
+  const text = await navigator.clipboard.readText();
+  if (!text.trim()) return;
+  await fetch(`/api/sessions/${sessionId}/clipboard-text`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+  await loadAttachments();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.ctrlKey && event.altKey && event.key.toLowerCase() === "b") {
+    event.preventDefault();
+    elements.contextToggle.click();
+  }
+});
 
 loadApplication();
+loadAttachments().catch((error) => showError(error.message));
