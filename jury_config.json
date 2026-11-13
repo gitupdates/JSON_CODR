@@ -1,0 +1,16 @@
+{
+  "host": "http://127.0.0.1:11434",
+  "model": "qwen2.5-coder:7b-instruct-q4_K_M",
+  "primary_base_model": "qwen2.5-coder:7b-instruct-q4_K_M",
+  "synthesizer_model": "qwen2.5-coder:7b-instruct-q4_K_M",
+  "jury_models": [
+    "qwen2.5-coder:7b-instruct-q4_K_M",
+    "opencoder:8b",
+    "codegeex4:9b",
+    "yi-coder:9b-chat",
+    "deepseek-coder:6.7b-instruct",
+    "starcoder2:7b",
+    "granite-code:8b-instruct",
+    "codegemma:7b-instruct"
+  ]
+}

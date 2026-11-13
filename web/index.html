@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>JSON_CODR · Local model console</title>
+    <link rel="stylesheet" href="/static/app.css" />
+  </head>
+  <body>
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="JSON CODR home">
+          <span class="brand-mark">{ }</span>
+          <span><strong>JSON_CODR</strong><small>V1.0.2 · local model console</small></span>
+        </a>
+        <div id="health-status" class="health" role="status" aria-live="polite">
+          <span class="health-dot"></span><span>Connecting</span>
+        </div>
+        <div class="topbar-actions">
+          <button id="terminal-toggle" class="panel-toggle" type="button" aria-controls="terminal-panel" aria-expanded="false" title="Toggle terminal (Ctrl+J)">CLI</button>
+          <button id="context-toggle" class="panel-toggle" type="button" aria-controls="context-panel" aria-expanded="true" title="Toggle context panel (Ctrl+Alt+B)">Context</button>
+          <button id="skills-toggle" class="panel-toggle" type="button" aria-controls="skills-panel" aria-expanded="true">Skills</button>
+          <button id="settings-toggle" class="panel-toggle" type="button" aria-controls="settings-panel" aria-expanded="false">Settings</button>
+        </div>
+      </header>
+
+      <section class="hero">
+        <p class="eyebrow">STRUCTURED INFERENCE / LOCAL ONLY</p>
+        <h1>One prompt.<br /><span>One precise model.</span></h1>
+        <p class="intro">Choose a local coding model and receive a validated response with a clean summary and full result.</p>
+      </section>
+
+      <section class="workspace" aria-label="Model chat workspace">
+        <form id="chat-form" class="composer">
+          <div class="field-row">
+            <label for="model-select">Active model</label>
+            <span id="model-count" class="meta">Loading roster…</span>
+          </div>
+          <div class="select-wrap">
+            <select id="model-select" name="model" aria-describedby="model-detail" disabled></select>
+          </div>
+          <div id="model-detail" class="model-detail">Waiting for Ollama model metadata.</div>
+
+          <div class="field-row prompt-label">
+            <label for="prompt-input">Prompt</label>
+            <span class="meta"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> to run</span>
+          </div>
+          <textarea id="prompt-input" name="prompt" rows="9" placeholder="Describe the code, review, or explanation you need…" required></textarea>
+
+          <div class="actions">
+            <button id="submit-button" class="primary" type="submit" disabled>
+              <span>Run model</span><span aria-hidden="true">↗</span>
+            </button>
+            <button id="cancel-button" class="secondary" type="button" hidden>Cancel</button>
+            <span id="request-status" class="request-status" role="status" aria-live="polite"></span>
+          </div>
+        </form>
+
+        <section class="response" aria-label="Structured response">
+          <div class="response-head">
+            <span>MODEL RESPONSE</span><span id="response-model">Awaiting prompt</span>
+          </div>
+          <div id="empty-state" class="empty-state">
+            <div class="empty-glyph">_</div>
+            <p>Your validated response will appear here.</p>
+          </div>
+          <div id="result-state" hidden>
+            <article>
+              <p class="result-label">SUMMARY</p>
+              <h2 id="summary-output"></h2>
+            </article>
+            <article>
+              <p class="result-label">CONTENT</p>
+              <pre id="content-output"></pre>
+              <a id="artifact-output" class="artifact-output" href="#" hidden>Download generated archive</a>
+            </article>
+          </div>
+          <div id="error-output" class="error" role="alert" hidden></div>
+        </section>
+      </section>
+
+      <aside id="context-panel" class="context-panel" aria-label="Attachment context">
+        <div class="context-head"><div><span class="eyebrow">MODEL CONTEXT</span><h2>Files &amp; pasted content</h2></div><span id="context-count" class="meta">0 items</span></div>
+        <div class="context-actions">
+          <label class="secondary file-button" for="attachment-input">Import files</label>
+          <input id="attachment-input" type="file" multiple hidden />
+          <button id="paste-text-button" class="secondary" type="button">Paste</button>
+          <a id="export-archive" class="secondary file-button" href="#">Export ZIP</a>
+        </div>
+        <div id="attachment-list" class="attachment-list"><p class="meta">No context attached.</p></div>
+        <pre id="attachment-preview" class="attachment-preview" hidden></pre>
+        <section id="dependency-review" class="dependency-review" aria-label="Dependency requirements">
+          <div class="dependency-head">
+            <div><span class="eyebrow">DEPENDENCY RESOLUTION</span><strong>Detected requirements</strong></div>
+            <button id="scan-dependencies" class="secondary" type="button">Scan</button>
+          </div>
+          <div id="dependency-list" class="dependency-list"><p class="meta">Import a requirements.txt or package.json file to detect dependencies.</p></div>
+        </section>
+      </aside>
+
+      <aside id="skills-panel" class="context-panel" aria-label="Active installed and saved skills">
+        <section id="skill-library" aria-label="Installed skill library">
+          <div class="dependency-head">
+            <div><span class="eyebrow">SKILL LIBRARY</span><strong>Active installed &amp; saved skills</strong></div>
+            <button id="skill-preview" class="secondary" type="button" disabled>Preview conversion</button>
+            <button id="skill-install" class="secondary" type="button" disabled>Install reviewed pack</button>
+            <button id="skill-deduplicate" class="secondary" type="button">Remove duplicates</button>
+          </div>
+          <p id="skill-conversion-status" class="meta">Choose “Review as skills” on an imported ZIP to convert Claude, Codex, or generic skills.</p>
+          <p class="meta"><a href="/api/skills/standard/envelope.md" download>JSON_CODR skill authoring standard</a> Â· <a href="/api/skills/standard/envelope.schema.json" download>JSON Schema</a></p>
+          <div id="skill-list" class="skill-list"><p class="meta">No skills installed.</p></div>
+          <article id="skill-details" class="skill-details" hidden aria-live="polite"></article>
+          <div class="skill-editor-wrap">
+            <label><input id="skill-enabled" type="checkbox" disabled /> Skill enabled</label>
+            <textarea id="skill-editor" rows="10" aria-label="Skill instructions" placeholder="Select Edit on a skill" disabled></textarea>
+            <div class="actions">
+              <button id="skill-save" class="primary" type="button" disabled>Save skill</button>
+              <button id="skill-remove-pack" class="secondary" type="button" disabled>Remove pack</button>
+            </div>
+          </div>
+          <section class="skill-discovery" aria-label="Skill discovery">
+            <div><span class="eyebrow">DISCOVERY</span><strong>Scan an approved local folder</strong></div>
+            <div class="scan-controls">
+              <input id="skill-scan-directory" type="text" placeholder="D:\path\to\skills" aria-label="Skill scan directory" />
+              <button id="skill-scan" class="secondary" type="button">Scan folder</button>
+              <button id="skill-scan-known" class="secondary" type="button" hidden>Scan known locations</button>
+            </div>
+            <div id="skill-scan-results" class="skill-list"><p class="meta">No scan has run.</p></div>
+          </section>
+        </section>
+      </aside>
+
+      <aside id="settings-panel" class="context-panel" aria-label="JSON CODR settings" hidden>
+        <div class="context-head"><div><span class="eyebrow">SETTINGS</span><h2>System configuration</h2></div></div>
+        <section class="dependency-review">
+          <strong>Interface</strong>
+          <label class="setting-row"><input id="setting-skills-open" type="checkbox" /> Reopen Skills panel on startup</label>
+        </section>
+        <section class="dependency-review">
+          <strong>Approved skill directories</strong>
+          <div id="approved-skill-directories" class="dependency-list"><p class="meta">No folders approved.</p></div>
+        </section>
+      </aside>
+
+      <section id="terminal-panel" class="terminal-panel" aria-label="Live command line" hidden>
+        <div class="terminal-head">
+          <div><span class="eyebrow">LOCAL POWERSHELL</span><strong>Live CLI passthrough</strong></div>
+          <span id="terminal-status" class="meta">Not started</span>
+        </div>
+        <pre id="terminal-output" class="terminal-output" aria-live="polite"></pre>
+        <div class="terminal-command">
+          <span aria-hidden="true">PS&gt;</span>
+          <input id="terminal-input" type="text" autocomplete="off" spellcheck="false" aria-label="PowerShell command" placeholder="Enter a command" />
+          <button id="terminal-run" class="primary" type="button">Run</button>
+          <button id="terminal-stop" class="secondary" type="button">Stop</button>
+        </div>
+      </section>
+
+      <footer><span>Runs entirely on this machine</span><span>127.0.0.1 · Ollama</span></footer>
+    </main>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

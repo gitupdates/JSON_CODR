@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.superpowers/
+.plans/
+*.log
+local_model_inventory.json
+duplicate_hashes.json
+relocation_journal.json
+model_validation_results.json
+models/
