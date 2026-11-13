@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from web_app.app import create_app
-from web_app.models import SettingsUpdate, SkillScanSettings, UiSettings
+from web_app.models import SettingsUpdate, SkillScanSettings, UiSettingsUpdate
 from web_app.settings import SettingsService
 from web_app.workspace import WorkspaceService
 
@@ -31,7 +31,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(service.get().ui.theme, "dark")
 
         service.update(SettingsUpdate(
-            ui=UiSettings(skill_catalog_open=False),
+            ui=UiSettingsUpdate(skill_catalog_open=False),
             skill_scan=SkillScanSettings(approved_directories=[str(self.root), str(self.root)]),
         ))
 
@@ -56,6 +56,26 @@ class SettingsTests(unittest.TestCase):
 
         self.assertEqual(updated.status_code, 200)
         self.assertFalse(client.get("/api/settings").json()["ui"]["skill_catalog_open"])
+
+    def test_partial_ui_patch_preserves_omitted_sibling_fields(self):
+        workspace = WorkspaceService(self.root)
+        client = TestClient(create_app(FakeService(), workspace))
+
+        first = client.patch("/api/settings", json={
+            "ui": {"skill_catalog_open": False},
+        })
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json()["ui"], {
+            "skill_catalog_open": False,
+            "theme": "dark",
+        })
+
+        second = client.patch("/api/settings", json={"ui": {"theme": "light"}})
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.json()["ui"], {
+            "skill_catalog_open": False,
+            "theme": "light",
+        })
 
 
     def test_api_round_trips_supported_themes(self):

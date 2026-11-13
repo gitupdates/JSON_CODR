@@ -137,6 +137,16 @@ class WebStaticTests(unittest.TestCase):
     def test_settings_toggle_brings_panel_into_view(self):
         javascript = self.client.get("/static/app.js").text
         self.assertIn("elements.settingsPanel.scrollIntoView", javascript)
+        self.assertIn('matchMedia("(prefers-reduced-motion: reduce)")', javascript)
+        self.assertIn("elements.settingTheme.focus", javascript)
+
+    def test_settings_saves_are_partial_and_serialized(self):
+        javascript = self.client.get("/static/app.js").text
+        self.assertIn("let settingsSaveQueue = Promise.resolve()", javascript)
+        self.assertIn("settingsSaveQueue.then", javascript)
+        self.assertNotIn("buildUiSettings", javascript)
+        self.assertIn('ui: { theme: nextThemeMode }', javascript)
+        self.assertIn('ui: { skill_catalog_open: open }', javascript)
 
 
     def test_theme_settings_and_runtime_hooks_are_present(self):
@@ -156,7 +166,7 @@ class WebStaticTests(unittest.TestCase):
         css = self.client.get("/static/app.css").text
         self.assertIn(':root[data-theme="light"]', css)
         for variable in (
-            "--focus-ring",
+            "--focus-outline",
             "--surface-input",
             "--surface-panel",
             "--terminal-bg",

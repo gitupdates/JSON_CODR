@@ -68,6 +68,8 @@ let editingSkill = null;
 let skillLoadGeneration = 0;
 let settingsState = null;
 let skillFallbackToken = null;
+let settingsSaveQueue = Promise.resolve();
+let themeSaveRevision = 0;
 let currentThemeMode = normalizeThemeMode(localStorage.getItem("json_codr_theme"));
 
 function normalizeThemeMode(mode) {
@@ -83,14 +85,6 @@ function applyThemeMode(mode, { cache = true } = {}) {
   if (cache) localStorage.setItem("json_codr_theme", normalized);
   if (elements.settingTheme) elements.settingTheme.value = normalized;
   return effective;
-}
-
-function buildUiSettings(overrides = {}) {
-  return {
-    skill_catalog_open: settingsState?.ui?.skill_catalog_open ?? elements.settingSkillsOpen.checked,
-    theme: currentThemeMode,
-    ...overrides,
-  };
 }
 
 systemThemeQuery.addEventListener("change", () => {
@@ -147,13 +141,19 @@ async function ensureSession() {
   return sessionId;
 }
 
-async function saveSettings(update) {
+async function persistSettings(update) {
   const response = await fetch("/api/settings", {
     method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(update),
   });
   if (!response.ok) throw new Error((await response.json()).detail || "Unable to save settings");
   settingsState = await response.json();
   renderApprovedDirectories();
+}
+
+function saveSettings(update) {
+  const operation = settingsSaveQueue.then(() => persistSettings(update));
+  settingsSaveQueue = operation.catch(() => undefined);
+  return operation;
 }
 
 function renderApprovedDirectories() {
@@ -550,34 +550,39 @@ elements.skillsToggle.addEventListener("click", () => {
   elements.skillsPanel.hidden = !open;
   elements.skillsToggle.setAttribute("aria-expanded", String(open));
   elements.settingSkillsOpen.checked = open;
-  saveSettings({ ui: buildUiSettings({ skill_catalog_open: open }) }).catch((error) => showError(error.message));
+  saveSettings({ ui: { skill_catalog_open: open } }).catch((error) => showError(error.message));
 });
 elements.settingsToggle.addEventListener("click", () => {
   const open = elements.settingsPanel.hidden;
   elements.settingsPanel.hidden = !open;
   elements.settingsToggle.setAttribute("aria-expanded", String(open));
   if (open) {
-    elements.settingsPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    elements.settingsPanel.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+    elements.settingTheme.focus({ preventScroll: true });
   }
 });
 elements.settingSkillsOpen.addEventListener("change", () => {
   const open = elements.settingSkillsOpen.checked;
   elements.skillsPanel.hidden = !open;
   elements.skillsToggle.setAttribute("aria-expanded", String(open));
-  saveSettings({ ui: buildUiSettings({ skill_catalog_open: open }) }).catch((error) => showError(error.message));
+  saveSettings({ ui: { skill_catalog_open: open } }).catch((error) => showError(error.message));
 });
 elements.settingTheme.addEventListener("change", async () => {
+  const revision = ++themeSaveRevision;
   const previousThemeMode = currentThemeMode;
   const previousCachedTheme = localStorage.getItem("json_codr_theme");
   const nextThemeMode = normalizeThemeMode(elements.settingTheme.value);
   applyThemeMode(nextThemeMode);
   try {
-    await saveSettings({ ui: buildUiSettings({ theme: nextThemeMode }) });
+    await saveSettings({ ui: { theme: nextThemeMode } });
   } catch (error) {
-    currentThemeMode = previousThemeMode;
-    if (previousCachedTheme === null) localStorage.removeItem("json_codr_theme");
-    else localStorage.setItem("json_codr_theme", previousCachedTheme);
-    applyThemeMode(previousThemeMode, { cache: false });
+    if (revision === themeSaveRevision) {
+      currentThemeMode = previousThemeMode;
+      if (previousCachedTheme === null) localStorage.removeItem("json_codr_theme");
+      else localStorage.setItem("json_codr_theme", previousCachedTheme);
+      applyThemeMode(previousThemeMode, { cache: false });
+    }
     showError(error.message);
   }
 });
@@ -648,7 +653,7 @@ elements.skillSave.addEventListener("click", async () => {
     elements.skillsPanel.hidden = false;
     elements.skillsToggle.setAttribute("aria-expanded", "true");
     elements.settingSkillsOpen.checked = true;
-    await saveSettings({ ui: buildUiSettings({ skill_catalog_open: true }) });
+    await saveSettings({ ui: { skill_catalog_open: true } });
   }
   await loadSkills();
   elements.skillSave.disabled = false;

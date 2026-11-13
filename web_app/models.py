@@ -132,6 +132,11 @@ class UiSettings(BaseModel):
     theme: Literal["light", "dark", "system"] = "dark"
 
 
+class UiSettingsUpdate(BaseModel):
+    skill_catalog_open: Optional[bool] = None
+    theme: Optional[Literal["light", "dark", "system"]] = None
+
+
 class SkillScanSettings(BaseModel):
     approved_directories: List[str] = Field(default_factory=list)
 
@@ -143,7 +148,7 @@ class SystemSettings(BaseModel):
 
 
 class SettingsUpdate(BaseModel):
-    ui: Optional[UiSettings] = None
+    ui: Optional[UiSettingsUpdate] = None
     skill_scan: Optional[SkillScanSettings] = None
 
 

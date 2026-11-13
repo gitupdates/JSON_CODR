@@ -28,6 +28,7 @@
   --error-text: #ffb0b0;
   --focus-border: rgba(199,255,74,.65);
   --focus-ring: rgba(199,255,74,.2);
+  --focus-outline: #c7ff4a;
   --shadow: rgba(0,0,0,.35);
   --terminal-bg: #05080b;
   --terminal-panel: #090d12;
@@ -66,6 +67,7 @@
   --error-text: #8e1b25;
   --focus-border: #3157c8;
   --focus-ring: rgba(49,87,200,.28);
+  --focus-outline: #3157c8;
   --shadow: rgba(38,57,88,.16);
   --terminal-bg: #e9eef6;
   --terminal-panel: #f7f9fc;
@@ -106,7 +108,7 @@ select, textarea { width: 100%; color: var(--text); background: var(--surface-in
 select { height: 47px; padding: 0 44px 0 15px; appearance: none; font: 600 12px ui-monospace, monospace; }
 textarea { resize: vertical; min-height: 200px; padding: 16px; font: 13px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; }
 select:focus, textarea:focus { border-color: var(--focus-border); box-shadow: 0 0 0 3px var(--focus-ring); }
-button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid var(--focus-outline); outline-offset: 2px; }
 .model-detail { min-height: 34px; padding-top: 9px; }
 .prompt-label { margin: 23px 0 12px; }
 .actions { min-height: 46px; margin-top: 18px; display: flex; align-items: center; gap: 11px; }

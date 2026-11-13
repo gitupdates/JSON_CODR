@@ -3,7 +3,7 @@ import os
 import uuid
 from pathlib import Path
 
-from web_app.models import SettingsUpdate, SystemSettings
+from web_app.models import SettingsUpdate, SystemSettings, UiSettings
 
 
 class SettingsService:
@@ -22,7 +22,11 @@ class SettingsService:
         raw = self._raw()
         current = self.get()
         if update.ui is not None:
-            current.ui = update.ui
+            merged_ui = {
+                **current.ui.model_dump(),
+                **update.ui.model_dump(exclude_unset=True, exclude_none=True),
+            }
+            current.ui = UiSettings.model_validate(merged_ui)
         if update.skill_scan is not None:
             resolved = []
             for value in update.skill_scan.approved_directories:
