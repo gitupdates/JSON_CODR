@@ -73,33 +73,33 @@ Commit: `git commit -m "Add Windows SDD workspace helper"`
 - Produces: `DependencyService(..., preflight: DependencyPreflight | None = None, install_root: Path | None = None)`
 - Produces: automatic `DependencySuggestion` values containing only missing or incompatible packages.
 
-- [ ] **Step 1: Write failing Python preflight tests**
+- [x] **Step 1: Write failing Python preflight tests**
 
 Add tests proving a satisfied PEP 440 requirement is omitted, an absent or incompatible requirement is returned, invalid manifest lines remain rejected, and metadata lookup failures fall back to missing.
 
-- [ ] **Step 2: Run the Python tests and verify RED**
+- [x] **Step 2: Run the Python tests and verify RED**
 
 Run: `python -m unittest -v test_dependencies.DependencyServiceTests`
 Expected: FAIL because preflight interfaces and automatic missing-only suggestions do not exist.
 
-- [ ] **Step 3: Implement Python preflight**
+- [x] **Step 3: Implement Python preflight**
 
 Use `packaging.requirements.Requirement`, canonical distribution lookup, marker evaluation, and `importlib.metadata.version`. Preserve original validated spec strings in generated commands.
 
-- [ ] **Step 4: Write failing Node preflight tests**
+- [x] **Step 4: Write failing Node preflight tests**
 
 Add tests for satisfied and incompatible `package@range` values, scoped packages, missing npm, timeout, and argument-array invocation with `shell=False`.
 
-- [ ] **Step 5: Run the Node tests and verify RED**
+- [x] **Step 5: Run the Node tests and verify RED**
 
 Run: `python -m unittest -v test_dependencies.DependencyServiceTests`
 Expected: FAIL because Node preflight is not implemented.
 
-- [ ] **Step 6: Implement Node preflight and missing-only suggestions**
+- [x] **Step 6: Implement Node preflight and missing-only suggestions**
 
 Run bounded `npm ls <package@range> --depth=0 --json` checks from the install root. Return failed, missing, incompatible, or uncheckable entries so npm reports the authoritative result in the live CLI. Set `automatic=True`; return no suggestion when every dependency is satisfied.
 
-- [ ] **Step 7: Run Task 1 tests and commit**
+- [x] **Step 7: Run Task 1 tests and commit**
 
 Run: `python -m unittest -v test_dependencies`
 Expected: PASS.
