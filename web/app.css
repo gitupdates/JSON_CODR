@@ -106,6 +106,8 @@ footer { padding: 22px 0 34px; color: #616a76; font: 600 10px ui-monospace, mono
 .dependency-row code { margin-top: 5px; color: var(--cyan); overflow-wrap: anywhere; font-size: 11px; }
 .skill-list { display: grid; gap: 12px; margin-top: 14px; }
 .skill-pack { padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.skill-pack-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.skill-pack-head button { height: 32px; padding: 0 10px; color: var(--text); background: #242a33; }
 .skill-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 8px; }
 .skill-row button { height: 32px; padding: 0 10px; color: var(--text); background: #242a33; }
 .skill-actions { display: flex; gap: 7px; }

@@ -17,6 +17,29 @@ class DuplicateSkillPack(ValueError):
     pass
 
 
+SKILL_ENVELOPE_MARKER = "JSON_CODR_SKILL_SCHEMA: 1"
+
+
+def _wrap_skill_content(name: str, description: str, content: str) -> str:
+    if SKILL_ENVELOPE_MARKER in content:
+        return content
+    capability_match = re.search(r"(?mi)^(?:capabilities|required-capabilities):\s*([^\n]+)", content)
+    capabilities = capability_match.group(1).strip() if capability_match else "Use only capabilities available and authorized in JSON_CODR"
+    intent = description or f"Apply the {name} workflow to the current user request"
+    return (
+        "--- JSON_CODR SKILL ENVELOPE ---\n"
+        f"{SKILL_ENVELOPE_MARKER}\n"
+        f"NAME: {name}\n"
+        f"INTENT: {intent}\n"
+        f"CAPABILITIES: {capabilities}\n"
+        "SYNTAX: Select this skill for the active session. Treat {{arguments}} as the current user request when present.\n"
+        "EXECUTION_DIRECTIVE: Apply this active saved skill automatically with any selected LLM. Follow the converted instructions in order, use only available authorized capabilities, and report unavailable requirements honestly.\n"
+        "--- BEGIN CONVERTED SKILL ---\n"
+        f"{content.strip()}\n"
+        "--- END CONVERTED SKILL ---\n"
+    )
+
+
 def _skill_fingerprint(skill: SkillRecord) -> str:
     content = (skill.original_content or skill.content).replace("\r\n", "\n").strip()
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -120,7 +143,14 @@ class SkillConverterService:
                 "Treat named provider tools as capability requirements. Use only capabilities available in the current session, "
                 "ask before running CLI commands, and never claim an unavailable action completed.\n"
             )
-            skills.append(SkillRecord(id=skill_id, name=name, description=description_match.group(1).strip() if description_match else "", content=converted + compatibility, original_content=content))
+            description = description_match.group(1).strip() if description_match else ""
+            skills.append(SkillRecord(
+                id=skill_id,
+                name=name,
+                description=description,
+                content=_wrap_skill_content(name, description, converted + compatibility),
+                original_content=content,
+            ))
         if not skills:
             raise ValueError("Archive contains no supported Markdown skills")
         pack_name = Path(source_name).stem
@@ -173,6 +203,19 @@ class SkillLibraryService:
         temporary = self.root / f".catalog-{uuid.uuid4().hex}.tmp"
         temporary.write_text(json.dumps([pack.model_dump(mode="json") for pack in packs], indent=2), encoding="utf-8")
         os.replace(temporary, self.catalog_path)
+
+    def ensure_envelopes(self) -> None:
+        with self._lock:
+            packs = self.list()
+            changed = False
+            for pack in packs:
+                for index, skill in enumerate(pack.skills):
+                    wrapped = _wrap_skill_content(skill.name, skill.description, skill.content)
+                    if wrapped != skill.content:
+                        pack.skills[index] = skill.model_copy(update={"content": wrapped})
+                        changed = True
+            if changed:
+                self._save(packs)
 
     def install(self, pack: SkillPack) -> SkillPack:
         with self._lock:
@@ -265,11 +308,25 @@ class SkillLibraryService:
                     continue
                 for index, skill in enumerate(pack.skills):
                     if skill.id == skill_id:
-                        updated = skill.model_copy(update={"content": content, "enabled": enabled})
+                        updated = skill.model_copy(update={"content": _wrap_skill_content(skill.name, skill.description, content), "enabled": enabled})
                         pack.skills[index] = updated
                         self._save(packs)
                         return updated
         raise KeyError(f"{pack_id}:{skill_id}")
+
+    def rename(self, pack_id: str, name: str) -> SkillPack:
+        normalized = name.strip()
+        if not normalized:
+            raise ValueError("Skill pack name cannot be empty")
+        with self._lock:
+            packs = self.list()
+            for index, pack in enumerate(packs):
+                if pack.id == pack_id:
+                    renamed = pack.model_copy(update={"name": normalized})
+                    packs[index] = renamed
+                    self._save(packs)
+                    return renamed
+        raise KeyError(pack_id)
 
     def remove(self, pack_id: str) -> None:
         with self._lock:

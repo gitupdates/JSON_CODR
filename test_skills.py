@@ -66,6 +66,28 @@ class SkillLibraryTests(unittest.TestCase):
         self.assertIn("{{arguments}}", content)
         self.assertIn("run_role_sequentially(", content)
 
+    def test_conversion_persists_standard_json_codr_envelope(self):
+        source = self.root / "skill.zip"
+        source.write_bytes(archive({"SKILL.md": "---\nname: enveloped\ndescription: Analyze input\ncapabilities: Read, Grep\n---\nAnalyze {{arguments}}"}))
+
+        content = self.converter.convert(source, source.name).skills[0].content
+
+        for field in ("JSON_CODR_SKILL_SCHEMA: 1", "NAME: enveloped", "INTENT: Analyze input", "CAPABILITIES: Read, Grep", "SYNTAX:", "EXECUTION_DIRECTIVE:", "BEGIN CONVERTED SKILL"):
+            self.assertIn(field, content)
+
+    def test_existing_catalog_skills_receive_envelope_once(self):
+        from web_app.models import SkillPack, SkillRecord
+        pack = SkillPack(id="legacy", name="Legacy", source_format="generic", source_name="legacy.zip", skills=[SkillRecord(id="review", name="Review", description="Review code", content="Legacy instructions")])
+        self.library._save([pack])
+
+        self.library.ensure_envelopes()
+        first = self.library.get_skill("legacy", "review").content
+        self.library.ensure_envelopes()
+        second = self.library.get_skill("legacy", "review").content
+
+        self.assertIn("JSON_CODR_SKILL_SCHEMA: 1", first)
+        self.assertEqual(first, second)
+
     def test_converts_7z_skill_pack(self):
         import py7zr
 
@@ -92,7 +114,8 @@ class SkillLibraryTests(unittest.TestCase):
         skill = installed.skills[0]
         self.library.update_skill(installed.id, skill.id, "Updated instructions", enabled=False)
         changed = self.library.get_skill(installed.id, skill.id)
-        self.assertEqual(changed.content, "Updated instructions")
+        self.assertIn("Updated instructions", changed.content)
+        self.assertIn("JSON_CODR_SKILL_SCHEMA: 1", changed.content)
         self.assertFalse(changed.enabled)
         self.assertIn("Original", changed.original_content)
         self.library.remove(installed.id)
@@ -142,7 +165,8 @@ class SkillLibraryTests(unittest.TestCase):
             f'/api/skills/{installed["id"]}/{skill_id}',
             json={"content": "Updated review instructions", "enabled": True},
         )
-        self.assertEqual(edited.json()["content"], "Updated review instructions")
+        self.assertIn("Updated review instructions", edited.json()["content"])
+        self.assertIn("JSON_CODR_SKILL_SCHEMA: 1", edited.json()["content"])
         self.assertEqual(client.delete(f'/api/skills/{installed["id"]}').status_code, 204)
         self.assertEqual(client.get("/api/skills").json(), [])
 
@@ -170,9 +194,26 @@ class SkillLibraryTests(unittest.TestCase):
         )
 
         self.assertEqual(saved.status_code, 200)
-        self.assertEqual(saved.json()["content"], "Updated and applied instructions")
+        self.assertIn("Updated and applied instructions", saved.json()["content"])
+        self.assertIn("JSON_CODR_SKILL_SCHEMA: 1", saved.json()["content"])
         selection = f'{installed["id"]}:{skill_id}'
         self.assertEqual(client.get(f"/api/sessions/{session.id}").json()["selected_skill_ids"], [selection])
+
+    def test_api_renames_pack_without_changing_skill_references(self):
+        session = self.workspace.create_session()
+        attachments = AttachmentService(self.workspace)
+        record = attachments.import_stream(
+            session.id, "skills.zip", io.BytesIO(archive({"SKILL.md": "---\nname: review\n---\nReview"})),
+        )
+        client = TestClient(create_app(FakeOllamaService(), self.workspace, attachments))
+        installed = client.post(f"/api/sessions/{session.id}/attachments/{record.id}/skill-install").json()
+
+        renamed = client.patch(f'/api/skills/{installed["id"]}', json={"name": "Greenfield Analysis Suite"})
+
+        self.assertEqual(renamed.status_code, 200)
+        self.assertEqual(renamed.json()["name"], "Greenfield Analysis Suite")
+        self.assertEqual(renamed.json()["id"], installed["id"])
+        self.assertEqual(renamed.json()["skills"][0]["id"], installed["skills"][0]["id"])
 
     def test_api_rejects_duplicate_install_and_exposes_cleanup(self):
         session = self.workspace.create_session()

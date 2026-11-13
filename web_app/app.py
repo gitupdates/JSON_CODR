@@ -10,7 +10,7 @@ from web_app.attachments import AttachmentService, AttachmentTooLarge
 from web_app.artifacts import ArtifactService
 from web_app.context import ContextAssembler
 from web_app.dependencies import DependencyService
-from web_app.models import AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, DiscoveryInstallRequest, KnownSkillScanRequest, SettingsUpdate, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
+from web_app.models import AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, DiscoveryInstallRequest, KnownSkillScanRequest, SettingsUpdate, SkillPackRenameRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
 from web_app.ollama_service import (
     ModelOutputError,
     ModelTimeoutError,
@@ -29,10 +29,11 @@ def create_app(
     attachments: AttachmentService | None = None,
     terminals: TerminalService | None = None,
 ) -> FastAPI:
-    application = FastAPI(title="JSON_CODR", version="V1.0.0")
+    application = FastAPI(title="JSON_CODR", version="V1.0.1")
     workspace = workspace or WorkspaceService(default_data_root())
     attachments = attachments or AttachmentService(workspace)
     skill_library = SkillLibraryService(workspace.data_root)
+    skill_library.ensure_envelopes()
     skill_converter = SkillConverterService()
     settings = SettingsService(workspace.data_root)
     skill_discovery = SkillDiscoveryService(skill_library, skill_converter, workspace.data_root)
@@ -272,6 +273,15 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(error)) from error
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Skill or session not found") from error
+
+    @application.patch("/api/skills/{pack_id}")
+    async def rename_skill_pack(pack_id: str, request: SkillPackRenameRequest):
+        try:
+            return skill_library.rename(pack_id, request.name)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Skill pack not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @application.delete("/api/skills/{pack_id}", status_code=204)
     async def remove_skill_pack(pack_id: str):

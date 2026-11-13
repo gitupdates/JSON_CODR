@@ -256,7 +256,20 @@ async function loadSkills() {
     group.className = "skill-pack";
     const heading = document.createElement("strong");
     heading.textContent = `${pack.name} · ${pack.source_format}`;
-    group.append(heading);
+    const packHead = document.createElement("div"); packHead.className = "skill-pack-head";
+    const rename = document.createElement("button"); rename.type = "button"; rename.textContent = "Rename pack";
+    rename.addEventListener("click", async () => {
+      const name = prompt("Rename this skill pack", pack.name);
+      if (!name?.trim() || name.trim() === pack.name) return;
+      const response = await fetch(`/api/skills/${pack.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name.trim() }),
+      });
+      const result = await response.json();
+      if (!response.ok) return showError(result.detail || "Unable to rename skill pack");
+      elements.skillConversionStatus.textContent = `Renamed pack to ${result.name}`;
+      await loadSkills();
+    });
+    packHead.append(heading, rename); group.append(packHead);
     for (const skill of pack.skills) {
       const row = document.createElement("div");
       row.className = "skill-row";

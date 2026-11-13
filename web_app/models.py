@@ -119,6 +119,10 @@ class SkillUpdateRequest(BaseModel):
     session_id: Optional[str] = None
 
 
+class SkillPackRenameRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
 class SkillSelectionRequest(BaseModel):
     selected: List[str] = Field(default_factory=list)
 
