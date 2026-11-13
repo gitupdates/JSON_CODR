@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 import tempfile
 import io
@@ -8,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from web_app.app import create_app
 from web_app.models import ChatResult, ConversionBundle, GeneratedFile
-from web_app.ollama_service import ModelOutputError, ModelTimeoutError, OllamaUnavailableError
+from web_app.ollama_service import ModelOutputError, ModelTimeoutError, OllamaService, OllamaUnavailableError
 from web_app.workspace import WorkspaceService
 
 
@@ -113,6 +114,25 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.json()["models"]), 2)
         self.assertFalse(response.json()["models"][1]["installed"])
+
+    def test_low_memory_coder_is_selectable_when_installed(self):
+        class LowMemoryClient:
+            async def list(self):
+                return {
+                    "models": [{
+                        "name": "qwen2.5-coder:0.5b",
+                        "size": 398_000_000,
+                        "details": {"quantization_level": "Q4_K_M"},
+                    }]
+                }
+
+        models = asyncio.run(OllamaService(client=LowMemoryClient()).list_models())
+        names = [model["name"] for model in models]
+
+        self.assertIn("qwen2.5-coder:0.5b", names)
+        low_memory = models[names.index("qwen2.5-coder:0.5b")]
+        self.assertTrue(low_memory["installed"])
+        self.assertEqual(low_memory["size"], 398_000_000)
 
     def test_chat_accepts_exact_and_unique_shorthand_models(self):
         for model in ("qwen", "qwen2.5-coder:7b-instruct-q4_K_M"):
