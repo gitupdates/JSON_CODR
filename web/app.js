@@ -22,6 +22,8 @@ const elements = {
   attachmentList: document.querySelector("#attachment-list"),
   attachmentPreview: document.querySelector("#attachment-preview"),
   exportArchive: document.querySelector("#export-archive"),
+  dependencyList: document.querySelector("#dependency-list"),
+  scanDependencies: document.querySelector("#scan-dependencies"),
   terminalToggle: document.querySelector("#terminal-toggle"),
   terminalPanel: document.querySelector("#terminal-panel"),
   terminalOutput: document.querySelector("#terminal-output"),
@@ -128,6 +130,41 @@ async function loadAttachments() {
     actions.append(download, retry, remove);
     row.append(label, actions);
     elements.attachmentList.append(row);
+  }
+  await loadDependencies();
+}
+
+async function loadDependencies() {
+  await ensureSession();
+  const response = await fetch(`/api/sessions/${sessionId}/dependencies`);
+  if (!response.ok) throw new Error("Unable to scan dependency manifests");
+  const suggestions = await response.json();
+  elements.dependencyList.replaceChildren();
+  if (!suggestions.length) {
+    elements.dependencyList.innerHTML = '<p class="meta">No supported dependency manifests detected.</p>';
+    return;
+  }
+  for (const suggestion of suggestions) {
+    const row = document.createElement("div");
+    row.className = "dependency-row";
+    const details = document.createElement("div");
+    const source = document.createElement("strong");
+    source.textContent = `${suggestion.source} · ${suggestion.ecosystem}`;
+    const command = document.createElement("code");
+    command.textContent = suggestion.command;
+    details.append(source, command);
+    const send = document.createElement("button");
+    send.type = "button";
+    send.className = "secondary";
+    send.textContent = "Send to CLI";
+    send.addEventListener("click", async () => {
+      if (elements.terminalPanel.hidden) elements.terminalToggle.click();
+      elements.terminalInput.value = suggestion.command;
+      elements.terminalInput.focus();
+      elements.terminalStatus.textContent = "Install command ready · review and press Run";
+    });
+    row.append(details, send);
+    elements.dependencyList.append(row);
   }
 }
 
@@ -252,6 +289,7 @@ elements.pasteTextButton.addEventListener("click", async () => {
   await fetch(`/api/sessions/${sessionId}/clipboard-text`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
   await loadAttachments();
 });
+elements.scanDependencies.addEventListener("click", () => loadDependencies().catch((error) => showError(error.message)));
 elements.terminalToggle.addEventListener("click", async () => {
   elements.terminalPanel.hidden = !elements.terminalPanel.hidden;
   elements.terminalToggle.setAttribute("aria-expanded", String(!elements.terminalPanel.hidden));

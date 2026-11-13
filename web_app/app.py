@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from web_app.attachments import AttachmentService, AttachmentTooLarge
 from web_app.context import ContextAssembler
+from web_app.dependencies import DependencyService
 from web_app.models import AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, TerminalCreateRequest
 from web_app.ollama_service import (
     ModelOutputError,
@@ -29,6 +30,7 @@ def create_app(
     workspace = workspace or WorkspaceService(default_data_root())
     attachments = attachments or AttachmentService(workspace)
     context_assembler = ContextAssembler(attachments)
+    dependency_service = DependencyService(attachments)
     terminals = terminals or TerminalService()
     web_root = Path(__file__).resolve().parent.parent / "web"
     application.mount("/static", StaticFiles(directory=web_root), name="static")
@@ -141,6 +143,13 @@ def create_app(
             media_type="application/zip",
             headers={"Content-Disposition": f'attachment; filename="json-codr-{session_id}.zip"'},
         )
+
+    @application.get("/api/sessions/{session_id}/dependencies")
+    async def detect_dependencies(session_id: str):
+        try:
+            return dependency_service.detect(session_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Session not found") from error
 
     @application.patch("/api/sessions/{session_id}/attachments/{attachment_id}")
     async def update_attachment(session_id: str, attachment_id: str, request: AttachmentUpdate):

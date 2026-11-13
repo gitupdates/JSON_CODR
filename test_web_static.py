@@ -94,6 +94,18 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("/api/terminals", javascript)
         self.assertIn("/ws/terminals/", javascript)
 
+    def test_dependency_review_controls_are_present(self):
+        response = self.client.get("/")
+        parser = IdCollector()
+        parser.feed(response.text)
+        self.assertTrue(
+            {
+                "dependency-review",
+                "dependency-list",
+                "scan-dependencies",
+            }.issubset(parser.ids)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
