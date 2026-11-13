@@ -71,7 +71,7 @@ try {
     }
   }
 
-  Write-Host "JSON_CODR V1.0.2 is running at $Url"
+  Write-Host "JSON_CODR V1.0.3 is running at $Url"
   Write-Host 'Press Ctrl+C to stop the local web server.'
   if (-not $NoBrowser) { Start-Process $Url }
   Wait-Process -Id $WebProcess.Id
