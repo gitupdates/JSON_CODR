@@ -28,6 +28,7 @@ const elements = {
   skillList: document.querySelector("#skill-list"),
   skillPreview: document.querySelector("#skill-preview"),
   skillInstall: document.querySelector("#skill-install"),
+  skillDeduplicate: document.querySelector("#skill-deduplicate"),
   skillEditor: document.querySelector("#skill-editor"),
   skillEnabled: document.querySelector("#skill-enabled"),
   skillSave: document.querySelector("#skill-save"),
@@ -49,6 +50,7 @@ let terminalId = null;
 let terminalSocket = null;
 let skillAttachmentId = null;
 let editingSkill = null;
+let skillLoadGeneration = 0;
 
 function appendTerminalOutput(text) {
   elements.terminalOutput.textContent += text;
@@ -164,14 +166,21 @@ async function saveSkillSelection() {
 }
 
 async function loadSkills() {
+  const generation = ++skillLoadGeneration;
   await ensureSession();
   const [packs, session] = await Promise.all([
     fetch("/api/skills").then((response) => response.json()),
     fetch(`/api/sessions/${sessionId}`).then((response) => response.json()),
   ]);
+  if (generation !== skillLoadGeneration) return;
   const selected = new Set(session.selected_skill_ids || []);
-  elements.skillList.replaceChildren();
-  if (!packs.length) elements.skillList.innerHTML = '<p class="meta">No skills installed.</p>';
+  const content = document.createDocumentFragment();
+  if (!packs.length) {
+    const empty = document.createElement("p");
+    empty.className = "meta";
+    empty.textContent = "No skills installed.";
+    content.append(empty);
+  }
   for (const pack of packs) {
     const group = document.createElement("section");
     group.className = "skill-pack";
@@ -204,8 +213,10 @@ async function loadSkills() {
       row.append(label, edit);
       group.append(row);
     }
-    elements.skillList.append(group);
+    content.append(group);
   }
+  if (generation !== skillLoadGeneration) return;
+  elements.skillList.replaceChildren(content);
 }
 
 async function loadDependencies() {
@@ -386,6 +397,13 @@ elements.skillInstall.addEventListener("click", async () => {
   if (!response.ok) return showError(payload.detail || "Skill installation failed");
   elements.skillConversionStatus.textContent = `Installed ${payload.name} with ${payload.skills.length} skills`;
   elements.skillInstall.disabled = true;
+  await loadSkills();
+});
+elements.skillDeduplicate.addEventListener("click", async () => {
+  const response = await fetch("/api/skills/deduplicate", { method: "POST" });
+  const payload = await response.json();
+  if (!response.ok) return showError(payload.detail || "Unable to remove duplicate skills");
+  elements.skillConversionStatus.textContent = `Removed ${payload.removed_packs} duplicate packs and ${payload.removed_skills} duplicate skills`;
   await loadSkills();
 });
 elements.skillSave.addEventListener("click", async () => {

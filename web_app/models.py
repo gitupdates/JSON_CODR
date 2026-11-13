@@ -109,6 +109,7 @@ class SkillPack(BaseModel):
     source_format: Literal["claude", "codex", "generic"]
     source_name: str
     source_path: Optional[str] = None
+    source_digest: Optional[str] = None
     skills: List[SkillRecord] = Field(default_factory=list)
 
 

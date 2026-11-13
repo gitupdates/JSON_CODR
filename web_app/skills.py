@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -8,6 +9,15 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 from web_app.models import SkillPack, SkillRecord
+
+
+class DuplicateSkillPack(ValueError):
+    pass
+
+
+def _skill_fingerprint(skill: SkillRecord) -> str:
+    content = (skill.original_content or skill.content).replace("\r\n", "\n").strip()
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 def _slug(value: str) -> str:
@@ -111,7 +121,15 @@ class SkillConverterService:
         if not skills:
             raise ValueError("Archive contains no supported Markdown skills")
         pack_name = Path(source_name).stem
-        return SkillPack(id=_slug(pack_name), name=pack_name, source_format=source_format, source_name=source_name, source_path=str(Path(source).resolve()), skills=skills)
+        return SkillPack(
+            id=_slug(pack_name),
+            name=pack_name,
+            source_format=source_format,
+            source_name=source_name,
+            source_path=str(Path(source).resolve()),
+            source_digest=hashlib.sha256(Path(source).read_bytes()).hexdigest(),
+            skills=skills,
+        )
 
     @staticmethod
     def _normalize_content(content: str) -> str:
@@ -156,6 +174,13 @@ class SkillLibraryService:
     def install(self, pack: SkillPack) -> SkillPack:
         with self._lock:
             packs = self.list()
+            installed_digests = {item.source_digest for item in packs if item.source_digest}
+            installed_skills = {_skill_fingerprint(skill) for item in packs for skill in item.skills}
+            incoming_skills = {_skill_fingerprint(skill) for skill in pack.skills}
+            if (pack.source_digest and pack.source_digest in installed_digests) or incoming_skills.issubset(installed_skills):
+                raise DuplicateSkillPack("This skill pack is already installed")
+            unique_skills = [skill for skill in pack.skills if _skill_fingerprint(skill) not in installed_skills]
+            pack = pack.model_copy(update={"skills": unique_skills})
             existing = {item.id for item in packs}
             base = pack.id
             suffix = 2
@@ -170,6 +195,38 @@ class SkillLibraryService:
             packs.append(pack)
             self._save(packs)
             return pack
+
+    def deduplicate(self) -> dict[str, object]:
+        with self._lock:
+            retained: list[SkillPack] = []
+            seen_digests: set[str] = set()
+            seen_skills: set[str] = set()
+            removed_pack_ids: list[str] = []
+            removed_skills = 0
+            for pack in self.list():
+                fingerprints = [_skill_fingerprint(skill) for skill in pack.skills]
+                duplicate_source = bool(pack.source_digest and pack.source_digest in seen_digests)
+                unique_skills = [
+                    skill for skill, fingerprint in zip(pack.skills, fingerprints)
+                    if fingerprint not in seen_skills
+                ]
+                removed_skills += len(pack.skills) - len(unique_skills)
+                if duplicate_source or not unique_skills:
+                    if duplicate_source:
+                        removed_skills += len(unique_skills)
+                    removed_pack_ids.append(pack.id)
+                    continue
+                updated = pack.model_copy(update={"skills": unique_skills})
+                retained.append(updated)
+                if pack.source_digest:
+                    seen_digests.add(pack.source_digest)
+                seen_skills.update(_skill_fingerprint(skill) for skill in unique_skills)
+            self._save(retained)
+            return {
+                "removed_packs": len(removed_pack_ids),
+                "removed_skills": removed_skills,
+                "removed_pack_ids": removed_pack_ids,
+            }
 
     def get_skill(self, pack_id: str, skill_id: str) -> SkillRecord:
         for pack in self.list():

@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from web_app.app import create_app
 from web_app.attachments import AttachmentService
-from web_app.skills import SkillConverterService, SkillLibraryService
+from web_app.skills import DuplicateSkillPack, SkillConverterService, SkillLibraryService
 from web_app.workspace import WorkspaceService
 
 
@@ -99,6 +99,29 @@ class SkillLibraryTests(unittest.TestCase):
         self.assertEqual(self.library.list(), [])
         self.assertEqual(preserved_source.read_bytes(), original)
 
+    def test_prevents_reinstalling_identical_pack(self):
+        source = self.root / "claude.zip"
+        source.write_bytes(archive({"pack/skills/review/SKILL.md": "---\nname: review\n---\nReview carefully"}))
+        self.library.install(self.converter.convert(source, source.name))
+
+        with self.assertRaises(DuplicateSkillPack):
+            self.library.install(self.converter.convert(source, source.name))
+
+        self.assertEqual(len(self.library.list()), 1)
+
+    def test_deduplicates_legacy_catalog_by_skill_content(self):
+        source = self.root / "claude.zip"
+        source.write_bytes(archive({"pack/skills/review/SKILL.md": "---\nname: review\n---\nReview carefully"}))
+        pack = self.converter.convert(source, source.name)
+        duplicate = pack.model_copy(update={"id": "claude-copy"})
+        self.library._save([pack, duplicate])
+
+        result = self.library.deduplicate()
+
+        self.assertEqual(result["removed_packs"], 1)
+        self.assertEqual(result["removed_skills"], 1)
+        self.assertEqual(len(self.library.list()), 1)
+
     def test_api_installs_selects_edits_and_removes_pack(self):
         session = self.workspace.create_session()
         attachments = AttachmentService(self.workspace)
@@ -122,6 +145,25 @@ class SkillLibraryTests(unittest.TestCase):
         self.assertEqual(edited.json()["content"], "Updated review instructions")
         self.assertEqual(client.delete(f'/api/skills/{installed["id"]}').status_code, 204)
         self.assertEqual(client.get("/api/skills").json(), [])
+
+    def test_api_rejects_duplicate_install_and_exposes_cleanup(self):
+        session = self.workspace.create_session()
+        attachments = AttachmentService(self.workspace)
+        record = attachments.import_stream(
+            session.id,
+            "skills.zip",
+            io.BytesIO(archive({"skills/review/SKILL.md": "---\nname: review\n---\nReview carefully"})),
+        )
+        client = TestClient(create_app(FakeOllamaService(), self.workspace, attachments))
+        endpoint = f"/api/sessions/{session.id}/attachments/{record.id}/skill-install"
+
+        self.assertEqual(client.post(endpoint).status_code, 201)
+        duplicate = client.post(endpoint)
+        self.assertEqual(duplicate.status_code, 409)
+        self.assertIn("already installed", duplicate.json()["detail"])
+        cleanup = client.post("/api/skills/deduplicate")
+        self.assertEqual(cleanup.status_code, 200)
+        self.assertEqual(cleanup.json()["removed_packs"], 0)
 
 
 if __name__ == "__main__": unittest.main()

@@ -19,7 +19,7 @@ from web_app.ollama_service import (
 )
 from web_app.workspace import InvalidSessionId, WorkspaceService, default_data_root
 from web_app.terminal import TerminalService
-from web_app.skills import SkillConverterService, SkillLibraryService
+from web_app.skills import DuplicateSkillPack, SkillConverterService, SkillLibraryService
 
 
 def create_app(
@@ -170,10 +170,19 @@ def create_app(
     async def install_skill_pack(session_id: str, attachment_id: str):
         try:
             return skill_library.install(convert_attachment(session_id, attachment_id))
+        except DuplicateSkillPack as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Attachment not found") from error
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @application.post("/api/skills/deduplicate")
+    async def deduplicate_skills():
+        result = skill_library.deduplicate()
+        for pack_id in result["removed_pack_ids"]:
+            workspace.clear_skill_pack(pack_id)
+        return result
 
     @application.patch("/api/sessions/{session_id}/skills")
     async def select_session_skills(session_id: str, request: SkillSelectionRequest):
