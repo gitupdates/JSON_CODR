@@ -2,6 +2,7 @@ import json
 import re
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
@@ -18,9 +19,19 @@ class DependencySuggestion:
     automatic: bool = False
 
 
-_PYTHON_SPEC = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9_,.-]+\])?(?:[!<>=~]=?[A-Za-z0-9.*+!_-]+)?$")
 _NPM_NAME = re.compile(r"^(?:@[a-z0-9._-]+/)?[a-z0-9._-]+$", re.IGNORECASE)
 _NPM_VERSION = re.compile(r"^[A-Za-z0-9.*+^~<>=| -]+$")
+
+
+def _valid_python_spec(spec: str) -> bool:
+    try:
+        return Requirement(spec).url is None
+    except InvalidRequirement:
+        return False
+
+
+def _powershell_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
 
 
 class DependencyPreflight:
@@ -46,8 +57,7 @@ class DependencyPreflight:
         npm = shutil.which("npm")
         if npm is None:
             return list(packages)
-        missing: list[str] = []
-        for package in packages:
+        def check(package: str) -> str | None:
             try:
                 result = subprocess.run(
                     [npm, "ls", package, "--depth=0", "--json"],
@@ -59,11 +69,12 @@ class DependencyPreflight:
                     check=False,
                 )
             except (OSError, subprocess.TimeoutExpired):
-                missing.append(package)
-                continue
-            if result.returncode != 0:
-                missing.append(package)
-        return missing
+                return package
+            return package if result.returncode != 0 else None
+
+        workers = min(8, len(packages))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            return [package for package in executor.map(check, packages) if package is not None]
 
 
 class DependencyService:
@@ -87,11 +98,11 @@ class DependencyService:
             if name in {"requirements.txt", "requirements-dev.txt"}:
                 text = self.attachments.preview(session_id, record.id)["text"]
                 specs = [line.strip() for line in text.splitlines()]
-                specs = [spec for spec in specs if _PYTHON_SPEC.fullmatch(spec)]
+                specs = [spec for spec in specs if _valid_python_spec(spec)]
                 if specs:
                     missing = self.preflight.missing_python(specs[:100])
                     if missing:
-                        quoted = " ".join(f"'{spec}'" for spec in missing)
+                        quoted = " ".join(_powershell_literal(spec) for spec in missing)
                         suggestions.append(DependencySuggestion("python", record.display_name, f"python -m pip install {quoted}", True))
             elif name == "package.json":
                 text = self.attachments.preview(session_id, record.id)["text"]
@@ -110,5 +121,6 @@ class DependencyService:
                 if packages:
                     missing = self.preflight.missing_node(packages[:100], self.install_root)
                     if missing:
-                        suggestions.append(DependencySuggestion("node", record.display_name, f"npm install {' '.join(missing)}", True))
+                        quoted = " ".join(_powershell_literal(package) for package in missing)
+                        suggestions.append(DependencySuggestion("node", record.display_name, f"npm install {quoted}", True))
         return suggestions

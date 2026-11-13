@@ -1,5 +1,6 @@
 import unittest
 from html.parser import HTMLParser
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -121,6 +122,12 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("suggestion.automatic", javascript)
         self.assertIn("dependencyInstallQueue.enqueue(suggestion.command)", javascript)
         self.assertIn('elements.terminalStatus.textContent = "Installing prerequisites..."', javascript)
+        self.assertIn('addEventListener("error", onFailure', javascript)
+        self.assertIn('addEventListener("close", onFailure', javascript)
+
+    def test_dependency_preflight_runs_off_the_async_event_loop(self):
+        application = Path(__file__).parent.joinpath("web_app", "app.py").read_text(encoding="utf-8")
+        self.assertIn("await asyncio.to_thread(dependency_service.detect, session_id)", application)
 
     def test_skill_library_controls_are_present(self):
         response = self.client.get("/")

@@ -317,7 +317,7 @@ def create_app(
     @application.get("/api/sessions/{session_id}/dependencies")
     async def detect_dependencies(session_id: str):
         try:
-            return dependency_service.detect(session_id)
+            return await asyncio.to_thread(dependency_service.detect, session_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Session not found") from error
 

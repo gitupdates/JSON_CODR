@@ -38,7 +38,7 @@ function Test-WorkspaceOwnership {
 
     $marker = Join-Path $Workspace "plan-path"
     if (Test-Path -LiteralPath $marker) {
-        return ([System.IO.File]::ReadAllText($marker).TrimEnd("`r", "`n") -ceq $planId)
+        return ([System.IO.File]::ReadAllText($marker).TrimEnd("`r", "`n") -ieq $planId)
     }
 
     [System.IO.Directory]::CreateDirectory($Workspace) | Out-Null

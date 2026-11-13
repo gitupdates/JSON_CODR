@@ -73,8 +73,24 @@ class DependencyServiceTests(unittest.TestCase):
 
         suggestions = self.dependencies.detect(self.session.id)
 
-        self.assertEqual(suggestions[0].command, "npm install react@^19.0.0 @scope/tool@1.2.0 vite@^7.0.0")
+        self.assertEqual(suggestions[0].command, "npm install 'react@^19.0.0' '@scope/tool@1.2.0' 'vite@^7.0.0'")
         self.assertEqual(suggestions[0].ecosystem, "node")
+
+    def test_compound_python_constraint_is_validated_and_preserved(self):
+        self.attachments.import_text(self.session.id, "fastapi>=0.115,<1", "requirements.txt")
+
+        suggestions = self.dependencies.detect(self.session.id)
+
+        self.assertEqual(suggestions[0].command, "python -m pip install 'fastapi>=0.115,<1'")
+
+    def test_npm_shell_metacharacters_remain_inside_powershell_literal(self):
+        payload = json.dumps({"dependencies": {"safe": "1 | whoami", "blocked": "1; whoami"}})
+        self.attachments.import_text(self.session.id, payload, "package.json")
+
+        suggestions = self.dependencies.detect(self.session.id)
+
+        self.assertEqual(suggestions[0].command, "npm install 'safe@1 | whoami'")
+        self.assertNotIn("blocked", suggestions[0].command)
 
     def test_service_omits_satisfied_dependencies_and_rejects_invalid_lines(self):
         self.dependencies = DependencyService(
@@ -134,11 +150,10 @@ class DependencyPreflightTests(unittest.TestCase):
     @patch("web_app.dependencies.shutil.which", return_value="npm")
     @patch("web_app.dependencies.subprocess.run")
     def test_node_checks_argument_arrays_and_returns_failed_ranges(self, run, which):
-        run.side_effect = [
-            CompletedProcess([], 0, stdout="{}", stderr=""),
-            CompletedProcess([], 1, stdout="{}", stderr=""),
-            CompletedProcess([], 0, stdout="{}", stderr=""),
-        ]
+        def result(arguments, **kwargs):
+            return CompletedProcess(arguments, 1 if arguments[2].startswith("vite@") else 0, stdout="{}", stderr="")
+
+        run.side_effect = result
         packages = ["react@^19.0.0", "vite@^7.0.0", "@scope/tool@1.2.0"]
         root = Path("C:/project")
 

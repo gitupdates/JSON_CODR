@@ -67,6 +67,17 @@ class SddWorkspacePowerShellTests(unittest.TestCase):
         self.assertEqual(repeated, second)
         self.assertEqual((second / "plan-path").read_text(encoding="utf-8").strip(), "docs/beta/plan.md")
 
+    def test_plan_identity_is_case_insensitive_on_windows(self):
+        plan = self.repo / "docs" / "plans" / "case.md"
+        plan.parent.mkdir(parents=True)
+        plan.write_text("# Case\n", encoding="utf-8")
+
+        original = self.run_helper(plan)
+        alternate_case = Path(str(plan).replace("docs", "DOCS").replace("plans", "PLANS"))
+        repeated = self.run_helper(alternate_case)
+
+        self.assertEqual(repeated, original)
+
 
 if __name__ == "__main__":
     unittest.main()

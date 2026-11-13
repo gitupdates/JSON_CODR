@@ -146,7 +146,18 @@ async function runTerminalCommand(command = null) {
   if (!command.trim()) return;
   await ensureTerminal();
   if (terminalSocket.readyState !== WebSocket.OPEN) {
-    await new Promise((resolve) => terminalSocket.addEventListener("open", resolve, { once: true }));
+    await new Promise((resolve, reject) => {
+      const cleanup = () => {
+        terminalSocket.removeEventListener("open", onOpen);
+        terminalSocket.removeEventListener("error", onFailure);
+        terminalSocket.removeEventListener("close", onFailure);
+      };
+      const onOpen = () => { cleanup(); resolve(); };
+      const onFailure = () => { cleanup(); reject(new Error("Terminal connection failed")); };
+      terminalSocket.addEventListener("open", onOpen, { once: true });
+      terminalSocket.addEventListener("error", onFailure, { once: true });
+      terminalSocket.addEventListener("close", onFailure, { once: true });
+    });
   }
   terminalSocket.send(JSON.stringify({ type: "input", data: `${command}\r\n` }));
   if (fromInput) elements.terminalInput.value = "";
