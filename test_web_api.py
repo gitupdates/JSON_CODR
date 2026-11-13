@@ -1,10 +1,13 @@
 import unittest
+import tempfile
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from web_app.app import create_app
 from web_app.models import ChatResult
 from web_app.ollama_service import ModelOutputError, ModelTimeoutError, OllamaUnavailableError
+from web_app.workspace import WorkspaceService
 
 
 class FakeService:
@@ -53,7 +56,29 @@ class FakeService:
 class WebApiTests(unittest.TestCase):
     def setUp(self):
         self.service = FakeService()
-        self.client = TestClient(create_app(self.service))
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.workspace = WorkspaceService(Path(self.temporary_directory.name))
+        self.client = TestClient(create_app(self.service, self.workspace))
+
+    def tearDown(self):
+        self.temporary_directory.cleanup()
+
+    def test_sessions_create_reopen_and_delete(self):
+        created = self.client.post("/api/sessions")
+        self.assertEqual(created.status_code, 201)
+        session_id = created.json()["id"]
+
+        reopened = self.client.get(f"/api/sessions/{session_id}")
+        self.assertEqual(reopened.status_code, 200)
+        self.assertEqual(reopened.json()["schema_version"], 1)
+
+        deleted = self.client.delete(f"/api/sessions/{session_id}")
+        self.assertEqual(deleted.status_code, 204)
+        self.assertEqual(self.client.get(f"/api/sessions/{session_id}").status_code, 404)
+
+    def test_session_path_traversal_is_rejected(self):
+        response = self.client.get("/api/sessions/not-an-id")
+        self.assertEqual(response.status_code, 400)
 
     def test_health_reports_ollama_readiness(self):
         self.assertEqual(
