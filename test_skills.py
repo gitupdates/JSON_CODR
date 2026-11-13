@@ -27,6 +27,30 @@ def archive(entries: dict[str, str]) -> bytes:
 
 
 class SkillLibraryTests(unittest.TestCase):
+    def test_native_json_codr_envelope_is_imported_without_conversion(self):
+        source = self.root / "native.zip"
+        native = """---
+name: native-review
+description: Review native JSON_CODR skills
+---
+--- JSON_CODR SKILL ENVELOPE ---
+JSON_CODR_SKILL_SCHEMA: 1
+NAME: native-review
+INTENT: Review a supplied artifact
+CAPABILITIES: read
+SYNTAX: Select the skill and provide {{arguments}}.
+EXECUTION_DIRECTIVE: Follow the instructions using authorized capabilities only.
+--- BEGIN CONVERTED SKILL ---
+Review the supplied artifact.
+--- END CONVERTED SKILL ---
+"""
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.writestr("native-review/SKILL.md", native)
+
+        pack = self.converter.convert(source, source.name)
+
+        self.assertEqual(pack.skills[0].content, native.strip())
+
     def setUp(self):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary_directory.name)
@@ -318,6 +342,13 @@ class SkillLibraryTests(unittest.TestCase):
         self.assertEqual(document.status_code, 200)
         self.assertIn("attachment", document.headers["content-disposition"])
         self.assertIn("## Intent", document.text)
+
+        standard = client.get("/api/skills/standard/envelope.md")
+        self.assertEqual(standard.status_code, 200)
+        self.assertIn("JSON_CODR Skill Envelope Standard", standard.text)
+        schema = client.get("/api/skills/standard/envelope.schema.json")
+        self.assertEqual(schema.status_code, 200)
+        self.assertEqual(schema.json()["properties"]["schema_version"]["const"], 1)
 
 
 if __name__ == "__main__": unittest.main()

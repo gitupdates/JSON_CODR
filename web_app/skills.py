@@ -138,7 +138,8 @@ class SkillConverterService:
                 skill_id = f"{_slug(name)}-{suffix}"
                 suffix += 1
             used.add(skill_id)
-            converted = self._normalize_content(content)
+            native = SKILL_ENVELOPE_MARKER in content
+            converted = content.strip() if native else self._normalize_content(content)
             compatibility = (
                 "\n\n## JSON_CODR compatibility\n"
                 "Treat named provider tools as capability requirements. Use only capabilities available in the current session, "
@@ -149,7 +150,7 @@ class SkillConverterService:
                 id=skill_id,
                 name=name,
                 description=description,
-                content=_wrap_skill_content(name, description, converted + compatibility),
+                content=converted if native else _wrap_skill_content(name, description, converted + compatibility),
                 original_content=content,
             ))
         if not skills:

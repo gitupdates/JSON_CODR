@@ -165,6 +165,16 @@ def create_app(
     async def list_skills():
         return skill_library.list()
 
+    @application.get("/api/skills/standard/envelope.md")
+    async def download_skill_envelope_standard():
+        path = Path(__file__).resolve().parent.parent / "docs" / "user" / "json-codr-skill-envelope.md"
+        return FileResponse(path, media_type="text/markdown", filename="json-codr-skill-envelope.md")
+
+    @application.get("/api/skills/standard/envelope.schema.json")
+    async def download_skill_envelope_schema():
+        path = Path(__file__).resolve().parent.parent / "docs" / "user" / "json-codr-skill-envelope.schema.json"
+        return FileResponse(path, media_type="application/schema+json", filename="json-codr-skill-envelope.schema.json")
+
     @application.post("/api/skills/scan")
     async def scan_skills(request: SkillScanRequest):
         try:
