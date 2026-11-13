@@ -30,7 +30,9 @@ class SettingsService:
                 if path not in resolved:
                     resolved.append(path)
             current.skill_scan.approved_directories = resolved
-        raw.update(current.model_dump(mode="json"))
+        raw["version"] = current.version
+        raw.setdefault("ui", {})["skill_catalog_open"] = current.ui.skill_catalog_open
+        raw.setdefault("skill_scan", {})["approved_directories"] = current.skill_scan.approved_directories
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.parent / f".settings-{uuid.uuid4().hex}.tmp"
         temporary.write_text(json.dumps(raw, indent=2), encoding="utf-8")

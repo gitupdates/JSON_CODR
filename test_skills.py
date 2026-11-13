@@ -243,6 +243,8 @@ class SkillLibraryTests(unittest.TestCase):
 
         for heading in ("# review", "## Intent", "## Abilities", "## Command structure and syntax", "## Example use cases", "## Compatibility", "## Instructions"):
             self.assertIn(heading, document)
+        self.assertIn("Source pack", document)
+        self.assertIn("Original source instructions", document)
 
     def test_discovery_scans_archive_and_folder_then_revalidates_source(self):
         scan_root = self.root / "scan"
@@ -275,6 +277,29 @@ class SkillLibraryTests(unittest.TestCase):
         self.assertEqual(discovery.scan_known(result.fallback_token).discoveries[0].name, "known")
         with self.assertRaises(ValueError):
             discovery.scan_known(result.fallback_token)
+
+    def test_rescan_invalidates_older_discoveries(self):
+        first = self.root / "first"; first.mkdir()
+        second = self.root / "second"; second.mkdir()
+        (first / "SKILL.md").write_text("---\nname: first\n---\nFirst", encoding="utf-8")
+        discovery = SkillDiscoveryService(self.library, self.converter, self.root)
+        old_id = discovery.scan(first).discoveries[0].id
+
+        discovery.scan(second)
+
+        with self.assertRaises(ValueError):
+            discovery.install(old_id)
+
+    def test_scan_rejects_symlink_or_reparse_root(self):
+        target = self.root / "target"; target.mkdir()
+        link = self.root / "link"
+        try:
+            link.symlink_to(target, target_is_directory=True)
+        except OSError:
+            self.skipTest("Directory symlinks require elevated Windows privileges")
+        discovery = SkillDiscoveryService(self.library, self.converter, self.root)
+        with self.assertRaises(ValueError):
+            discovery.scan(link)
 
     def test_api_scans_installs_and_downloads_documentation(self):
         scan_root = self.root / "scan"

@@ -227,12 +227,14 @@ function showSkillDetails(pack, skill, selected) {
   const abilities = document.createElement("pre");
   const capability = skill.content.match(/^(?:capabilities|required-capabilities):\s*([^\n]+)/mi);
   abilities.textContent = `ABILITIES\n${capability ? capability[1] : "Uses the instructions and capabilities available to the selected model."}\n\nCOMMAND STRUCTURE & SYNTAX\nSelect this skill, then describe the task in the prompt. {{arguments}} represents user input when present.\n\nEXAMPLE\nEnable the skill, save it, and run a relevant request with any installed LLM.`;
+  const instructions = document.createElement("pre");
+  instructions.textContent = `CONVERTED INSTRUCTIONS\n${skill.content}`;
   const download = document.createElement("a");
   download.className = "secondary file-button";
   download.href = `/api/skills/${pack.id}/${skill.id}/documentation.md`;
   download.textContent = "Export documentation";
   title.scrollIntoView({ block: "nearest" });
-  elements.skillDetails.append(title, state, intent, abilities, download);
+  elements.skillDetails.append(title, state, intent, abilities, instructions, download);
 }
 
 async function loadSkills() {
@@ -345,6 +347,10 @@ function renderSkillDiscoveries(payload) {
   elements.skillScanResults.replaceChildren();
   skillFallbackToken = payload.fallback_token || null;
   elements.skillScanKnown.hidden = !skillFallbackToken;
+  for (const warning of payload.warnings || []) {
+    const notice = document.createElement("p"); notice.className = "meta"; notice.textContent = warning;
+    elements.skillScanResults.append(notice);
+  }
   if (!payload.discoveries.length) {
     const empty = document.createElement("p"); empty.className = "meta";
     empty.textContent = "No compatible skills found. You may scan known provider locations.";

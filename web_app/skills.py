@@ -8,6 +8,7 @@ import uuid
 import zipfile
 import tempfile
 import time
+import stat
 from pathlib import Path, PurePosixPath
 
 from web_app.models import SkillDiscovery, SkillPack, SkillRecord, SkillScanResult
@@ -283,7 +284,12 @@ class SkillLibraryService:
         raise KeyError(f"{pack_id}:{skill_id}")
 
     def documentation(self, pack_id: str, skill_id: str) -> str:
-        skill = self.get_skill(pack_id, skill_id)
+        pack = next((item for item in self.list() if item.id == pack_id), None)
+        if pack is None:
+            raise KeyError(pack_id)
+        skill = next((item for item in pack.skills if item.id == skill_id), None)
+        if skill is None:
+            raise KeyError(skill_id)
         capabilities = re.search(r"(?mi)^(?:capabilities|required-capabilities):\s*([^\n]+)", skill.content)
         abilities = capabilities.group(1).strip() if capabilities else "Follow the documented instructions using capabilities available in JSON_CODR."
         syntax = "Select this skill for the active session, then provide the task in the prompt."
@@ -291,13 +297,13 @@ class SkillLibraryService:
             syntax += " The `{{arguments}}` placeholder represents the user's task input."
         intent = skill.description or f"Apply the {skill.name} workflow to the active request."
         return (
-            f"# {skill.name}\n\n## Intent\n\n{intent}\n\n"
+            f"# {skill.name}\n\nSource pack: {pack.name} ({pack.source_format})\nSource file: {pack.source_name}\n\n## Intent\n\n{intent}\n\n"
             f"## Abilities\n\n{abilities}\n\n"
             f"## Command structure and syntax\n\n{syntax}\n\n"
             f"## Example use cases\n\n- Select **{skill.name}**, enter a relevant task, and run the chosen local model.\n"
             f"- Edit the instructions, save the skill, and apply it to the current session.\n\n"
             "## Compatibility\n\nThis converted JSON_CODR skill is provider-neutral. Tool names are capability requirements and run only when the current system provides and authorizes them.\n\n"
-            f"## Instructions\n\n{skill.content}\n"
+            f"## Instructions\n\n{skill.content}\n\n## Original source instructions\n\n{skill.original_content or 'Not available for this legacy skill.'}\n"
         )
 
     def update_skill(self, pack_id: str, skill_id: str, content: str, enabled: bool) -> SkillRecord:
@@ -343,32 +349,80 @@ class SkillDiscoveryService:
         self.converter = converter
         self.data_root = Path(data_root).resolve()
         home = Path.home()
-        self.known_roots = known_roots or [home / ".codex" / "skills", home / ".claude" / "skills"]
+        self.known_roots = known_roots or [home / ".claude", home / ".codex" / "skills", self.data_root]
         self._previews: dict[str, dict] = {}
         self._tokens: dict[str, float] = {}
 
     @staticmethod
-    def _digest(path: Path) -> str:
+    def _is_link(path: Path) -> bool:
+        details = path.lstat()
+        return path.is_symlink() or bool(getattr(details, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+    @classmethod
+    def _bounded_files(cls, root: Path) -> tuple[list[Path], list[str]]:
+        files: list[Path] = []
+        warnings: list[str] = []
+        entries = 0
+        total_bytes = 0
+        def visit(directory: Path, depth: int) -> None:
+            nonlocal entries, total_bytes
+            if depth > 5:
+                if "Scan stopped at depth 5" not in warnings: warnings.append("Scan stopped at depth 5")
+                return
+            for child in directory.iterdir():
+                if entries >= 500:
+                    if "Scan stopped after 500 entries" not in warnings: warnings.append("Scan stopped after 500 entries")
+                    return
+                entries += 1
+                if cls._is_link(child):
+                    continue
+                resolved = child.resolve()
+                if not resolved.is_relative_to(root):
+                    continue
+                if child.is_dir():
+                    visit(child, depth + 1)
+                elif child.is_file():
+                    total_bytes += child.stat().st_size
+                    if total_bytes > 10 * 1024 * 1024:
+                        if "Scan stopped after 10 MB" not in warnings: warnings.append("Scan stopped after 10 MB")
+                        return
+                    files.append(child)
+        visit(root, 0)
+        return files, warnings
+
+    @classmethod
+    def _digest(cls, path: Path) -> str:
         digest = hashlib.sha256()
         if path.is_file():
             digest.update(path.read_bytes())
         else:
-            for item in sorted(path.rglob("*")):
-                if item.is_file() and not item.is_symlink():
-                    digest.update(item.relative_to(path).as_posix().encode())
-                    digest.update(item.read_bytes())
+            files, warnings = cls._bounded_files(path)
+            if warnings:
+                raise ValueError("; ".join(warnings))
+            for item in sorted(files):
+                digest.update(item.relative_to(path).as_posix().encode())
+                digest.update(item.read_bytes())
         return digest.hexdigest()
 
-    @staticmethod
-    def _folder_archive(path: Path) -> Path:
+    @classmethod
+    def _folder_archive(cls, path: Path) -> Path:
         handle, filename = tempfile.mkstemp(suffix=".zip")
         os.close(handle)
         target = Path(filename)
+        files, warnings = cls._bounded_files(path)
+        if warnings:
+            target.unlink(missing_ok=True)
+            raise ValueError("; ".join(warnings))
         with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as bundle:
-            for item in path.rglob("*"):
-                if item.is_file() and not item.is_symlink():
-                    bundle.write(item, item.relative_to(path).as_posix())
+            for item in files:
+                bundle.write(item, item.relative_to(path).as_posix())
         return target
+
+    def _clear_previews(self) -> None:
+        for preview in self._previews.values():
+            preview["snapshot"].unlink(missing_ok=True)
+        self._previews.clear()
+        self._tokens.clear()
 
     def _convert_source(self, path: Path) -> SkillPack:
         if path.is_dir():
@@ -383,21 +437,16 @@ class SkillDiscoveryService:
         installed = {_skill_fingerprint(skill) for item in self.library.list() for skill in item.skills}
         return all(_skill_fingerprint(skill) in installed for skill in pack.skills)
 
-    def scan(self, directory: Path | str) -> SkillScanResult:
-        root = Path(directory).resolve()
-        if not root.is_dir() or root.is_symlink():
+    def scan(self, directory: Path | str, _reset: bool = True) -> SkillScanResult:
+        requested = Path(directory)
+        if not requested.is_dir() or self._is_link(requested):
             raise ValueError("Skill scan path must be an existing local directory")
+        root = requested.resolve()
+        if _reset:
+            self._clear_previews()
         candidates: list[Path] = []
-        warnings: list[str] = []
-        entries = 0
-        for item in root.rglob("*"):
-            depth = len(item.relative_to(root).parts)
-            if depth > 5 or item.is_symlink():
-                continue
-            entries += 1
-            if entries > 500:
-                warnings.append("Scan stopped after 500 entries")
-                break
+        files, warnings = self._bounded_files(root)
+        for item in files:
             if item.is_file() and item.suffix.casefold() in {".zip", ".7z"}:
                 candidates.append(item)
             elif item.is_file() and item.name == "SKILL.md":
@@ -410,15 +459,28 @@ class SkillDiscoveryService:
             if source in seen:
                 continue
             seen.add(source)
+            snapshot: Path | None = None
             try:
-                pack = self._convert_source(source)
+                if source.is_dir():
+                    snapshot = self._folder_archive(source)
+                else:
+                    handle, filename = tempfile.mkstemp(suffix=source.suffix)
+                    os.close(handle)
+                    snapshot = Path(filename)
+                if source.is_file():
+                    shutil.copyfile(source, snapshot)
+                pack = self.converter.convert(snapshot, f"{source.name}.zip" if source.is_dir() else source.name)
+                source_digest = self._digest(source)
             except ValueError as error:
+                if snapshot is not None:
+                    snapshot.unlink(missing_ok=True)
                 warnings.append(f"{source.name}: {error}")
                 continue
             discovery_id = uuid.uuid4().hex
             self._previews[discovery_id] = {
                 "path": source,
-                "digest": self._digest(source),
+                "snapshot": snapshot,
+                "digest": source_digest,
                 "expires": time.monotonic() + 600,
             }
             discoveries.append(SkillDiscovery(
@@ -433,17 +495,21 @@ class SkillDiscoveryService:
         if not discoveries:
             token = uuid.uuid4().hex
             self._tokens[token] = time.monotonic() + 600
+        while len(self._previews) > 128:
+            oldest = next(iter(self._previews))
+            self._previews.pop(oldest)["snapshot"].unlink(missing_ok=True)
         return SkillScanResult(discoveries=discoveries, warnings=warnings, fallback_token=token)
 
     def scan_known(self, fallback_token: str) -> SkillScanResult:
         expiry = self._tokens.pop(fallback_token, None)
         if expiry is None or expiry < time.monotonic():
             raise ValueError("Known-location scan requires a recent empty explicit scan")
+        self._clear_previews()
         combined = SkillScanResult()
         for root in self.known_roots:
             if not root.is_dir():
                 continue
-            result = self.scan(root)
+            result = self.scan(root, _reset=False)
             combined.discoveries.extend(result.discoveries)
             combined.warnings.extend(result.warnings)
         return combined
@@ -454,12 +520,11 @@ class SkillDiscoveryService:
             raise ValueError("Discovery preview expired; scan again")
         source = preview["path"]
         if not source.exists() or self._digest(source) != preview["digest"]:
+            preview["snapshot"].unlink(missing_ok=True)
             raise ValueError("Skill source changed after preview; scan again")
-        if source.is_dir():
-            archive = self._folder_archive(source)
-            try:
-                pack = self.converter.convert(archive, f"{source.name}.zip")
-                return self.library.install(pack)
-            finally:
-                archive.unlink(missing_ok=True)
-        return self.library.install(self.converter.convert(source, source.name))
+        snapshot = preview["snapshot"]
+        try:
+            pack = self.converter.convert(snapshot, f"{source.name}.zip" if source.is_dir() else source.name)
+            return self.library.install(pack)
+        finally:
+            snapshot.unlink(missing_ok=True)

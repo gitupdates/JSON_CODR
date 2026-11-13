@@ -26,7 +26,7 @@ class SettingsTests(unittest.TestCase):
     def test_defaults_and_persistence_preserve_unknown_configuration(self):
         service = SettingsService(self.root)
         self.assertTrue(service.get().ui.skill_catalog_open)
-        service.path.write_text(json.dumps({"version": 1, "future": {"hook": "value"}}), encoding="utf-8")
+        service.path.write_text(json.dumps({"version": 1, "future": {"hook": "value"}, "ui": {"future_ui": "kept"}, "skill_scan": {"future_scan": 42}}), encoding="utf-8")
 
         service.update(SettingsUpdate(
             ui=UiSettings(skill_catalog_open=False),
@@ -37,6 +37,9 @@ class SettingsTests(unittest.TestCase):
         self.assertFalse(reloaded.ui.skill_catalog_open)
         self.assertEqual(reloaded.skill_scan.approved_directories, [str(self.root.resolve())])
         self.assertEqual(json.loads(service.path.read_text(encoding="utf-8"))["future"], {"hook": "value"})
+        raw = json.loads(service.path.read_text(encoding="utf-8"))
+        self.assertEqual(raw["ui"]["future_ui"], "kept")
+        self.assertEqual(raw["skill_scan"]["future_scan"], 42)
 
     def test_api_gets_and_updates_settings(self):
         workspace = WorkspaceService(self.root)
