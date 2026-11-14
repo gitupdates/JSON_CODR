@@ -10,8 +10,9 @@ from web_app.attachments import AttachmentService, AttachmentTooLarge
 from web_app.actions import ActionProposalService
 from web_app.artifacts import ArtifactService
 from web_app.context import ContextAssembler
+from web_app.hardware import HardwareBackendManager
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
+from web_app.models import ActionApprovalRequest, AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, HardwareBenchmarkRequest, HardwareProbeRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
 from web_app.ollama_service import (
     ModelOutputError,
     ModelTimeoutError,
@@ -32,6 +33,7 @@ def create_app(
     workspace: WorkspaceService | None = None,
     attachments: AttachmentService | None = None,
     terminals: TerminalService | None = None,
+    hardware: HardwareBackendManager | None = None,
 ) -> FastAPI:
     application = FastAPI(title="JSON_CODR", version=APP_VERSION)
     workspace = workspace or WorkspaceService(default_data_root())
@@ -40,6 +42,7 @@ def create_app(
     skill_library.ensure_envelopes()
     skill_converter = SkillConverterService()
     settings = SettingsService(workspace.data_root)
+    hardware = hardware or HardwareBackendManager(workspace.data_root)
     skillsets = SkillsetService(workspace.data_root, skill_library)
     recommendations = SkillRecommendationService(skill_library, skillsets, settings)
     skill_discovery = SkillDiscoveryService(skill_library, skill_converter, workspace.data_root)
@@ -74,6 +77,38 @@ def create_app(
     @application.patch("/api/settings")
     async def update_settings(request: SettingsUpdate):
         return settings.update(request)
+
+    @application.get("/api/hardware")
+    async def hardware_status():
+        return hardware.status()
+
+    @application.post("/api/hardware/detect")
+    async def detect_hardware():
+        return hardware.detect()
+
+    @application.post("/api/hardware/probe")
+    async def probe_hardware(request: HardwareProbeRequest):
+        try:
+            return await hardware.probe(request.backend, request.model)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @application.post("/api/hardware/restore-cpu")
+    async def restore_cpu_backend():
+        return hardware.restore_cpu()
+
+    @application.get("/api/hardware/benchmarks")
+    async def hardware_benchmark_history():
+        return hardware.benchmark_history()
+
+    @application.post("/api/hardware/benchmarks")
+    async def run_hardware_benchmark(request: HardwareBenchmarkRequest):
+        try:
+            return await hardware.benchmark(request.suite, request.model)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.get("/api/skillsets")
     async def list_skillsets():
@@ -608,6 +643,8 @@ def create_app(
             raise HTTPException(status_code=502, detail=str(error)) from error
         except OllamaUnavailableError as error:
             status = 409 if str(error) == "Model is not installed" else 502
+            if status == 502:
+                hardware.record_runtime_failure(str(error))
             raise HTTPException(status_code=status, detail=str(error)) from error
 
     return application

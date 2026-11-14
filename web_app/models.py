@@ -13,6 +13,16 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = None
 
 
+class HardwareProbeRequest(BaseModel):
+    backend: Literal["cpu", "cuda_v12", "cuda_v13", "rocm_v7_1", "vulkan"]
+    model: str = Field(min_length=1, max_length=200)
+
+
+class HardwareBenchmarkRequest(BaseModel):
+    suite: Literal["quick", "thorough"] = "quick"
+    model: str = Field(min_length=1, max_length=200)
+
+
 class ActionSuggestion(BaseModel):
     command: str = Field(min_length=1, max_length=2000)
     cwd: Optional[str] = Field(default=None, max_length=500)

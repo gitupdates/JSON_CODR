@@ -78,6 +78,35 @@ class FakeService:
         )
 
 
+class FakeHardware:
+    def __init__(self):
+        self.probed = None
+        self.benchmarked = None
+        self.benchmark_error = None
+
+    def status(self):
+        return {"preferred_backend": "cpu", "last_known_good": "cpu", "quarantined": {}, "last_error": None}
+
+    def detect(self):
+        return [{"id": "cpu", "name": "CPU", "compatible": True, "verified": True}]
+
+    async def probe(self, backend, model):
+        self.probed = (backend, model)
+        return {**self.status(), "preferred_backend": backend, "restart_required": True}
+
+    def restore_cpu(self):
+        return self.status()
+
+    async def benchmark(self, suite, model):
+        if self.benchmark_error:
+            raise self.benchmark_error
+        self.benchmarked = (suite, model)
+        return {"id": "run-1", "suite": suite, "model": model, "results": []}
+
+    def benchmark_history(self):
+        return [{"id": "run-0", "suite": "quick", "model": "model", "results": []}]
+
+
 class WebApiTests(unittest.TestCase):
     def setUp(self):
         self.service = FakeService()
@@ -113,6 +142,38 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(self.client.app.version, "V1.0.4")
         self.service.available = False
         self.assertEqual(self.client.get("/api/health").json()["status"], "degraded")
+
+    def test_hardware_detection_probe_and_cpu_restore_are_exposed(self):
+        hardware = FakeHardware()
+        client = TestClient(create_app(self.service, self.workspace, hardware=hardware))
+
+        self.assertEqual(client.get("/api/hardware").json()["preferred_backend"], "cpu")
+        self.assertEqual(client.post("/api/hardware/detect").json()[0]["id"], "cpu")
+        response = client.post("/api/hardware/probe", json={"backend": "cpu", "model": "qwen2.5-coder:0.5b"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(hardware.probed, ("cpu", "qwen2.5-coder:0.5b"))
+        self.assertEqual(client.post("/api/hardware/restore-cpu").json()["preferred_backend"], "cpu")
+
+    def test_hardware_benchmark_execution_history_validation_and_busy_conflict(self):
+        hardware = FakeHardware()
+        client = TestClient(create_app(self.service, self.workspace, hardware=hardware))
+
+        response = client.post(
+            "/api/hardware/benchmarks",
+            json={"suite": "quick", "model": "qwen2.5-coder:0.5b"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id"], "run-1")
+        self.assertEqual(hardware.benchmarked, ("quick", "qwen2.5-coder:0.5b"))
+        self.assertEqual(client.get("/api/hardware/benchmarks").json()[0]["id"], "run-0")
+
+        invalid = client.post("/api/hardware/benchmarks", json={"suite": "overnight", "model": "model"})
+        self.assertEqual(invalid.status_code, 422)
+
+        hardware.benchmark_error = RuntimeError("A hardware benchmark is already running")
+        busy = client.post("/api/hardware/benchmarks", json={"suite": "quick", "model": "model"})
+        self.assertEqual(busy.status_code, 409)
+        self.assertIn("already running", busy.json()["detail"])
 
     def test_models_keep_missing_configured_entries_disabled(self):
         response = self.client.get("/api/models")
