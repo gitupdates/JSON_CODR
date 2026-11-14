@@ -24,6 +24,7 @@ from web_app.skills import DuplicateSkillPack, SkillConverterService, SkillDisco
 from web_app.settings import SettingsService
 from web_app.skillsets import SkillsetService
 from web_app.recommendations import SkillRecommendationService
+from web_app.version import APP_VERSION
 
 
 def create_app(
@@ -32,7 +33,7 @@ def create_app(
     attachments: AttachmentService | None = None,
     terminals: TerminalService | None = None,
 ) -> FastAPI:
-    application = FastAPI(title="JSON_CODR", version="V1.0.3")
+    application = FastAPI(title="JSON_CODR", version=APP_VERSION)
     workspace = workspace or WorkspaceService(default_data_root())
     attachments = attachments or AttachmentService(workspace)
     skill_library = SkillLibraryService(workspace.data_root)
@@ -57,7 +58,7 @@ def create_app(
     @application.get("/api/health")
     async def health():
         result = await service.health()
-        return {"status": "ready" if result["ollama"] else "degraded", **result}
+        return {"status": "ready" if result["ollama"] else "degraded", "app_version": APP_VERSION, **result}
 
     @application.get("/api/models")
     async def models():

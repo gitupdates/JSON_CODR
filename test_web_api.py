@@ -108,8 +108,9 @@ class WebApiTests(unittest.TestCase):
     def test_health_reports_ollama_readiness(self):
         self.assertEqual(
             self.client.get("/api/health").json(),
-            {"status": "ready", "ollama": True},
+            {"status": "ready", "ollama": True, "app_version": "V1.0.4"},
         )
+        self.assertEqual(self.client.app.version, "V1.0.4")
         self.service.available = False
         self.assertEqual(self.client.get("/api/health").json()["status"], "degraded")
 

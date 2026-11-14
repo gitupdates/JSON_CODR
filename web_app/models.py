@@ -4,6 +4,8 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from web_app.version import APP_VERSION
+
 
 class ChatRequest(BaseModel):
     model: str
@@ -274,6 +276,7 @@ class SkillRoutingSettings(BaseModel):
 
 class SystemSettings(BaseModel):
     version: int = 2
+    app_version: str = APP_VERSION
     ui: UiSettings = Field(default_factory=UiSettings)
     skill_scan: SkillScanSettings = Field(default_factory=SkillScanSettings)
     skill_routing: SkillRoutingSettings = Field(default_factory=SkillRoutingSettings)

@@ -34,7 +34,7 @@ class WebStaticTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.0.3", response.text)
+        self.assertIn("V1.0.4", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(

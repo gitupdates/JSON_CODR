@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 
 from web_app.models import SettingsUpdate, SkillRoutingSettings, SystemSettings, UiSettings
+from web_app.version import APP_VERSION
 
 
 class SettingsService:
@@ -18,6 +19,7 @@ class SettingsService:
     def get(self) -> SystemSettings:
         raw = self._raw()
         raw["version"] = 2
+        raw["app_version"] = APP_VERSION
         return SystemSettings.model_validate(raw)
 
     def update(self, update: SettingsUpdate) -> SystemSettings:
@@ -39,6 +41,7 @@ class SettingsService:
         if update.skill_routing is not None:
             current.skill_routing = SkillRoutingSettings.model_validate(update.skill_routing)
         raw["version"] = current.version
+        raw["app_version"] = APP_VERSION
         raw.setdefault("ui", {})["skill_catalog_open"] = current.ui.skill_catalog_open
         raw.setdefault("ui", {})["theme"] = current.ui.theme
         raw.setdefault("skill_scan", {})["approved_directories"] = current.skill_scan.approved_directories

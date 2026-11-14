@@ -105,6 +105,25 @@ A version-1 skill is compatible without conversion when:
 
 Native skills may also be found with **Scan folder**. Scanning is preview-only; installation remains a separate user action.
 
+## Automatic Skillsets and recommendations
+
+V1.0.4 groups related installed skills into generated Skillsets. A Skillset stores references to canonical skills; it does not copy or replace their instructions. JSON_CODR deterministically recommends enabled skills from prompt terms, declared capabilities, descriptions, Skillset routing terms, and attached file types. The interface displays the reason for every match.
+
+Manual selections remain first. Automatic attachment is limited to three Skillsets and five distinct skills. A session can disable automatic attachment or dismiss an individual recommendation; dismissed references remain excluded for that session. Deleted, disabled, stale, and duplicate references are never attached.
+
+The non-user prompt context is capped at 20,000 characters. Skill instructions use at most 12,000 characters and are omitted whole rather than cut mid-document. When extracted attachment text exists, it receives at least an 8,000-character allocation. The original user request is always preserved in full.
+
+## Terminal action proposals
+
+A skill may suggest a command only through the structured `actions` response field. Commands shown in prose or fenced code are never executable proposals. JSON_CODR validates each structured suggestion and displays the exact server-owned command, working directory, explanation, source skills, and risk classification for review.
+
+- Normal proposals require **Approve and run** and receive a terminal-bound, one-shot token valid for five minutes.
+- Destructive commands and unknown commands require a second dialog that repeats the command, directory, and risk and requires typing the displayed confirmation phrase. Its one-shot token is valid for 60 seconds.
+- Rejecting, editing, superseding, consuming, or restarting the server invalidates approval authority.
+- Approval never crosses chat sessions or terminals. The terminal channel receives only the proposal ID and token, then executes the exact command retained by the server.
+
+Direct CLI input remains a separate user-initiated workflow. Imported skill documentation never grants terminal authority.
+
 ## Common incompatibilities
 
 - Missing lowercase YAML `name:` makes JSON_CODR derive a name from the directory.
