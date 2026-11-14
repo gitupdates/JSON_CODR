@@ -3,7 +3,9 @@ import os
 import re
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, field_validator
+
+from web_app.models import ActionSuggestion
 
 
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "jury_config.json")
@@ -13,6 +15,20 @@ class StructuredCLIResponse(BaseModel):
     status: str = Field(description="Execution status of the CLI prompt response")
     summary: str = Field(description="Brief summary of the generated response")
     content: str = Field(description="Detailed response content")
+    actions: list[ActionSuggestion] = Field(default_factory=list, max_length=5)
+
+    @field_validator("actions", mode="before")
+    @classmethod
+    def drop_invalid_actions(cls, value):
+        if not isinstance(value, list):
+            return []
+        valid = []
+        for item in value[:5]:
+            try:
+                valid.append(ActionSuggestion.model_validate(item))
+            except (ValidationError, TypeError, ValueError):
+                continue
+        return valid
 
 
 def load_config() -> dict:

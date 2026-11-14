@@ -7,10 +7,12 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from web_app.attachments import AttachmentService, AttachmentTooLarge
+from web_app.actions import ActionProposalService
 from web_app.artifacts import ArtifactService
 from web_app.context import ContextAssembler
+from web_app.hardware import HardwareBackendManager
 from web_app.dependencies import DependencyService
-from web_app.models import AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, DiscoveryInstallRequest, KnownSkillScanRequest, SettingsUpdate, SkillPackRenameRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
+from web_app.models import ActionApprovalRequest, AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, HardwareBenchmarkRequest, HardwareProbeRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
 from web_app.ollama_service import (
     ModelOutputError,
     ModelTimeoutError,
@@ -21,6 +23,9 @@ from web_app.workspace import InvalidSessionId, WorkspaceService, default_data_r
 from web_app.terminal import TerminalService
 from web_app.skills import DuplicateSkillPack, SkillConverterService, SkillDiscoveryService, SkillLibraryService
 from web_app.settings import SettingsService
+from web_app.skillsets import SkillsetService
+from web_app.recommendations import SkillRecommendationService
+from web_app.version import APP_VERSION
 
 
 def create_app(
@@ -28,19 +33,24 @@ def create_app(
     workspace: WorkspaceService | None = None,
     attachments: AttachmentService | None = None,
     terminals: TerminalService | None = None,
+    hardware: HardwareBackendManager | None = None,
 ) -> FastAPI:
-    application = FastAPI(title="JSON_CODR", version="V1.0.2")
+    application = FastAPI(title="JSON_CODR", version=APP_VERSION)
     workspace = workspace or WorkspaceService(default_data_root())
     attachments = attachments or AttachmentService(workspace)
     skill_library = SkillLibraryService(workspace.data_root)
     skill_library.ensure_envelopes()
     skill_converter = SkillConverterService()
     settings = SettingsService(workspace.data_root)
+    hardware = hardware or HardwareBackendManager(workspace.data_root)
+    skillsets = SkillsetService(workspace.data_root, skill_library)
+    recommendations = SkillRecommendationService(skill_library, skillsets, settings)
     skill_discovery = SkillDiscoveryService(skill_library, skill_converter, workspace.data_root)
     context_assembler = ContextAssembler(attachments, skills=skill_library)
     dependency_service = DependencyService(attachments)
     artifact_service = ArtifactService(workspace)
     terminals = terminals or TerminalService()
+    action_proposals = ActionProposalService()
     web_root = Path(__file__).resolve().parent.parent / "web"
     application.mount("/static", StaticFiles(directory=web_root), name="static")
 
@@ -51,7 +61,7 @@ def create_app(
     @application.get("/api/health")
     async def health():
         result = await service.health()
-        return {"status": "ready" if result["ollama"] else "degraded", **result}
+        return {"status": "ready" if result["ollama"] else "degraded", "app_version": APP_VERSION, **result}
 
     @application.get("/api/models")
     async def models():
@@ -68,6 +78,42 @@ def create_app(
     async def update_settings(request: SettingsUpdate):
         return settings.update(request)
 
+    @application.get("/api/hardware")
+    async def hardware_status():
+        return hardware.status()
+
+    @application.post("/api/hardware/detect")
+    async def detect_hardware():
+        return hardware.detect()
+
+    @application.post("/api/hardware/probe")
+    async def probe_hardware(request: HardwareProbeRequest):
+        try:
+            return await hardware.probe(request.backend, request.model)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @application.post("/api/hardware/restore-cpu")
+    async def restore_cpu_backend():
+        return hardware.restore_cpu()
+
+    @application.get("/api/hardware/benchmarks")
+    async def hardware_benchmark_history():
+        return hardware.benchmark_history()
+
+    @application.post("/api/hardware/benchmarks")
+    async def run_hardware_benchmark(request: HardwareBenchmarkRequest):
+        try:
+            return await hardware.benchmark(request.suite, request.model, request.backend)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @application.get("/api/skillsets")
+    async def list_skillsets():
+        return skillsets.reconcile()
+
     @application.post("/api/sessions", status_code=201)
     async def create_session():
         return workspace.create_session()
@@ -80,6 +126,39 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(error)) from error
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Session not found") from error
+
+    @application.post("/api/sessions/{session_id}/skill-recommendations")
+    async def preview_skill_recommendations(session_id: str, request: SkillRecommendationRequest):
+        try:
+            return recommendations.recommend(workspace.get_session(session_id), request.prompt)
+        except InvalidSessionId as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Session not found") from error
+
+    @application.patch("/api/sessions/{session_id}/skill-routing")
+    async def update_session_skill_routing(session_id: str, request: SessionSkillRoutingUpdate):
+        try:
+            session = workspace.get_session(session_id)
+            if request.excluded_skill_ids is not None:
+                exclusions = list(dict.fromkeys(request.excluded_skill_ids))
+                for reference in exclusions:
+                    if ":" not in reference:
+                        raise ValueError("Invalid skill reference")
+                    pack_id, skill_id = reference.split(":", 1)
+                    if not skill_library.get_skill(pack_id, skill_id).enabled:
+                        raise ValueError("Disabled skills cannot be excluded")
+                session.excluded_skill_ids = exclusions
+            if request.auto_attach_skills is not None:
+                session.auto_attach_skills = request.auto_attach_skills
+            workspace.save_manifest(session)
+            return session
+        except InvalidSessionId as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=422, detail="Unknown skill reference") from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @application.delete("/api/sessions/{session_id}", status_code=204)
     async def delete_session(session_id: str):
@@ -197,7 +276,9 @@ def create_app(
     @application.post("/api/skills/install-discovery", status_code=201)
     async def install_discovered_skill(request: DiscoveryInstallRequest):
         try:
-            return skill_discovery.install(request.discovery_id)
+            installed = skill_discovery.install(request.discovery_id)
+            skillsets.reconcile()
+            return installed
         except DuplicateSkillPack as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except ValueError as error:
@@ -231,7 +312,9 @@ def create_app(
     @application.post("/api/sessions/{session_id}/attachments/{attachment_id}/skill-install", status_code=201)
     async def install_skill_pack(session_id: str, attachment_id: str):
         try:
-            return skill_library.install(convert_attachment(session_id, attachment_id))
+            installed = skill_library.install(convert_attachment(session_id, attachment_id))
+            skillsets.reconcile()
+            return installed
         except DuplicateSkillPack as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except KeyError as error:
@@ -244,6 +327,7 @@ def create_app(
         result = skill_library.deduplicate()
         for pack_id in result["removed_pack_ids"]:
             workspace.clear_skill_pack(pack_id)
+        skillsets.reconcile()
         return result
 
     @application.patch("/api/sessions/{session_id}/skills")
@@ -270,6 +354,7 @@ def create_app(
     async def update_skill(pack_id: str, skill_id: str, request: SkillUpdateRequest):
         try:
             updated = skill_library.update_skill(pack_id, skill_id, request.content, request.enabled)
+            skillsets.reconcile()
             if request.session_id:
                 session = workspace.get_session(request.session_id)
                 selection = f"{pack_id}:{skill_id}"
@@ -298,6 +383,7 @@ def create_app(
         try:
             skill_library.remove(pack_id)
             workspace.clear_skill_pack(pack_id)
+            skillsets.reconcile()
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Skill pack not found") from error
         return Response(status_code=204)
@@ -317,7 +403,7 @@ def create_app(
     @application.get("/api/sessions/{session_id}/dependencies")
     async def detect_dependencies(session_id: str):
         try:
-            return dependency_service.detect(session_id)
+            return await asyncio.to_thread(dependency_service.detect, session_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Session not found") from error
 
@@ -371,6 +457,60 @@ def create_app(
             raise HTTPException(status_code=404, detail="Terminal not found") from error
         return Response(status_code=204)
 
+    def validate_action_terminal(proposal, terminal_id: str):
+        try:
+            terminal = terminals.get(terminal_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Terminal not found") from error
+        if Path(terminal.cwd).resolve() != Path(proposal.cwd).resolve():
+            raise HTTPException(status_code=400, detail="Proposal working directory must match the terminal")
+        return terminal
+
+    @application.post("/api/sessions/{session_id}/action-proposals/{proposal_id}/approve")
+    async def approve_action(
+        session_id: str,
+        proposal_id: str,
+        request: ActionApprovalRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        try:
+            proposal = action_proposals.get(session_id, proposal_id)
+            validate_action_terminal(proposal, request.terminal_id)
+            return action_proposals.approve(session_id, proposal_id, request.terminal_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Action proposal not found") from error
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+
+    @application.post("/api/sessions/{session_id}/action-proposals/{proposal_id}/confirm-destructive")
+    async def confirm_destructive_action(
+        session_id: str,
+        proposal_id: str,
+        request: DestructiveConfirmationRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        try:
+            proposal = action_proposals.get(session_id, proposal_id)
+            validate_action_terminal(proposal, request.terminal_id)
+            return action_proposals.confirm_destructive(
+                session_id, proposal_id, request.terminal_id, request.phrase
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Action proposal not found") from error
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+
+    @application.post("/api/sessions/{session_id}/action-proposals/{proposal_id}/reject")
+    async def reject_action(session_id: str, proposal_id: str):
+        try:
+            return action_proposals.reject(session_id, proposal_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Action proposal not found") from error
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+
     @application.websocket("/ws/terminals/{terminal_id}")
     async def terminal_socket(websocket: WebSocket, terminal_id: str):
         expected_origin = f"http://{websocket.url.hostname}:{websocket.url.port}"
@@ -398,6 +538,16 @@ def create_app(
                     terminals.write(terminal_id, str(message.get("data", "")))
                 elif message.get("type") == "interrupt":
                     terminals.interrupt(terminal_id)
+                elif message.get("type") == "approved_action":
+                    try:
+                        terminals.write_approved(
+                            terminal_id,
+                            action_proposals,
+                            str(message.get("proposal_id", "")),
+                            str(message.get("token", "")),
+                        )
+                    except (KeyError, PermissionError, RuntimeError) as error:
+                        await websocket.send_json({"type": "action_error", "error": str(error)})
 
         sender = asyncio.create_task(send_output())
         receiver = asyncio.create_task(receive_input())
@@ -416,9 +566,13 @@ def create_app(
             original_prompt = request.prompt.strip()
             model_prompt = original_prompt
             model_images = []
+            context_result = None
+            recommendation_result = None
             if request.session_id:
                 session = workspace.get_session(request.session_id)
-                model_prompt = context_assembler.build_prompt(session, original_prompt)
+                recommendation_result = recommendations.recommend(session, original_prompt)
+                context_result = context_assembler.build(session, original_prompt, recommendation_result)
+                model_prompt = context_result.prompt
                 if await service.supports_vision(request.model):
                     model_images = context_assembler.image_paths(session)
             conversion_words = ("convert", "save", "archive")
@@ -458,6 +612,18 @@ def create_app(
                 )
             else:
                 result = await service.chat(request.model, model_prompt, images=model_images)
+            if context_result and recommendation_result:
+                result.attached_skills = context_result.attached_skills
+                result.attached_skillsets = context_result.skillsets
+                result.skill_recommendations = recommendation_result.recommendations
+            if request.session_id and result.actions:
+                source_skills = [item.reference for item in (context_result.attached_skills if context_result else [])]
+                result.action_proposals = action_proposals.propose(
+                    request.session_id,
+                    result.actions,
+                    source_skills,
+                    str(Path(__file__).resolve().parent.parent),
+                )
             if request.session_id:
                 workspace.append_message(request.session_id, ChatMessage(role="user", content=original_prompt))
                 workspace.append_message(
@@ -477,6 +643,8 @@ def create_app(
             raise HTTPException(status_code=502, detail=str(error)) from error
         except OllamaUnavailableError as error:
             status = 409 if str(error) == "Model is not installed" else 502
+            if status == 502:
+                hardware.record_runtime_failure(str(error))
             raise HTTPException(status_code=status, detail=str(error)) from error
 
     return application

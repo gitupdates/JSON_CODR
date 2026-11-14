@@ -91,6 +91,13 @@ class TerminalService:
         terminal.process.stdin.write(data.encode("utf-8"))
         terminal.process.stdin.flush()
 
+    def write_approved(self, terminal_id: str, approvals, proposal_id: str, token: str) -> None:
+        action = approvals.consume(proposal_id, token, terminal_id)
+        terminal = self._lookup(terminal_id)
+        if Path(terminal.record.cwd).resolve() != Path(action.cwd).resolve():
+            raise PermissionError("Action working directory does not match the terminal")
+        self.write(terminal_id, action.command + "\r\n")
+
     def read(self, terminal_id: str, timeout: float = 0.1) -> str:
         terminal = self._lookup(terminal_id)
         try:
