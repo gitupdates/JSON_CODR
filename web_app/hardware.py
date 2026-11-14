@@ -59,7 +59,22 @@ class HardwareBackendManager:
             value = json.loads(self.benchmark_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return []
-        return value if isinstance(value, list) else []
+        if not isinstance(value, list):
+            return []
+        for benchmark in value:
+            if not isinstance(benchmark, dict):
+                continue
+            benchmark.setdefault("target_backend", "all")
+            benchmark.setdefault("created_at", "")
+            for result in benchmark.get("results", []):
+                if not isinstance(result, dict):
+                    continue
+                result.setdefault("runtime", result.get("backend", "unknown"))
+                result.setdefault("kind", "unknown")
+                result.setdefault("verified", False)
+                result.setdefault("active", False)
+                result.setdefault("tests", [])
+        return value
 
     def _save_benchmark(self, benchmark: dict) -> None:
         history = [benchmark, *self.benchmark_history()][:20]
@@ -160,12 +175,7 @@ class HardwareBackendManager:
         except Exception as error:
             return {**self.record_probe(backend, False, str(error)), "restart_required": False}
         finally:
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
+            await self._stop_process(process)
         return {**self.record_probe(backend, True), "restart_required": backend != os.environ.get("OLLAMA_LLM_LIBRARY", "cpu")}
 
     async def benchmark(self, suite: str, model: str, backend: str = "all") -> dict:
@@ -295,13 +305,18 @@ class HardwareBackendManager:
                     })
             return samples
         finally:
-            if process.returncode is None:
-                process.terminate()
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=5)
-                except asyncio.TimeoutError:
-                    process.kill()
-                    await process.wait()
+            await self._stop_process(process)
+
+    @staticmethod
+    async def _stop_process(process) -> None:
+        if process.returncode is not None:
+            return
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
 
     @staticmethod
     def _write_user_environment(name: str, value: str) -> None:

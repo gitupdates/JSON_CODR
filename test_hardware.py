@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 from web_app.hardware import HardwareBackendManager
@@ -192,6 +193,35 @@ class HardwareBenchmarkTests(unittest.IsolatedAsyncioTestCase):
                 await self.manager.benchmark("quick", "model")
         finally:
             self.manager._benchmark_lock.release()
+
+    async def test_legacy_history_is_normalized_for_current_result_renderer(self):
+        legacy = [{
+            "id": "old-run",
+            "suite": "quick",
+            "model": "model",
+            "results": [{
+                "backend": "cuda_v12", "name": "CUDA", "status": "completed",
+                "tokens_per_second": 20.0, "average_total_seconds": 1.0,
+                "average_load_seconds": 0.5, "speedup_vs_cpu": 2.0,
+            }],
+        }]
+        self.manager.benchmark_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+        result = self.manager.benchmark_history()[0]["results"][0]
+
+        self.assertEqual(result["runtime"], "cuda_v12")
+        self.assertEqual(result["kind"], "unknown")
+        self.assertEqual(result["tests"], [])
+        self.assertFalse(result["active"])
+
+    async def test_process_cleanup_ignores_process_that_already_exited(self):
+        class ExitedProcess:
+            returncode = 1
+
+            def terminate(self):
+                raise AssertionError("terminate must not be called")
+
+        await self.manager._stop_process(ExitedProcess())
 
 
 if __name__ == "__main__":
