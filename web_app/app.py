@@ -464,9 +464,13 @@ def create_app(
             original_prompt = request.prompt.strip()
             model_prompt = original_prompt
             model_images = []
+            context_result = None
+            recommendation_result = None
             if request.session_id:
                 session = workspace.get_session(request.session_id)
-                model_prompt = context_assembler.build_prompt(session, original_prompt)
+                recommendation_result = recommendations.recommend(session, original_prompt)
+                context_result = context_assembler.build(session, original_prompt, recommendation_result)
+                model_prompt = context_result.prompt
                 if await service.supports_vision(request.model):
                     model_images = context_assembler.image_paths(session)
             conversion_words = ("convert", "save", "archive")
@@ -506,6 +510,10 @@ def create_app(
                 )
             else:
                 result = await service.chat(request.model, model_prompt, images=model_images)
+            if context_result and recommendation_result:
+                result.attached_skills = context_result.attached_skills
+                result.attached_skillsets = context_result.skillsets
+                result.skill_recommendations = recommendation_result.recommendations
             if request.session_id:
                 workspace.append_message(request.session_id, ChatMessage(role="user", content=original_prompt))
                 workspace.append_message(

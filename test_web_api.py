@@ -166,6 +166,39 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual([message.role for message in restored.messages], ["user", "assistant"])
         self.assertEqual(restored.messages[0].content, "Review the attachment")
 
+    def test_chat_recalculates_recommendations_and_returns_attachment_metadata(self):
+        from web_app.models import SkillPack, SkillRecord
+        from web_app.skills import SkillLibraryService
+
+        SkillLibraryService(self.workspace.data_root).install(SkillPack(
+            id="local", name="Local", source_format="generic", source_name="local.zip",
+            skills=[SkillRecord(
+                id="python-review", name="Python Review", description="Review Python code",
+                content="CAPABILITIES: python review\nCHECK PYTHON CAREFULLY",
+            )],
+        ))
+        self.client.close()
+        self.client = TestClient(create_app(self.service, self.workspace))
+        session = self.workspace.create_session()
+
+        response = self.client.post(
+            "/api/chat",
+            json={
+                "model": "qwen",
+                "prompt": "Review this Python code",
+                "session_id": session.id,
+                "skill_recommendations": [{"reference": "stale:missing", "score": 999}],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual([item["reference"] for item in body["attached_skills"]], ["local:python-review"])
+        self.assertEqual(body["skill_recommendations"][0]["reference"], "local:python-review")
+        self.assertIn("name: python", body["skill_recommendations"][0]["reasons"])
+        self.assertNotIn("stale:missing", self.service.last_prompt)
+        self.assertIn("CHECK PYTHON CAREFULLY", self.service.last_prompt)
+
     def test_session_chat_sends_original_images_to_vision_models(self):
         import io
         from PIL import Image
@@ -216,6 +249,9 @@ class WebApiTests(unittest.TestCase):
         self.assertTrue(Path(artifact["path"]).is_file())
         self.assertTrue(artifact["url"].startswith("http://testserver/api/sessions/"))
         self.assertTrue(original.is_file())
+        self.assertIn("attached_skills", response.json())
+        self.assertIn("attached_skillsets", response.json())
+        self.assertIn("skill_recommendations", response.json())
         download = self.client.get(artifact["url"])
         self.assertEqual(download.status_code, 200)
         self.assertEqual(download.headers["content-type"], "application/zip")

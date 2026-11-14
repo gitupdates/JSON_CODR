@@ -18,6 +18,9 @@ class ChatResult(BaseModel):
     content: str
     error: Optional[str] = None
     artifact: Optional["ArtifactRecord"] = None
+    attached_skills: List["AttachedSkill"] = Field(default_factory=list)
+    attached_skillsets: List[str] = Field(default_factory=list)
+    skill_recommendations: List["SkillRecommendation"] = Field(default_factory=list)
 
 
 class GeneratedFile(BaseModel):
@@ -150,6 +153,21 @@ class SkillRecommendation(BaseModel):
 class SkillRecommendationResult(BaseModel):
     recommendations: List[SkillRecommendation] = Field(default_factory=list)
     skillset_ids: List[str] = Field(default_factory=list)
+
+
+class AttachedSkill(BaseModel):
+    reference: str
+    name: str
+    score: int = 0
+    reasons: List[str] = Field(default_factory=list)
+    manual: bool = False
+
+
+class ContextBuildResult(BaseModel):
+    prompt: str
+    attached_skills: List[AttachedSkill] = Field(default_factory=list)
+    skillsets: List[str] = Field(default_factory=list)
+    omitted: List[str] = Field(default_factory=list)
 
 
 class SkillRecommendationRequest(BaseModel):
