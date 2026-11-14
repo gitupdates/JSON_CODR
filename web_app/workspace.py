@@ -65,7 +65,12 @@ class WorkspaceService:
         if not manifest.is_file():
             raise KeyError(session_id)
         with manifest.open("r", encoding="utf-8") as source:
-            return SessionRecord.model_validate(json.load(source))
+            raw = json.load(source)
+        record = SessionRecord.model_validate(raw)
+        record.schema_version = 2
+        if record.model_dump(mode="json") != raw:
+            self.save_manifest(record)
+        return record
 
     def append_message(self, session_id: str, message: ChatMessage) -> SessionRecord:
         record = self.get_session(session_id)

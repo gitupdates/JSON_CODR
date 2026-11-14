@@ -8,14 +8,24 @@ $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $HostAddress = '127.0.0.1'
 $Port = 8765
 $Url = "http://${HostAddress}:$Port"
+$Version = 'V1.0.4'
 $Python = (Get-Command python -ErrorAction Stop).Source
-$Ollama = (Get-Command ollama -ErrorAction Stop).Source
+$OllamaCommand = Get-Command ollama -ErrorAction SilentlyContinue
+if ($OllamaCommand) {
+  $Ollama = $OllamaCommand.Source
+} else {
+  $Ollama = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'
+  if (-not (Test-Path -LiteralPath $Ollama)) {
+    throw 'Ollama is not installed or available in PATH.'
+  }
+}
 
 if ($ValidateOnly) {
   [pscustomobject]@{
     host = $HostAddress
     port = $Port
     url = $Url
+    version = $Version
     python = $Python
     ollama = $Ollama
     modelStore = $env:JSON_CODR_MODELS
@@ -63,7 +73,7 @@ try {
     }
   }
 
-  Write-Host "JSON_CODR V1.0.2 is running at $Url"
+  Write-Host "JSON_CODR $Version is running at $Url"
   Write-Host 'Press Ctrl+C to stop the local web server.'
   if (-not $NoBrowser) { Start-Process $Url }
   Wait-Process -Id $WebProcess.Id

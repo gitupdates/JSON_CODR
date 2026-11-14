@@ -73,6 +73,37 @@ Review the supplied artifact.
             self.assertEqual(pack.source_format, expected)
             self.assertTrue(pack.skills)
 
+    def test_generic_command_pack_ignores_prompt_helper_markdown(self):
+        source = self.root / "commands.zip"
+        source.write_bytes(archive({
+            "commands/review/review.md": "# Review\nReview code",
+            "commands/review/prompt.md": "# Prompt\nInternal prompt helper",
+            "commands/deploy/deploy.md": "# Deploy\nDeploy code",
+            "commands/deploy/prompt.md": "# Prompt\nDifferent helper",
+        }))
+
+        pack = self.converter.convert(source, source.name)
+
+        self.assertEqual([skill.name for skill in pack.skills], ["review", "deploy"])
+
+    def test_deduplicate_removes_normalized_name_collisions_and_keeps_richer_skill(self):
+        from web_app.models import SkillPack, SkillRecord
+        self.library._save([
+            SkillPack(id="one", name="One", source_format="generic", source_name="one.zip", skills=[
+                SkillRecord(id="workflow", name="Workflow", description="", content="short"),
+            ]),
+            SkillPack(id="two", name="Two", source_format="codex", source_name="two.zip", skills=[
+                SkillRecord(id="workflow", name=" workflow ", description="Complete workflow", content="much richer workflow instructions"),
+            ]),
+        ])
+
+        result = self.library.deduplicate()
+
+        remaining = [skill for pack in self.library.list() for skill in pack.skills]
+        self.assertEqual(result["removed_skills"], 1)
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0].description, "Complete workflow")
+
     def test_translates_provider_specific_skill_syntax(self):
         source = self.root / "claude.zip"
         source.write_bytes(archive({
@@ -183,6 +214,8 @@ Review the supplied artifact.
         installed = client.post(f"/api/sessions/{session.id}/attachments/{record.id}/skill-install").json()
         skill_id = installed["skills"][0]["id"]
         selection = f'{installed["id"]}:{skill_id}'
+        skillsets_path = self.root / "skillsets.json"
+        self.assertIn(selection, skillsets_path.read_text(encoding="utf-8"))
         selected = client.patch(f"/api/sessions/{session.id}/skills", json={"selected": [selection]})
         self.assertEqual(selected.json()["selected_skill_ids"], [selection])
         edited = client.patch(
@@ -191,6 +224,12 @@ Review the supplied artifact.
         )
         self.assertIn("Updated review instructions", edited.json()["content"])
         self.assertIn("JSON_CODR_SKILL_SCHEMA: 1", edited.json()["content"])
+        disabled = client.patch(
+            f'/api/skills/{installed["id"]}/{skill_id}',
+            json={"content": "Updated review instructions", "enabled": False},
+        )
+        self.assertEqual(disabled.status_code, 200)
+        self.assertNotIn(selection, skillsets_path.read_text(encoding="utf-8"))
         self.assertEqual(client.delete(f'/api/skills/{installed["id"]}').status_code, 204)
         self.assertEqual(client.get("/api/skills").json(), [])
 

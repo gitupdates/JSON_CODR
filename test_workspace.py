@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -22,7 +23,7 @@ class WorkspaceServiceTests(unittest.TestCase):
 
         restored = WorkspaceService(self.data_root).get_session(session.id)
 
-        self.assertEqual(restored.schema_version, 1)
+        self.assertEqual(restored.schema_version, 2)
         self.assertEqual(restored.messages[0].content, "hello")
         self.assertRegex(restored.id, r"^[0-9a-f]{32}$")
 
@@ -66,6 +67,22 @@ class WorkspaceServiceTests(unittest.TestCase):
 
         self.assertEqual(restored.id, session.id)
         self.assertEqual(restored.messages, [])
+
+    def test_legacy_session_migrates_skill_routing_defaults_and_deduplicates_exclusions(self):
+        service = WorkspaceService(self.data_root)
+        record = service.create_session()
+        manifest = service.sessions_root / record.id / "manifest.json"
+        raw = json.loads(manifest.read_text(encoding="utf-8"))
+        raw["schema_version"] = 1
+        raw.pop("auto_attach_skills", None)
+        raw["excluded_skill_ids"] = ["pack:skill", "pack:skill"]
+        manifest.write_text(json.dumps(raw), encoding="utf-8")
+
+        migrated = service.get_session(record.id)
+
+        self.assertEqual(migrated.schema_version, 2)
+        self.assertTrue(migrated.auto_attach_skills)
+        self.assertEqual(migrated.excluded_skill_ids, ["pack:skill"])
 
 
 if __name__ == "__main__":

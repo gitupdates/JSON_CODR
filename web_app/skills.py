@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import hashlib
 import os
@@ -127,6 +129,18 @@ class SkillConverterService:
             or source_format == "generic"
             or (source_format == "claude" and any(part in PurePosixPath(name).parts for part in ("commands", "agents")))
         }
+        if source_format == "generic":
+            markdown_by_parent: dict[PurePosixPath, list[PurePosixPath]] = {}
+            for name in candidates:
+                path = PurePosixPath(name)
+                markdown_by_parent.setdefault(path.parent, []).append(path)
+            candidates = {
+                name: content for name, content in candidates.items()
+                if not (
+                    PurePosixPath(name).name.casefold() == "prompt.md"
+                    and any(item.name.casefold() != "prompt.md" for item in markdown_by_parent[PurePosixPath(name).parent])
+                )
+            }
         for path, content in candidates.items():
             fallback = PurePosixPath(path).parent.name if path.endswith("/SKILL.md") else PurePosixPath(path).stem
             name_match = re.search(r"(?m)^name:\s*([^\n]+)", content)
@@ -246,17 +260,28 @@ class SkillLibraryService:
 
     def deduplicate(self) -> dict[str, object]:
         with self._lock:
+            packs = self.list()
             retained: list[SkillPack] = []
             seen_digests: set[str] = set()
             seen_skills: set[str] = set()
+            name_winners: dict[str, tuple[tuple[int, int], str, str]] = {}
+            for pack in packs:
+                for skill in pack.skills:
+                    key = _slug(skill.name)
+                    content = skill.original_content or skill.content
+                    quality = (1 if skill.description.strip() else 0, len(content))
+                    winner = name_winners.get(key)
+                    if winner is None or quality > winner[0]:
+                        name_winners[key] = (quality, pack.id, skill.id)
             removed_pack_ids: list[str] = []
             removed_skills = 0
-            for pack in self.list():
+            for pack in packs:
                 fingerprints = [_skill_fingerprint(skill) for skill in pack.skills]
                 duplicate_source = bool(pack.source_digest and pack.source_digest in seen_digests)
                 unique_skills = [
                     skill for skill, fingerprint in zip(pack.skills, fingerprints)
                     if fingerprint not in seen_skills
+                    and name_winners[_slug(skill.name)][1:] == (pack.id, skill.id)
                 ]
                 removed_skills += len(pack.skills) - len(unique_skills)
                 if duplicate_source or not unique_skills:
