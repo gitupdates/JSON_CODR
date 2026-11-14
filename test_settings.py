@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from web_app.app import create_app
-from web_app.models import SettingsUpdate, SkillScanSettings, UiSettingsUpdate
+from web_app.models import SettingsUpdate, SkillRoutingSettings, SkillScanSettings, UiSettingsUpdate
 from web_app.settings import SettingsService
 from web_app.workspace import WorkspaceService
 
@@ -25,6 +25,8 @@ class SettingsTests(unittest.TestCase):
 
     def test_defaults_and_persistence_preserve_unknown_configuration(self):
         service = SettingsService(self.root)
+        self.assertEqual(service.get().version, 2)
+        self.assertTrue(service.get().skill_routing.auto_attach)
         self.assertTrue(service.get().ui.skill_catalog_open)
         self.assertEqual(service.get().ui.theme, "dark")
         service.path.write_text(json.dumps({"version": 1, "future": {"hook": "value"}, "ui": {"future_ui": "kept"}, "skill_scan": {"future_scan": 42}}), encoding="utf-8")
@@ -33,15 +35,19 @@ class SettingsTests(unittest.TestCase):
         service.update(SettingsUpdate(
             ui=UiSettingsUpdate(skill_catalog_open=False),
             skill_scan=SkillScanSettings(approved_directories=[str(self.root), str(self.root)]),
+            skill_routing=SkillRoutingSettings(auto_attach=False, max_skillsets=2, max_skills=4, minimum_score=9),
         ))
 
         reloaded = SettingsService(self.root).get()
         self.assertFalse(reloaded.ui.skill_catalog_open)
         self.assertEqual(reloaded.skill_scan.approved_directories, [str(self.root.resolve())])
+        self.assertFalse(reloaded.skill_routing.auto_attach)
+        self.assertEqual(reloaded.skill_routing.max_skillsets, 2)
         self.assertEqual(json.loads(service.path.read_text(encoding="utf-8"))["future"], {"hook": "value"})
         raw = json.loads(service.path.read_text(encoding="utf-8"))
         self.assertEqual(raw["ui"]["future_ui"], "kept")
         self.assertEqual(raw["skill_scan"]["future_scan"], 42)
+        self.assertEqual(raw["version"], 2)
 
     def test_api_gets_and_updates_settings(self):
         workspace = WorkspaceService(self.root)

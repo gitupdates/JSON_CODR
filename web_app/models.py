@@ -113,6 +113,24 @@ class SkillPack(BaseModel):
     skills: List[SkillRecord] = Field(default_factory=list)
 
 
+class SkillsetMember(BaseModel):
+    reference: str
+    name: str
+
+
+class SkillsetRecord(BaseModel):
+    id: str
+    name: str
+    category: str
+    members: List[SkillsetMember] = Field(default_factory=list)
+    routing_terms: List[str] = Field(default_factory=list)
+    attachment_extensions: List[str] = Field(default_factory=list)
+    summary: str = ""
+    enabled: bool = True
+    auto_attach: bool = True
+    version: int = 1
+
+
 class SkillUpdateRequest(BaseModel):
     content: str
     enabled: bool = True
@@ -149,15 +167,24 @@ class SkillScanSettings(BaseModel):
     approved_directories: List[str] = Field(default_factory=list)
 
 
+class SkillRoutingSettings(BaseModel):
+    auto_attach: bool = True
+    max_skillsets: int = Field(default=3, ge=1, le=10)
+    max_skills: int = Field(default=5, ge=1, le=20)
+    minimum_score: int = Field(default=8, ge=1, le=100)
+
+
 class SystemSettings(BaseModel):
-    version: int = 1
+    version: int = 2
     ui: UiSettings = Field(default_factory=UiSettings)
     skill_scan: SkillScanSettings = Field(default_factory=SkillScanSettings)
+    skill_routing: SkillRoutingSettings = Field(default_factory=SkillRoutingSettings)
 
 
 class SettingsUpdate(BaseModel):
     ui: Optional[UiSettingsUpdate] = None
     skill_scan: Optional[SkillScanSettings] = None
+    skill_routing: Optional[SkillRoutingSettings] = None
 
 
 class SkillScanRequest(BaseModel):

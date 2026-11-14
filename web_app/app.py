@@ -21,6 +21,7 @@ from web_app.workspace import InvalidSessionId, WorkspaceService, default_data_r
 from web_app.terminal import TerminalService
 from web_app.skills import DuplicateSkillPack, SkillConverterService, SkillDiscoveryService, SkillLibraryService
 from web_app.settings import SettingsService
+from web_app.skillsets import SkillsetService
 
 
 def create_app(
@@ -36,6 +37,7 @@ def create_app(
     skill_library.ensure_envelopes()
     skill_converter = SkillConverterService()
     settings = SettingsService(workspace.data_root)
+    skillsets = SkillsetService(workspace.data_root, skill_library)
     skill_discovery = SkillDiscoveryService(skill_library, skill_converter, workspace.data_root)
     context_assembler = ContextAssembler(attachments, skills=skill_library)
     dependency_service = DependencyService(attachments)
@@ -67,6 +69,10 @@ def create_app(
     @application.patch("/api/settings")
     async def update_settings(request: SettingsUpdate):
         return settings.update(request)
+
+    @application.get("/api/skillsets")
+    async def list_skillsets():
+        return skillsets.reconcile()
 
     @application.post("/api/sessions", status_code=201)
     async def create_session():
@@ -197,7 +203,9 @@ def create_app(
     @application.post("/api/skills/install-discovery", status_code=201)
     async def install_discovered_skill(request: DiscoveryInstallRequest):
         try:
-            return skill_discovery.install(request.discovery_id)
+            installed = skill_discovery.install(request.discovery_id)
+            skillsets.reconcile()
+            return installed
         except DuplicateSkillPack as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except ValueError as error:
@@ -231,7 +239,9 @@ def create_app(
     @application.post("/api/sessions/{session_id}/attachments/{attachment_id}/skill-install", status_code=201)
     async def install_skill_pack(session_id: str, attachment_id: str):
         try:
-            return skill_library.install(convert_attachment(session_id, attachment_id))
+            installed = skill_library.install(convert_attachment(session_id, attachment_id))
+            skillsets.reconcile()
+            return installed
         except DuplicateSkillPack as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except KeyError as error:
@@ -244,6 +254,7 @@ def create_app(
         result = skill_library.deduplicate()
         for pack_id in result["removed_pack_ids"]:
             workspace.clear_skill_pack(pack_id)
+        skillsets.reconcile()
         return result
 
     @application.patch("/api/sessions/{session_id}/skills")
@@ -270,6 +281,7 @@ def create_app(
     async def update_skill(pack_id: str, skill_id: str, request: SkillUpdateRequest):
         try:
             updated = skill_library.update_skill(pack_id, skill_id, request.content, request.enabled)
+            skillsets.reconcile()
             if request.session_id:
                 session = workspace.get_session(request.session_id)
                 selection = f"{pack_id}:{skill_id}"
@@ -298,6 +310,7 @@ def create_app(
         try:
             skill_library.remove(pack_id)
             workspace.clear_skill_pack(pack_id)
+            skillsets.reconcile()
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Skill pack not found") from error
         return Response(status_code=204)
