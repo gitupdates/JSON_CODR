@@ -97,11 +97,11 @@ class FakeHardware:
     def restore_cpu(self):
         return self.status()
 
-    async def benchmark(self, suite, model):
+    async def benchmark(self, suite, model, backend="all"):
         if self.benchmark_error:
             raise self.benchmark_error
-        self.benchmarked = (suite, model)
-        return {"id": "run-1", "suite": suite, "model": model, "results": []}
+        self.benchmarked = (suite, model, backend)
+        return {"id": "run-1", "suite": suite, "model": model, "target_backend": backend, "results": []}
 
     def benchmark_history(self):
         return [{"id": "run-0", "suite": "quick", "model": "model", "results": []}]
@@ -137,9 +137,9 @@ class WebApiTests(unittest.TestCase):
     def test_health_reports_ollama_readiness(self):
         self.assertEqual(
             self.client.get("/api/health").json(),
-            {"status": "ready", "ollama": True, "app_version": "V1.0.4"},
+            {"status": "ready", "ollama": True, "app_version": "V1.0.5"},
         )
-        self.assertEqual(self.client.app.version, "V1.0.4")
+        self.assertEqual(self.client.app.version, "V1.0.5")
         self.service.available = False
         self.assertEqual(self.client.get("/api/health").json()["status"], "degraded")
 
@@ -160,11 +160,11 @@ class WebApiTests(unittest.TestCase):
 
         response = client.post(
             "/api/hardware/benchmarks",
-            json={"suite": "quick", "model": "qwen2.5-coder:0.5b"},
+            json={"suite": "quick", "model": "qwen2.5-coder:0.5b", "backend": "cuda_v12"},
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["id"], "run-1")
-        self.assertEqual(hardware.benchmarked, ("quick", "qwen2.5-coder:0.5b"))
+        self.assertEqual(hardware.benchmarked, ("quick", "qwen2.5-coder:0.5b", "cuda_v12"))
         self.assertEqual(client.get("/api/hardware/benchmarks").json()[0]["id"], "run-0")
 
         invalid = client.post("/api/hardware/benchmarks", json={"suite": "overnight", "model": "model"})

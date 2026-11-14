@@ -21,6 +21,7 @@ class HardwareProbeRequest(BaseModel):
 class HardwareBenchmarkRequest(BaseModel):
     suite: Literal["quick", "thorough"] = "quick"
     model: str = Field(min_length=1, max_length=200)
+    backend: str = Field(default="all", min_length=1, max_length=50, pattern=r"^[a-z0-9_-]+$")
 
 
 class ActionSuggestion(BaseModel):

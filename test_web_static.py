@@ -34,7 +34,7 @@ class WebStaticTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.0.4", response.text)
+        self.assertIn("V1.0.5", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -181,6 +181,7 @@ class WebStaticTests(unittest.TestCase):
         for identifier in (
             "hardware-tab-optimization", "hardware-tab-benchmarks", "hardware-optimization-view",
             "hardware-benchmark-view", "hardware-benchmark-suite", "hardware-benchmark-model",
+            "hardware-benchmark-backend",
             "hardware-benchmark-run", "hardware-benchmark-status", "hardware-benchmark-results",
             "hardware-benchmark-history",
         ):
@@ -189,6 +190,8 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('fetch("/api/hardware/benchmarks"', javascript)
         self.assertIn("speedup_vs_cpu", javascript)
         self.assertIn("tokens_per_second", javascript)
+        self.assertIn("result.tests", javascript)
+        self.assertIn("backend: elements.hardwareBenchmarkBackend.value", javascript)
         self.assertIn("Running standardized benchmark", javascript)
         self.assertIn("candidate.runnable === false", javascript)
 

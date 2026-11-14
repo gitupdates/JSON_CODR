@@ -69,6 +69,7 @@ const elements = {
   hardwareBenchmarkView: document.querySelector("#hardware-benchmark-view"),
   hardwareBenchmarkSuite: document.querySelector("#hardware-benchmark-suite"),
   hardwareBenchmarkModel: document.querySelector("#hardware-benchmark-model"),
+  hardwareBenchmarkBackend: document.querySelector("#hardware-benchmark-backend"),
   hardwareBenchmarkRun: document.querySelector("#hardware-benchmark-run"),
   hardwareBenchmarkStatus: document.querySelector("#hardware-benchmark-status"),
   hardwareBenchmarkResults: document.querySelector("#hardware-benchmark-results"),
@@ -336,6 +337,15 @@ async function detectHardware() {
     const response = await fetch("/api/hardware/detect", { method: "POST" });
     if (!response.ok) throw new Error((await response.json()).detail || "Hardware detection failed");
     const candidates = await response.json();
+    elements.hardwareBenchmarkBackend.replaceChildren();
+    const all = document.createElement("option"); all.value = "all"; all.textContent = "All detected and available";
+    elements.hardwareBenchmarkBackend.append(all);
+    for (const candidate of candidates) {
+      const option = document.createElement("option"); option.value = candidate.id;
+      option.textContent = `${candidate.name}${candidate.runnable && candidate.compatible ? "" : " — unavailable"}`;
+      option.disabled = !candidate.runnable || !candidate.compatible;
+      elements.hardwareBenchmarkBackend.append(option);
+    }
     elements.hardwareCandidates.replaceChildren();
     for (const candidate of candidates) {
       const row = document.createElement("div"); row.className = "dependency-row";
@@ -386,13 +396,25 @@ function renderBenchmarkResults(benchmark) {
     const label = document.createElement("div");
     const name = document.createElement("strong"); name.textContent = result.name;
     const metrics = document.createElement("p"); metrics.className = "meta";
+    let components = null;
     if (result.status === "completed") {
       const relative = result.speedup_vs_cpu == null ? "CPU baseline unavailable" : `${result.speedup_vs_cpu.toFixed(2)}× CPU`;
       metrics.textContent = `${result.tokens_per_second.toFixed(2)} tokens/s · ${result.average_total_seconds.toFixed(3)}s average · ${relative}`;
+      components = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = `${result.runtime} · ${result.kind} · ${result.verified ? "verified" : "not yet verified"}${result.active ? " · active" : ""}`;
+      components.append(summary);
+      for (const test of result.tests) {
+        const line = document.createElement("p"); line.className = "meta";
+        line.textContent = `${test.test} #${test.repetition}: ${test.total_seconds.toFixed(3)}s · ${test.load_seconds.toFixed(3)}s load · ${test.tokens} tokens · ${test.tokens_per_second.toFixed(2)} tokens/s`;
+        components.append(line);
+      }
     } else {
       metrics.textContent = `${result.status}: ${result.error || "Backend is unavailable"}`;
     }
-    label.append(name, metrics); row.append(label); elements.hardwareBenchmarkResults.append(row);
+    label.append(name, metrics);
+    if (components) label.append(components);
+    row.append(label); elements.hardwareBenchmarkResults.append(row);
   }
 }
 
@@ -420,7 +442,7 @@ async function runHardwareBenchmark() {
   try {
     const response = await fetch("/api/hardware/benchmarks", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ suite: elements.hardwareBenchmarkSuite.value, model: elements.hardwareBenchmarkModel.value }),
+      body: JSON.stringify({ suite: elements.hardwareBenchmarkSuite.value, model: elements.hardwareBenchmarkModel.value, backend: elements.hardwareBenchmarkBackend.value }),
     });
     const benchmark = await response.json();
     if (!response.ok) throw new Error(benchmark.detail || "Benchmark failed");
@@ -920,6 +942,7 @@ elements.hardwareRestoreCpu.addEventListener("click", () => restoreCpuBackend().
 elements.hardwareTabOptimization.addEventListener("click", () => selectHardwareTab("optimization"));
 elements.hardwareTabBenchmarks.addEventListener("click", () => {
   selectHardwareTab("benchmarks");
+  detectHardware().catch((error) => showError(error.message));
   loadBenchmarkHistory().catch((error) => showError(error.message));
 });
 elements.hardwareBenchmarkRun.addEventListener("click", () => runHardwareBenchmark().catch((error) => {

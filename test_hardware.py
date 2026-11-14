@@ -135,8 +135,21 @@ class HardwareBenchmarkTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([entry["backend"] for entry in result["results"]], ["cpu", "cuda_v12", "npu-0"])
         self.assertEqual(result["results"][0]["tokens_per_second"], 25.0)
         self.assertEqual(result["results"][1]["speedup_vs_cpu"], 2.0)
+        self.assertEqual([sample["test"] for sample in result["results"][1]["tests"]], ["instruction", "reasoning", "code"])
+        self.assertEqual(result["results"][1]["runtime"], "cuda_v12")
+        self.assertEqual(result["results"][1]["kind"], "gpu")
         self.assertEqual(result["results"][2]["status"], "unavailable")
         self.assertEqual(self.manager.status()["preferred_backend"], "cpu")
+
+    async def test_selected_accelerator_runs_with_cpu_baseline_and_rejects_unknown_target(self):
+        result = await self.manager.benchmark("quick", "model", "cuda_v12")
+
+        self.assertEqual([entry[0] for entry in self.calls], ["cpu", "cuda_v12"])
+        self.assertEqual([entry["backend"] for entry in result["results"]], ["cpu", "cuda_v12"])
+        self.assertEqual(result["target_backend"], "cuda_v12")
+
+        with self.assertRaisesRegex(ValueError, "target"):
+            await self.manager.benchmark("quick", "model", "unknown")
 
     async def test_thorough_benchmark_repeats_workload_and_persists_bounded_history(self):
         first = await self.manager.benchmark("thorough", "qwen2.5-coder:0.5b")

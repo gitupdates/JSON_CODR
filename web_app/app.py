@@ -104,7 +104,7 @@ def create_app(
     @application.post("/api/hardware/benchmarks")
     async def run_hardware_benchmark(request: HardwareBenchmarkRequest):
         try:
-            return await hardware.benchmark(request.suite, request.model)
+            return await hardware.benchmark(request.suite, request.model, request.backend)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         except RuntimeError as error:

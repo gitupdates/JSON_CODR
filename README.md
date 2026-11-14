@@ -1,6 +1,6 @@
 # JSON_CODR
 
-JSON_CODR V1.0.2 is a localhost-only web and CLI interface for structured responses from local Ollama coding models.
+JSON_CODR V1.0.5 is a localhost-only web and CLI interface for structured responses from local Ollama coding models.
 
 ## Skill catalog and settings
 
@@ -13,6 +13,12 @@ New skills can target JSON_CODR directly without provider conversion. Follow the
 Use **Scan folder** to inspect an explicit local directory for Claude, Codex, generic skill folders, ZIP archives, and 7z archives. Discovery is preview-only until **Install** is selected. If an explicit scan finds nothing, JSON_CODR offers a separately confirmed scan of known provider locations. It never scans whole drives or installs skills silently.
 
 Open **Settings** to control whether the Skills panel reopens at startup and to rescan or remove approved skill directories. Settings are stored under the configured JSON_CODR data root and are shared across local sessions.
+
+## Hardware optimization and benchmarks
+
+Open **Settings → Hardware optimization** to detect CPU, supported GPU runtimes, and Windows NPU or AI accelerator devices. CPU is the compatibility fallback. An accelerated Ollama backend is saved only after an isolated model-generation probe succeeds; unavailable NPU runtimes are reported without being executed.
+
+The **Benchmarks** tab compares CPU with all detected runnable backends or one selected optimization using the same model, generation settings, and three standardized prompts. A selected accelerator is always paired with a fresh CPU baseline. **Quick** runs each prompt once; **Thorough** repeats the set three times. Results show runtime and verification metadata, per-test request/load time and token throughput, aggregate metrics, and relative throughput versus CPU. Benchmarking does not change the active backend, and the most recent 20 runs are stored under the JSON_CODR data root.
 
 ## Requirements
 

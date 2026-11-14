@@ -168,7 +168,7 @@ class HardwareBackendManager:
                 await process.wait()
         return {**self.record_probe(backend, True), "restart_required": backend != os.environ.get("OLLAMA_LLM_LIBRARY", "cpu")}
 
-    async def benchmark(self, suite: str, model: str) -> dict:
+    async def benchmark(self, suite: str, model: str, backend: str = "all") -> dict:
         if suite not in {"quick", "thorough"}:
             raise ValueError("Benchmark suite must be quick or thorough")
         if self._benchmark_lock.locked():
@@ -181,12 +181,23 @@ class HardwareBackendManager:
         repeats = 1 if suite == "quick" else 3
         async with self._benchmark_lock:
             detected = self.detect()
+            detected_ids = {candidate["id"] for candidate in detected}
+            if backend != "all" and backend not in detected_ids:
+                raise ValueError("Benchmark target is not detected on this machine")
+            selected = detected if backend == "all" else [
+                candidate for candidate in detected if candidate["id"] == "cpu" or candidate["id"] == backend
+            ]
             results = []
-            for candidate in detected:
+            test_names = ["instruction", "reasoning", "code"]
+            for candidate in selected:
                 if not candidate["runnable"] or not candidate["compatible"]:
                     results.append({
                         "backend": candidate["id"],
                         "name": candidate["name"],
+                        "runtime": candidate["id"],
+                        "kind": candidate["kind"],
+                        "verified": candidate["verified"],
+                        "active": candidate["id"] == self.active_backend,
                         "status": "unavailable",
                         "error": candidate.get("compatibility_reason") or candidate.get("quarantine_reason"),
                         "speedup_vs_cpu": None,
@@ -196,11 +207,24 @@ class HardwareBackendManager:
                     samples = await self.benchmark_runner(candidate["id"], model, prompts, repeats)
                     total_tokens = sum(sample["tokens"] for sample in samples)
                     eval_seconds = sum(sample["eval_seconds"] for sample in samples)
+                    tests = [{
+                        "test": test_names[index % len(test_names)],
+                        "repetition": index // len(test_names) + 1,
+                        "total_seconds": round(sample["total_seconds"], 3),
+                        "load_seconds": round(sample["load_seconds"], 3),
+                        "tokens": sample["tokens"],
+                        "tokens_per_second": round(sample["tokens"] / sample["eval_seconds"], 3) if sample["eval_seconds"] else 0.0,
+                    } for index, sample in enumerate(samples)]
                     results.append({
                         "backend": candidate["id"],
                         "name": candidate["name"],
+                        "runtime": candidate["id"],
+                        "kind": candidate["kind"],
+                        "verified": candidate["verified"],
+                        "active": candidate["id"] == self.active_backend,
                         "status": "completed",
                         "samples": len(samples),
+                        "tests": tests,
                         "average_total_seconds": round(sum(sample["total_seconds"] for sample in samples) / len(samples), 3),
                         "average_load_seconds": round(sum(sample["load_seconds"] for sample in samples) / len(samples), 3),
                         "tokens_per_second": round(total_tokens / eval_seconds, 3) if eval_seconds else 0.0,
@@ -210,6 +234,10 @@ class HardwareBackendManager:
                     results.append({
                         "backend": candidate["id"],
                         "name": candidate["name"],
+                        "runtime": candidate["id"],
+                        "kind": candidate["kind"],
+                        "verified": candidate["verified"],
+                        "active": candidate["id"] == self.active_backend,
                         "status": "failed",
                         "error": str(error),
                         "speedup_vs_cpu": None,
@@ -224,6 +252,7 @@ class HardwareBackendManager:
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "suite": suite,
                 "model": model,
+                "target_backend": backend,
                 "prompt_count": len(prompts),
                 "repeats": repeats,
                 "results": results,

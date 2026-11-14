@@ -26,7 +26,7 @@
       <header class="topbar">
         <a class="brand" href="/" aria-label="JSON CODR home">
           <span class="brand-mark">{ }</span>
-          <span><strong>JSON_CODR</strong><small>V1.0.4 · local model console</small></span>
+          <span><strong>JSON_CODR</strong><small>V1.0.5 · local model console</small></span>
         </a>
         <div id="health-status" class="health" role="status" aria-live="polite">
           <span class="health-dot"></span><span>Connecting</span>
@@ -198,6 +198,10 @@
             </select>
             <label class="setting-row" for="hardware-benchmark-model">Benchmark model</label>
             <select id="hardware-benchmark-model" class="setting-select"></select>
+            <label class="setting-row" for="hardware-benchmark-backend">Hardware optimization</label>
+            <select id="hardware-benchmark-backend" class="setting-select">
+              <option value="all">All detected and available</option>
+            </select>
             <div class="actions">
               <button id="hardware-benchmark-run" class="primary" type="button">Run benchmark</button>
               <span id="hardware-benchmark-status" class="meta" role="status" aria-live="polite"></span>
@@ -242,7 +246,7 @@
 
       <footer><span>Runs entirely on this machine</span><span>127.0.0.1 · Ollama</span></footer>
     </main>
-    <script src="/static/dependency_install_queue.js?v=1.0.4" defer></script>
-    <script src="/static/app.js?v=1.0.4-benchmarks" defer></script>
+    <script src="/static/dependency_install_queue.js?v=1.0.5" defer></script>
+    <script src="/static/app.js?v=1.0.5" defer></script>
   </body>
 </html>
