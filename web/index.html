@@ -175,6 +175,38 @@
           <strong>Approved skill directories</strong>
           <div id="approved-skill-directories" class="dependency-list"><p class="meta">No folders approved.</p></div>
         </section>
+        <section class="dependency-review" aria-label="Hardware optimization">
+          <div class="context-head"><div><strong>Hardware optimization</strong><p id="hardware-status" class="meta">CPU compatibility mode</p></div></div>
+          <div class="actions" role="tablist" aria-label="Hardware settings">
+            <button id="hardware-tab-optimization" class="secondary" type="button" role="tab" aria-controls="hardware-optimization-view" aria-selected="true">Optimization</button>
+            <button id="hardware-tab-benchmarks" class="secondary" type="button" role="tab" aria-controls="hardware-benchmark-view" aria-selected="false">Benchmarks</button>
+          </div>
+          <div id="hardware-optimization-view" role="tabpanel" aria-labelledby="hardware-tab-optimization">
+            <p class="meta">Candidates are tested on an isolated Ollama port. A backend is saved only after successful model generation.</p>
+            <div class="actions">
+              <button id="hardware-detect" class="secondary" type="button">Detect hardware</button>
+              <button id="hardware-restore-cpu" class="secondary" type="button">Restore CPU</button>
+            </div>
+            <div id="hardware-candidates" class="dependency-list"><p class="meta">Run detection to list compatible backends.</p></div>
+          </div>
+          <div id="hardware-benchmark-view" role="tabpanel" aria-labelledby="hardware-tab-benchmarks" hidden>
+            <p class="meta">Runs the same standardized prompts on CPU first and then each available backend. Benchmarking never changes the active backend.</p>
+            <label class="setting-row" for="hardware-benchmark-suite">Benchmark suite</label>
+            <select id="hardware-benchmark-suite" class="setting-select">
+              <option value="quick">Quick · 3 measured prompts</option>
+              <option value="thorough">Thorough · 9 measured prompts</option>
+            </select>
+            <label class="setting-row" for="hardware-benchmark-model">Benchmark model</label>
+            <select id="hardware-benchmark-model" class="setting-select"></select>
+            <div class="actions">
+              <button id="hardware-benchmark-run" class="primary" type="button">Run benchmark</button>
+              <span id="hardware-benchmark-status" class="meta" role="status" aria-live="polite"></span>
+            </div>
+            <div id="hardware-benchmark-results" class="dependency-list"><p class="meta">No benchmark selected.</p></div>
+            <strong>Previous runs</strong>
+            <div id="hardware-benchmark-history" class="dependency-list"><p class="meta">No benchmark history.</p></div>
+          </div>
+        </section>
       </aside>
 
       <section id="terminal-panel" class="terminal-panel" aria-label="Live command line" hidden>
@@ -210,7 +242,7 @@
 
       <footer><span>Runs entirely on this machine</span><span>127.0.0.1 · Ollama</span></footer>
     </main>
-    <script src="/static/dependency_install_queue.js" defer></script>
-    <script src="/static/app.js" defer></script>
+    <script src="/static/dependency_install_queue.js?v=1.0.4" defer></script>
+    <script src="/static/app.js?v=1.0.4-benchmarks" defer></script>
   </body>
 </html>

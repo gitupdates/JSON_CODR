@@ -162,6 +162,36 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('matchMedia("(prefers-reduced-motion: reduce)")', javascript)
         self.assertIn("elements.settingTheme.focus", javascript)
 
+    def test_hardware_optimization_controls_are_present(self):
+        html = self.client.get("/").text
+        parser = IdCollector()
+        parser.feed(html)
+        self.assertTrue({
+            "hardware-status", "hardware-detect", "hardware-candidates", "hardware-restore-cpu"
+        }.issubset(parser.ids))
+        javascript = self.client.get("/static/app.js").text
+        self.assertIn('fetch("/api/hardware/detect"', javascript)
+        self.assertIn('fetch("/api/hardware/probe"', javascript)
+        self.assertIn('fetch("/api/hardware/restore-cpu"', javascript)
+
+    def test_hardware_benchmark_tab_runs_suites_and_renders_cpu_relative_results(self):
+        html = self.client.get("/").text
+        javascript = self.client.get("/static/app.js").text
+
+        for identifier in (
+            "hardware-tab-optimization", "hardware-tab-benchmarks", "hardware-optimization-view",
+            "hardware-benchmark-view", "hardware-benchmark-suite", "hardware-benchmark-model",
+            "hardware-benchmark-run", "hardware-benchmark-status", "hardware-benchmark-results",
+            "hardware-benchmark-history",
+        ):
+            self.assertIn(f'id="{identifier}"', html)
+        self.assertIn('role="tablist"', html)
+        self.assertIn('fetch("/api/hardware/benchmarks"', javascript)
+        self.assertIn("speedup_vs_cpu", javascript)
+        self.assertIn("tokens_per_second", javascript)
+        self.assertIn("Running standardized benchmark", javascript)
+        self.assertIn("candidate.runnable === false", javascript)
+
     def test_settings_saves_are_partial_and_serialized(self):
         javascript = self.client.get("/static/app.js").text
         html = self.client.get("/").text

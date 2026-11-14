@@ -59,6 +59,20 @@ const elements = {
   settingSkillsOpen: document.querySelector("#setting-skills-open"),
   settingTheme: document.querySelector("#setting-theme"),
   approvedSkillDirectories: document.querySelector("#approved-skill-directories"),
+  hardwareStatus: document.querySelector("#hardware-status"),
+  hardwareDetect: document.querySelector("#hardware-detect"),
+  hardwareCandidates: document.querySelector("#hardware-candidates"),
+  hardwareRestoreCpu: document.querySelector("#hardware-restore-cpu"),
+  hardwareTabOptimization: document.querySelector("#hardware-tab-optimization"),
+  hardwareTabBenchmarks: document.querySelector("#hardware-tab-benchmarks"),
+  hardwareOptimizationView: document.querySelector("#hardware-optimization-view"),
+  hardwareBenchmarkView: document.querySelector("#hardware-benchmark-view"),
+  hardwareBenchmarkSuite: document.querySelector("#hardware-benchmark-suite"),
+  hardwareBenchmarkModel: document.querySelector("#hardware-benchmark-model"),
+  hardwareBenchmarkRun: document.querySelector("#hardware-benchmark-run"),
+  hardwareBenchmarkStatus: document.querySelector("#hardware-benchmark-status"),
+  hardwareBenchmarkResults: document.querySelector("#hardware-benchmark-results"),
+  hardwareBenchmarkHistory: document.querySelector("#hardware-benchmark-history"),
   terminalToggle: document.querySelector("#terminal-toggle"),
   terminalPanel: document.querySelector("#terminal-panel"),
   terminalOutput: document.querySelector("#terminal-output"),
@@ -305,6 +319,117 @@ async function loadSettings() {
   elements.settingTheme.disabled = false;
   elements.settingSkillsOpen.disabled = false;
   renderApprovedDirectories();
+}
+
+async function loadHardwareStatus() {
+  const response = await fetch("/api/hardware");
+  if (!response.ok) throw new Error("Unable to load hardware status");
+  const state = await response.json();
+  elements.hardwareStatus.textContent = `Preferred: ${state.preferred_backend} · last known good: ${state.last_known_good}`;
+  if (state.last_error) elements.hardwareStatus.textContent += ` · last failure: ${state.last_error}`;
+}
+
+async function detectHardware() {
+  elements.hardwareDetect.disabled = true;
+  elements.hardwareCandidates.innerHTML = '<p class="meta">Detecting local runtimes…</p>';
+  try {
+    const response = await fetch("/api/hardware/detect", { method: "POST" });
+    if (!response.ok) throw new Error((await response.json()).detail || "Hardware detection failed");
+    const candidates = await response.json();
+    elements.hardwareCandidates.replaceChildren();
+    for (const candidate of candidates) {
+      const row = document.createElement("div"); row.className = "dependency-row";
+      const label = document.createElement("div");
+      const name = document.createElement("strong"); name.textContent = candidate.name;
+      const detail = document.createElement("p"); detail.className = "meta";
+      detail.textContent = candidate.compatibility_reason || (candidate.verified ? "Verified" : candidate.quarantine_reason ? `Quarantined: ${candidate.quarantine_reason}` : "Available for testing");
+      label.append(name, detail);
+      const probe = document.createElement("button"); probe.type = "button"; probe.className = "secondary"; probe.textContent = "Test and use";
+      if (candidate.runnable === false) { probe.disabled = true; probe.textContent = "Runtime unavailable"; }
+      probe.addEventListener("click", async () => {
+        probe.disabled = true; probe.textContent = "Testing…";
+        try {
+          const result = await fetch("/api/hardware/probe", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ backend: candidate.id, model: elements.model.value || "qwen2.5-coder:0.5b" }),
+          });
+          const payload = await result.json();
+          if (!result.ok) throw new Error(payload.detail || "Backend probe failed");
+          await loadHardwareStatus(); await detectHardware();
+          if (payload.restart_required) elements.hardwareStatus.textContent += " · restart Ollama to activate";
+        } catch (error) { showError(error.message); probe.disabled = false; probe.textContent = "Retest"; }
+      });
+      row.append(label, probe); elements.hardwareCandidates.append(row);
+    }
+  } finally { elements.hardwareDetect.disabled = false; }
+}
+
+async function restoreCpuBackend() {
+  const response = await fetch("/api/hardware/restore-cpu", { method: "POST" });
+  if (!response.ok) throw new Error((await response.json()).detail || "Unable to restore CPU mode");
+  await loadHardwareStatus();
+  elements.hardwareStatus.textContent += " · restart Ollama to activate";
+}
+
+function selectHardwareTab(tab) {
+  const benchmarks = tab === "benchmarks";
+  elements.hardwareOptimizationView.hidden = benchmarks;
+  elements.hardwareBenchmarkView.hidden = !benchmarks;
+  elements.hardwareTabOptimization.setAttribute("aria-selected", String(!benchmarks));
+  elements.hardwareTabBenchmarks.setAttribute("aria-selected", String(benchmarks));
+}
+
+function renderBenchmarkResults(benchmark) {
+  elements.hardwareBenchmarkResults.replaceChildren();
+  for (const result of benchmark.results) {
+    const row = document.createElement("div"); row.className = "dependency-row";
+    const label = document.createElement("div");
+    const name = document.createElement("strong"); name.textContent = result.name;
+    const metrics = document.createElement("p"); metrics.className = "meta";
+    if (result.status === "completed") {
+      const relative = result.speedup_vs_cpu == null ? "CPU baseline unavailable" : `${result.speedup_vs_cpu.toFixed(2)}× CPU`;
+      metrics.textContent = `${result.tokens_per_second.toFixed(2)} tokens/s · ${result.average_total_seconds.toFixed(3)}s average · ${relative}`;
+    } else {
+      metrics.textContent = `${result.status}: ${result.error || "Backend is unavailable"}`;
+    }
+    label.append(name, metrics); row.append(label); elements.hardwareBenchmarkResults.append(row);
+  }
+}
+
+async function loadBenchmarkHistory() {
+  const response = await fetch("/api/hardware/benchmarks");
+  if (!response.ok) throw new Error("Unable to load benchmark history");
+  const history = await response.json();
+  elements.hardwareBenchmarkHistory.replaceChildren();
+  if (!history.length) {
+    elements.hardwareBenchmarkHistory.innerHTML = '<p class="meta">No benchmark history.</p>';
+    return;
+  }
+  for (const benchmark of history) {
+    const button = document.createElement("button"); button.type = "button"; button.className = "secondary";
+    button.textContent = `${benchmark.suite} · ${benchmark.model} · ${new Date(benchmark.created_at).toLocaleString()}`;
+    button.addEventListener("click", () => renderBenchmarkResults(benchmark));
+    elements.hardwareBenchmarkHistory.append(button);
+  }
+  renderBenchmarkResults(history[0]);
+}
+
+async function runHardwareBenchmark() {
+  elements.hardwareBenchmarkRun.disabled = true;
+  elements.hardwareBenchmarkStatus.textContent = "Running standardized benchmark…";
+  try {
+    const response = await fetch("/api/hardware/benchmarks", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ suite: elements.hardwareBenchmarkSuite.value, model: elements.hardwareBenchmarkModel.value }),
+    });
+    const benchmark = await response.json();
+    if (!response.ok) throw new Error(benchmark.detail || "Benchmark failed");
+    renderBenchmarkResults(benchmark);
+    await loadBenchmarkHistory();
+    elements.hardwareBenchmarkStatus.textContent = "Benchmark complete";
+  } finally {
+    elements.hardwareBenchmarkRun.disabled = false;
+  }
 }
 
 async function loadAttachments() {
@@ -662,6 +787,7 @@ async function loadApplication() {
       option.textContent = `${model.name}${model.installed ? "" : " — not installed"}`;
       option.disabled = !model.installed;
       elements.model.append(option);
+      if (model.installed) elements.hardwareBenchmarkModel.append(option.cloneNode(true));
     }
     const installed = models.filter((model) => model.installed).length;
     elements.modelCount.textContent = `${installed} of ${models.length} installed`;
@@ -789,6 +915,17 @@ elements.settingsToggle.addEventListener("click", () => {
     elements.settingTheme.focus({ preventScroll: true });
   }
 });
+elements.hardwareDetect.addEventListener("click", () => detectHardware().catch((error) => showError(error.message)));
+elements.hardwareRestoreCpu.addEventListener("click", () => restoreCpuBackend().catch((error) => showError(error.message)));
+elements.hardwareTabOptimization.addEventListener("click", () => selectHardwareTab("optimization"));
+elements.hardwareTabBenchmarks.addEventListener("click", () => {
+  selectHardwareTab("benchmarks");
+  loadBenchmarkHistory().catch((error) => showError(error.message));
+});
+elements.hardwareBenchmarkRun.addEventListener("click", () => runHardwareBenchmark().catch((error) => {
+  elements.hardwareBenchmarkStatus.textContent = error.message;
+  showError(error.message);
+}));
 elements.settingSkillsOpen.addEventListener("change", () => {
   skillsChangeRevision += 1;
   const open = elements.settingSkillsOpen.checked;
@@ -923,5 +1060,6 @@ document.addEventListener("keydown", (event) => {
 
 loadApplication();
 queueSettingsLoad().catch((error) => showError(error.message));
+loadHardwareStatus().catch((error) => showError(error.message));
 loadAttachments().catch((error) => showError(error.message));
 loadSkillsets().catch((error) => showError(error.message));
