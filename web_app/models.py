@@ -11,6 +11,54 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = None
 
 
+class ActionSuggestion(BaseModel):
+    command: str = Field(min_length=1, max_length=2000)
+    cwd: Optional[str] = Field(default=None, max_length=500)
+    explanation: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("command", "cwd", "explanation")
+    @classmethod
+    def reject_control_characters(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError("Control characters are not allowed")
+        return value
+
+
+class ActionProposal(BaseModel):
+    id: str
+    session_id: str
+    command: str
+    cwd: str
+    explanation: str
+    source_skill_ids: List[str] = Field(default_factory=list)
+    risk: Literal["normal", "destructive"]
+    risk_reason: str
+    status: Literal["pending", "awaiting_confirmation", "approved", "rejected", "superseded", "consumed"] = "pending"
+    confirmation_phrase: Optional[str] = None
+
+
+class ActionApprovalResult(BaseModel):
+    proposal_id: str
+    requires_confirmation: bool = False
+    confirmation_phrase: Optional[str] = None
+    token: Optional[str] = None
+    expires_in: Optional[int] = None
+
+
+class ApprovedAction(BaseModel):
+    proposal_id: str
+    command: str
+    cwd: str
+
+
+class ActionApprovalRequest(BaseModel):
+    terminal_id: str = Field(min_length=1, max_length=64)
+
+
+class DestructiveConfirmationRequest(ActionApprovalRequest):
+    phrase: str = Field(min_length=1, max_length=200)
+
+
 class ChatResult(BaseModel):
     model: str
     status: str
@@ -21,6 +69,8 @@ class ChatResult(BaseModel):
     attached_skills: List["AttachedSkill"] = Field(default_factory=list)
     attached_skillsets: List[str] = Field(default_factory=list)
     skill_recommendations: List["SkillRecommendation"] = Field(default_factory=list)
+    actions: List[ActionSuggestion] = Field(default_factory=list)
+    action_proposals: List[ActionProposal] = Field(default_factory=list)
 
 
 class GeneratedFile(BaseModel):

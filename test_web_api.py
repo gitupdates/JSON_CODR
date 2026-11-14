@@ -1,4 +1,5 @@
 import asyncio
+import json
 import unittest
 import tempfile
 import io
@@ -8,7 +9,8 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from web_app.app import create_app
-from web_app.models import ChatResult, ConversionBundle, GeneratedFile
+from cli import parse_response_content
+from web_app.models import ActionSuggestion, ChatResult, ConversionBundle, GeneratedFile
 from web_app.ollama_service import ModelOutputError, ModelTimeoutError, OllamaService, OllamaUnavailableError
 from web_app.workspace import WorkspaceService
 
@@ -20,6 +22,7 @@ class FakeService:
         self.last_prompt = None
         self.last_images = []
         self.vision = False
+        self.actions = []
 
     async def health(self):
         return {"ollama": self.available}
@@ -58,6 +61,7 @@ class FakeService:
                 status="ready",
                 summary="Ready",
                 content=f"Answered: {prompt}",
+                actions=self.actions,
             )
         if model == "opencoder:8b":
             raise OllamaUnavailableError("Model is not installed")
@@ -198,6 +202,45 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("name: python", body["skill_recommendations"][0]["reasons"])
         self.assertNotIn("stale:missing", self.service.last_prompt)
         self.assertIn("CHECK PYTHON CAREFULLY", self.service.last_prompt)
+
+    def test_structured_actions_ignore_prose_commands_drop_invalid_entries_and_server_own_risk(self):
+        prose_only = parse_response_content(json.dumps({
+            "status": "ready",
+            "summary": "No action",
+            "content": "```powershell\nRemove-Item -Recurse C:\\\\temp\n```",
+        }))
+        self.assertEqual(prose_only.actions, [])
+
+        parsed = parse_response_content(json.dumps({
+            "status": "ready",
+            "summary": "Mixed",
+            "content": "Text remains available",
+            "actions": [
+                {"command": "git status", "cwd": ".", "explanation": "Inspect", "risk": "normal", "approved": True},
+                {"command": "bad\u0000command", "cwd": ".", "explanation": "Invalid"},
+                {"command": "git diff", "cwd": ".", "explanation": "Inspect changes"},
+            ],
+        }))
+        self.assertEqual(parsed.content, "Text remains available")
+        self.assertEqual([action.command for action in parsed.actions], ["git status", "git diff"])
+        self.assertNotIn("risk", parsed.actions[0].model_dump())
+        self.assertNotIn("approved", parsed.actions[0].model_dump())
+
+    def test_chat_creates_server_owned_action_proposals_only_for_structured_actions(self):
+        session = self.workspace.create_session()
+        self.service.actions = [ActionSuggestion(
+            command="git status", cwd=str(Path.cwd()), explanation="Inspect repository"
+        )]
+
+        response = self.client.post(
+            "/api/chat", json={"model": "qwen", "prompt": "Check status", "session_id": session.id}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        proposal = response.json()["action_proposals"][0]
+        self.assertEqual(proposal["command"], "git status")
+        self.assertEqual(proposal["risk"], "normal")
+        self.assertNotIn("token", proposal)
 
     def test_session_chat_sends_original_images_to_vision_models(self):
         import io

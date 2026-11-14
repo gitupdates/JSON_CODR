@@ -7,10 +7,11 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from web_app.attachments import AttachmentService, AttachmentTooLarge
+from web_app.actions import ActionProposalService
 from web_app.artifacts import ArtifactService
 from web_app.context import ContextAssembler
 from web_app.dependencies import DependencyService
-from web_app.models import AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, DiscoveryInstallRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
+from web_app.models import ActionApprovalRequest, AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
 from web_app.ollama_service import (
     ModelOutputError,
     ModelTimeoutError,
@@ -45,6 +46,7 @@ def create_app(
     dependency_service = DependencyService(attachments)
     artifact_service = ArtifactService(workspace)
     terminals = terminals or TerminalService()
+    action_proposals = ActionProposalService()
     web_root = Path(__file__).resolve().parent.parent / "web"
     application.mount("/static", StaticFiles(directory=web_root), name="static")
 
@@ -419,6 +421,60 @@ def create_app(
             raise HTTPException(status_code=404, detail="Terminal not found") from error
         return Response(status_code=204)
 
+    def validate_action_terminal(proposal, terminal_id: str):
+        try:
+            terminal = terminals.get(terminal_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Terminal not found") from error
+        if Path(terminal.cwd).resolve() != Path(proposal.cwd).resolve():
+            raise HTTPException(status_code=400, detail="Proposal working directory must match the terminal")
+        return terminal
+
+    @application.post("/api/sessions/{session_id}/action-proposals/{proposal_id}/approve")
+    async def approve_action(
+        session_id: str,
+        proposal_id: str,
+        request: ActionApprovalRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        try:
+            proposal = action_proposals.get(session_id, proposal_id)
+            validate_action_terminal(proposal, request.terminal_id)
+            return action_proposals.approve(session_id, proposal_id, request.terminal_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Action proposal not found") from error
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+
+    @application.post("/api/sessions/{session_id}/action-proposals/{proposal_id}/confirm-destructive")
+    async def confirm_destructive_action(
+        session_id: str,
+        proposal_id: str,
+        request: DestructiveConfirmationRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        try:
+            proposal = action_proposals.get(session_id, proposal_id)
+            validate_action_terminal(proposal, request.terminal_id)
+            return action_proposals.confirm_destructive(
+                session_id, proposal_id, request.terminal_id, request.phrase
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Action proposal not found") from error
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+
+    @application.post("/api/sessions/{session_id}/action-proposals/{proposal_id}/reject")
+    async def reject_action(session_id: str, proposal_id: str):
+        try:
+            return action_proposals.reject(session_id, proposal_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Action proposal not found") from error
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+
     @application.websocket("/ws/terminals/{terminal_id}")
     async def terminal_socket(websocket: WebSocket, terminal_id: str):
         expected_origin = f"http://{websocket.url.hostname}:{websocket.url.port}"
@@ -446,6 +502,16 @@ def create_app(
                     terminals.write(terminal_id, str(message.get("data", "")))
                 elif message.get("type") == "interrupt":
                     terminals.interrupt(terminal_id)
+                elif message.get("type") == "approved_action":
+                    try:
+                        terminals.write_approved(
+                            terminal_id,
+                            action_proposals,
+                            str(message.get("proposal_id", "")),
+                            str(message.get("token", "")),
+                        )
+                    except (KeyError, PermissionError, RuntimeError) as error:
+                        await websocket.send_json({"type": "action_error", "error": str(error)})
 
         sender = asyncio.create_task(send_output())
         receiver = asyncio.create_task(receive_input())
@@ -514,6 +580,14 @@ def create_app(
                 result.attached_skills = context_result.attached_skills
                 result.attached_skillsets = context_result.skillsets
                 result.skill_recommendations = recommendation_result.recommendations
+            if request.session_id and result.actions:
+                source_skills = [item.reference for item in (context_result.attached_skills if context_result else [])]
+                result.action_proposals = action_proposals.propose(
+                    request.session_id,
+                    result.actions,
+                    source_skills,
+                    str(Path(__file__).resolve().parent.parent),
+                )
             if request.session_id:
                 workspace.append_message(request.session_id, ChatMessage(role="user", content=original_prompt))
                 workspace.append_message(
