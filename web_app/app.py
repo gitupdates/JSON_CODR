@@ -10,7 +10,7 @@ from web_app.attachments import AttachmentService, AttachmentTooLarge
 from web_app.artifacts import ArtifactService
 from web_app.context import ContextAssembler
 from web_app.dependencies import DependencyService
-from web_app.models import AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, DiscoveryInstallRequest, KnownSkillScanRequest, SettingsUpdate, SkillPackRenameRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
+from web_app.models import AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, DiscoveryInstallRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
 from web_app.ollama_service import (
     ModelOutputError,
     ModelTimeoutError,
@@ -22,6 +22,7 @@ from web_app.terminal import TerminalService
 from web_app.skills import DuplicateSkillPack, SkillConverterService, SkillDiscoveryService, SkillLibraryService
 from web_app.settings import SettingsService
 from web_app.skillsets import SkillsetService
+from web_app.recommendations import SkillRecommendationService
 
 
 def create_app(
@@ -38,6 +39,7 @@ def create_app(
     skill_converter = SkillConverterService()
     settings = SettingsService(workspace.data_root)
     skillsets = SkillsetService(workspace.data_root, skill_library)
+    recommendations = SkillRecommendationService(skill_library, skillsets, settings)
     skill_discovery = SkillDiscoveryService(skill_library, skill_converter, workspace.data_root)
     context_assembler = ContextAssembler(attachments, skills=skill_library)
     dependency_service = DependencyService(attachments)
@@ -86,6 +88,39 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(error)) from error
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Session not found") from error
+
+    @application.post("/api/sessions/{session_id}/skill-recommendations")
+    async def preview_skill_recommendations(session_id: str, request: SkillRecommendationRequest):
+        try:
+            return recommendations.recommend(workspace.get_session(session_id), request.prompt)
+        except InvalidSessionId as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Session not found") from error
+
+    @application.patch("/api/sessions/{session_id}/skill-routing")
+    async def update_session_skill_routing(session_id: str, request: SessionSkillRoutingUpdate):
+        try:
+            session = workspace.get_session(session_id)
+            if request.excluded_skill_ids is not None:
+                exclusions = list(dict.fromkeys(request.excluded_skill_ids))
+                for reference in exclusions:
+                    if ":" not in reference:
+                        raise ValueError("Invalid skill reference")
+                    pack_id, skill_id = reference.split(":", 1)
+                    if not skill_library.get_skill(pack_id, skill_id).enabled:
+                        raise ValueError("Disabled skills cannot be excluded")
+                session.excluded_skill_ids = exclusions
+            if request.auto_attach_skills is not None:
+                session.auto_attach_skills = request.auto_attach_skills
+            workspace.save_manifest(session)
+            return session
+        except InvalidSessionId as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=422, detail="Unknown skill reference") from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @application.delete("/api/sessions/{session_id}", status_code=204)
     async def delete_session(session_id: str):

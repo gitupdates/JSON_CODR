@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ChatRequest(BaseModel):
@@ -72,13 +72,20 @@ class AttachmentRecord(BaseModel):
 
 
 class SessionRecord(BaseModel):
-    schema_version: int = 1
+    schema_version: int = 2
     id: str
     created_at: datetime
     updated_at: datetime
     messages: List[ChatMessage] = Field(default_factory=list)
     attachments: List[AttachmentRecord] = Field(default_factory=list)
     selected_skill_ids: List[str] = Field(default_factory=list)
+    auto_attach_skills: bool = True
+    excluded_skill_ids: List[str] = Field(default_factory=list)
+
+    @field_validator("excluded_skill_ids")
+    @classmethod
+    def deduplicate_exclusions(cls, value: List[str]) -> List[str]:
+        return list(dict.fromkeys(value))
 
 
 class ClipboardTextRequest(BaseModel):
@@ -129,6 +136,29 @@ class SkillsetRecord(BaseModel):
     enabled: bool = True
     auto_attach: bool = True
     version: int = 1
+
+
+class SkillRecommendation(BaseModel):
+    reference: str
+    name: str
+    score: int
+    reasons: List[str] = Field(default_factory=list)
+    skillset_ids: List[str] = Field(default_factory=list)
+    manual: bool = False
+
+
+class SkillRecommendationResult(BaseModel):
+    recommendations: List[SkillRecommendation] = Field(default_factory=list)
+    skillset_ids: List[str] = Field(default_factory=list)
+
+
+class SkillRecommendationRequest(BaseModel):
+    prompt: str = Field(min_length=1)
+
+
+class SessionSkillRoutingUpdate(BaseModel):
+    auto_attach_skills: Optional[bool] = None
+    excluded_skill_ids: Optional[List[str]] = None
 
 
 class SkillUpdateRequest(BaseModel):

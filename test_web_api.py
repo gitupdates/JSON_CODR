@@ -91,7 +91,7 @@ class WebApiTests(unittest.TestCase):
 
         reopened = self.client.get(f"/api/sessions/{session_id}")
         self.assertEqual(reopened.status_code, 200)
-        self.assertEqual(reopened.json()["schema_version"], 1)
+        self.assertEqual(reopened.json()["schema_version"], 2)
 
         deleted = self.client.delete(f"/api/sessions/{session_id}")
         self.assertEqual(deleted.status_code, 204)
