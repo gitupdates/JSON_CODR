@@ -178,6 +178,27 @@ footer { padding: 22px 0 34px; color: var(--text-subtle); font: 600 10px ui-mono
 .skill-details pre { white-space: pre-wrap; color: var(--text-soft); font: 12px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .skill-editor-wrap { margin-top: 14px; }
 .skill-editor-wrap textarea { min-height: 160px; }
+.skillset-library { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
+.skill-routing-toggle { display: flex; align-items: center; gap: 7px; color: var(--text-soft); }
+.skillset-list, .skill-recommendations, .action-list { display: grid; gap: 9px; margin-top: 12px; }
+.skillset-pack { padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-input); }
+.skillset-pack summary { cursor: pointer; font-weight: 700; }
+.skillset-pack p, .skillset-pack li { color: var(--text-soft); font-size: 12px; line-height: 1.55; }
+.recommendation-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 11px; border: 1px solid var(--info-line); border-radius: 9px; color: var(--text-soft); font-size: 12px; }
+.recommendation-row button, .action-controls button { height: 34px; min-width: auto; padding: 0 11px; }
+.attached-skills { display: flex; flex-wrap: wrap; gap: 7px; padding: 16px 0 0; }
+.attached-skills[hidden], .action-review[hidden] { display: none; }
+.attached-skill-chip { padding: 6px 9px; border: 1px solid var(--accent-line); border-radius: 999px; color: var(--text-soft); background: var(--surface-input); font-size: 11px; }
+.action-review { padding: 20px 0; border-top: 1px solid var(--line); }
+.action-card { display: grid; gap: 9px; padding: 14px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-input); }
+.action-card code, .confirmation-dialog code { display: block; padding: 9px; overflow-wrap: anywhere; color: var(--cyan); background: var(--surface-preview); }
+.action-card small { color: var(--muted); overflow-wrap: anywhere; }
+.action-risk { margin: 0; color: var(--text-soft); font-size: 11px; }
+.action-risk.destructive { color: var(--error-text); }
+.action-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.confirmation-dialog { width: min(620px, calc(100% - 28px)); color: var(--text); background: var(--surface-panel-solid); border: 1px solid var(--error-line); border-radius: 14px; box-shadow: 0 24px 80px var(--shadow); }
+.confirmation-dialog::backdrop { background: rgba(0,0,0,.68); }
+.confirmation-dialog input { width: 100%; height: 44px; margin-top: 8px; padding: 0 12px; color: var(--text); background: var(--surface-input); border: 1px solid var(--line-strong); }
 .skill-discovery { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
 .skill-discovery strong { display: block; margin-top: 3px; }
 .scan-controls { display: flex; gap: 10px; margin-top: 12px; }

@@ -205,6 +205,48 @@ class WebStaticTests(unittest.TestCase):
         ):
             self.assertIn(variable, css)
 
+    def test_skillset_recommendation_and_confirmed_action_ui_contracts(self):
+        html = self.client.get("/").text
+        parser = IdCollector()
+        parser.feed(html)
+        self.assertTrue({
+            "skillset-library",
+            "skillset-list",
+            "auto-attach-skills",
+            "skill-recommendations",
+            "attached-skills",
+            "action-review",
+            "action-list",
+            "destructive-confirmation-dialog",
+            "destructive-confirmation-command",
+            "destructive-confirmation-cwd",
+            "destructive-confirmation-risk",
+            "destructive-confirmation-phrase",
+            "destructive-confirmation-input",
+            "destructive-confirmation-submit",
+        }.issubset(parser.ids))
+        self.assertIn("<details", html)
+
+        javascript = self.client.get("/static/app.js").text
+        self.assertIn('fetch("/api/skillsets")', javascript)
+        self.assertIn("/skill-recommendations", javascript)
+        self.assertIn("/skill-routing", javascript)
+        self.assertIn("excluded_skill_ids", javascript)
+        self.assertIn("recommendation.reasons", javascript)
+        self.assertIn('button.textContent = "Dismiss"', javascript)
+        self.assertIn('copy.textContent = "Copy"', javascript)
+        self.assertIn('reject.textContent = "Reject"', javascript)
+        self.assertIn('approve.textContent = "Approve and run"', javascript)
+        self.assertIn("destructive-confirmation-phrase", html)
+        self.assertIn('type: "approved_action", proposal_id: proposal.id, token', javascript)
+        self.assertNotIn("runTerminalCommand(proposal.command)", javascript)
+        self.assertIn("textContent", javascript)
+
+        css = self.client.get("/static/app.css").text
+        self.assertIn(".attached-skill-chip", css)
+        self.assertIn(".action-card", css)
+        self.assertIn(":root[data-theme=\"light\"]", css)
+
 
 if __name__ == "__main__":
     unittest.main()

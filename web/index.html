@@ -80,6 +80,7 @@
             <p>Your validated response will appear here.</p>
           </div>
           <div id="result-state" hidden>
+            <section id="attached-skills" class="attached-skills" aria-label="Skills attached to this response" hidden></section>
             <article>
               <p class="result-label">SUMMARY</p>
               <h2 id="summary-output"></h2>
@@ -89,6 +90,10 @@
               <pre id="content-output"></pre>
               <a id="artifact-output" class="artifact-output" href="#" hidden>Download generated archive</a>
             </article>
+            <section id="action-review" class="action-review" aria-label="Proposed terminal actions" hidden>
+              <p class="result-label">REVIEW ACTIONS</p>
+              <div id="action-list" class="action-list"></div>
+            </section>
           </div>
           <div id="error-output" class="error" role="alert" hidden></div>
         </section>
@@ -124,6 +129,14 @@
           <p id="skill-conversion-status" class="meta">Choose “Review as skills” on an imported ZIP to convert Claude, Codex, or generic skills.</p>
           <p class="meta"><a href="/api/skills/standard/envelope.md" download>JSON_CODR skill authoring standard</a> Â· <a href="/api/skills/standard/envelope.schema.json" download>JSON Schema</a></p>
           <div id="skill-list" class="skill-list"><p class="meta">No skills installed.</p></div>
+          <section id="skillset-library" class="skillset-library" aria-label="Automatic Skillsets">
+            <div class="dependency-head">
+              <div><span class="eyebrow">SKILLSETS</span><strong>Automatic routing packs</strong></div>
+              <label class="skill-routing-toggle"><input id="auto-attach-skills" type="checkbox" checked /> Auto-attach relevant skills</label>
+            </div>
+            <div id="skill-recommendations" class="skill-recommendations" aria-live="polite"></div>
+            <div id="skillset-list" class="skillset-list"><details class="skillset-pack"><summary>Loading Skillsets…</summary><p class="meta">Automatic routing packs are loading.</p></details></div>
+          </section>
           <article id="skill-details" class="skill-details" hidden aria-live="polite"></article>
           <div class="skill-editor-wrap">
             <label><input id="skill-enabled" type="checkbox" disabled /> Skill enabled</label>
@@ -177,6 +190,23 @@
           <button id="terminal-stop" class="secondary" type="button">Stop</button>
         </div>
       </section>
+
+      <dialog id="destructive-confirmation-dialog" class="confirmation-dialog" aria-labelledby="destructive-confirmation-title">
+        <form method="dialog">
+          <p class="eyebrow">STRONG CONFIRMATION REQUIRED</p>
+          <h2 id="destructive-confirmation-title">Review destructive action</h2>
+          <p>Command</p><code id="destructive-confirmation-command"></code>
+          <p>Working directory</p><code id="destructive-confirmation-cwd"></code>
+          <p>Risk</p><strong id="destructive-confirmation-risk"></strong>
+          <p>Type <code id="destructive-confirmation-phrase"></code> to continue.</p>
+          <label for="destructive-confirmation-input">Confirmation phrase</label>
+          <input id="destructive-confirmation-input" type="text" autocomplete="off" />
+          <div class="actions">
+            <button id="destructive-confirmation-submit" class="primary" type="button">Confirm and run</button>
+            <button class="secondary" value="cancel">Cancel</button>
+          </div>
+        </form>
+      </dialog>
 
       <footer><span>Runs entirely on this machine</span><span>127.0.0.1 · Ollama</span></footer>
     </main>

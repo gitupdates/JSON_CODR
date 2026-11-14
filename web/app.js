@@ -43,6 +43,19 @@ const elements = {
   skillScan: document.querySelector("#skill-scan"),
   skillScanKnown: document.querySelector("#skill-scan-known"),
   skillScanResults: document.querySelector("#skill-scan-results"),
+  skillsetList: document.querySelector("#skillset-list"),
+  skillRecommendations: document.querySelector("#skill-recommendations"),
+  autoAttachSkills: document.querySelector("#auto-attach-skills"),
+  attachedSkills: document.querySelector("#attached-skills"),
+  actionReview: document.querySelector("#action-review"),
+  actionList: document.querySelector("#action-list"),
+  destructiveDialog: document.querySelector("#destructive-confirmation-dialog"),
+  destructiveCommand: document.querySelector("#destructive-confirmation-command"),
+  destructiveCwd: document.querySelector("#destructive-confirmation-cwd"),
+  destructiveRisk: document.querySelector("#destructive-confirmation-risk"),
+  destructivePhrase: document.querySelector("#destructive-confirmation-phrase"),
+  destructiveInput: document.querySelector("#destructive-confirmation-input"),
+  destructiveSubmit: document.querySelector("#destructive-confirmation-submit"),
   settingSkillsOpen: document.querySelector("#setting-skills-open"),
   settingTheme: document.querySelector("#setting-theme"),
   approvedSkillDirectories: document.querySelector("#approved-skill-directories"),
@@ -73,6 +86,8 @@ let themeSaveRevision = 0;
 let skillsChangeRevision = 0;
 let currentThemeMode = normalizeThemeMode(localStorage.getItem("json_codr_theme"));
 let persistedThemeMode = null;
+let excludedSkillIds = [];
+let pendingDestructiveAction = null;
 
 const dependencyInstallQueue = createDependencyInstallQueue(async (command) => {
   if (elements.terminalPanel.hidden) {
@@ -136,8 +151,67 @@ async function ensureTerminal() {
     const message = JSON.parse(event.data);
     if (message.type === "output") appendTerminalOutput(message.data);
     if (message.type === "exit") elements.terminalStatus.textContent = "Stopped";
+    if (message.type === "action_error") showError(message.error || "Approved action failed");
   });
   terminalSocket.addEventListener("close", () => { elements.terminalStatus.textContent = "Disconnected"; });
+}
+
+async function sendApprovedAction(proposal, token) {
+  await ensureTerminal();
+  if (terminalSocket.readyState !== WebSocket.OPEN) {
+    await new Promise((resolve) => terminalSocket.addEventListener("open", resolve, { once: true }));
+  }
+  terminalSocket.send(JSON.stringify({ type: "approved_action", proposal_id: proposal.id, token }));
+  elements.terminalPanel.hidden = false;
+  elements.terminalToggle.setAttribute("aria-expanded", "true");
+}
+
+async function approveAction(proposal) {
+  await ensureTerminal();
+  const response = await fetch(`/api/sessions/${sessionId}/action-proposals/${proposal.id}/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
+    body: JSON.stringify({ terminal_id: terminalId }),
+  });
+  const approval = await response.json();
+  if (!response.ok) throw new Error(approval.detail || "Unable to approve action");
+  if (!approval.requires_confirmation) return sendApprovedAction(proposal, approval.token);
+  pendingDestructiveAction = { proposal, phrase: approval.confirmation_phrase };
+  elements.destructiveCommand.textContent = proposal.command;
+  elements.destructiveCwd.textContent = proposal.cwd;
+  elements.destructiveRisk.textContent = `${proposal.risk}: ${proposal.risk_reason}`;
+  elements.destructivePhrase.textContent = approval.confirmation_phrase;
+  elements.destructiveInput.value = "";
+  elements.destructiveDialog.showModal();
+  elements.destructiveInput.focus();
+}
+
+function renderActions(proposals) {
+  elements.actionList.replaceChildren();
+  elements.actionReview.hidden = !proposals.length;
+  for (const proposal of proposals) {
+    const card = document.createElement("article"); card.className = "action-card";
+    const title = document.createElement("strong"); title.textContent = proposal.explanation;
+    const command = document.createElement("code"); command.textContent = proposal.command;
+    const cwd = document.createElement("small"); cwd.textContent = `Working directory: ${proposal.cwd}`;
+    const risk = document.createElement("p"); risk.className = `action-risk ${proposal.risk}`;
+    risk.textContent = `${proposal.risk.toUpperCase()} · ${proposal.risk_reason}`;
+    const controls = document.createElement("div"); controls.className = "action-controls";
+    const copy = document.createElement("button"); copy.type = "button"; copy.className = "secondary"; copy.textContent = "Copy";
+    copy.addEventListener("click", () => navigator.clipboard.writeText(proposal.command));
+    const reject = document.createElement("button"); reject.type = "button"; reject.className = "secondary"; reject.textContent = "Reject";
+    reject.addEventListener("click", async () => {
+      const response = await fetch(`/api/sessions/${sessionId}/action-proposals/${proposal.id}/reject`, { method: "POST" });
+      if (!response.ok) return showError((await response.json()).detail || "Unable to reject action");
+      card.remove();
+      elements.actionReview.hidden = !elements.actionList.children.length;
+    });
+    const approve = document.createElement("button"); approve.type = "button"; approve.className = "primary"; approve.textContent = "Approve and run";
+    approve.addEventListener("click", () => approveAction(proposal).catch((error) => showError(error.message)));
+    controls.append(copy, reject, approve);
+    card.append(title, command, cwd, risk, controls);
+    elements.actionList.append(card);
+  }
 }
 
 async function runTerminalCommand(command = null) {
@@ -389,6 +463,82 @@ async function loadSkills() {
   elements.skillList.replaceChildren(content);
 }
 
+async function loadSkillsets() {
+  await ensureSession();
+  const [skillsetResponse, sessionResponse] = await Promise.all([
+    fetch("/api/skillsets"),
+    fetch(`/api/sessions/${sessionId}`),
+  ]);
+  const skillsets = await skillsetResponse.json();
+  const session = await sessionResponse.json();
+  if (!skillsetResponse.ok) throw new Error(skillsets.detail || "Unable to load Skillsets");
+  excludedSkillIds = session.excluded_skill_ids || [];
+  elements.autoAttachSkills.checked = session.auto_attach_skills !== false;
+  elements.skillsetList.replaceChildren();
+  for (const skillset of skillsets) {
+    const details = document.createElement("details"); details.className = "skillset-pack";
+    const summary = document.createElement("summary");
+    summary.textContent = `${skillset.name} · ${skillset.members.length} skills`;
+    const description = document.createElement("p"); description.textContent = skillset.summary;
+    const members = document.createElement("ul");
+    for (const member of skillset.members) {
+      const item = document.createElement("li"); item.textContent = member.name; members.append(item);
+    }
+    details.append(summary, description, members);
+    elements.skillsetList.append(details);
+  }
+  if (!skillsets.length) {
+    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "No Skillsets available.";
+    elements.skillsetList.append(empty);
+  }
+}
+
+function renderRecommendations(recommendations) {
+  elements.skillRecommendations.replaceChildren();
+  for (const recommendation of recommendations) {
+    const row = document.createElement("div"); row.className = "recommendation-row";
+    const explanation = document.createElement("span");
+    explanation.textContent = `${recommendation.name} · ${recommendation.reasons.join(" · ")}`;
+    row.append(explanation);
+    if (!recommendation.manual) {
+      const button = document.createElement("button"); button.type = "button"; button.className = "secondary"; button.textContent = "Dismiss";
+      button.addEventListener("click", async () => {
+        excludedSkillIds = [...new Set([...excludedSkillIds, recommendation.reference])];
+        const response = await fetch(`/api/sessions/${sessionId}/skill-routing`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ excluded_skill_ids: excludedSkillIds }),
+        });
+        if (!response.ok) return showError((await response.json()).detail || "Unable to dismiss recommendation");
+        row.remove();
+      });
+      row.append(button);
+    }
+    elements.skillRecommendations.append(row);
+  }
+}
+
+async function previewSkillRecommendations() {
+  const prompt = elements.prompt.value.trim();
+  if (!prompt) return renderRecommendations([]);
+  await ensureSession();
+  const response = await fetch(`/api/sessions/${sessionId}/skill-recommendations`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt }),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.detail || "Unable to preview skill recommendations");
+  renderRecommendations(payload.recommendations || []);
+}
+
+function renderAttachedSkills(skills) {
+  elements.attachedSkills.replaceChildren();
+  elements.attachedSkills.hidden = !skills.length;
+  for (const skill of skills) {
+    const chip = document.createElement("span"); chip.className = "attached-skill-chip";
+    chip.textContent = `${skill.name} · ${skill.reasons.join(" · ")}`;
+    elements.attachedSkills.append(chip);
+  }
+}
+
 async function loadDependencies() {
   await ensureSession();
   const response = await fetch(`/api/sessions/${sessionId}/dependencies`);
@@ -566,6 +716,9 @@ async function submitPrompt(event) {
     elements.responseModel.textContent = payload.model;
     elements.summary.textContent = payload.summary;
     elements.content.textContent = payload.content;
+    renderAttachedSkills(payload.attached_skills || []);
+    renderRecommendations(payload.skill_recommendations || []);
+    renderActions(payload.action_proposals || []);
     elements.artifactOutput.hidden = !payload.artifact;
     if (payload.artifact) {
       elements.artifactOutput.href = payload.artifact.url;
@@ -584,6 +737,34 @@ elements.cancel.addEventListener("click", () => activeRequest?.abort());
 elements.model.addEventListener("change", updateModelDetail);
 elements.prompt.addEventListener("keydown", (event) => {
   if (event.ctrlKey && event.key === "Enter") elements.form.requestSubmit();
+});
+let recommendationTimer = null;
+elements.prompt.addEventListener("input", () => {
+  clearTimeout(recommendationTimer);
+  recommendationTimer = setTimeout(() => previewSkillRecommendations().catch((error) => showError(error.message)), 300);
+});
+elements.autoAttachSkills.addEventListener("change", async () => {
+  const response = await fetch(`/api/sessions/${sessionId}/skill-routing`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ auto_attach_skills: elements.autoAttachSkills.checked }),
+  });
+  if (!response.ok) return showError((await response.json()).detail || "Unable to update automatic attachment");
+  await previewSkillRecommendations();
+});
+elements.destructiveSubmit.addEventListener("click", async () => {
+  if (!pendingDestructiveAction) return;
+  const { proposal, phrase } = pendingDestructiveAction;
+  if (elements.destructiveInput.value !== phrase) return showError("Confirmation phrase does not match");
+  const response = await fetch(`/api/sessions/${sessionId}/action-proposals/${proposal.id}/confirm-destructive`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
+    body: JSON.stringify({ terminal_id: terminalId, phrase: elements.destructiveInput.value }),
+  });
+  const approval = await response.json();
+  if (!response.ok) return showError(approval.detail || "Unable to confirm destructive action");
+  elements.destructiveDialog.close();
+  pendingDestructiveAction = null;
+  await sendApprovedAction(proposal, approval.token);
 });
 elements.contextToggle.addEventListener("click", () => {
   elements.contextPanel.hidden = !elements.contextPanel.hidden;
@@ -743,3 +924,4 @@ document.addEventListener("keydown", (event) => {
 loadApplication();
 queueSettingsLoad().catch((error) => showError(error.message));
 loadAttachments().catch((error) => showError(error.message));
+loadSkillsets().catch((error) => showError(error.message));
