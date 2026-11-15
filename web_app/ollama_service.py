@@ -1,11 +1,11 @@
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import ollama
 from pydantic import ValidationError
 
 from cli import StructuredCLIResponse, load_config, parse_response_content
-from web_app.models import ChatResult, ConversionBundle
+from web_app.models import ChatResult, ConversionBundle, GpuProfileSettings
 
 
 class OllamaUnavailableError(RuntimeError):
@@ -21,10 +21,19 @@ class ModelTimeoutError(RuntimeError):
 
 
 class OllamaService:
-    def __init__(self, client: Optional[Any] = None, timeout_seconds: int = 180) -> None:
+    def __init__(
+        self,
+        client: Optional[Any] = None,
+        timeout_seconds: int = 180,
+        optimization_provider: Optional[Callable[[str], GpuProfileSettings]] = None,
+    ) -> None:
         self.config = load_config()
         self.client = client or ollama.AsyncClient(host=self.config["host"])
         self.timeout_seconds = timeout_seconds
+        self.optimization_provider = optimization_provider or (lambda model: GpuProfileSettings())
+
+    def set_optimization_provider(self, provider: Callable[[str], GpuProfileSettings]) -> None:
+        self.optimization_provider = provider
 
     async def health(self) -> Dict[str, bool]:
         try:
@@ -102,15 +111,22 @@ class OllamaService:
         live = await self._live_models()
         if resolved not in live:
             raise OllamaUnavailableError("Model is not installed")
+        request = {
+            "model": resolved,
+            "messages": [{"role": "user", "content": prompt, "images": images or None}],
+            "format": StructuredCLIResponse.model_json_schema(),
+        }
+        options = self.optimization_provider(resolved).ollama_options()
+        if options:
+            request["options"] = options
         try:
-            response = await asyncio.wait_for(
-                self.client.chat(
-                    model=resolved,
-                    messages=[{"role": "user", "content": prompt, "images": images or None}],
-                    format=StructuredCLIResponse.model_json_schema(),
-                ),
-                timeout=self.timeout_seconds,
-            )
+            try:
+                response = await asyncio.wait_for(self.client.chat(**request), timeout=self.timeout_seconds)
+            except Exception:
+                if not options:
+                    raise
+                request.pop("options", None)
+                response = await asyncio.wait_for(self.client.chat(**request), timeout=self.timeout_seconds)
         except asyncio.TimeoutError as error:
             raise ModelTimeoutError("Model request timed out") from error
         except Exception as error:

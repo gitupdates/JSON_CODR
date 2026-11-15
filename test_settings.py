@@ -117,5 +117,42 @@ class SettingsTests(unittest.TestCase):
         current = client.get("/api/settings").json()["ui"]
         self.assertEqual(current, {"skill_catalog_open": True, "theme": "dark"})
 
+    def test_gpu_profiles_default_to_automatic_and_persist_per_model(self):
+        workspace = WorkspaceService(self.root)
+        client = TestClient(create_app(FakeService(), workspace))
+
+        self.assertEqual(client.get("/api/settings").json()["gpu_optimization"], {
+            "default_profile": {"mode": "automatic", "num_gpu": None, "main_gpu": None, "num_ctx": None, "num_batch": None},
+            "model_profiles": {},
+        })
+        updated = client.patch("/api/settings", json={
+            "gpu_optimization": {
+                "default_profile": {"mode": "vram_conservative"},
+                "model_profiles": {"qwen2.5-coder:0.5b": {"mode": "gpu_preferred"}},
+            },
+        })
+
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["gpu_optimization"]["default_profile"]["mode"], "vram_conservative")
+        self.assertEqual(SettingsService(self.root).optimization_for("qwen2.5-coder:0.5b").mode, "gpu_preferred")
+
+    def test_gpu_profile_validation_rejects_unknown_models_and_invalid_advanced_values(self):
+        workspace = WorkspaceService(self.root)
+        client = TestClient(create_app(FakeService(), workspace))
+
+        unknown = client.patch("/api/settings", json={
+            "gpu_optimization": {
+                "model_profiles": {"missing:model": {"mode": "gpu_preferred"}},
+            },
+        })
+        invalid = client.patch("/api/settings", json={
+            "gpu_optimization": {
+                "default_profile": {"mode": "advanced", "num_gpu": 2000, "main_gpu": 99},
+            },
+        })
+
+        self.assertEqual(unknown.status_code, 422)
+        self.assertEqual(invalid.status_code, 422)
+
 
 if __name__ == "__main__": unittest.main()

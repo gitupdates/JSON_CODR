@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -285,18 +285,63 @@ class SkillRoutingSettings(BaseModel):
     minimum_score: int = Field(default=8, ge=1, le=100)
 
 
+class GpuProfileSettings(BaseModel):
+    mode: Literal[
+        "automatic", "gpu_preferred", "balanced", "vram_conservative", "cpu_only", "advanced"
+    ] = "automatic"
+    num_gpu: Optional[int] = Field(default=None, ge=0, le=999)
+    main_gpu: Optional[int] = Field(default=None, ge=0, le=15)
+    num_ctx: Optional[int] = Field(default=None, ge=512, le=131072)
+    num_batch: Optional[int] = Field(default=None, ge=1, le=2048)
+
+    @model_validator(mode="after")
+    def validate_advanced_profile(self) -> "GpuProfileSettings":
+        manual = (self.num_gpu, self.main_gpu, self.num_ctx, self.num_batch)
+        if self.mode == "advanced" and all(value is None for value in manual):
+            raise ValueError("Advanced profile requires at least one manual option")
+        if self.mode != "advanced" and any(value is not None for value in manual):
+            raise ValueError("Manual options require the advanced profile")
+        return self
+
+    def ollama_options(self) -> dict:
+        presets = {
+            "automatic": {},
+            "gpu_preferred": {"num_gpu": 999},
+            "balanced": {"num_gpu": 16},
+            "vram_conservative": {"num_ctx": 2048, "num_batch": 128},
+            "cpu_only": {"num_gpu": 0},
+        }
+        if self.mode != "advanced":
+            return presets[self.mode]
+        return {
+            name: value for name, value in (
+                ("num_gpu", self.num_gpu),
+                ("main_gpu", self.main_gpu),
+                ("num_ctx", self.num_ctx),
+                ("num_batch", self.num_batch),
+            ) if value is not None
+        }
+
+
+class GpuOptimizationSettings(BaseModel):
+    default_profile: GpuProfileSettings = Field(default_factory=GpuProfileSettings)
+    model_profiles: Dict[str, GpuProfileSettings] = Field(default_factory=dict)
+
+
 class SystemSettings(BaseModel):
     version: int = 2
     app_version: str = APP_VERSION
     ui: UiSettings = Field(default_factory=UiSettings)
     skill_scan: SkillScanSettings = Field(default_factory=SkillScanSettings)
     skill_routing: SkillRoutingSettings = Field(default_factory=SkillRoutingSettings)
+    gpu_optimization: GpuOptimizationSettings = Field(default_factory=GpuOptimizationSettings)
 
 
 class SettingsUpdate(BaseModel):
     ui: Optional[UiSettingsUpdate] = None
     skill_scan: Optional[SkillScanSettings] = None
     skill_routing: Optional[SkillRoutingSettings] = None
+    gpu_optimization: Optional[GpuOptimizationSettings] = None
 
 
 class SkillScanRequest(BaseModel):

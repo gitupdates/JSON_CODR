@@ -3,7 +3,8 @@ import os
 import uuid
 from pathlib import Path
 
-from web_app.models import SettingsUpdate, SkillRoutingSettings, SystemSettings, UiSettings
+from cli import load_config
+from web_app.models import GpuOptimizationSettings, GpuProfileSettings, SettingsUpdate, SkillRoutingSettings, SystemSettings, UiSettings
 from web_app.version import APP_VERSION
 
 
@@ -40,14 +41,25 @@ class SettingsService:
             current.skill_scan.approved_directories = resolved
         if update.skill_routing is not None:
             current.skill_routing = SkillRoutingSettings.model_validate(update.skill_routing)
+        if update.gpu_optimization is not None:
+            known_models = set(load_config().get("jury_models", []))
+            unknown = set(update.gpu_optimization.model_profiles) - known_models
+            if unknown:
+                raise ValueError(f"Unknown model profile: {sorted(unknown)[0]}")
+            current.gpu_optimization = GpuOptimizationSettings.model_validate(update.gpu_optimization)
         raw["version"] = current.version
         raw["app_version"] = APP_VERSION
         raw.setdefault("ui", {})["skill_catalog_open"] = current.ui.skill_catalog_open
         raw.setdefault("ui", {})["theme"] = current.ui.theme
         raw.setdefault("skill_scan", {})["approved_directories"] = current.skill_scan.approved_directories
         raw["skill_routing"] = current.skill_routing.model_dump()
+        raw["gpu_optimization"] = current.gpu_optimization.model_dump()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.parent / f".settings-{uuid.uuid4().hex}.tmp"
         temporary.write_text(json.dumps(raw, indent=2), encoding="utf-8")
         os.replace(temporary, self.path)
         return current
+
+    def optimization_for(self, model: str) -> GpuProfileSettings:
+        settings = self.get().gpu_optimization
+        return settings.model_profiles.get(model, settings.default_profile)

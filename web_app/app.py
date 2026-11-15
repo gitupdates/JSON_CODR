@@ -50,6 +50,8 @@ def create_app(
     skill_library.ensure_envelopes()
     skill_converter = SkillConverterService()
     settings = SettingsService(workspace.data_root)
+    if hasattr(service, "set_optimization_provider"):
+        service.set_optimization_provider(settings.optimization_for)
     catalog = OptimizedModelCatalog()
     environment_manager = EnvironmentManager(workspace.data_root)
     clients = {
@@ -114,7 +116,10 @@ def create_app(
 
     @application.patch("/api/settings")
     async def update_settings(request: SettingsUpdate):
-        return settings.update(request)
+        try:
+            return settings.update(request)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @application.get("/api/hardware")
     async def hardware_status():
