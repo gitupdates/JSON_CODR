@@ -101,6 +101,14 @@ def create_app(
     async def inference_catalog():
         return [model.model_dump(mode="json") for model in catalog.list()]
 
+    @application.get("/api/inference/environments")
+    async def inference_environments():
+        return [
+            environment_manager.status(provider)
+            for provider in ProviderKind
+            if provider is not ProviderKind.ollama
+        ]
+
     @application.get("/api/inference/install-plan/{provider}")
     async def inference_install_plan(provider: ProviderKind):
         if provider is ProviderKind.ollama:

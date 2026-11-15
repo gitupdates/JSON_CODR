@@ -71,6 +71,45 @@ class EnvironmentManager:
             f"& $providerPython -m pip --disable-pip-version-check install {packages}",
         ))
 
+    @staticmethod
+    def _python_version(python: Path) -> tuple[int, int] | None:
+        try:
+            result = subprocess.run(
+                [str(python), "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            )
+            major, minor = result.stdout.strip().split(".", 1)
+            return (int(major), int(minor)) if result.returncode == 0 else None
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            return None
+
+    def status(self, provider: ProviderKind) -> dict:
+        plan = self.plan(provider)
+        if not plan.python.is_file():
+            return {
+                "provider": provider.value,
+                "environment": str(plan.root),
+                "installed": False,
+                "compatible": False,
+                "status": "missing",
+                "python_version": None,
+                "packages": plan.packages,
+            }
+        version = self._python_version(plan.python)
+        compatible = version in {(3, 11), (3, 12)}
+        return {
+            "provider": provider.value,
+            "environment": str(plan.root),
+            "installed": True,
+            "compatible": compatible,
+            "status": "ready" if compatible else "incompatible",
+            "python_version": ".".join(map(str, version)) if version else None,
+            "packages": plan.packages,
+        }
+
     def remove(self, provider: ProviderKind) -> None:
         plan = self.plan(provider)
         if plan.root.is_dir():

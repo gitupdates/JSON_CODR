@@ -41,6 +41,21 @@ class EnvironmentManagerTests(unittest.TestCase):
         self.assertNotIn("openvino", requirements)
         self.assertNotIn("onnxruntime", requirements)
 
+    def test_provider_status_distinguishes_missing_and_compatible_environments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager = EnvironmentManager(Path(directory))
+            missing = manager.status(ProviderKind.openvino)
+            self.assertEqual(missing["status"], "missing")
+            self.assertFalse(missing["installed"])
+
+            plan = manager.plan(ProviderKind.openvino)
+            plan.python.parent.mkdir(parents=True)
+            plan.python.touch()
+            manager._python_version = lambda python: (3, 12)
+            compatible = manager.status(ProviderKind.openvino)
+            self.assertEqual(compatible["status"], "ready")
+            self.assertTrue(compatible["compatible"])
+
 
 class SidecarClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_stdout_json_is_parsed_and_stderr_is_diagnostic_only(self):

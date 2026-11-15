@@ -151,6 +151,18 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("isolated OpenVINO runtime", proposal["explanation"])
         self.assertNotIn("driver", proposal["command"].casefold())
 
+    def test_provider_environment_statuses_are_exposed_independently(self):
+        client = TestClient(create_app(self.service, self.workspace, optimized=True))
+
+        response = client.get("/api/inference/environments")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            {item["provider"] for item in response.json()},
+            {"openvino", "ryzen_ai", "winml", "directml"},
+        )
+        self.assertTrue(all(item["status"] == "missing" for item in response.json()))
+
     def tearDown(self):
         self.temporary_directory.cleanup()
 
