@@ -28,7 +28,8 @@
     const peakVram = percentiles(tests.map((test) => test.peak_vram_mb)).max;
     const total = numberOrNull(result.average_total_seconds) ?? percentiles(tests.map((test) => test.total_seconds)).p50;
     const speedup = numberOrNull(result.speedup_vs_cpu);
-    const conforming = result.localperf?.conformance?.conforming !== false;
+    const rawConformance = result.localperf?.conformance?.conforming;
+    const conforming = rawConformance === true ? true : rawConformance === false ? false : null;
     const status = result.status || "unavailable";
     return {
       id: `${session.id || "legacy"}:${result.backend || result.runtime || "unknown"}`,
@@ -47,7 +48,11 @@
       compatible: result.compatible !== false,
       availability_reason: result.availability_reason || result.reason || null,
       conforming,
-      eligible_rank: status === "completed" && conforming,
+      eligible_rank: status === "completed" && conforming === true,
+      runtime: result.runtime || null,
+      kind: result.kind || null,
+      active: typeof result.active === "boolean" ? result.active : null,
+      configuration_hash: result.configuration_hash || result.localperf?.configuration_hash || null,
       tokens_per_second: throughput,
       ttft_ms: ttft,
       average_total_seconds: total,
@@ -60,6 +65,8 @@
       error: result.error || null,
       rejection_reasons: Array.isArray(result.rejection_reasons) ? [...result.rejection_reasons] : [],
       conformance_reasons: Array.isArray(result.localperf?.conformance?.reasons) ? [...result.localperf.conformance.reasons] : [],
+      compatibility_reasons: Array.isArray(result.compatibility_reasons) ? [...result.compatibility_reasons] : [],
+      quarantine_reason: result.quarantine_reason || null,
       runtime_metadata: result.runtime_metadata || result.localperf?.runtime_metadata || null,
       tests,
     };
@@ -81,6 +88,13 @@
         runnable: candidate.runnable,
         compatible: candidate.compatible,
         availability_reason: candidate.reason || candidate.error || null,
+        conforming: null,
+        runtime: candidate.runtime || null,
+        kind: candidate.kind || null,
+        active: typeof candidate.active === "boolean" ? candidate.active : null,
+        configuration_hash: candidate.configuration_hash || null,
+        compatibility_reasons: Array.isArray(candidate.compatibility_reasons) ? [...candidate.compatibility_reasons] : [],
+        quarantine_reason: candidate.quarantine_reason || null,
         tested: false,
         tests: [],
       }));

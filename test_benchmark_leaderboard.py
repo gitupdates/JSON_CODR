@@ -115,6 +115,8 @@ class BenchmarkLeaderboardTests(unittest.TestCase):
         self.assertEqual(stats["stats"], {"min": 1, "p50": 3, "p90": 4.6, "max": 5})
         self.assertEqual(stats["rows"][0]["status"], "unavailable")
         self.assertIsNone(stats["rows"][0]["ttft_ms"])
+        self.assertIsNone(stats["rows"][0]["conforming"])
+        self.assertFalse(stats["rows"][0]["eligible_rank"])
 
         null_metrics = run_helper(
             "globalThis.JSONCodrLeaderboard.buildRows(input.history, [], 'nulls')[0]",
@@ -177,6 +179,7 @@ class BenchmarkLeaderboardTests(unittest.TestCase):
         self.assertEqual(candidate["availability_reason"], "Runtime missing")
         self.assertEqual(candidate["status"], "unavailable")
         self.assertFalse(candidate["tested"])
+        self.assertIsNone(candidate["conforming"])
 
         selected = run_helper(
             "globalThis.JSONCodrLeaderboard.chooseSession(input.history, 'run-2', 'all', 'all').id",

@@ -906,6 +906,9 @@ function renderLeaderboardScatter(rows) {
   }
   elements.leaderboardBackendChart.append(svg);
   const summary = document.createElement("p"); summary.className = "meta"; summary.textContent = eligible.map((row) => `${row.name}: ${row.tokens_per_second.toFixed(2)} tok/s at ${row.ttft_ms.toFixed(1)} ms`).join("; "); elements.leaderboardBackendChart.append(summary);
+  if (eligible.length === 1) {
+    const note = document.createElement("p"); note.className = "meta"; note.textContent = "Only one comparable result is available; at least two are required for comparison."; elements.leaderboardBackendChart.append(note);
+  }
   renderLeaderboardMetricComparison(rows);
 }
 
@@ -942,10 +945,14 @@ function renderLeaderboardTrend(row) {
 
 function handoffUntestedBackend(row) {
   if (!row.runnable || !row.compatible) { elements.leaderboardStatus.textContent = row.availability_reason || "This backend is not currently runnable."; return false; }
-  if ([...elements.hardwareBenchmarkModel.options].some((option) => option.value === row.model)) elements.hardwareBenchmarkModel.value = row.model;
-  if ([...elements.hardwareBenchmarkSuite.options].some((option) => option.value === row.suite)) elements.hardwareBenchmarkSuite.value = row.suite;
+  const modelOption = [...elements.hardwareBenchmarkModel.options].find((option) => option.value === row.model && !option.disabled);
+  if (!modelOption) { elements.leaderboardStatus.textContent = `Benchmark model ${row.model} is not available in the benchmark runner.`; return false; }
+  const suiteOption = [...elements.hardwareBenchmarkSuite.options].find((option) => option.value === row.suite && !option.disabled);
+  if (!suiteOption) { elements.leaderboardStatus.textContent = `Benchmark suite ${row.suite} is not available in the benchmark runner.`; return false; }
   const backendOption = [...elements.hardwareBenchmarkBackend.options].find((option) => option.value === row.backend && !option.disabled);
   if (!backendOption) { elements.leaderboardStatus.textContent = `Backend ${row.backend} is not available in the benchmark runner.`; return false; }
+  elements.hardwareBenchmarkModel.value = row.model;
+  elements.hardwareBenchmarkSuite.value = row.suite;
   elements.hardwareBenchmarkBackend.value = row.backend;
   selectHardwareSection("benchmarks");
   return true;
@@ -957,7 +964,8 @@ function renderLeaderboardDetails(row) {
   selectedLocalperfEvaluationId = row.evaluation_id;
   elements.localperfExport.disabled = !selectedLocalperfEvaluationId;
   const heading = document.createElement("h4"); heading.textContent = `${row.model} · ${row.name}`;
-  const description = document.createElement("p"); description.className = "meta"; description.textContent = `${row.suite} · ${row.workload_version} · ${row.status}${row.probe_verified ? " · runtime probe verified" : " · runtime probe unverified"} · Conformance: ${row.conforming ? "valid" : "invalid"}`;
+  const conformanceLabel = row.conforming === true ? "valid" : row.conforming === false ? "invalid" : "unknown";
+  const description = document.createElement("p"); description.className = "meta"; description.textContent = `${row.suite} · ${row.workload_version} · ${row.status}${row.probe_verified ? " · runtime probe verified" : " · runtime probe unverified"} · Conformance: ${conformanceLabel}`;
   elements.leaderboardDetails.append(heading, description);
   if (row.status === "not_tested") {
     const action = document.createElement("button"); action.type = "button"; action.className = "primary"; action.textContent = "Test this backend"; action.addEventListener("click", () => handoffUntestedBackend(row)); elements.leaderboardDetails.append(action); return;
@@ -971,9 +979,9 @@ function renderLeaderboardDetails(row) {
     const item = document.createElement("li"); item.textContent = `${label}: p50 ${formatLeaderboardValue(summary.p50)}, p90 ${formatLeaderboardValue(summary.p90)}, min ${formatLeaderboardValue(summary.min)}, max ${formatLeaderboardValue(summary.max)}`; stats.append(item);
   }
   elements.leaderboardDetails.append(stats);
-  const metadata = document.createElement("p"); metadata.className = "meta"; metadata.textContent = `Session ${row.session_id} · backend ${row.backend} · evaluation ${row.evaluation_id || "unavailable"} · workload hash ${row.workload_hash || "unavailable"}`; elements.leaderboardDetails.append(metadata);
+  const metadata = document.createElement("p"); metadata.className = "meta"; metadata.textContent = `Session ${row.session_id} · backend ${row.backend} · runtime ${row.runtime || "unavailable"} · kind ${row.kind || "unavailable"} · active ${row.active == null ? "unknown" : row.active ? "yes" : "no"} · evaluation ${row.evaluation_id || "unavailable"} · configuration hash ${row.configuration_hash || row.workload_hash || "unavailable"}`; elements.leaderboardDetails.append(metadata);
   if (row.runtime_metadata) { const runtime = document.createElement("p"); runtime.className = "meta"; runtime.textContent = `Runtime metadata: ${JSON.stringify(row.runtime_metadata)}`; elements.leaderboardDetails.append(runtime); }
-  const validityReasons = [...row.rejection_reasons, ...row.conformance_reasons];
+  const validityReasons = [...row.rejection_reasons, ...row.conformance_reasons, ...(row.compatibility_reasons || []), row.quarantine_reason].filter(Boolean);
   if (row.error || validityReasons.length) { const warning = document.createElement("p"); warning.className = "error"; warning.textContent = row.error || validityReasons.join("; "); elements.leaderboardDetails.append(warning); }
   const samples = document.createElement("details"); const summary = document.createElement("summary"); summary.textContent = `Show ${row.tests.length} per-prompt samples`; samples.append(summary);
   for (const sample of row.tests) { const line = document.createElement("p"); line.className = "meta"; line.textContent = `${sample.prompt_id || sample.test || "sample"} #${sample.repetition || 1}: ${formatLeaderboardValue(sample.tokens_per_second, " tok/s")} · ${formatLeaderboardValue(sample.ttft_ms, " ms")} TTFT · ${formatLeaderboardValue(sample.total_seconds, " s")} total`; samples.append(line); }
@@ -1000,7 +1008,8 @@ function renderBenchmarkLeaderboard() {
   renderLeaderboardKpis(rows); elements.leaderboardTable.replaceChildren();
   for (const row of rows) {
     const tableRow = document.createElement("tr"); tableRow.tabIndex = 0; tableRow.classList.toggle("is-selected", row.id === selectedLeaderboardRowId);
-    const values = [row.rank || "—", `${row.model} · ${row.name}`, formatLeaderboardValue(row.performance_index, "", 0), formatLeaderboardValue(row.tokens_per_second), formatLeaderboardValue(row.ttft_ms, " ms", 0), formatLeaderboardValue(row.average_total_seconds, " s"), formatLeaderboardValue(row.peak_vram_mb, " MiB", 0), formatLeaderboardValue(row.speedup_vs_cpu, "×"), row.status === "not_tested" ? "Not tested" : row.eligible_rank ? "Conforming" : row.status];
+    const evidenceStatus = row.status === "not_tested" ? "Not tested" : row.status === "completed" && row.conforming === true ? "Conforming" : row.status === "completed" && row.conforming === false ? "Nonconforming" : row.status === "completed" ? "Unverified evidence" : row.status;
+    const values = [row.rank || "—", `${row.model} · ${row.name}`, formatLeaderboardValue(row.performance_index, "", 0), formatLeaderboardValue(row.tokens_per_second), formatLeaderboardValue(row.ttft_ms, " ms", 0), formatLeaderboardValue(row.average_total_seconds, " s"), formatLeaderboardValue(row.peak_vram_mb, " MiB", 0), formatLeaderboardValue(row.speedup_vs_cpu, "×"), evidenceStatus];
     for (const value of values) { const cell = document.createElement("td"); cell.textContent = value; tableRow.append(cell); }
     const choose = () => { selectedLeaderboardRowId = row.id; renderBenchmarkLeaderboard(); };
     tableRow.addEventListener("click", choose); tableRow.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); choose(); } }); elements.leaderboardTable.append(tableRow);

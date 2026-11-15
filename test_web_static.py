@@ -321,6 +321,10 @@ class WebStaticTests(unittest.TestCase):
             "historyBackends",
             "Conformance:",
             "renderLeaderboardMetricComparison",
+            "Benchmark model ${row.model} is not available",
+            "Benchmark suite ${row.suite} is not available",
+            'row.conforming === true ? "valid" : row.conforming === false ? "invalid" : "unknown"',
+            "configuration_hash",
         ):
             self.assertIn(contract, javascript)
         for identifier in (
