@@ -57,7 +57,9 @@ def create_app(
         for provider in (ProviderKind.openvino, ProviderKind.ryzen_ai, ProviderKind.winml, ProviderKind.directml)
         if environment_manager.plan(provider).python.is_file()
     }
-    inference_router = InferenceRouter(service, catalog, ProviderRegistry(clients), set()) if optimized else None
+    inference_router = InferenceRouter(
+        service, catalog, ProviderRegistry(clients, workspace.data_root / "optimized-models"), set()
+    ) if optimized else None
     hardware = hardware or HardwareBackendManager(
         workspace.data_root,
         accelerator_detector=AcceleratorDetector() if optimized else None,

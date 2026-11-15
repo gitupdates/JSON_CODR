@@ -5,11 +5,11 @@ from web_app.inference.providers.openvino import OpenVINOProvider
 
 
 class OnnxGenAIProvider(OpenVINOProvider):
-    def __init__(self, kind: ProviderKind, client) -> None:
+    def __init__(self, kind: ProviderKind, client, model_root=None) -> None:
         if kind not in {ProviderKind.ryzen_ai, ProviderKind.winml, ProviderKind.directml}:
             raise ValueError("Unsupported ONNX Runtime GenAI provider")
         self.kind = kind
-        super().__init__(client)
+        super().__init__(client, model_root)
 
     def _payload(self, model):
         if model.provider is not self.kind:
@@ -22,6 +22,6 @@ class OnnxGenAIProvider(OpenVINOProvider):
         return {
             "provider": execution_provider,
             "model_id": model.id,
-            "repository": model.repository,
+            "repository": str(self.model_root / self.kind.value / model.repository.replace("/", "--")) if self.model_root else model.repository,
             "device": model.device,
         }

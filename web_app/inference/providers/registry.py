@@ -6,10 +6,10 @@ from web_app.inference.providers.openvino import OpenVINOProvider
 
 
 class ProviderRegistry:
-    def __init__(self, clients: dict[ProviderKind, object]) -> None:
+    def __init__(self, clients: dict[ProviderKind, object], model_root=None) -> None:
         self._providers = {}
         for kind, client in clients.items():
-            self._providers[kind] = OpenVINOProvider(client) if kind is ProviderKind.openvino else OnnxGenAIProvider(kind, client)
+            self._providers[kind] = OpenVINOProvider(client, model_root) if kind is ProviderKind.openvino else OnnxGenAIProvider(kind, client, model_root)
 
     def get(self, provider: ProviderKind):
         try:

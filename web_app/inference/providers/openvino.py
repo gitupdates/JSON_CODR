@@ -9,13 +9,15 @@ from web_app.models import ChatResult
 class OpenVINOProvider:
     kind = ProviderKind.openvino
 
-    def __init__(self, client) -> None:
+    def __init__(self, client, model_root=None) -> None:
         self.client = client
+        self.model_root = model_root
 
     def _payload(self, model: OptimizedModelRecord) -> dict:
         if model.provider is not self.kind or model.device not in {"CPU", "GPU", "NPU"}:
             raise ValueError("Model is not compatible with this provider")
-        return {"provider": self.kind.value, "model_id": model.id, "repository": model.repository, "device": model.device}
+        repository = self.model_root / self.kind.value / model.repository.replace("/", "--") if self.model_root else model.repository
+        return {"provider": self.kind.value, "model_id": model.id, "repository": str(repository), "device": model.device}
 
     async def health(self) -> dict[str, Any]:
         return await self.client.request("health", {"provider": self.kind.value})

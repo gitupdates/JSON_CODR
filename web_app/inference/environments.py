@@ -9,10 +9,10 @@ from web_app.inference.contracts import ProviderKind
 
 
 PACKAGES = {
-    ProviderKind.openvino: ("openvino-genai==2025.4", "openvino-tokenizers==2025.4"),
-    ProviderKind.ryzen_ai: ("onnxruntime-genai==0.19.0",),
-    ProviderKind.winml: ("onnxruntime-genai==0.19.0",),
-    ProviderKind.directml: ("onnxruntime-genai-directml==0.19.0",),
+    ProviderKind.openvino: ("openvino-genai==2025.4", "openvino-tokenizers==2025.4", "huggingface-hub==0.36.0"),
+    ProviderKind.ryzen_ai: ("onnxruntime-genai==0.19.0", "huggingface-hub==0.36.0"),
+    ProviderKind.winml: ("onnxruntime-genai==0.19.0", "huggingface-hub==0.36.0"),
+    ProviderKind.directml: ("onnxruntime-genai-directml==0.19.0", "huggingface-hub==0.36.0"),
 }
 
 
@@ -44,3 +44,14 @@ class EnvironmentManager:
         plan = self.plan(provider)
         if plan.root.is_dir():
             shutil.rmtree(plan.root)
+
+    def model_path(self, model) -> Path:
+        return self.root.parent / "optimized-models" / model.provider.value / model.repository.replace("/", "--")
+
+    def model_install_command(self, model) -> str:
+        plan = self.plan(model.provider)
+        target = self.model_path(model)
+        return (
+            f'& "{plan.python}" -m huggingface_hub.commands.huggingface_cli download '
+            f'"{model.repository}" --revision "{model.revision}" --local-dir "{target}"'
+        )

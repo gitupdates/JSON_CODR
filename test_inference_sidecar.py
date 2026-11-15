@@ -6,6 +6,7 @@ from pathlib import Path
 from web_app.inference.contracts import ProviderKind
 from web_app.inference.environments import EnvironmentManager
 from web_app.inference.sidecar import SidecarClient, SidecarError
+from web_app.inference.sidecar_main import handle_request
 
 
 class EnvironmentManagerTests(unittest.TestCase):
@@ -53,6 +54,22 @@ class SidecarClientTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(SidecarError, "timed out"):
             await SidecarClient(runner=timeout_runner).request("health", {}, 1)
+
+    async def test_sidecar_dispatches_chat_and_benchmark_to_provider_handler(self):
+        calls = []
+
+        def handler(operation, payload):
+            calls.append((operation, payload))
+            return {"status": "ok"}
+
+        response = handle_request(
+            {"operation": "chat", "payload": {"provider": "openvino", "prompt": "hello"}},
+            {"openvino": handler},
+        )
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["result"], {"status": "ok"})
+        self.assertEqual(calls, [("chat", {"provider": "openvino", "prompt": "hello"})])
 
 
 if __name__ == "__main__":
