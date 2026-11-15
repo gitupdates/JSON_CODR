@@ -1,6 +1,6 @@
 # JSON_CODR
 
-JSON_CODR V1.0.7 is a localhost-only web and CLI interface for structured responses from local Ollama coding models.
+JSON_CODR V1.0.8 is a localhost-only web and CLI interface for structured responses from local Ollama coding models.
 
 ## Skill catalog and settings
 
@@ -18,7 +18,7 @@ Open **Settings** to control whether the Skills panel reopens at startup and to 
 
 Open **Settings → Hardware optimization** to detect CPU, supported GPU runtimes, and Windows NPU or AI accelerator devices. CPU is the compatibility fallback. An accelerated Ollama backend is saved only after an isolated model-generation probe succeeds; unavailable NPU runtimes are reported without being executed.
 
-V1.0.7 adds live GPU and VRAM telemetry plus safe per-model optimization profiles for GPU offload, balanced execution, constrained VRAM, CPU-only compatibility, and advanced tuning. Automatic remains the default and leaves allocation to Ollama. If a profile-specific request fails, JSON_CODR retries once without overrides. The existing opt-in connector foundations for Intel OpenVINO GenAI, AMD Ryzen AI, Windows ML, and DirectML remain isolated from the unchanged Ollama default.
+V1.0.8 adds ordered CPU, Ollama GPU, CUDA, ROCm, Vulkan, NPU, and provider capability reporting; bounded “Test and use” verification; GPU/VRAM benchmark evidence; and approval-required user-space runtime installation proposals. Drivers and firmware remain advisory-only. Automatic CPU-compatible Ollama behavior remains the fallback whenever acceleration cannot be verified.
 
 The **Benchmarks** tab compares CPU with all detected runnable backends or one selected optimization using the same model, generation settings, and three standardized prompts. A selected accelerator is always paired with a fresh CPU baseline. **Quick** runs each prompt once; **Thorough** repeats the set three times. Results show runtime and verification metadata, per-test request/load time and token throughput, aggregate metrics, and relative throughput versus CPU. Benchmarking does not change the active backend, and the most recent 20 runs are stored under the JSON_CODR data root.
 
