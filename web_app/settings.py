@@ -19,6 +19,9 @@ class SettingsService:
 
     def get(self) -> SystemSettings:
         raw = self._raw()
+        ui = raw.get("ui")
+        if isinstance(ui, dict) and "primary_destination" not in ui and ui.get("skill_catalog_open") is True:
+            ui["primary_destination"] = "skills"
         raw["version"] = 2
         raw["app_version"] = APP_VERSION
         return SystemSettings.model_validate(raw)
@@ -49,8 +52,9 @@ class SettingsService:
             current.gpu_optimization = GpuOptimizationSettings.model_validate(update.gpu_optimization)
         raw["version"] = current.version
         raw["app_version"] = APP_VERSION
-        raw.setdefault("ui", {})["skill_catalog_open"] = current.ui.skill_catalog_open
-        raw.setdefault("ui", {})["theme"] = current.ui.theme
+        saved_ui = raw.setdefault("ui", {})
+        for field, value in current.ui.model_dump().items():
+            saved_ui[field] = value
         raw.setdefault("skill_scan", {})["approved_directories"] = current.skill_scan.approved_directories
         raw["skill_routing"] = current.skill_routing.model_dump()
         raw["gpu_optimization"] = current.gpu_optimization.model_dump()

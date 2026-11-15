@@ -76,6 +76,10 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(first.json()["ui"], {
             "skill_catalog_open": False,
             "theme": "dark",
+            "sidebar_collapsed": False,
+            "sidebar_width": 260,
+            "primary_destination": "chat",
+            "hardware_section": "overview",
         })
 
         second = client.patch("/api/settings", json={"ui": {"theme": "light"}})
@@ -83,7 +87,70 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(second.json()["ui"], {
             "skill_catalog_open": False,
             "theme": "light",
+            "sidebar_collapsed": False,
+            "sidebar_width": 260,
+            "primary_destination": "chat",
+            "hardware_section": "overview",
         })
+
+    def test_navigation_layout_defaults_and_round_trips_partial_updates(self):
+        workspace = WorkspaceService(self.root)
+        client = TestClient(create_app(FakeService(), workspace))
+
+        self.assertEqual(client.get("/api/settings").json()["ui"], {
+            "skill_catalog_open": True,
+            "theme": "dark",
+            "sidebar_collapsed": False,
+            "sidebar_width": 260,
+            "primary_destination": "chat",
+            "hardware_section": "overview",
+        })
+
+        updated = client.patch("/api/settings", json={"ui": {
+            "sidebar_collapsed": True,
+            "sidebar_width": 340,
+            "primary_destination": "hardware",
+            "hardware_section": "model-search",
+        }})
+
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["ui"], {
+            "skill_catalog_open": True,
+            "theme": "dark",
+            "sidebar_collapsed": True,
+            "sidebar_width": 340,
+            "primary_destination": "hardware",
+            "hardware_section": "model-search",
+        })
+        self.assertEqual(SettingsService(self.root).get().ui.model_dump(), updated.json()["ui"])
+
+    def test_legacy_open_skills_migrates_only_without_new_destination(self):
+        service = SettingsService(self.root)
+        service.path.write_text(json.dumps({"ui": {"skill_catalog_open": True}}), encoding="utf-8")
+
+        self.assertEqual(service.get().ui.primary_destination, "skills")
+
+        service.path.write_text(json.dumps({"ui": {
+            "skill_catalog_open": True,
+            "primary_destination": "context",
+        }}), encoding="utf-8")
+
+        self.assertEqual(service.get().ui.primary_destination, "context")
+
+    def test_navigation_width_is_bounded_and_invalid_destinations_are_rejected(self):
+        service = SettingsService(self.root)
+        service.path.write_text(json.dumps({"ui": {"sidebar_width": 10}}), encoding="utf-8")
+        self.assertEqual(service.get().ui.sidebar_width, 220)
+        service.path.write_text(json.dumps({"ui": {"sidebar_width": 999}}), encoding="utf-8")
+        self.assertEqual(service.get().ui.sidebar_width, 380)
+
+        workspace = WorkspaceService(self.root)
+        client = TestClient(create_app(FakeService(), workspace))
+        invalid_destination = client.patch("/api/settings", json={"ui": {"primary_destination": "missing"}})
+        invalid_section = client.patch("/api/settings", json={"ui": {"hardware_section": "missing"}})
+
+        self.assertEqual(invalid_destination.status_code, 422)
+        self.assertEqual(invalid_section.status_code, 422)
 
 
     def test_api_round_trips_supported_themes(self):
@@ -109,13 +176,23 @@ class SettingsTests(unittest.TestCase):
         workspace = WorkspaceService(self.root)
         client = TestClient(create_app(FakeService(), workspace))
 
-        for field in ("theme", "skill_catalog_open"):
+        for field in (
+            "theme", "skill_catalog_open", "sidebar_collapsed", "sidebar_width",
+            "primary_destination", "hardware_section",
+        ):
             with self.subTest(field=field):
                 response = client.patch("/api/settings", json={"ui": {field: None}})
                 self.assertEqual(response.status_code, 422)
 
         current = client.get("/api/settings").json()["ui"]
-        self.assertEqual(current, {"skill_catalog_open": True, "theme": "dark"})
+        self.assertEqual(current, {
+            "skill_catalog_open": True,
+            "theme": "dark",
+            "sidebar_collapsed": False,
+            "sidebar_width": 260,
+            "primary_destination": "chat",
+            "hardware_section": "overview",
+        })
 
     def test_gpu_profiles_default_to_automatic_and_persist_per_model(self):
         workspace = WorkspaceService(self.root)

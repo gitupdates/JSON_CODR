@@ -259,15 +259,44 @@ class SkillSelectionRequest(BaseModel):
 class UiSettings(BaseModel):
     skill_catalog_open: bool = True
     theme: Literal["light", "dark", "system"] = "dark"
+    sidebar_collapsed: bool = False
+    sidebar_width: int = 260
+    primary_destination: Literal["chat", "terminal", "context", "skills", "hardware", "settings"] = "chat"
+    hardware_section: Literal[
+        "overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "history", "localperf"
+    ] = "overview"
+
+    @field_validator("sidebar_width", mode="before")
+    @classmethod
+    def bound_sidebar_width(cls, value: object) -> int:
+        width = int(value)
+        return min(380, max(220, width))
 
 
 class UiSettingsUpdate(BaseModel):
     skill_catalog_open: Optional[bool] = None
     theme: Optional[Literal["light", "dark", "system"]] = None
+    sidebar_collapsed: Optional[bool] = None
+    sidebar_width: Optional[int] = None
+    primary_destination: Optional[Literal["chat", "terminal", "context", "skills", "hardware", "settings"]] = None
+    hardware_section: Optional[Literal[
+        "overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "history", "localperf"
+    ]] = None
+
+    @field_validator("sidebar_width", mode="before")
+    @classmethod
+    def bound_sidebar_width(cls, value: object) -> Optional[int]:
+        if value is None:
+            return None
+        width = int(value)
+        return min(380, max(220, width))
 
     @model_validator(mode="after")
     def reject_explicit_nulls(self) -> "UiSettingsUpdate":
-        for field in ("skill_catalog_open", "theme"):
+        for field in (
+            "skill_catalog_open", "theme", "sidebar_collapsed", "sidebar_width",
+            "primary_destination", "hardware_section",
+        ):
             if field in self.model_fields_set and getattr(self, field) is None:
                 raise ValueError(f"{field} cannot be null")
         return self
