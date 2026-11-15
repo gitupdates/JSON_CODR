@@ -64,7 +64,11 @@ def create_app(
     ) if optimized else None
     hardware = hardware or HardwareBackendManager(
         workspace.data_root,
-        accelerator_detector=AcceleratorDetector() if optimized else None,
+        accelerator_detector=AcceleratorDetector(
+            runtime_available=lambda provider: environment_manager.status(ProviderKind(provider))["status"] == "ready",
+            provider_devices=lambda provider: environment_manager.provider_devices(ProviderKind(provider)),
+            model_ready=lambda provider: environment_manager.model_ready(ProviderKind(provider)),
+        ) if optimized else None,
     )
     skillsets = SkillsetService(workspace.data_root, skill_library)
     recommendations = SkillRecommendationService(skill_library, skillsets, settings)

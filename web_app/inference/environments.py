@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -86,6 +87,42 @@ class EnvironmentManager:
         except (OSError, subprocess.TimeoutExpired, ValueError):
             return None
 
+    def _runtime_importable(self, provider: ProviderKind) -> bool:
+        module = "openvino_genai" if provider is ProviderKind.openvino else "onnxruntime_genai"
+        try:
+            result = subprocess.run(
+                [str(self.plan(provider).python), "-c", f"import {module}"],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            )
+            return result.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
+    def provider_devices(self, provider: ProviderKind) -> list[str]:
+        if provider is ProviderKind.openvino:
+            code = "import json, openvino as ov; print(json.dumps(ov.Core().available_devices))"
+        else:
+            code = "import json, onnxruntime as ort; print(json.dumps(ort.get_available_providers()))"
+        try:
+            result = subprocess.run(
+                [str(self.plan(provider).python), "-c", code],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            )
+            value = json.loads(result.stdout.strip()) if result.returncode == 0 else []
+            return [str(item) for item in value] if isinstance(value, list) else []
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+            return []
+
+    def model_ready(self, provider: ProviderKind) -> bool:
+        root = self.root.parent / "optimized-models" / provider.value
+        return root.is_dir() and any(item.is_dir() for item in root.iterdir())
+
     def status(self, provider: ProviderKind) -> dict:
         plan = self.plan(provider)
         if not plan.python.is_file():
@@ -99,13 +136,14 @@ class EnvironmentManager:
                 "packages": plan.packages,
             }
         version = self._python_version(plan.python)
-        compatible = version in {(3, 11), (3, 12)}
+        compatible_python = version in {(3, 11), (3, 12)}
+        runtime_ready = compatible_python and self._runtime_importable(provider)
         return {
             "provider": provider.value,
             "environment": str(plan.root),
             "installed": True,
-            "compatible": compatible,
-            "status": "ready" if compatible else "incompatible",
+            "compatible": runtime_ready,
+            "status": "ready" if runtime_ready else "incomplete" if compatible_python else "incompatible",
             "python_version": ".".join(map(str, version)) if version else None,
             "packages": plan.packages,
         }

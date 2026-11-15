@@ -52,9 +52,24 @@ class EnvironmentManagerTests(unittest.TestCase):
             plan.python.parent.mkdir(parents=True)
             plan.python.touch()
             manager._python_version = lambda python: (3, 12)
+            manager._runtime_importable = lambda provider: True
             compatible = manager.status(ProviderKind.openvino)
             self.assertEqual(compatible["status"], "ready")
             self.assertTrue(compatible["compatible"])
+
+    def test_compatible_python_without_provider_packages_is_incomplete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager = EnvironmentManager(Path(directory))
+            plan = manager.plan(ProviderKind.winml)
+            plan.python.parent.mkdir(parents=True)
+            plan.python.touch()
+            manager._python_version = lambda python: (3, 12)
+            manager._runtime_importable = lambda provider: False
+
+            status = manager.status(ProviderKind.winml)
+
+            self.assertEqual(status["status"], "incomplete")
+            self.assertFalse(status["compatible"])
 
 
 class SidecarClientTests(unittest.IsolatedAsyncioTestCase):
