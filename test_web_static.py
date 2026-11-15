@@ -178,6 +178,9 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("WinML", html)
         self.assertIn("DirectML", html)
         self.assertIn('fetch("/api/inference/catalog"', javascript)
+        self.assertIn("install-proposal", javascript)
+        self.assertIn("Review runtime install", javascript)
+        self.assertIn("Driver guidance", javascript)
 
     def test_optimization_tab_runs_a_fresh_hardware_scan(self):
         javascript = self.client.get("/static/app.js").text.replace("\r\n", "\n")

@@ -19,7 +19,7 @@ from web_app.inference.providers.registry import ProviderRegistry
 from web_app.inference.router import InferenceRouter
 from web_app.inference.sidecar import SidecarClient
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
+from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
 from web_app.ollama_service import (
     ModelOutputError,
     ModelTimeoutError,
@@ -113,6 +113,28 @@ def create_app(
             "packages": plan.packages,
             "includes_driver": False,
         }
+
+    @application.post("/api/sessions/{session_id}/hardware/{provider}/install-proposal")
+    async def hardware_install_proposal(session_id: str, provider: ProviderKind):
+        try:
+            workspace.get_session(session_id)
+        except (InvalidSessionId, KeyError) as error:
+            raise HTTPException(status_code=404, detail="Session not found") from error
+        if provider is ProviderKind.ollama:
+            raise HTTPException(status_code=400, detail="Ollama uses the base installation")
+        command = environment_manager.install_command(provider)
+        provider_name = {
+            ProviderKind.openvino: "OpenVINO",
+            ProviderKind.ryzen_ai: "Ryzen AI",
+            ProviderKind.winml: "WinML",
+            ProviderKind.directml: "DirectML",
+        }[provider]
+        suggestion = ActionSuggestion(
+            command=command,
+            cwd=str(Path(__file__).resolve().parent.parent),
+            explanation=f"Install the isolated {provider_name} runtime without drivers.",
+        )
+        return action_proposals.propose(session_id, [suggestion], [], str(Path(__file__).resolve().parent.parent))
 
     @application.patch("/api/settings")
     async def update_settings(request: SettingsUpdate):

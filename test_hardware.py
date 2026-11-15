@@ -113,6 +113,35 @@ class HardwareBackendTests(unittest.TestCase):
         self.assertTrue(openvino["model_ready"])
         self.assertTrue(openvino["runnable"])
 
+    def test_missing_optimization_components_separate_runtime_proposals_from_driver_guidance(self):
+        detector = AcceleratorDetector(
+            device_names=lambda: ["Intel(R) AI Boost"],
+            runtime_available=lambda provider: False,
+            provider_devices=lambda provider: [],
+            windows_build=lambda: 26100,
+            directx12_available=lambda: True,
+            model_ready=lambda provider: False,
+        )
+        manager = HardwareBackendManager(
+            self.root,
+            command_available=lambda command: False,
+            ai_device_detector=lambda: ["Intel(R) AI Boost"],
+            accelerator_detector=detector,
+            gpu_telemetry_reader=lambda: [],
+        )
+
+        result = manager.detect()
+
+        generic_npu = next(item for item in result if item["id"] == "npu-0")
+        openvino = next(item for item in result if item["id"] == "openvino")
+        directml = next(item for item in result if item["id"] == "directml")
+        self.assertFalse(generic_npu["installation"]["automatic"])
+        self.assertEqual(generic_npu["installation"]["kind"], "driver_guidance")
+        self.assertTrue(openvino["installation"]["automatic"])
+        self.assertFalse(openvino["installation"]["includes_driver"])
+        self.assertEqual(openvino["installation"]["provider"], "openvino")
+        self.assertEqual(directml["installation"]["provider"], "directml")
+
     def test_successful_probe_persists_preference_and_failure_quarantines_backend(self):
         manager = HardwareBackendManager(self.root, environment_writer=lambda name, value: None)
 

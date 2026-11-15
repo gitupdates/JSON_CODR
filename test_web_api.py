@@ -139,6 +139,18 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("openvino-genai", plan.json()["command"])
         self.assertFalse(plan.json()["includes_driver"])
 
+    def test_hardware_runtime_install_creates_reviewable_cli_proposal_without_drivers(self):
+        client = TestClient(create_app(self.service, self.workspace, optimized=True))
+        session_id = client.post("/api/sessions").json()["id"]
+
+        response = client.post(f"/api/sessions/{session_id}/hardware/openvino/install-proposal")
+
+        self.assertEqual(response.status_code, 200)
+        proposal = response.json()[0]
+        self.assertIn("openvino-genai==2025.4", proposal["command"])
+        self.assertIn("isolated OpenVINO runtime", proposal["explanation"])
+        self.assertNotIn("driver", proposal["command"].casefold())
+
     def tearDown(self):
         self.temporary_directory.cleanup()
 

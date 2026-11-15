@@ -215,10 +215,31 @@ class HardwareBackendManager:
                 "verified": False,
                 "compatibility_reason": "Detected AI accelerator; no Ollama-compatible NPU backend is installed.",
                 "readiness": {"hardware": True, "driver": True, "runtime": False, "model": False},
+                "installation": {
+                    "kind": "driver_guidance",
+                    "automatic": False,
+                    "guidance": "Install the device vendor's supported NPU driver and runtime, then scan again.",
+                },
             })
         if self.accelerator_detector:
             for state_record in self.accelerator_detector.detect():
                 state = state_record.model_dump(mode="json")
+                installation = None
+                if state["hardware_detected"] and not state["runtime_ready"]:
+                    installation = {
+                        "kind": "runtime",
+                        "automatic": True,
+                        "provider": state["provider"],
+                        "includes_driver": False,
+                        "guidance": "The isolated user-space runtime can be installed after approval; drivers are not included.",
+                    }
+                elif state["runtime_ready"] and not state["model_ready"]:
+                    installation = {
+                        "kind": "model_template",
+                        "automatic": False,
+                        "provider": state["provider"],
+                        "guidance": "Select a compatible optimized model template from the provider catalog.",
+                    }
                 result.append({
                     "id": state["provider"],
                     "name": state["name"],
@@ -237,6 +258,7 @@ class HardwareBackendManager:
                         "runtime": state["runtime_ready"],
                         "model": state["model_ready"],
                     },
+                    "installation": installation,
                 })
         return result
 

@@ -493,7 +493,26 @@ async function runHardwareDetection() {
           if (payload.restart_required) elements.hardwareStatus.textContent += " · restart Ollama to activate";
         } catch (error) { showError(error.message); probe.disabled = false; probe.textContent = "Retest"; }
       });
-      row.append(label, probe); elements.hardwareCandidates.append(row);
+      let control = probe;
+      if (candidate.installation?.automatic) {
+        const install = document.createElement("button"); install.type = "button"; install.className = "secondary"; install.textContent = "Review runtime install";
+        install.addEventListener("click", async () => {
+          try {
+            await ensureSession();
+            const response = await fetch(`/api/sessions/${sessionId}/hardware/${candidate.installation.provider}/install-proposal`, { method: "POST" });
+            const proposals = await response.json();
+            if (!response.ok) throw new Error(proposals.detail || "Unable to prepare runtime installation");
+            elements.empty.hidden = true; elements.result.hidden = false;
+            renderActions(proposals);
+            elements.actionReview.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          } catch (error) { showError(error.message); }
+        });
+        control = install;
+      } else if (candidate.installation) {
+        probe.disabled = true; probe.textContent = candidate.installation.kind === "driver_guidance" ? "Driver guidance" : "Model guidance";
+        probe.title = candidate.installation.guidance;
+      }
+      row.append(label, control); elements.hardwareCandidates.append(row);
     }
   } finally { elements.hardwareDetect.disabled = false; }
 }
