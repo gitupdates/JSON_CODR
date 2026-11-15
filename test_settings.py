@@ -172,6 +172,12 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(client.get("/api/settings").json()["ui"]["theme"], "dark")
 
+    def test_leaderboard_is_a_persisted_hardware_section(self):
+        client = TestClient(create_app(FakeService(), WorkspaceService(self.root)))
+        response = client.patch("/api/settings", json={"ui": {"hardware_section": "leaderboard"}})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["ui"]["hardware_section"], "leaderboard")
+
     def test_api_rejects_explicit_null_ui_values(self):
         workspace = WorkspaceService(self.root)
         client = TestClient(create_app(FakeService(), workspace))

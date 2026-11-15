@@ -124,6 +124,12 @@ class BenchmarkLeaderboardTests(unittest.TestCase):
         self.assertEqual([point["session_id"] for point in trend], ["run-1", "run-2"])
         self.assertEqual([point["value"] for point in trend], [30, 33])
 
+        ttft_trend = run_helper(
+            "(()=>{const rows=globalThis.JSONCodrLeaderboard.buildRows(input.history, input.candidates, 'run-1'); return globalThis.JSONCodrLeaderboard.buildTrend(input.history, rows.find(row=>row.backend==='cuda_v12'), 'ttft_ms');})()",
+            payload,
+        )
+        self.assertEqual([point["value"] for point in ttft_trend], [280, 280])
+
     def test_scale_points_handles_empty_single_and_constant_domains(self):
         scaled = run_helper(
             "({empty:globalThis.JSONCodrLeaderboard.scalePoints([], input.bounds), single:globalThis.JSONCodrLeaderboard.scalePoints([{x:4,y:9}], input.bounds), constant:globalThis.JSONCodrLeaderboard.scalePoints([{x:2,y:3},{x:2,y:3}], input.bounds)})",
@@ -136,6 +142,13 @@ class BenchmarkLeaderboardTests(unittest.TestCase):
                 self.assertIsInstance(point["cy"], (int, float))
                 self.assertGreaterEqual(point["cx"], 20)
                 self.assertLessEqual(point["cx"], 380)
+
+    def test_select_row_keeps_visible_selection_or_falls_back_deterministically(self):
+        selected = run_helper(
+            "({kept:globalThis.JSONCodrLeaderboard.selectRow(input.rows, 'b').id, fallback:globalThis.JSONCodrLeaderboard.selectRow(input.rows, 'missing').id, empty:globalThis.JSONCodrLeaderboard.selectRow([], 'b')})",
+            {"rows": [{"id": "a"}, {"id": "b"}]},
+        )
+        self.assertEqual(selected, {"kept": "b", "fallback": "a", "empty": None})
 
 
 if __name__ == "__main__":

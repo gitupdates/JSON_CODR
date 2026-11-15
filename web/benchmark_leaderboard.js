@@ -101,7 +101,7 @@
     return ordered.map(({ row }) => ({ ...row, rank: row.eligible_rank ? ++rank : null }));
   }
 
-  function buildTrend(history, row) {
+  function buildTrend(history, row, metric = "tokens_per_second") {
     if (!row) return [];
     const points = [];
     for (const session of Array.isArray(history) ? history : []) {
@@ -111,8 +111,9 @@
       const result = (Array.isArray(session.results) ? session.results : []).find(
         (item) => (item.backend || item.runtime) === row.backend && item.status === "completed"
       );
-      const value = numberOrNull(result?.tokens_per_second);
-      if (!result || value === null) continue;
+      if (!result) continue;
+      const value = numberOrNull(resultRow(session, result)[metric]);
+      if (value === null) continue;
       points.push({ session_id: session.id || "legacy", created_at: session.created_at || "", value });
     }
     return points.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
@@ -136,5 +137,10 @@
     }));
   }
 
-  root.JSONCodrLeaderboard = { buildRows, filterAndRank, percentiles, buildTrend, scalePoints };
+  function selectRow(rows, selectedId) {
+    if (!Array.isArray(rows) || !rows.length) return null;
+    return rows.find((row) => row.id === selectedId) || rows[0];
+  }
+
+  root.JSONCodrLeaderboard = { buildRows, filterAndRank, percentiles, buildTrend, scalePoints, selectRow };
 })(typeof window === "undefined" ? globalThis : window);

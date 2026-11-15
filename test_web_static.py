@@ -299,6 +299,25 @@ class WebStaticTests(unittest.TestCase):
         self.assertLess(html.index("benchmark_leaderboard.js"), html.index("app.js"))
         self.assertNotIn("chart.js", html.lower())
         self.assertNotIn("plotly", html.lower())
+        for contract in (
+            "let leaderboardHistoryCache = []",
+            "let leaderboardCandidateCache = []",
+            "function renderBenchmarkLeaderboard",
+            "function selectLeaderboardSession",
+            'section === "leaderboard"',
+            'setAttribute("tabindex", "0")',
+            "selectedLocalperfEvaluationId = row.evaluation_id",
+            'selectHardwareSection("benchmarks")',
+            "renderLeaderboardDetails",
+            "renderLeaderboardScatter",
+            "renderLeaderboardTrend",
+        ):
+            self.assertIn(contract, javascript)
+        for identifier in (
+            "leaderboardSearch", "leaderboardModelFilter", "leaderboardBackendFilter",
+            "leaderboardSuiteFilter", "leaderboardMetric",
+        ):
+            self.assertIn(f"elements.{identifier}.addEventListener", javascript)
 
     def test_gpu_telemetry_and_per_model_profile_controls_are_present(self):
         html = self.client.get("/").text

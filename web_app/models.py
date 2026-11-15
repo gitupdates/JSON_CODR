@@ -263,7 +263,7 @@ class UiSettings(BaseModel):
     sidebar_width: int = 260
     primary_destination: Literal["chat", "terminal", "context", "skills", "hardware", "settings"] = "chat"
     hardware_section: Literal[
-        "overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "history", "localperf"
+        "overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "leaderboard", "history", "localperf"
     ] = "overview"
 
     @field_validator("sidebar_width", mode="before")
@@ -280,7 +280,7 @@ class UiSettingsUpdate(BaseModel):
     sidebar_width: Optional[int] = None
     primary_destination: Optional[Literal["chat", "terminal", "context", "skills", "hardware", "settings"]] = None
     hardware_section: Optional[Literal[
-        "overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "history", "localperf"
+        "overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "leaderboard", "history", "localperf"
     ]] = None
 
     @field_validator("sidebar_width", mode="before")

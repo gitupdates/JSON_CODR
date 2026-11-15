@@ -90,6 +90,17 @@ const elements = {
   hardwareBenchmarkResults: document.querySelector("#hardware-benchmark-results"),
   hardwareBenchmarkHistory: document.querySelector("#hardware-benchmark-history"),
   hardwareBenchmarkClear: document.querySelector("#hardware-benchmark-clear"),
+  leaderboardSearch: document.querySelector("#leaderboard-search"),
+  leaderboardModelFilter: document.querySelector("#leaderboard-model-filter"),
+  leaderboardBackendFilter: document.querySelector("#leaderboard-backend-filter"),
+  leaderboardSuiteFilter: document.querySelector("#leaderboard-suite-filter"),
+  leaderboardMetric: document.querySelector("#leaderboard-metric"),
+  leaderboardKpis: document.querySelector("#leaderboard-kpis"),
+  leaderboardTable: document.querySelector("#leaderboard-table"),
+  leaderboardBackendChart: document.querySelector("#leaderboard-backend-chart"),
+  leaderboardTrendChart: document.querySelector("#leaderboard-trend-chart"),
+  leaderboardDetails: document.querySelector("#leaderboard-details"),
+  leaderboardStatus: document.querySelector("#leaderboard-status"),
   localperfExport: document.querySelector("#localperf-export"),
   localperfIncludeDetails: document.querySelector("#localperf-include-details"),
   localperfImportInput: document.querySelector("#localperf-import-input"),
@@ -110,7 +121,7 @@ const elements = {
 
 const VALID_THEME_MODES = new Set(["light", "dark", "system"]);
 const NAVIGATION_DESTINATIONS = new Set(["chat", "terminal", "context", "skills", "hardware", "settings"]);
-const HARDWARE_SECTIONS = new Set(["overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "history", "localperf"]);
+const HARDWARE_SECTIONS = new Set(["overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "leaderboard", "history", "localperf"]);
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 const narrowNavigationQuery = window.matchMedia("(max-width: 700px)");
 
@@ -140,6 +151,10 @@ let excludedSkillIds = [];
 let pendingDestructiveAction = null;
 let pendingActionProposalId = null;
 let hardwareDetectionPromise = null;
+let leaderboardHistoryCache = [];
+let leaderboardCandidateCache = [];
+let selectedLeaderboardSessionId = null;
+let selectedLeaderboardRowId = null;
 const actionButtons = new Map();
 
 const dependencyInstallQueue = createDependencyInstallQueue(async (command) => {
@@ -221,6 +236,7 @@ function selectHardwareSection(section, { persist = true, focus = false } = {}) 
     detectHardware().catch((error) => showError(error.message));
   }
   if (section === "benchmarks" || section === "history") loadBenchmarkHistory().catch((error) => showError(error.message));
+  if (section === "leaderboard") loadBenchmarkLeaderboard().catch((error) => { elements.leaderboardStatus.textContent = error.message; });
   if (persist) {
     navigationChangeRevision += 1;
     saveSettings({ ui: { hardware_section: section } }).catch((error) => showError(error.message));
@@ -639,6 +655,7 @@ async function runHardwareDetection() {
     ]);
     if (!response.ok) throw new Error((await response.json()).detail || "Hardware detection failed");
     const candidates = await response.json();
+    leaderboardCandidateCache = candidates.map((candidate) => ({ ...candidate }));
     const optimizedCatalog = catalogResponse.ok ? await catalogResponse.json() : [];
     const providerEnvironments = environmentResponse.ok ? await environmentResponse.json() : [];
     const compatibility = compatibilityResponse.ok ? await compatibilityResponse.json() : [];
@@ -751,6 +768,8 @@ async function runHardwareDetection() {
       });
       row.append(label, install); elements.hardwareCandidates.append(row);
     }
+    if (activeHardwareSection === "leaderboard" && leaderboardHistoryCache.length) renderBenchmarkLeaderboard();
+    return candidates;
   } finally { elements.hardwareDetect.disabled = false; }
 }
 
@@ -759,6 +778,193 @@ async function restoreCpuBackend() {
   if (!response.ok) throw new Error((await response.json()).detail || "Unable to restore CPU mode");
   await loadHardwareStatus();
   elements.hardwareStatus.textContent += " · restart Ollama to activate";
+}
+
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+
+function formatLeaderboardValue(value, unit = "", digits = 1) {
+  return Number.isFinite(value) ? `${value.toFixed(digits)}${unit}` : "Unavailable";
+}
+
+function replaceSelectOptions(select, values, allLabel) {
+  const previous = select.value;
+  select.replaceChildren();
+  const all = document.createElement("option"); all.value = "all"; all.textContent = allLabel; select.append(all);
+  for (const value of [...new Set(values.filter(Boolean))].sort()) {
+    const option = document.createElement("option"); option.value = value; option.textContent = value; select.append(option);
+  }
+  select.value = [...select.options].some((option) => option.value === previous) ? previous : "all";
+}
+
+function updateLeaderboardFilterOptions() {
+  replaceSelectOptions(elements.leaderboardModelFilter, leaderboardHistoryCache.map((item) => item.model), "All models");
+  replaceSelectOptions(elements.leaderboardSuiteFilter, leaderboardHistoryCache.map((item) => item.suite), "All suites");
+  replaceSelectOptions(elements.leaderboardBackendFilter, leaderboardCandidateCache.map((item) => item.id), "All backends");
+}
+
+function selectLeaderboardSession(sessionId) {
+  const session = leaderboardHistoryCache.find((item) => item.id === sessionId) || leaderboardHistoryCache[0] || null;
+  selectedLeaderboardSessionId = session?.id || null;
+  selectedLeaderboardRowId = null;
+  if (session) {
+    elements.leaderboardModelFilter.value = [...elements.leaderboardModelFilter.options].some((option) => option.value === session.model) ? session.model : "all";
+    elements.leaderboardSuiteFilter.value = [...elements.leaderboardSuiteFilter.options].some((option) => option.value === session.suite) ? session.suite : "all";
+  }
+  renderBenchmarkLeaderboard();
+}
+
+function createKpi(label, value, detail) {
+  const card = document.createElement("div"); card.className = "leaderboard-kpi";
+  const name = document.createElement("span"); name.textContent = label;
+  const metric = document.createElement("strong"); metric.textContent = value;
+  const context = document.createElement("small"); context.className = "meta"; context.textContent = detail;
+  card.append(name, metric, context); return card;
+}
+
+function renderLeaderboardKpis(rows) {
+  elements.leaderboardKpis.replaceChildren();
+  const ranked = rows.filter((row) => row.eligible_rank);
+  const throughput = ranked.filter((row) => Number.isFinite(row.tokens_per_second)).sort((a, b) => b.tokens_per_second - a.tokens_per_second)[0];
+  const ttft = ranked.filter((row) => Number.isFinite(row.ttft_ms)).sort((a, b) => a.ttft_ms - b.ttft_ms)[0];
+  const vram = ranked.filter((row) => Number.isFinite(row.peak_vram_mb)).sort((a, b) => a.peak_vram_mb - b.peak_vram_mb)[0];
+  const tested = rows.filter((row) => row.tested);
+  elements.leaderboardKpis.append(
+    createKpi("Best throughput", throughput ? formatLeaderboardValue(throughput.tokens_per_second, " tok/s") : "—", throughput?.name || "No ranked result"),
+    createKpi("Lowest TTFT", ttft ? formatLeaderboardValue(ttft.ttft_ms, " ms", 0) : "—", ttft?.name || "No TTFT evidence"),
+    createKpi("Lowest peak VRAM", vram ? formatLeaderboardValue(vram.peak_vram_mb, " MiB", 0) : "—", vram?.name || "No VRAM evidence"),
+    createKpi("Conforming results", tested.length ? `${ranked.length} / ${tested.length}` : "—", `${rows.filter((row) => row.status === "not_tested").length} detected option(s) not tested`),
+  );
+}
+
+function svgNode(name, attributes = {}) {
+  const node = document.createElementNS(SVG_NAMESPACE, name);
+  for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, String(value));
+  return node;
+}
+
+function resetChart(figure, title) {
+  figure.replaceChildren();
+  const caption = document.createElement("figcaption"); caption.textContent = title; figure.append(caption);
+}
+
+function renderLeaderboardScatter(rows) {
+  resetChart(elements.leaderboardBackendChart, "Throughput versus responsiveness");
+  const eligible = rows.filter((row) => row.eligible_rank && Number.isFinite(row.tokens_per_second) && Number.isFinite(row.ttft_ms));
+  if (!eligible.length) {
+    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "No comparable TTFT and throughput evidence is available."; elements.leaderboardBackendChart.append(empty); return;
+  }
+  const points = window.JSONCodrLeaderboard.scalePoints(eligible.map((row) => ({ x: row.ttft_ms, y: row.tokens_per_second, row })), { width: 520, height: 240, padding: 34 });
+  const svg = svgNode("svg", { viewBox: "0 0 520 240", role: "img", "aria-label": "Higher and farther left indicates faster output and lower time to first token" });
+  for (const y of [34, 90, 146, 206]) svg.append(svgNode("line", { x1: 34, y1: y, x2: 486, y2: y, class: "chart-grid" }));
+  const xLabel = svgNode("text", { x: 414, y: 232, class: "chart-label" }); xLabel.textContent = "TTFT (ms)"; svg.append(xLabel);
+  const yLabel = svgNode("text", { x: 4, y: 16, class: "chart-label" }); yLabel.textContent = "tokens/s"; svg.append(yLabel);
+  for (const point of points) {
+    const circle = svgNode("circle", { cx: point.cx, cy: point.cy, r: 8, class: "chart-point", role: "img" });
+    circle.setAttribute("tabindex", "0");
+    circle.setAttribute("aria-label", `${point.row.name}: ${point.row.tokens_per_second.toFixed(2)} tokens per second, ${point.row.ttft_ms.toFixed(1)} milliseconds TTFT`);
+    circle.addEventListener("click", () => { selectedLeaderboardRowId = point.row.id; renderBenchmarkLeaderboard(); });
+    svg.append(circle);
+  }
+  elements.leaderboardBackendChart.append(svg);
+  const summary = document.createElement("p"); summary.className = "meta"; summary.textContent = eligible.map((row) => `${row.name}: ${row.tokens_per_second.toFixed(2)} tok/s at ${row.ttft_ms.toFixed(1)} ms`).join("; "); elements.leaderboardBackendChart.append(summary);
+}
+
+function renderLeaderboardTrend(row) {
+  resetChart(elements.leaderboardTrendChart, "Performance history");
+  if (!row || !row.tested) {
+    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "Select a tested backend to view its history."; elements.leaderboardTrendChart.append(empty); return;
+  }
+  const metric = elements.leaderboardMetric.value;
+  const metricLabels = {
+    tokens_per_second: ["Throughput", " tok/s"],
+    ttft_ms: ["TTFT", " ms"],
+    average_total_seconds: ["Total time", " s"],
+    peak_vram_mb: ["Peak VRAM", " MiB"],
+    speedup_vs_cpu: ["CPU-relative speed", "×"],
+    performance_index: ["Performance index", ""],
+  };
+  const [metricLabel, metricUnit] = metricLabels[metric] || [metric, ""];
+  const trend = window.JSONCodrLeaderboard.buildTrend(leaderboardHistoryCache, row, metric);
+  if (trend.length < 2) {
+    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = trend.length ? "One matching run is available; run it again to establish a trend." : "No matching historical runs are available."; elements.leaderboardTrendChart.append(empty); return;
+  }
+  const points = window.JSONCodrLeaderboard.scalePoints(trend.map((point, index) => ({ x: index, y: point.value, point })), { width: 520, height: 240, padding: 34 });
+  const svg = svgNode("svg", { viewBox: "0 0 520 240", role: "img", "aria-label": `${row.name} throughput over time` });
+  for (const y of [34, 90, 146, 206]) svg.append(svgNode("line", { x1: 34, y1: y, x2: 486, y2: y, class: "chart-grid" }));
+  const line = svgNode("polyline", { points: points.map((point) => `${point.cx},${point.cy}`).join(" "), fill: "none", stroke: "currentColor", "stroke-width": 3 }); svg.append(line);
+  for (const point of points) {
+    const circle = svgNode("circle", { cx: point.cx, cy: point.cy, r: 6, class: "chart-point", role: "img" });
+    circle.setAttribute("tabindex", "0"); circle.setAttribute("aria-label", `${new Date(point.point.created_at).toLocaleDateString()}: ${point.point.value.toFixed(2)} tokens per second`); svg.append(circle);
+  }
+  elements.leaderboardTrendChart.append(svg);
+  const summary = document.createElement("p"); summary.className = "meta"; summary.textContent = `${metricLabel}: ${trend.map((point) => `${new Date(point.created_at).toLocaleDateString()}: ${point.value.toFixed(2)}${metricUnit}`).join("; ")}`; elements.leaderboardTrendChart.append(summary);
+}
+
+function handoffUntestedBackend(row) {
+  if ([...elements.hardwareBenchmarkModel.options].some((option) => option.value === row.model)) elements.hardwareBenchmarkModel.value = row.model;
+  if ([...elements.hardwareBenchmarkSuite.options].some((option) => option.value === row.suite)) elements.hardwareBenchmarkSuite.value = row.suite;
+  if ([...elements.hardwareBenchmarkBackend.options].some((option) => option.value === row.backend && !option.disabled)) elements.hardwareBenchmarkBackend.value = row.backend;
+  selectHardwareSection("benchmarks");
+}
+
+function renderLeaderboardDetails(row) {
+  elements.leaderboardDetails.replaceChildren();
+  if (!row) { const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "No result matches the current filters."; elements.leaderboardDetails.append(empty); return; }
+  selectedLocalperfEvaluationId = row.evaluation_id;
+  elements.localperfExport.disabled = !selectedLocalperfEvaluationId;
+  const heading = document.createElement("h4"); heading.textContent = `${row.model} · ${row.name}`;
+  const description = document.createElement("p"); description.className = "meta"; description.textContent = `${row.suite} · ${row.workload_version} · ${row.status}${row.probe_verified ? " · runtime probe verified" : " · runtime probe unverified"}`;
+  elements.leaderboardDetails.append(heading, description);
+  if (row.status === "not_tested") {
+    const action = document.createElement("button"); action.type = "button"; action.className = "primary"; action.textContent = "Test this backend"; action.addEventListener("click", () => handoffUntestedBackend(row)); elements.leaderboardDetails.append(action); return;
+  }
+  const metrics = document.createElement("p"); metrics.textContent = `Performance index ${formatLeaderboardValue(row.performance_index, "", 0)} · ${formatLeaderboardValue(row.tokens_per_second, " tok/s")} · ${formatLeaderboardValue(row.ttft_ms, " ms")} TTFT · ${formatLeaderboardValue(row.peak_vram_mb, " MiB", 0)} peak VRAM`; elements.leaderboardDetails.append(metrics);
+  const metricNames = [["tokens_per_second", "Throughput"], ["ttft_ms", "TTFT"], ["total_seconds", "Duration"], ["peak_vram_mb", "Peak VRAM"]];
+  const stats = document.createElement("ul");
+  for (const [key, label] of metricNames) {
+    const values = row.tests.map((sample) => sample[key]); const summary = window.JSONCodrLeaderboard.percentiles(values);
+    const item = document.createElement("li"); item.textContent = `${label}: p50 ${formatLeaderboardValue(summary.p50)}, p90 ${formatLeaderboardValue(summary.p90)}, min ${formatLeaderboardValue(summary.min)}, max ${formatLeaderboardValue(summary.max)}`; stats.append(item);
+  }
+  elements.leaderboardDetails.append(stats);
+  if (row.error || row.rejection_reasons.length) { const warning = document.createElement("p"); warning.className = "error"; warning.textContent = row.error || row.rejection_reasons.join("; "); elements.leaderboardDetails.append(warning); }
+  const samples = document.createElement("details"); const summary = document.createElement("summary"); summary.textContent = `Show ${row.tests.length} per-prompt samples`; samples.append(summary);
+  for (const sample of row.tests) { const line = document.createElement("p"); line.className = "meta"; line.textContent = `${sample.prompt_id || sample.test || "sample"} #${sample.repetition || 1}: ${formatLeaderboardValue(Number(sample.tokens_per_second), " tok/s")} · ${formatLeaderboardValue(Number(sample.ttft_ms), " ms")} TTFT · ${formatLeaderboardValue(Number(sample.total_seconds), " s")} total`; samples.append(line); }
+  elements.leaderboardDetails.append(samples);
+}
+
+function renderBenchmarkLeaderboard() {
+  if (!leaderboardHistoryCache.length) {
+    elements.leaderboardTable.replaceChildren(); const row = document.createElement("tr"); const cell = document.createElement("td"); cell.colSpan = 9; cell.className = "meta"; cell.textContent = "No benchmark history. Run Performance benchmarks first."; row.append(cell); elements.leaderboardTable.append(row);
+    elements.leaderboardKpis.replaceChildren(); elements.leaderboardStatus.textContent = "No saved benchmark results."; renderLeaderboardScatter([]); renderLeaderboardTrend(null); renderLeaderboardDetails(null); return;
+  }
+  const session = leaderboardHistoryCache.find((item) => item.id === selectedLeaderboardSessionId) || leaderboardHistoryCache[0];
+  selectedLeaderboardSessionId = session.id;
+  const allRows = window.JSONCodrLeaderboard.buildRows(leaderboardHistoryCache, leaderboardCandidateCache, session.id);
+  const rows = window.JSONCodrLeaderboard.filterAndRank(allRows, {
+    search: elements.leaderboardSearch.value,
+    model: elements.leaderboardModelFilter.value,
+    backend: elements.leaderboardBackendFilter.value,
+    suite: elements.leaderboardSuiteFilter.value,
+    metric: elements.leaderboardMetric.value,
+  });
+  const selected = window.JSONCodrLeaderboard.selectRow(rows, selectedLeaderboardRowId); selectedLeaderboardRowId = selected?.id || null;
+  elements.leaderboardStatus.textContent = `${session.model} · ${session.suite} · ${new Date(session.created_at).toLocaleString()} · ${rows.length} option(s)`;
+  renderLeaderboardKpis(rows); elements.leaderboardTable.replaceChildren();
+  for (const row of rows) {
+    const tableRow = document.createElement("tr"); tableRow.tabIndex = 0; tableRow.classList.toggle("is-selected", row.id === selectedLeaderboardRowId);
+    const values = [row.rank || "—", `${row.model} · ${row.name}`, formatLeaderboardValue(row.performance_index, "", 0), formatLeaderboardValue(row.tokens_per_second), formatLeaderboardValue(row.ttft_ms, " ms", 0), formatLeaderboardValue(row.average_total_seconds, " s"), formatLeaderboardValue(row.peak_vram_mb, " MiB", 0), formatLeaderboardValue(row.speedup_vs_cpu, "×"), row.status === "not_tested" ? "Not tested" : row.eligible_rank ? "Conforming" : row.status];
+    for (const value of values) { const cell = document.createElement("td"); cell.textContent = value; tableRow.append(cell); }
+    const choose = () => { selectedLeaderboardRowId = row.id; renderBenchmarkLeaderboard(); };
+    tableRow.addEventListener("click", choose); tableRow.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); choose(); } }); elements.leaderboardTable.append(tableRow);
+  }
+  renderLeaderboardScatter(rows); renderLeaderboardTrend(selected); renderLeaderboardDetails(selected);
+}
+
+async function loadBenchmarkLeaderboard() {
+  elements.leaderboardStatus.textContent = "Loading benchmark comparisons…";
+  const historyPromise = loadBenchmarkHistory();
+  const candidatesPromise = leaderboardCandidateCache.length ? Promise.resolve(leaderboardCandidateCache) : detectHardware();
+  await Promise.all([historyPromise, candidatesPromise]); updateLeaderboardFilterOptions(); renderBenchmarkLeaderboard();
 }
 
 function renderBenchmarkResults(benchmark) {
@@ -807,6 +1013,8 @@ async function loadBenchmarkHistory() {
   const response = await fetch("/api/hardware/benchmarks");
   if (!response.ok) throw new Error("Unable to load benchmark history");
   const history = await response.json();
+  leaderboardHistoryCache = history;
+  if (!history.some((benchmark) => benchmark.id === selectedLeaderboardSessionId)) selectedLeaderboardSessionId = history[0]?.id || null;
   elements.hardwareBenchmarkHistory.replaceChildren();
   if (!history.length) {
     elements.hardwareBenchmarkHistory.innerHTML = '<p class="meta">No benchmark history.</p>';
@@ -815,10 +1023,12 @@ async function loadBenchmarkHistory() {
   for (const benchmark of history) {
     const button = document.createElement("button"); button.type = "button"; button.className = "secondary";
     button.textContent = `${benchmark.suite} · ${benchmark.model} · ${new Date(benchmark.created_at).toLocaleString()}`;
-    button.addEventListener("click", () => renderBenchmarkResults(benchmark));
+    button.addEventListener("click", () => { renderBenchmarkResults(benchmark); selectLeaderboardSession(benchmark.id); });
     elements.hardwareBenchmarkHistory.append(button);
   }
   renderBenchmarkResults(history[0]);
+  if (activeHardwareSection === "leaderboard") { updateLeaderboardFilterOptions(); renderBenchmarkLeaderboard(); }
+  return history;
 }
 
 async function runHardwareBenchmark() {
@@ -832,6 +1042,7 @@ async function runHardwareBenchmark() {
     const benchmark = await response.json();
     if (!response.ok) throw new Error(benchmark.detail || "Benchmark failed");
     renderBenchmarkResults(benchmark);
+    selectedLeaderboardSessionId = benchmark.id;
     await loadBenchmarkHistory();
     elements.hardwareBenchmarkStatus.textContent = `Benchmark complete · selected ${benchmark.model} on ${benchmark.selected_backend}`;
   } finally {
@@ -845,6 +1056,9 @@ async function clearHardwareBenchmarks() {
     const response = await fetch("/api/hardware/benchmarks", { method: "DELETE" });
     if (!response.ok) throw new Error("Unable to clear benchmark data");
     await loadBenchmarkHistory();
+    selectedLeaderboardSessionId = null;
+    selectedLeaderboardRowId = null;
+    renderBenchmarkLeaderboard();
     elements.hardwareBenchmarkResults.innerHTML = '<p class="meta">No benchmark selected.</p>';
     elements.hardwareBenchmarkStatus.textContent = "Previous benchmark data cleared.";
   } finally {
@@ -1435,6 +1649,23 @@ elements.hardwareBenchmarkRun.addEventListener("click", () => runHardwareBenchma
 elements.hardwareBenchmarkClear.addEventListener("click", () => clearHardwareBenchmarks().catch((error) => {
   elements.hardwareBenchmarkStatus.textContent = error.message;
 }));
+elements.leaderboardSearch.addEventListener("input", renderBenchmarkLeaderboard);
+elements.leaderboardBackendFilter.addEventListener("change", renderBenchmarkLeaderboard);
+elements.leaderboardMetric.addEventListener("change", renderBenchmarkLeaderboard);
+elements.leaderboardModelFilter.addEventListener("change", () => {
+  const model = elements.leaderboardModelFilter.value;
+  const suite = elements.leaderboardSuiteFilter.value;
+  const session = leaderboardHistoryCache.find((item) => (model === "all" || item.model === model) && (suite === "all" || item.suite === suite));
+  if (session) { selectedLeaderboardSessionId = session.id; selectedLeaderboardRowId = null; }
+  renderBenchmarkLeaderboard();
+});
+elements.leaderboardSuiteFilter.addEventListener("change", () => {
+  const model = elements.leaderboardModelFilter.value;
+  const suite = elements.leaderboardSuiteFilter.value;
+  const session = leaderboardHistoryCache.find((item) => (model === "all" || item.model === model) && (suite === "all" || item.suite === suite));
+  if (session) { selectedLeaderboardSessionId = session.id; selectedLeaderboardRowId = null; }
+  renderBenchmarkLeaderboard();
+});
 elements.localperfExport.addEventListener("click", exportLocalperfPackage);
 elements.localperfImportInput.addEventListener("change", () => {
   const file = elements.localperfImportInput.files[0];
