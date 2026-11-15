@@ -115,6 +115,7 @@ let currentThemeMode = normalizeThemeMode(localStorage.getItem("json_codr_theme"
 let persistedThemeMode = null;
 let excludedSkillIds = [];
 let pendingDestructiveAction = null;
+let pendingActionProposalId = null;
 let hardwareDetectionPromise = null;
 const actionButtons = new Map();
 
@@ -191,12 +192,14 @@ async function createTerminalConnection() {
     if (message.type === "output") appendTerminalOutput(message.data);
     if (message.type === "exit") elements.terminalStatus.textContent = "Stopped";
     if (message.type === "action_started") {
+      if (pendingActionProposalId === message.proposal_id) pendingActionProposalId = null;
       elements.terminalStatus.textContent = "Command accepted — installation running...";
       appendTerminalOutput("Command accepted by PowerShell. Installation is running; initial setup may be quiet.\n");
       const button = actionButtons.get(message.proposal_id);
       if (button) button.textContent = "Started";
     }
     if (message.type === "action_error") {
+      if (pendingActionProposalId === message.proposal_id) pendingActionProposalId = null;
       const button = actionButtons.get(message.proposal_id);
       if (button) { button.disabled = false; button.textContent = "Approve and run"; }
       elements.terminalStatus.textContent = "Approved action failed";
@@ -204,7 +207,16 @@ async function createTerminalConnection() {
       showError(message.error || "Approved action failed");
     }
   });
-  terminalSocket.addEventListener("close", () => { elements.terminalStatus.textContent = "Disconnected"; });
+  terminalSocket.addEventListener("close", () => {
+    if (pendingActionProposalId) {
+      const button = actionButtons.get(pendingActionProposalId);
+      if (button) { button.disabled = false; button.textContent = "Approve and run"; }
+      appendTerminalOutput("Terminal disconnected before action was accepted. Retry the approved action.\n");
+      showError("Terminal disconnected before action was accepted");
+      pendingActionProposalId = null;
+    }
+    elements.terminalStatus.textContent = "Disconnected";
+  });
   await new Promise((resolve, reject) => {
     const cleanup = () => {
       terminalSocket.removeEventListener("open", onOpen);
@@ -227,7 +239,14 @@ async function sendApprovedAction(proposal, token, approveButton) {
   elements.terminalStatus.textContent = "Sending approved action...";
   appendTerminalOutput(`Sending approved action: ${proposal.explanation}\n`);
   if (approveButton) { approveButton.disabled = true; approveButton.textContent = "Sending..."; }
-  terminalSocket.send(JSON.stringify({ type: "approved_action", proposal_id: proposal.id, token }));
+  pendingActionProposalId = proposal.id;
+  try {
+    terminalSocket.send(JSON.stringify({ type: "approved_action", proposal_id: proposal.id, token }));
+  } catch (error) {
+    pendingActionProposalId = null;
+    if (approveButton) { approveButton.disabled = false; approveButton.textContent = "Approve and run"; }
+    throw error;
+  }
   elements.terminalPanel.hidden = false;
   elements.terminalToggle.setAttribute("aria-expanded", "true");
 }
@@ -1115,7 +1134,11 @@ elements.destructiveSubmit.addEventListener("click", async () => {
   if (!response.ok) return showError(approval.detail || "Unable to confirm destructive action");
   pendingDestructiveAction = null;
   elements.destructiveDialog.close();
-  await sendApprovedAction(proposal, approval.token, approveButton);
+  try {
+    await sendApprovedAction(proposal, approval.token, approveButton);
+  } catch (error) {
+    showError(error.message);
+  }
 });
 elements.destructiveDialog.addEventListener("close", () => {
   if (!pendingDestructiveAction) return;

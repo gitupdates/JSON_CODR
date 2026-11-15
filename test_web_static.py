@@ -316,6 +316,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('message.type === "action_started"', javascript)
         self.assertIn('"Command accepted — installation running..."', javascript)
         self.assertIn('approve.disabled = true', javascript)
+        self.assertIn("Terminal disconnected before action was accepted", javascript)
         server_source = Path("web_app/app.py").read_text(encoding="utf-8")
         self.assertIn('{"type": "action_started", "proposal_id": proposal_id}', server_source)
         self.assertNotIn("runTerminalCommand(proposal.command)", javascript)
