@@ -129,7 +129,29 @@ class HardwareBackendManager:
 
     def detect(self) -> list[dict]:
         state = self._read()
-        result = [{"id": "cpu", "name": "CPU (compatible fallback)", "kind": "cpu", "runnable": True, "compatible": True, "verified": True}]
+        ready = {"hardware": True, "driver": True, "runtime": True, "model": True}
+        result = [{
+            "id": "cpu",
+            "name": "CPU (compatible fallback)",
+            "kind": "cpu",
+            "runnable": True,
+            "compatible": True,
+            "verified": True,
+            "readiness": ready,
+        }]
+        gpus = self.gpu_telemetry()
+        if gpus:
+            names = ", ".join(gpu["name"] for gpu in gpus)
+            result.append({
+                "id": "ollama_gpu",
+                "name": f"Ollama GPU · {names}",
+                "kind": "gpu",
+                "runnable": True,
+                "compatible": True,
+                "verified": state["last_known_good"] == "ollama_gpu",
+                "readiness": ready,
+                "evidence": gpus,
+            })
         candidates = []
         if self.command_available("nvidia-smi"):
             candidates.extend([
@@ -150,6 +172,7 @@ class HardwareBackendManager:
                     "compatible": backend not in state["quarantined"],
                     "verified": state["last_known_good"] == backend,
                     "quarantine_reason": state["quarantined"].get(backend),
+                    "readiness": ready,
                 })
         for index, name in enumerate(self.ai_device_detector()):
             result.append({
@@ -160,6 +183,7 @@ class HardwareBackendManager:
                 "compatible": False,
                 "verified": False,
                 "compatibility_reason": "Detected AI accelerator; no Ollama-compatible NPU backend is installed.",
+                "readiness": {"hardware": True, "driver": True, "runtime": False, "model": False},
             })
         if self.accelerator_detector:
             for state_record in self.accelerator_detector.detect():
@@ -176,6 +200,12 @@ class HardwareBackendManager:
                     "model_ready": state["model_ready"],
                     "evidence": state["evidence"],
                     "compatibility_reason": state["reason"],
+                    "readiness": {
+                        "hardware": state["hardware_detected"],
+                        "driver": state["hardware_detected"],
+                        "runtime": state["runtime_ready"],
+                        "model": state["model_ready"],
+                    },
                 })
         return result
 

@@ -29,6 +29,7 @@ class HardwareBackendTests(unittest.TestCase):
             runtime_root=runtime,
             command_available=lambda command: command == "nvidia-smi",
             ai_device_detector=lambda: [],
+            gpu_telemetry_reader=lambda: [],
         )
 
         result = manager.detect()
@@ -37,12 +38,46 @@ class HardwareBackendTests(unittest.TestCase):
         self.assertTrue(result[0]["compatible"])
         self.assertFalse(result[1]["verified"])
 
+    def test_detect_orders_ollama_gpu_below_cpu_before_native_runtimes_and_npu(self):
+        runtime = self.root / "ollama"
+        for backend in ("cuda_v12", "vulkan"):
+            (runtime / backend).mkdir(parents=True)
+        manager = HardwareBackendManager(
+            self.root,
+            runtime_root=runtime,
+            command_available=lambda command: command in {"nvidia-smi", "vulkaninfo"},
+            ai_device_detector=lambda: ["Intel(R) AI Boost"],
+            gpu_telemetry_reader=lambda: [{
+                "index": 0,
+                "name": "NVIDIA GeForce RTX 4060 Laptop GPU",
+                "memory_total": 8188,
+                "memory_used": 512,
+                "memory_free": 7676,
+                "utilization": 12,
+                "temperature": 47,
+            }],
+        )
+
+        result = manager.detect()
+
+        self.assertEqual([item["id"] for item in result], ["cpu", "ollama_gpu", "cuda_v12", "vulkan", "npu-0"])
+        self.assertEqual(result[1]["name"], "Ollama GPU · NVIDIA GeForce RTX 4060 Laptop GPU")
+        self.assertEqual(result[1]["kind"], "gpu")
+        self.assertTrue(result[1]["runnable"])
+        self.assertEqual(result[1]["readiness"], {
+            "hardware": True,
+            "driver": True,
+            "runtime": True,
+            "model": True,
+        })
+
     def test_ai_accelerator_is_reported_but_not_runnable_without_ollama_backend(self):
         manager = HardwareBackendManager(
             self.root,
             ai_device_detector=lambda: ["Intel(R) AI Boost"],
             command_available=lambda command: False,
             environment_writer=lambda name, value: None,
+            gpu_telemetry_reader=lambda: [],
         )
 
         result = manager.detect()
