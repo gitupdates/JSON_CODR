@@ -179,6 +179,15 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("DirectML", html)
         self.assertIn('fetch("/api/inference/catalog"', javascript)
 
+    def test_optimization_tab_runs_a_fresh_hardware_scan(self):
+        javascript = self.client.get("/static/app.js").text
+        self.assertIn(
+            'elements.hardwareTabOptimization.addEventListener("click", () => {',
+            javascript,
+        )
+        self.assertIn('selectHardwareTab("optimization");\n  detectHardware().catch', javascript)
+        self.assertIn("let hardwareDetectionPromise = null", javascript)
+
     def test_hardware_benchmark_tab_runs_suites_and_renders_cpu_relative_results(self):
         html = self.client.get("/").text
         javascript = self.client.get("/static/app.js").text

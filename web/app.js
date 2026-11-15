@@ -103,6 +103,7 @@ let currentThemeMode = normalizeThemeMode(localStorage.getItem("json_codr_theme"
 let persistedThemeMode = null;
 let excludedSkillIds = [];
 let pendingDestructiveAction = null;
+let hardwareDetectionPromise = null;
 
 const dependencyInstallQueue = createDependencyInstallQueue(async (command) => {
   if (elements.terminalPanel.hidden) {
@@ -330,7 +331,13 @@ async function loadHardwareStatus() {
   if (state.last_error) elements.hardwareStatus.textContent += ` · last failure: ${state.last_error}`;
 }
 
-async function detectHardware() {
+function detectHardware() {
+  if (hardwareDetectionPromise) return hardwareDetectionPromise;
+  hardwareDetectionPromise = runHardwareDetection().finally(() => { hardwareDetectionPromise = null; });
+  return hardwareDetectionPromise;
+}
+
+async function runHardwareDetection() {
   elements.hardwareDetect.disabled = true;
   elements.hardwareCandidates.innerHTML = '<p class="meta">Detecting local runtimes…</p>';
   try {
@@ -947,7 +954,10 @@ elements.settingsToggle.addEventListener("click", () => {
 });
 elements.hardwareDetect.addEventListener("click", () => detectHardware().catch((error) => showError(error.message)));
 elements.hardwareRestoreCpu.addEventListener("click", () => restoreCpuBackend().catch((error) => showError(error.message)));
-elements.hardwareTabOptimization.addEventListener("click", () => selectHardwareTab("optimization"));
+elements.hardwareTabOptimization.addEventListener("click", () => {
+  selectHardwareTab("optimization");
+  detectHardware().catch((error) => showError(error.message));
+});
 elements.hardwareTabBenchmarks.addEventListener("click", () => {
   selectHardwareTab("benchmarks");
   detectHardware().catch((error) => showError(error.message));
