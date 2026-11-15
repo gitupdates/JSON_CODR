@@ -180,7 +180,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('fetch("/api/inference/catalog"', javascript)
 
     def test_optimization_tab_runs_a_fresh_hardware_scan(self):
-        javascript = self.client.get("/static/app.js").text
+        javascript = self.client.get("/static/app.js").text.replace("\r\n", "\n")
         self.assertIn(
             'elements.hardwareTabOptimization.addEventListener("click", () => {',
             javascript,
