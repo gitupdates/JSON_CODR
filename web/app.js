@@ -86,6 +86,16 @@ const elements = {
   hardwareBenchmarkResults: document.querySelector("#hardware-benchmark-results"),
   hardwareBenchmarkHistory: document.querySelector("#hardware-benchmark-history"),
   hardwareBenchmarkClear: document.querySelector("#hardware-benchmark-clear"),
+  localperfExport: document.querySelector("#localperf-export"),
+  localperfIncludeDetails: document.querySelector("#localperf-include-details"),
+  localperfImportInput: document.querySelector("#localperf-import-input"),
+  localperfImport: document.querySelector("#localperf-import"),
+  localperfRetainDetails: document.querySelector("#localperf-retain-details"),
+  localperfPackageStatus: document.querySelector("#localperf-package-status"),
+  optimizedModelSearchProvider: document.querySelector("#optimized-model-search-provider"),
+  optimizedModelSearchQuery: document.querySelector("#optimized-model-search-query"),
+  optimizedModelSearchRun: document.querySelector("#optimized-model-search-run"),
+  optimizedModelSearchResults: document.querySelector("#optimized-model-search-results"),
   terminalToggle: document.querySelector("#terminal-toggle"),
   terminalPanel: document.querySelector("#terminal-panel"),
   terminalOutput: document.querySelector("#terminal-output"),
@@ -103,6 +113,8 @@ let activeRequest = null;
 let sessionId = localStorage.getItem("json_codr_session");
 let terminalId = null;
 let terminalSocket = null;
+let selectedLocalperfEvaluationId = null;
+let pendingLocalperfPackage = null;
 let terminalConnectionPromise = null;
 let skillAttachmentId = null;
 let editingSkill = null;
@@ -531,15 +543,17 @@ async function runHardwareDetection() {
   elements.hardwareDetect.disabled = true;
   elements.hardwareCandidates.innerHTML = '<p class="meta">Detecting local runtimes…</p>';
   try {
-    const [response, catalogResponse, environmentResponse] = await Promise.all([
+    const [response, catalogResponse, environmentResponse, compatibilityResponse] = await Promise.all([
       fetch("/api/hardware/detect", { method: "POST" }),
       fetch("/api/inference/catalog"),
       fetch("/api/inference/environments"),
+      fetch("/api/hardware/model-compatibility"),
     ]);
     if (!response.ok) throw new Error((await response.json()).detail || "Hardware detection failed");
     const candidates = await response.json();
     const optimizedCatalog = catalogResponse.ok ? await catalogResponse.json() : [];
     const providerEnvironments = environmentResponse.ok ? await environmentResponse.json() : [];
+    const compatibility = compatibilityResponse.ok ? await compatibilityResponse.json() : [];
     elements.hardwareBenchmarkBackend.replaceChildren();
     const all = document.createElement("option"); all.value = "all"; all.textContent = "All detected and available";
     elements.hardwareBenchmarkBackend.append(all);
@@ -615,6 +629,19 @@ async function runHardwareDetection() {
         ? `${environment.status} · Python ${environment.python_version || "unknown"} · isolated runtime`
         : `not installed · ${environment.environment}`;
       label.append(name, detail);
+      const modelGroup = compatibility.find((item) => item.backend === candidate.id);
+      if (modelGroup?.models.length) {
+        const models = document.createElement("div"); models.className = "model-compatibility-list";
+        for (const model of modelGroup.models) {
+          const line = document.createElement("p"); line.className = "meta";
+          const state = model.status === "accelerated" ? "Accelerated and verified" :
+            model.status === "candidate" ? "Compatible download candidate" :
+            model.status === "runnable" ? "Runnable · acceleration unverified" : model.status;
+          line.textContent = `${model.model} · ${state}${model.reason ? ` · ${model.reason}` : ""}`;
+          models.append(line);
+        }
+        label.append(models);
+      }
       const install = document.createElement("button"); install.type = "button"; install.className = "secondary";
       install.textContent = environment.installed && environment.compatible ? "Recheck installed runtime" : "Review runtime install";
       install.addEventListener("click", async () => {
@@ -650,6 +677,7 @@ function selectHardwareTab(tab) {
 
 function renderBenchmarkResults(benchmark) {
   elements.hardwareBenchmarkResults.replaceChildren();
+  selectedLocalperfEvaluationId = null;
   for (const result of benchmark.results) {
     const row = document.createElement("div"); row.className = "dependency-row";
     const label = document.createElement("div");
@@ -666,6 +694,7 @@ function renderBenchmarkResults(benchmark) {
         : result.eligible ? " · Eligible" : ` · Not eligible: ${(result.rejection_reasons || []).join("; ")}`;
       metrics.textContent = `${result.tokens_per_second.toFixed(2)} tokens/s · ${result.average_total_seconds.toFixed(3)}s average · ${relative}${gpu}${eligibility}`;
       if (result.localperf) {
+        if (!selectedLocalperfEvaluationId) selectedLocalperfEvaluationId = result.localperf.evaluation_id;
         const conformance = result.localperf.conformance.conforming ? "conforming" : `non-conforming: ${result.localperf.conformance.reasons.join(", ")}`;
         metrics.textContent += ` · LocalPerf ${conformance}`;
       }
@@ -685,6 +714,7 @@ function renderBenchmarkResults(benchmark) {
     if (components) label.append(components);
     row.append(label); elements.hardwareBenchmarkResults.append(row);
   }
+  elements.localperfExport.disabled = !selectedLocalperfEvaluationId;
 }
 
 async function loadBenchmarkHistory() {
@@ -734,6 +764,63 @@ async function clearHardwareBenchmarks() {
   } finally {
     elements.hardwareBenchmarkClear.disabled = false;
   }
+}
+
+function exportLocalperfPackage() {
+  if (!selectedLocalperfEvaluationId) return;
+  const details = elements.localperfIncludeDetails.checked ? "true" : "false";
+  window.location.assign(`/api/localperf/packages/${encodeURIComponent(selectedLocalperfEvaluationId)}?include_system_details=${details}`);
+}
+
+async function previewLocalperfPackage(file) {
+  pendingLocalperfPackage = await file.arrayBuffer();
+  const response = await fetch("/api/localperf/packages/preview", {
+    method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: pendingLocalperfPackage,
+  });
+  const preview = await response.json();
+  if (!response.ok) throw new Error(preview.detail || "Package validation failed");
+  elements.localperfRetainDetails.disabled = !preview.contains_system_details;
+  elements.localperfRetainDetails.checked = false;
+  elements.localperfImport.disabled = false;
+  elements.localperfPackageStatus.textContent = preview.contains_system_details
+    ? "Valid package contains system details. Consent is required to retain them."
+    : "Valid sanitized package. Ready to import.";
+}
+
+async function importLocalperfPackage() {
+  if (!pendingLocalperfPackage) return;
+  const retain = elements.localperfRetainDetails.checked ? "true" : "false";
+  const response = await fetch(`/api/localperf/packages/import?retain_system_details=${retain}`, {
+    method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: pendingLocalperfPackage,
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.detail || "Package import failed");
+  elements.localperfPackageStatus.textContent = `Imported reference package ${result.package_id.slice(0, 12)} · local baseline disabled.`;
+  elements.localperfImport.disabled = true;
+}
+
+async function searchOptimizedModels() {
+  elements.optimizedModelSearchRun.disabled = true;
+  elements.optimizedModelSearchResults.innerHTML = '<p class="meta">Searching approved remote sources…</p>';
+  try {
+    const provider = encodeURIComponent(elements.optimizedModelSearchProvider.value);
+    const query = encodeURIComponent(elements.optimizedModelSearchQuery.value || "coder");
+    const response = await fetch(`/api/inference/models/search?provider=${provider}&q=${query}&limit=10`);
+    const models = await response.json();
+    if (!response.ok) throw new Error(models.detail || "Optimized-model search failed");
+    elements.optimizedModelSearchResults.replaceChildren();
+    if (!models.length) elements.optimizedModelSearchResults.innerHTML = '<p class="meta">No compatible candidates found.</p>';
+    for (const model of models) {
+      const row = document.createElement("div"); row.className = "dependency-row";
+      const label = document.createElement("div");
+      const name = document.createElement("strong"); name.textContent = model.repository;
+      const detail = document.createElement("p"); detail.className = "meta";
+      detail.textContent = `${model.provider} · ${model.device} · ${model.format} · ${model.license} · ${model.source}`;
+      const link = document.createElement("a"); link.className = "secondary file-button"; link.href = model.source_url;
+      link.target = "_blank"; link.rel = "noopener noreferrer"; link.textContent = "Review download source";
+      label.append(name, detail); row.append(label, link); elements.optimizedModelSearchResults.append(row);
+    }
+  } finally { elements.optimizedModelSearchRun.disabled = false; }
 }
 
 async function loadAttachments() {
@@ -1250,6 +1337,17 @@ elements.hardwareBenchmarkRun.addEventListener("click", () => runHardwareBenchma
 }));
 elements.hardwareBenchmarkClear.addEventListener("click", () => clearHardwareBenchmarks().catch((error) => {
   elements.hardwareBenchmarkStatus.textContent = error.message;
+}));
+elements.localperfExport.addEventListener("click", exportLocalperfPackage);
+elements.localperfImportInput.addEventListener("change", () => {
+  const file = elements.localperfImportInput.files[0];
+  if (file) previewLocalperfPackage(file).catch((error) => { elements.localperfPackageStatus.textContent = error.message; });
+});
+elements.localperfImport.addEventListener("click", () => importLocalperfPackage().catch((error) => {
+  elements.localperfPackageStatus.textContent = error.message;
+}));
+elements.optimizedModelSearchRun.addEventListener("click", () => searchOptimizedModels().catch((error) => {
+  elements.optimizedModelSearchResults.innerHTML = `<p class="meta">${escapeHtml(error.message)}</p>`;
 }));
 elements.hardwareProfileModel.addEventListener("change", renderGpuProfileControls);
 elements.hardwareProfileMode.addEventListener("change", () => {

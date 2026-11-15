@@ -34,7 +34,7 @@ class WebStaticTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.0.10", response.text)
+        self.assertIn("V1.0.11", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -201,6 +201,10 @@ class WebStaticTests(unittest.TestCase):
             "hardware-benchmark-backend",
             "hardware-benchmark-run", "hardware-benchmark-status", "hardware-benchmark-results",
             "hardware-benchmark-history", "hardware-benchmark-clear",
+            "localperf-export", "localperf-include-details", "localperf-import",
+            "localperf-import-input", "localperf-retain-details", "localperf-package-status",
+            "optimized-model-search-provider", "optimized-model-search-query",
+            "optimized-model-search-run", "optimized-model-search-results",
         ):
             self.assertIn(f'id="{identifier}"', html)
         self.assertIn('role="tablist"', html)
@@ -221,6 +225,13 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("result.localperf", javascript)
         self.assertIn("ttft_ms", javascript)
         self.assertIn('method: "DELETE"', javascript)
+        self.assertIn("/api/localperf/packages/", javascript)
+        self.assertIn("/api/localperf/packages/preview", javascript)
+        self.assertIn("/api/localperf/packages/import", javascript)
+        self.assertIn("contains_system_details", javascript)
+        self.assertIn('/api/hardware/model-compatibility', javascript)
+        self.assertIn('/api/inference/models/search', javascript)
+        self.assertIn('model.status === "accelerated"', javascript)
 
     def test_gpu_telemetry_and_per_model_profile_controls_are_present(self):
         html = self.client.get("/").text

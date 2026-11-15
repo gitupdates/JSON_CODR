@@ -1,6 +1,6 @@
 # JSON_CODR
 
-JSON_CODR V1.0.10 is a localhost-only web and CLI interface for structured responses from local Ollama coding models.
+JSON_CODR V1.0.11 is a localhost-only web and CLI interface for structured responses from local Ollama coding models.
 
 ## Skill catalog and settings
 
@@ -19,6 +19,8 @@ Open **Settings** to control whether the Skills panel reopens at startup and to 
 Open **Settings → Hardware optimization** to detect CPU, supported GPU runtimes, and Windows NPU or AI accelerator devices. CPU is the compatibility fallback. An accelerated Ollama backend is saved only after an isolated model-generation probe succeeds; unavailable NPU runtimes are reported without being executed.
 
 V1.0.10 introduces LocalPerf minimum conformance for repeatable local-inference measurements. Quick runs execute the versioned 12-prompt LocalPerf-Core-v1 workload three times and Thorough runs seven times after warmup. Each configuration records generation throughput, streaming time-to-first-token, peak VRAM, quality checks, configuration identity, and atomic aggregate JSON plus sample JSONL artifacts. Incomplete or failed configurations remain visible but cannot be selected as conforming winners. Ollama CPU remains the compatibility fallback.
+
+V1.0.11 adds sanitized-by-default portable `.localperf.zip` reference packages with checksums, schemas, methodology, reporting templates, preview/import validation, and explicit consent for system details. Hardware Optimization now reports model-specific acceleration states and provides a pinned offline optimized-model catalog plus explicit on-demand search of approved remote model metadata. A model is labeled accelerated only after model-specific evidence or a successful provider probe.
 
 The **Benchmarks** tab compares CPU with all detected runnable backends or one selected optimization using the same model, generation settings, and three standardized prompts. A selected accelerator is always paired with a fresh CPU baseline. **Quick** runs each prompt once; **Thorough** repeats the set three times. Results show runtime and verification metadata, per-test request/load time and token throughput, aggregate metrics, and relative throughput versus CPU. Benchmarking does not change the active backend, and the most recent 20 runs are stored under the JSON_CODR data root.
 

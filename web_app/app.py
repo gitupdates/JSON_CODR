@@ -19,6 +19,10 @@ from web_app.inference.environments import EnvironmentManager
 from web_app.inference.providers.registry import ProviderRegistry
 from web_app.inference.router import InferenceRouter
 from web_app.inference.sidecar import SidecarClient
+from web_app.inference.compatibility import ollama_model_status, optimized_model_status
+from web_app.inference.search import OptimizedModelSearch
+from web_app.localperf.package import LocalPerfPackageError, LocalPerfPackageService
+from web_app.localperf.storage import LocalPerfStorage
 from web_app.dependencies import DependencyService
 from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
 from web_app.ollama_service import (
@@ -71,6 +75,8 @@ def create_app(
             model_ready=lambda provider: environment_manager.model_ready(ProviderKind(provider)),
         ) if optimized else None,
     )
+    localperf_packages = LocalPerfPackageService(LocalPerfStorage(workspace.data_root))
+    optimized_search = OptimizedModelSearch(catalog=catalog)
     skillsets = SkillsetService(workspace.data_root, skill_library)
     recommendations = SkillRecommendationService(skill_library, skillsets, settings)
     skill_discovery = SkillDiscoveryService(skill_library, skill_converter, workspace.data_root)
@@ -105,6 +111,15 @@ def create_app(
     @application.get("/api/inference/catalog")
     async def inference_catalog():
         return [model.model_dump(mode="json") for model in catalog.list()]
+
+    @application.get("/api/inference/models/search")
+    async def search_inference_models(provider: ProviderKind, q: str = "coder", limit: int = 10):
+        if provider is ProviderKind.ollama:
+            raise HTTPException(status_code=400, detail="Search targets optional optimized providers")
+        try:
+            return await asyncio.to_thread(optimized_search.search, provider.value, q, limit)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
 
     @application.get("/api/inference/environments")
     async def inference_environments():
@@ -164,6 +179,27 @@ def create_app(
     async def detect_hardware():
         return hardware.detect()
 
+    @application.get("/api/hardware/model-compatibility")
+    async def hardware_model_compatibility():
+        installed, running = await asyncio.gather(service.list_models(), service.running_models())
+        installed_names = [item["name"] for item in installed if item.get("installed")]
+        detected = hardware.detect()
+        matrix = []
+        for candidate in detected:
+            backend = candidate["id"]
+            if backend in {"cpu", "ollama_gpu"} or backend.startswith(("cuda_", "rocm_", "vulkan")):
+                models = [ollama_model_status(name, backend, running, bool(candidate.get("compatible"))) for name in installed_names]
+            else:
+                models = []
+                for model in catalog.list():
+                    if model.provider.value != backend:
+                        continue
+                    installed_model = environment_manager.model_path(model).is_dir()
+                    verified = bool(inference_router and model.id in inference_router.verified_models)
+                    models.append(optimized_model_status(model, installed_model, bool(candidate.get("runtime_ready")), verified))
+            matrix.append({"backend": backend, "name": candidate["name"], "models": models})
+        return matrix
+
     @application.get("/api/hardware/telemetry")
     async def hardware_telemetry():
         gpus, running_models = await asyncio.gather(
@@ -215,6 +251,42 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(error)) from error
         except RuntimeError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @application.get("/api/localperf/packages/{evaluation_id}")
+    async def export_localperf_package(evaluation_id: str, include_system_details: bool = False):
+        try:
+            artifact = localperf_packages.export(evaluation_id, include_system_details)
+        except LocalPerfPackageError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return Response(
+            content=artifact.content, media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{artifact.filename}"'},
+        )
+
+    @application.post("/api/localperf/packages/preview")
+    async def preview_localperf_package(request: Request):
+        try:
+            preview = localperf_packages.preview(await request.body())
+            return {
+                "valid": preview.valid, "package_id": preview.package_id,
+                "evaluation_id": preview.evaluation_id,
+                "contains_system_details": preview.contains_system_details,
+                "members": preview.members,
+            }
+        except LocalPerfPackageError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @application.post("/api/localperf/packages/import", status_code=201)
+    async def import_localperf_package(request: Request, retain_system_details: bool = False):
+        try:
+            record = localperf_packages.import_package(await request.body(), retain_system_details)
+            return {
+                "package_id": record.package_id, "path": str(record.path),
+                "retained_system_details": record.retained_system_details,
+                "source": "imported", "eligible_as_local_baseline": False,
+            }
+        except LocalPerfPackageError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
 
     @application.get("/api/skillsets")
     async def list_skillsets():

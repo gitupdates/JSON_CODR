@@ -191,9 +191,9 @@ class WebApiTests(unittest.TestCase):
     def test_health_reports_ollama_readiness(self):
         self.assertEqual(
             self.client.get("/api/health").json(),
-            {"status": "ready", "ollama": True, "app_version": "V1.0.10"},
+            {"status": "ready", "ollama": True, "app_version": "V1.0.11"},
         )
-        self.assertEqual(self.client.app.version, "V1.0.10")
+        self.assertEqual(self.client.app.version, "V1.0.11")
         self.service.available = False
         self.assertEqual(self.client.get("/api/health").json()["status"], "degraded")
 
@@ -263,6 +263,41 @@ class WebApiTests(unittest.TestCase):
         busy = client.post("/api/hardware/benchmarks", json={"suite": "quick", "model": "model"})
         self.assertEqual(busy.status_code, 409)
         self.assertIn("already running", busy.json()["detail"])
+
+    def test_localperf_package_export_preview_and_import_are_private_by_default(self):
+        from web_app.localperf.aggregate import aggregate_run
+        from web_app.localperf.models import SampleRecord
+        from web_app.localperf.storage import LocalPerfStorage
+
+        storage = LocalPerfStorage(self.workspace.data_root)
+        run = aggregate_run([SampleRecord(
+            prompt_id="lp-01", repetition=1, success=True, generation_tokens_per_second=2,
+            ttft_ms=5, peak_vram_mb=0, total_duration_ms=10, prompt_tokens=1,
+            generated_tokens=1, output="ok",
+        )], {"model":"model", "backend":"cpu", "hardware":{"serial":"secret"},
+             "software":{"application":"JSON_CODR", "version":"V1.0.10"}}, "quick", 1)
+        storage.save_run(run)
+        exported = self.client.get(f"/api/localperf/packages/{run.evaluation_id}")
+        self.assertEqual(exported.status_code, 200)
+        self.assertIn(".localperf.zip", exported.headers["content-disposition"])
+        preview = self.client.post("/api/localperf/packages/preview", content=exported.content,
+                                   headers={"content-type":"application/octet-stream"})
+        self.assertEqual(preview.status_code, 200)
+        self.assertFalse(preview.json()["contains_system_details"])
+        imported = self.client.post("/api/localperf/packages/import", content=exported.content,
+                                    headers={"content-type":"application/octet-stream"})
+        self.assertEqual(imported.status_code, 201)
+        self.assertFalse(imported.json()["retained_system_details"])
+
+    def test_model_compatibility_and_explicit_remote_search_endpoints(self):
+        client = TestClient(create_app(self.service, self.workspace, optimized=True))
+        compatibility = client.get("/api/hardware/model-compatibility")
+        self.assertEqual(compatibility.status_code, 200)
+        cpu = next(item for item in compatibility.json() if item["backend"] == "cpu")
+        self.assertTrue(any(model["model"] == "qwen2.5-coder:7b-instruct-q4_K_M" for model in cpu["models"]))
+        search = client.get("/api/inference/models/search", params={"provider":"openvino", "q":"Qwen", "limit":5})
+        self.assertEqual(search.status_code, 200)
+        self.assertLessEqual(len(search.json()), 5)
 
     def test_models_keep_missing_configured_entries_disabled(self):
         response = self.client.get("/api/models")
