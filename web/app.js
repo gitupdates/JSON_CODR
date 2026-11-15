@@ -509,7 +509,10 @@ async function runHardwareDetection() {
         });
         control = install;
       } else if (candidate.installation) {
-        probe.disabled = true; probe.textContent = candidate.installation.kind === "driver_guidance" ? "Driver guidance" : "Model guidance";
+        probe.disabled = true;
+        probe.textContent = candidate.installation.kind === "driver_guidance"
+          ? "Driver guidance"
+          : candidate.installation.kind === "runtime_guidance" ? "Runtime guidance" : "Model guidance";
         probe.title = candidate.installation.guidance;
       }
       row.append(label, control); elements.hardwareCandidates.append(row);

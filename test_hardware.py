@@ -34,9 +34,11 @@ class HardwareBackendTests(unittest.TestCase):
 
         result = manager.detect()
 
-        self.assertEqual([item["id"] for item in result], ["cpu", "cuda_v12"])
+        self.assertEqual([item["id"] for item in result], ["cpu", "cuda_v12", "cuda_v13"])
         self.assertTrue(result[0]["compatible"])
         self.assertFalse(result[1]["verified"])
+        self.assertFalse(result[2]["runnable"])
+        self.assertEqual(result[2]["installation"]["kind"], "runtime_guidance")
 
     def test_detect_orders_ollama_gpu_below_cpu_before_native_runtimes_and_npu(self):
         runtime = self.root / "ollama"
@@ -60,7 +62,7 @@ class HardwareBackendTests(unittest.TestCase):
 
         result = manager.detect()
 
-        self.assertEqual([item["id"] for item in result], ["cpu", "ollama_gpu", "cuda_v12", "vulkan", "npu-0"])
+        self.assertEqual([item["id"] for item in result], ["cpu", "ollama_gpu", "cuda_v12", "cuda_v13", "vulkan", "npu-0"])
         self.assertEqual(result[1]["name"], "Ollama GPU · NVIDIA GeForce RTX 4060 Laptop GPU")
         self.assertEqual(result[1]["kind"], "gpu")
         self.assertTrue(result[1]["runnable"])
@@ -301,7 +303,7 @@ class HardwareBenchmarkTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls[0][2:], self.calls[1][2:])
         self.assertEqual(self.calls[0][3], 1)
         self.assertEqual(len(self.calls[0][2]), 3)
-        self.assertEqual([entry["backend"] for entry in result["results"]], ["cpu", "ollama_gpu", "cuda_v12", "npu-0"])
+        self.assertEqual([entry["backend"] for entry in result["results"]], ["cpu", "ollama_gpu", "cuda_v12", "cuda_v13", "npu-0"])
         self.assertEqual(result["results"][0]["tokens_per_second"], 25.0)
         self.assertEqual(result["results"][1]["speedup_vs_cpu"], 2.667)
         self.assertEqual([sample["test"] for sample in result["results"][1]["tests"]], ["instruction", "reasoning", "code"])
@@ -310,6 +312,7 @@ class HardwareBenchmarkTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["results"][1]["gpu_percent"], 100)
         self.assertEqual(result["results"][1]["vram_bytes"], 398_000_000)
         self.assertEqual(result["results"][3]["status"], "unavailable")
+        self.assertEqual(result["results"][4]["status"], "unavailable")
         self.assertEqual(self.manager.status()["preferred_backend"], "cpu")
 
     async def test_selected_accelerator_runs_with_cpu_baseline_and_rejects_unknown_target(self):

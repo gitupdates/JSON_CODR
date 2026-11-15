@@ -194,17 +194,23 @@ class HardwareBackendManager:
         if self.command_available("vulkaninfo"):
             candidates.append(("vulkan", "Vulkan"))
         for backend, name in candidates:
-            if (self.runtime_root / backend).is_dir():
-                result.append({
-                    "id": backend,
-                    "name": name,
-                    "kind": "gpu",
-                    "runnable": True,
-                    "compatible": backend not in state["quarantined"],
-                    "verified": state["last_known_good"] == backend,
-                    "quarantine_reason": state["quarantined"].get(backend),
-                    "readiness": ready,
-                })
+            runtime_ready = (self.runtime_root / backend).is_dir()
+            result.append({
+                "id": backend,
+                "name": name,
+                "kind": "gpu",
+                "runnable": runtime_ready,
+                "compatible": runtime_ready and backend not in state["quarantined"],
+                "verified": state["last_known_good"] == backend,
+                "quarantine_reason": state["quarantined"].get(backend),
+                "compatibility_reason": None if runtime_ready else "Hardware tooling is detected, but this Ollama runtime is not installed.",
+                "readiness": {**ready, "runtime": runtime_ready},
+                "installation": None if runtime_ready else {
+                    "kind": "runtime_guidance",
+                    "automatic": False,
+                    "guidance": "Update or reinstall Ollama with this runtime, then scan again; JSON_CODR will not modify display drivers.",
+                },
+            })
         for index, name in enumerate(self.ai_device_detector()):
             result.append({
                 "id": f"npu-{index}",
