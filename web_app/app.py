@@ -192,6 +192,15 @@ def create_app(
     async def hardware_benchmark_history():
         return hardware.benchmark_history()
 
+    @application.delete("/api/hardware/benchmarks")
+    async def clear_hardware_benchmarks():
+        cleared = hardware.clear_legacy_benchmarks() if hasattr(hardware, "clear_legacy_benchmarks") else False
+        benchmark_path = getattr(hardware, "benchmark_path", None)
+        if benchmark_path and Path(benchmark_path).is_file():
+            Path(benchmark_path).unlink()
+            cleared = True
+        return {"cleared": cleared, "history": []}
+
     @application.post("/api/hardware/benchmarks")
     async def run_hardware_benchmark(request: HardwareBenchmarkRequest):
         try:

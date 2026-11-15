@@ -26,7 +26,7 @@
       <header class="topbar">
         <a class="brand" href="/" aria-label="JSON CODR home">
           <span class="brand-mark">{ }</span>
-          <span><strong>JSON_CODR</strong><small>V1.0.9 · local model console</small></span>
+          <span><strong>JSON_CODR</strong><small>V1.0.10 · local model console</small></span>
         </a>
         <div id="health-status" class="health" role="status" aria-live="polite">
           <span class="health-dot"></span><span>Connecting</span>
@@ -219,11 +219,11 @@
             <div id="hardware-candidates" class="dependency-list"><p class="meta">Run detection to list compatible backends.</p></div>
           </div>
           <div id="hardware-benchmark-view" role="tabpanel" aria-labelledby="hardware-tab-benchmarks" hidden>
-            <p class="meta">Runs the same standardized prompts on CPU first and then each available backend. Benchmarking never changes the active backend.</p>
+            <p class="meta">LocalPerf 0.3.0-localperf · LocalPerf-Core-v1. Runs the same versioned 12-prompt workload on CPU first and then each available backend.</p>
             <label class="setting-row" for="hardware-benchmark-suite">Benchmark suite</label>
             <select id="hardware-benchmark-suite" class="setting-select">
-              <option value="quick">Quick · 3 measured prompts</option>
-              <option value="thorough">Thorough · 9 measured prompts</option>
+              <option value="quick">Quick · 12 prompts × 3 repetitions</option>
+              <option value="thorough">Thorough · 12 prompts × 7 repetitions</option>
             </select>
             <label class="setting-row" for="hardware-benchmark-model">Benchmark model</label>
             <select id="hardware-benchmark-model" class="setting-select"></select>
@@ -237,6 +237,7 @@
             </div>
             <div id="hardware-benchmark-results" class="dependency-list"><p class="meta">No benchmark selected.</p></div>
             <strong>Previous runs</strong>
+            <button id="hardware-benchmark-clear" class="secondary" type="button">Clear benchmark data</button>
             <div id="hardware-benchmark-history" class="dependency-list"><p class="meta">No benchmark history.</p></div>
           </div>
         </section>
@@ -275,7 +276,7 @@
 
       <footer><span>Runs entirely on this machine</span><span>127.0.0.1 · Ollama</span></footer>
     </main>
-    <script src="/static/dependency_install_queue.js?v=1.0.9" defer></script>
-    <script src="/static/app.js?v=1.0.9-action-completion1" defer></script>
+    <script src="/static/dependency_install_queue.js?v=1.0.10" defer></script>
+    <script src="/static/app.js?v=1.0.10-localperf" defer></script>
   </body>
 </html>

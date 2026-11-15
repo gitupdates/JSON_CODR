@@ -85,6 +85,7 @@ const elements = {
   hardwareBenchmarkStatus: document.querySelector("#hardware-benchmark-status"),
   hardwareBenchmarkResults: document.querySelector("#hardware-benchmark-results"),
   hardwareBenchmarkHistory: document.querySelector("#hardware-benchmark-history"),
+  hardwareBenchmarkClear: document.querySelector("#hardware-benchmark-clear"),
   terminalToggle: document.querySelector("#terminal-toggle"),
   terminalPanel: document.querySelector("#terminal-panel"),
   terminalOutput: document.querySelector("#terminal-output"),
@@ -664,13 +665,17 @@ function renderBenchmarkResults(benchmark) {
         ? " · Selected for compatibility and performance"
         : result.eligible ? " · Eligible" : ` · Not eligible: ${(result.rejection_reasons || []).join("; ")}`;
       metrics.textContent = `${result.tokens_per_second.toFixed(2)} tokens/s · ${result.average_total_seconds.toFixed(3)}s average · ${relative}${gpu}${eligibility}`;
+      if (result.localperf) {
+        const conformance = result.localperf.conformance.conforming ? "conforming" : `non-conforming: ${result.localperf.conformance.reasons.join(", ")}`;
+        metrics.textContent += ` · LocalPerf ${conformance}`;
+      }
       components = document.createElement("details");
       const summary = document.createElement("summary");
       summary.textContent = `${result.runtime} · ${result.kind} · ${result.verified ? "verified" : "not yet verified"}${result.active ? " · active" : ""}`;
       components.append(summary);
       for (const test of result.tests) {
         const line = document.createElement("p"); line.className = "meta";
-        line.textContent = `${test.test} #${test.repetition}: ${test.total_seconds.toFixed(3)}s · ${test.load_seconds.toFixed(3)}s load · ${test.tokens} tokens · ${test.tokens_per_second.toFixed(2)} tokens/s`;
+        line.textContent = `${test.prompt_id || test.test} · ${test.test} #${test.repetition}: ${test.total_seconds.toFixed(3)}s · ${test.ttft_ms == null ? "TTFT unavailable" : `${test.ttft_ms.toFixed(1)} ms TTFT`} · ${test.peak_vram_mb == null ? "VRAM unavailable" : `${test.peak_vram_mb.toFixed(1)} MiB peak VRAM`} · ${test.tokens_per_second.toFixed(2)} tokens/s`;
         components.append(line);
       }
     } else {
@@ -715,6 +720,19 @@ async function runHardwareBenchmark() {
     elements.hardwareBenchmarkStatus.textContent = `Benchmark complete · selected ${benchmark.model} on ${benchmark.selected_backend}`;
   } finally {
     elements.hardwareBenchmarkRun.disabled = false;
+  }
+}
+
+async function clearHardwareBenchmarks() {
+  elements.hardwareBenchmarkClear.disabled = true;
+  try {
+    const response = await fetch("/api/hardware/benchmarks", { method: "DELETE" });
+    if (!response.ok) throw new Error("Unable to clear benchmark data");
+    await loadBenchmarkHistory();
+    elements.hardwareBenchmarkResults.innerHTML = '<p class="meta">No benchmark selected.</p>';
+    elements.hardwareBenchmarkStatus.textContent = "Previous benchmark data cleared.";
+  } finally {
+    elements.hardwareBenchmarkClear.disabled = false;
   }
 }
 
@@ -1229,6 +1247,9 @@ elements.hardwareTabBenchmarks.addEventListener("click", () => {
 elements.hardwareBenchmarkRun.addEventListener("click", () => runHardwareBenchmark().catch((error) => {
   elements.hardwareBenchmarkStatus.textContent = error.message;
   showError(error.message);
+}));
+elements.hardwareBenchmarkClear.addEventListener("click", () => clearHardwareBenchmarks().catch((error) => {
+  elements.hardwareBenchmarkStatus.textContent = error.message;
 }));
 elements.hardwareProfileModel.addEventListener("change", renderGpuProfileControls);
 elements.hardwareProfileMode.addEventListener("change", () => {

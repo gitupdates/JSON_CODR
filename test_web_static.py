@@ -34,7 +34,7 @@ class WebStaticTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.0.9", response.text)
+        self.assertIn("V1.0.10", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -200,7 +200,7 @@ class WebStaticTests(unittest.TestCase):
             "hardware-benchmark-view", "hardware-benchmark-suite", "hardware-benchmark-model",
             "hardware-benchmark-backend",
             "hardware-benchmark-run", "hardware-benchmark-status", "hardware-benchmark-results",
-            "hardware-benchmark-history",
+            "hardware-benchmark-history", "hardware-benchmark-clear",
         ):
             self.assertIn(f'id="{identifier}"', html)
         self.assertIn('role="tablist"', html)
@@ -217,6 +217,10 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("candidate.readiness", javascript)
         self.assertIn("result.gpu_percent", javascript)
         self.assertIn("GPU offload verified", javascript)
+        self.assertIn("0.3.0-localperf", html)
+        self.assertIn("result.localperf", javascript)
+        self.assertIn("ttft_ms", javascript)
+        self.assertIn('method: "DELETE"', javascript)
 
     def test_gpu_telemetry_and_per_model_profile_controls_are_present(self):
         html = self.client.get("/").text

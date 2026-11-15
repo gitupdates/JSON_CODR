@@ -15,6 +15,12 @@ from typing import Awaitable, Callable
 import ollama
 
 from web_app.inference.detection import AcceleratorDetector
+from web_app.localperf.aggregate import aggregate_run
+from web_app.localperf.models import SampleRecord
+from web_app.localperf.quality import evaluate_quality
+from web_app.localperf.storage import LocalPerfStorage
+from web_app.localperf.workload import CORE_WORKLOAD, WORKLOAD_NAME, WORKLOAD_VERSION, workload_hash
+from web_app.version import APP_VERSION
 
 
 class HardwareBackendManager:
@@ -27,19 +33,24 @@ class HardwareBackendManager:
         active_backend: str | None = None,
         ai_device_detector: Callable[[], list[str]] | None = None,
         benchmark_runner: Callable[[str, str, list[str], int], Awaitable[list[dict]]] | None = None,
+        cpu_benchmark_runner: Callable[[str, str, list[str], int], Awaitable[list[dict]]] | None = None,
         accelerator_detector: AcceleratorDetector | None = None,
         gpu_telemetry_reader: Callable[[], list[dict]] | None = None,
         ollama_gpu_probe: Callable[[str], Awaitable[dict]] | None = None,
         ollama_gpu_benchmark_runner: Callable[[str, str, list[str], int], Awaitable[list[dict]]] | None = None,
     ) -> None:
         self.path = Path(data_root).resolve() / "hardware-backend.json"
-        self.benchmark_path = Path(data_root).resolve() / "hardware-benchmarks.json"
+        self.data_root = Path(data_root).resolve()
+        self.legacy_benchmark_path = self.data_root / "hardware-benchmarks.json"
+        self.benchmark_path = self.data_root / "localperf" / "benchmark-index.json"
+        self.localperf_storage = LocalPerfStorage(self.data_root)
         self.runtime_root = runtime_root or Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "lib" / "ollama"
         self.command_available = command_available or (lambda command: shutil.which(command) is not None)
         self.environment_writer = environment_writer or self._write_user_environment
         self.active_backend = active_backend or os.environ.get("OLLAMA_LLM_LIBRARY", "cpu")
         self.ai_device_detector = ai_device_detector or self._detect_windows_ai_devices
         self.benchmark_runner = benchmark_runner or self._run_benchmark_backend
+        self.cpu_benchmark_runner = cpu_benchmark_runner or benchmark_runner or self._run_cpu_benchmark
         self.accelerator_detector = accelerator_detector
         self.gpu_telemetry_reader = gpu_telemetry_reader or self._read_nvidia_telemetry
         self.ollama_gpu_probe = ollama_gpu_probe or self._probe_ollama_gpu
@@ -157,6 +168,9 @@ class HardwareBackendManager:
         temporary = self.benchmark_path.parent / f".benchmarks-{uuid.uuid4().hex}.tmp"
         temporary.write_text(json.dumps(history, indent=2), encoding="utf-8")
         os.replace(temporary, self.benchmark_path)
+
+    def clear_legacy_benchmarks(self) -> bool:
+        return self.localperf_storage.clear_legacy_history()
 
     def detect(self) -> list[dict]:
         state = self._read()
@@ -368,12 +382,8 @@ class HardwareBackendManager:
             raise ValueError("Benchmark suite must be quick or thorough")
         if self._benchmark_lock.locked():
             raise RuntimeError("A hardware benchmark is already running")
-        prompts = [
-            "Reply with exactly: JSON_CODR benchmark ready.",
-            "Return only the sum of the integers from 1 through 100.",
-            "Write a compact Python function named clamp that bounds a number between a minimum and maximum.",
-        ]
-        repeats = 1 if suite == "quick" else 3
+        prompts = [item.prompt for item in CORE_WORKLOAD]
+        repeats = 3 if suite == "quick" else 7
         async with self._benchmark_lock:
             detected = self.detect()
             detected_ids = {candidate["id"] for candidate in detected}
@@ -383,7 +393,7 @@ class HardwareBackendManager:
                 candidate for candidate in detected if candidate["id"] == "cpu" or candidate["id"] == backend
             ]
             results = []
-            test_names = ["instruction", "reasoning", "code"]
+            test_names = [item.category for item in CORE_WORKLOAD]
             for candidate in selected:
                 if not candidate["runnable"] or not candidate["compatible"]:
                     results.append({
@@ -402,18 +412,46 @@ class HardwareBackendManager:
                     })
                     continue
                 try:
-                    runner = self.ollama_gpu_benchmark_runner if candidate["id"] == "ollama_gpu" else self.benchmark_runner
+                    runner = (
+                        self.cpu_benchmark_runner if candidate["id"] == "cpu"
+                        else self.ollama_gpu_benchmark_runner if candidate["id"] == "ollama_gpu"
+                        else self.benchmark_runner
+                    )
                     samples = await runner(candidate["id"], model, prompts, repeats)
                     total_tokens = sum(sample["tokens"] for sample in samples)
                     eval_seconds = sum(sample["eval_seconds"] for sample in samples)
                     tests = [{
                         "test": test_names[index % len(test_names)],
+                        "prompt_id": CORE_WORKLOAD[index % len(CORE_WORKLOAD)].id,
                         "repetition": index // len(test_names) + 1,
                         "total_seconds": round(sample["total_seconds"], 3),
                         "load_seconds": round(sample["load_seconds"], 3),
                         "tokens": sample["tokens"],
                         "tokens_per_second": round(sample["tokens"] / sample["eval_seconds"], 3) if sample["eval_seconds"] else 0.0,
+                        "ttft_ms": round(float(sample.get("ttft_seconds", max(.001, sample["total_seconds"] - sample["eval_seconds"]))) * 1000, 3),
+                        "peak_vram_mb": round(float(sample.get("vram_bytes", 0)) / 1048576, 3),
                     } for index, sample in enumerate(samples)]
+                    canonical_samples = []
+                    for index, sample in enumerate(samples):
+                        prompt = CORE_WORKLOAD[index % len(CORE_WORKLOAD)]
+                        output = str(sample.get("output") or "")
+                        canonical_samples.append(SampleRecord(
+                            prompt_id=prompt.id, repetition=index // len(CORE_WORKLOAD) + 1,
+                            success=sample.get("tokens", 0) > 0 and sample.get("eval_seconds", 0) > 0,
+                            generation_tokens_per_second=sample["tokens"] / sample["eval_seconds"],
+                            ttft_ms=float(sample.get("ttft_seconds", max(.001, sample["total_seconds"] - sample["eval_seconds"]))) * 1000,
+                            peak_vram_mb=float(sample.get("vram_bytes", 0)) / 1048576,
+                            total_duration_ms=float(sample["total_seconds"]) * 1000,
+                            prompt_tokens=int(sample.get("prompt_tokens", 0)), generated_tokens=int(sample["tokens"]),
+                            output=output, quality=evaluate_quality(prompt.id, output) if prompt.quality_scored else None,
+                        ))
+                    metadata = {
+                        "model": model, "backend": candidate["id"], "profile": "automatic",
+                        "hardware": {"kind": candidate["kind"], "name": candidate["name"]},
+                        "software": {"application": "JSON_CODR", "version": APP_VERSION, "runtime": candidate["id"]},
+                    }
+                    localperf_run = aggregate_run(canonical_samples, metadata, suite, repeats)
+                    artifact_paths = self.localperf_storage.save_run(localperf_run)
                     results.append({
                         "backend": candidate["id"],
                         "name": candidate["name"],
@@ -439,6 +477,14 @@ class HardwareBackendManager:
                         "gpu_percent": max((int(sample.get("gpu_percent") or 0) for sample in samples), default=0),
                         "vram_bytes": max((int(sample.get("vram_bytes") or 0) for sample in samples), default=0),
                         "speedup_vs_cpu": None,
+                        "localperf": {
+                            "schema_version": localperf_run.schema_version,
+                            "evaluation_id": localperf_run.evaluation_id,
+                            "configuration_hash": localperf_run.configuration.hash,
+                            "conformance": localperf_run.conformance.model_dump(),
+                            "quality_rate": localperf_run.quality_rate,
+                            "artifacts": {name: str(path) for name, path in artifact_paths.items()},
+                        },
                     })
                 except Exception as error:
                     results.append({
@@ -481,12 +527,60 @@ class HardwareBackendManager:
                 "target_backend": backend,
                 "prompt_count": len(prompts),
                 "repeats": repeats,
+                "schema_version": "0.3.0-localperf",
+                "workload_name": WORKLOAD_NAME,
+                "workload_version": WORKLOAD_VERSION,
+                "workload_hash": workload_hash(),
                 "selected_backend": selected_backend,
                 "selection_reason": "Highest throughput among candidates that completed every compatibility test" if winner else "Ollama CPU compatibility fallback",
                 "results": results,
             }
             self._save_benchmark(benchmark)
             return benchmark
+
+    @staticmethod
+    async def _stream_ollama_sample(client, model: str, prompt: str, options: dict, keep_alive) -> dict:
+        started = time.perf_counter()
+        first_token_at = None
+        output = []
+        final = None
+        stream = await asyncio.wait_for(
+            client.generate(model=model, prompt=prompt, options=options, stream=True, keep_alive=keep_alive),
+            timeout=120,
+        )
+        async for chunk in stream:
+            final = chunk
+            text = getattr(chunk, "response", None) or (chunk.get("response", "") if isinstance(chunk, dict) else "")
+            if text and first_token_at is None:
+                first_token_at = time.perf_counter()
+            output.append(text)
+        ended = time.perf_counter()
+        if final is None or first_token_at is None:
+            raise RuntimeError("Benchmark stream returned no generated tokens")
+        get = lambda name, default=0: getattr(final, name, default) if not isinstance(final, dict) else final.get(name, default)
+        return {
+            "total_seconds": ended - started,
+            "ttft_seconds": first_token_at - started,
+            "load_seconds": get("load_duration", 0) / 1_000_000_000,
+            "tokens": get("eval_count", 0) or 0,
+            "prompt_tokens": get("prompt_eval_count", 0) or 0,
+            "eval_seconds": get("eval_duration", 0) / 1_000_000_000,
+            "output": "".join(output),
+        }
+
+    @staticmethod
+    async def _run_cpu_benchmark(backend: str, model: str, prompts: list[str], repeats: int) -> list[dict]:
+        client = ollama.AsyncClient()
+        options = {"temperature": 0, "num_predict": 96, "num_gpu": 0}
+        await asyncio.wait_for(
+            client.generate(model=model, prompt=prompts[0], options=options, stream=False, keep_alive="5m"),
+            timeout=120,
+        )
+        samples = []
+        for _ in range(repeats):
+            for prompt in prompts:
+                samples.append(await HardwareBackendManager._stream_ollama_sample(client, model, prompt, options, "5m"))
+        return samples
 
     @staticmethod
     async def _run_ollama_gpu_benchmark(backend: str, model: str, prompts: list[str], repeats: int) -> list[dict]:
@@ -499,17 +593,7 @@ class HardwareBackendManager:
         samples = []
         for _ in range(repeats):
             for prompt in prompts:
-                started = time.perf_counter()
-                response = await asyncio.wait_for(
-                    client.generate(model=model, prompt=prompt, options=options, stream=False, keep_alive="5m"),
-                    timeout=120,
-                )
-                samples.append({
-                    "total_seconds": time.perf_counter() - started,
-                    "load_seconds": getattr(response, "load_duration", 0) / 1_000_000_000,
-                    "tokens": getattr(response, "eval_count", 0) or 0,
-                    "eval_seconds": getattr(response, "eval_duration", 0) / 1_000_000_000,
-                })
+                samples.append(await HardwareBackendManager._stream_ollama_sample(client, model, prompt, options, "5m"))
         runtime = await client.ps()
         payload = runtime.model_dump() if hasattr(runtime, "model_dump") else runtime
         running = next(
@@ -546,18 +630,7 @@ class HardwareBackendManager:
             samples = []
             for _ in range(repeats):
                 for prompt in prompts:
-                    started = time.perf_counter()
-                    response = await asyncio.wait_for(
-                        client.generate(model=model, prompt=prompt, options=options, stream=False, keep_alive=0),
-                        timeout=120,
-                    )
-                    total_seconds = time.perf_counter() - started
-                    samples.append({
-                        "total_seconds": total_seconds,
-                        "load_seconds": getattr(response, "load_duration", 0) / 1_000_000_000,
-                        "tokens": getattr(response, "eval_count", 0) or 0,
-                        "eval_seconds": getattr(response, "eval_duration", 0) / 1_000_000_000,
-                    })
+                    samples.append(await self._stream_ollama_sample(client, model, prompt, options, 0))
             return samples
         finally:
             await self._stop_process(process)

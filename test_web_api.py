@@ -191,9 +191,9 @@ class WebApiTests(unittest.TestCase):
     def test_health_reports_ollama_readiness(self):
         self.assertEqual(
             self.client.get("/api/health").json(),
-            {"status": "ready", "ollama": True, "app_version": "V1.0.9"},
+            {"status": "ready", "ollama": True, "app_version": "V1.0.10"},
         )
-        self.assertEqual(self.client.app.version, "V1.0.9")
+        self.assertEqual(self.client.app.version, "V1.0.10")
         self.service.available = False
         self.assertEqual(self.client.get("/api/health").json()["status"], "degraded")
 
@@ -252,6 +252,9 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(hardware.benchmarked, ("quick", "qwen2.5-coder:0.5b", "cuda_v12"))
         self.assertEqual(hardware.selected_benchmark["selected_backend"], "cpu")
         self.assertEqual(client.get("/api/hardware/benchmarks").json()[0]["id"], "run-0")
+
+        cleared = client.delete("/api/hardware/benchmarks")
+        self.assertEqual(cleared.status_code, 200)
 
         invalid = client.post("/api/hardware/benchmarks", json={"suite": "overnight", "model": "model"})
         self.assertEqual(invalid.status_code, 422)

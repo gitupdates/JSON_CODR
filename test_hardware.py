@@ -319,12 +319,14 @@ class HardwareBenchmarkTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([entry[0] for entry in self.calls], ["cpu", "ollama_gpu", "cuda_v12"])
         self.assertEqual(self.calls[0][2:], self.calls[1][2:])
-        self.assertEqual(self.calls[0][3], 1)
-        self.assertEqual(len(self.calls[0][2]), 3)
+        self.assertEqual(self.calls[0][3], 3)
+        self.assertEqual(len(self.calls[0][2]), 12)
         self.assertEqual([entry["backend"] for entry in result["results"]], ["cpu", "ollama_gpu", "cuda_v12", "cuda_v13", "npu-0"])
         self.assertEqual(result["results"][0]["tokens_per_second"], 25.0)
         self.assertEqual(result["results"][1]["speedup_vs_cpu"], 2.667)
-        self.assertEqual([sample["test"] for sample in result["results"][1]["tests"]], ["instruction", "reasoning", "code"])
+        self.assertEqual(len(result["results"][1]["tests"]), 36)
+        self.assertEqual(result["schema_version"], "0.3.0-localperf")
+        self.assertEqual(result["workload_name"], "LocalPerf-Core-v1")
         self.assertEqual(result["results"][1]["runtime"], "ollama_gpu")
         self.assertEqual(result["results"][1]["kind"], "gpu")
         self.assertEqual(result["results"][1]["gpu_percent"], 100)
@@ -336,6 +338,22 @@ class HardwareBenchmarkTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["results"][1]["selected"])
         self.assertFalse(result["results"][3]["eligible"])
         self.assertEqual(self.manager.status()["preferred_backend"], "cpu")
+
+    async def test_cpu_uses_primary_runner_while_accelerator_uses_isolated_runner(self):
+        calls = []
+        async def primary(backend, model, prompts, repeats):
+            calls.append("primary")
+            return [{"total_seconds": 1, "load_seconds": .1, "tokens": 2, "eval_seconds": .5} for _ in range(len(prompts) * repeats)]
+        async def isolated(backend, model, prompts, repeats):
+            calls.append("isolated")
+            return [{"total_seconds": 1, "load_seconds": .1, "tokens": 2, "eval_seconds": .5} for _ in range(len(prompts) * repeats)]
+        manager = HardwareBackendManager(
+            self.root, runtime_root=self.root / "ollama", command_available=lambda command: False,
+            ai_device_detector=lambda: [], environment_writer=lambda name, value: None,
+            benchmark_runner=isolated, cpu_benchmark_runner=primary,
+        )
+        await manager.benchmark("quick", "model", "cpu")
+        self.assertEqual(calls, ["primary"])
 
     async def test_selected_accelerator_runs_with_cpu_baseline_and_rejects_unknown_target(self):
         result = await self.manager.benchmark("quick", "model", "cuda_v12")
@@ -359,7 +377,7 @@ class HardwareBenchmarkTests(unittest.IsolatedAsyncioTestCase):
     async def test_thorough_benchmark_repeats_workload_and_persists_bounded_history(self):
         first = await self.manager.benchmark("thorough", "qwen2.5-coder:0.5b")
 
-        self.assertEqual(self.calls[0][3], 3)
+        self.assertEqual(self.calls[0][3], 7)
         self.assertEqual(self.manager.benchmark_history()[0]["id"], first["id"])
 
         for _ in range(22):
@@ -381,6 +399,7 @@ class HardwareBenchmarkTests(unittest.IsolatedAsyncioTestCase):
             return [{"total_seconds": 0.5, "load_seconds": 0.1, "tokens": 10, "eval_seconds": 0.4}]
 
         self.manager.benchmark_runner = failing_runner
+        self.manager.cpu_benchmark_runner = failing_runner
         result = await self.manager.benchmark("quick", "model")
 
         self.assertEqual(result["results"][0]["status"], "failed")
@@ -404,7 +423,7 @@ class HardwareBenchmarkTests(unittest.IsolatedAsyncioTestCase):
         accelerated = [item for item in result["results"] if item["backend"] != "cpu" and item["status"] == "completed"]
         self.assertTrue(accelerated)
         self.assertTrue(all(not item["eligible"] for item in accelerated))
-        self.assertTrue(all("expected 3 successful samples" in item["rejection_reasons"][0] for item in accelerated))
+        self.assertTrue(all("expected 36 successful samples" in item["rejection_reasons"][0] for item in accelerated))
 
     async def test_rejects_invalid_suite_and_overlapping_run(self):
         with self.assertRaisesRegex(ValueError, "suite"):
@@ -428,6 +447,7 @@ class HardwareBenchmarkTests(unittest.IsolatedAsyncioTestCase):
                 "average_load_seconds": 0.5, "speedup_vs_cpu": 2.0,
             }],
         }]
+        self.manager.benchmark_path.parent.mkdir(parents=True, exist_ok=True)
         self.manager.benchmark_path.write_text(json.dumps(legacy), encoding="utf-8")
 
         result = self.manager.benchmark_history()[0]["results"][0]
