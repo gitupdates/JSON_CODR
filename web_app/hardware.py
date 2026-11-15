@@ -601,6 +601,6 @@ class HardwareBackendManager:
     @staticmethod
     def is_ai_device_name(name: str) -> bool:
         return bool(re.search(
-            r"(?i)(?:\bNPU\b|neural (?:processing unit|processor)|intel(?:\(r\))? AI Boost|AMD Ryzen AI|Qualcomm Hexagon)",
+            r"(?i)(?:\bNPU\b|neural (?:processing unit|processor)|intel(?:\(r\))?.*(?:AI Boost|AI accelerator)|AMD Ryzen AI|Qualcomm Hexagon)",
             name,
         ))

@@ -19,7 +19,25 @@ class HardwareBackendTests(unittest.TestCase):
         self.assertFalse(HardwareBackendManager.is_ai_device_name("USB Input Device"))
         self.assertFalse(HardwareBackendManager.is_ai_device_name("Microsoft Input Configuration Device"))
         self.assertTrue(HardwareBackendManager.is_ai_device_name("Intel(R) AI Boost"))
+        self.assertTrue(HardwareBackendManager.is_ai_device_name("Intel AI Accelerator"))
         self.assertTrue(HardwareBackendManager.is_ai_device_name("Qualcomm Hexagon NPU"))
+
+    def test_intel_ai_accelerator_uses_openvino_npu_when_runtime_and_model_are_verified(self):
+        detector = AcceleratorDetector(
+            device_names=lambda: ["Intel AI Accelerator"],
+            runtime_available=lambda provider: provider == "openvino",
+            provider_devices=lambda provider: ["NPU"] if provider == "openvino" else [],
+            windows_build=lambda: 26100,
+            directx12_available=lambda: False,
+            model_ready=lambda provider: provider == "openvino",
+        )
+
+        result = detector.detect()
+
+        openvino = next(item for item in result if item.provider.value == "openvino")
+        self.assertTrue(openvino.hardware_detected)
+        self.assertTrue(openvino.runtime_ready)
+        self.assertTrue(openvino.model_ready)
 
     def test_cpu_is_universal_and_accelerators_require_detector_and_runtime(self):
         runtime = self.root / "ollama"

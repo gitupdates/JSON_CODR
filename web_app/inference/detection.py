@@ -30,7 +30,10 @@ class AcceleratorDetector:
 
     def detect(self) -> list[ProviderState]:
         devices = list(dict.fromkeys(name.strip() for name in self.device_names() if name.strip()))
-        intel = [name for name in devices if re.search(r"(?i)(intel.*AI Boost|intel.*NPU)", name)]
+        intel = [name for name in devices if re.search(
+            r"(?i)intel(?:\(r\))?.*(?:AI Boost|AI accelerator|\bNPU\b|neural (?:processing unit|processor))",
+            name,
+        )]
         amd = [name for name in devices if re.search(r"(?i)(AMD.*Ryzen AI|AMD.*NPU)", name)]
         generic_npu = [name for name in devices if self.is_npu_name(name)]
         result: list[ProviderState] = []
@@ -106,7 +109,7 @@ class AcceleratorDetector:
     @staticmethod
     def is_npu_name(name: str) -> bool:
         return bool(re.search(
-            r"(?i)(?:\bNPU\b|neural (?:processing unit|processor)|intel(?:\(r\))? AI Boost|AMD Ryzen AI|Qualcomm Hexagon)",
+            r"(?i)(?:\bNPU\b|neural (?:processing unit|processor)|intel(?:\(r\))?.*(?:AI Boost|AI accelerator)|AMD Ryzen AI|Qualcomm Hexagon)",
             name,
         ))
 

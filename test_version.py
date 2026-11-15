@@ -5,7 +5,7 @@ from web_app.version import APP_VERSION
 
 class VersionTests(unittest.TestCase):
     def test_canonical_application_version(self):
-        self.assertEqual(APP_VERSION, "V1.0.8")
+        self.assertEqual(APP_VERSION, "V1.0.9")
 
 
 if __name__ == "__main__":
