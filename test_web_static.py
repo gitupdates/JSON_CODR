@@ -55,7 +55,7 @@ class WebStaticTests(unittest.TestCase):
         html = self.client.get("/").text
         css = self.client.get("/static/app.css")
         javascript = self.client.get("/static/app.js")
-        self.assertIn('/static/app.css?v=1.0.13-benchmark-leaderboard-2', html)
+        self.assertIn('/static/app.css?v=1.0.13-benchmark-leaderboard-3', html)
         self.assertEqual(css.status_code, 200)
         self.assertIn("text/css", css.headers["content-type"])
         self.assertEqual(javascript.status_code, 200)
@@ -325,6 +325,7 @@ class WebStaticTests(unittest.TestCase):
             "Benchmark suite ${row.suite} is not available",
             'row.conforming === true ? "valid" : row.conforming === false ? "invalid" : "unknown"',
             "configuration_hash",
+            "workload hash ${row.workload_hash || \"unavailable\"}",
         ):
             self.assertIn(contract, javascript)
         for identifier in (

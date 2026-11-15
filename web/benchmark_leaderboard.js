@@ -87,13 +87,15 @@
         verified: candidate.verified,
         runnable: candidate.runnable,
         compatible: candidate.compatible,
-        availability_reason: candidate.reason || candidate.error || null,
+        availability_reason: candidate.compatibility_reason || candidate.reason || candidate.error || null,
         conforming: null,
         runtime: candidate.runtime || null,
         kind: candidate.kind || null,
         active: typeof candidate.active === "boolean" ? candidate.active : null,
         configuration_hash: candidate.configuration_hash || null,
-        compatibility_reasons: Array.isArray(candidate.compatibility_reasons) ? [...candidate.compatibility_reasons] : [],
+        compatibility_reasons: Array.isArray(candidate.compatibility_reasons)
+          ? [...candidate.compatibility_reasons]
+          : candidate.compatibility_reason ? [candidate.compatibility_reason] : [],
         quarantine_reason: candidate.quarantine_reason || null,
         tested: false,
         tests: [],

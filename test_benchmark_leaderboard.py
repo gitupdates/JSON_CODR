@@ -171,12 +171,13 @@ class BenchmarkLeaderboardTests(unittest.TestCase):
             "globalThis.JSONCodrLeaderboard.buildRows(input.history, input.candidates, 'run-1').at(-1)",
             {
                 "history": [session()],
-                "candidates": [{"id": "npu-0", "name": "Intel NPU", "runnable": False, "compatible": False, "reason": "Runtime missing"}],
+                "candidates": [{"id": "npu-0", "name": "Intel NPU", "runnable": False, "compatible": False, "compatibility_reason": "Runtime missing"}],
             },
         )
         self.assertFalse(candidate["runnable"])
         self.assertFalse(candidate["compatible"])
         self.assertEqual(candidate["availability_reason"], "Runtime missing")
+        self.assertEqual(candidate["compatibility_reasons"], ["Runtime missing"])
         self.assertEqual(candidate["status"], "unavailable")
         self.assertFalse(candidate["tested"])
         self.assertIsNone(candidate["conforming"])
