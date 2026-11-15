@@ -257,9 +257,16 @@ class WebStaticTests(unittest.TestCase):
             "localperf-import-input", "localperf-retain-details", "localperf-package-status",
             "optimized-model-search-provider", "optimized-model-search-query",
             "optimized-model-search-run", "optimized-model-search-results",
+            "leaderboard-search", "leaderboard-model-filter", "leaderboard-backend-filter",
+            "leaderboard-suite-filter", "leaderboard-metric", "leaderboard-kpis",
+            "leaderboard-table", "leaderboard-backend-chart", "leaderboard-trend-chart",
+            "leaderboard-details", "leaderboard-status",
         ):
             self.assertIn(f'id="{identifier}"', html)
+        self.assertIn('data-hardware-section="benchmarks">Performance benchmarks', html)
+        self.assertIn('data-hardware-section="leaderboard">Leaderboard', html)
         self.assertIn('data-hardware-view="benchmarks"', html)
+        self.assertIn('data-hardware-view="leaderboard"', html)
         self.assertIn('data-hardware-view="history"', html)
         self.assertIn('data-hardware-view="localperf"', html)
         self.assertIn('fetch("/api/hardware/benchmarks"', javascript)
@@ -286,6 +293,12 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('/api/hardware/model-compatibility', javascript)
         self.assertIn('/api/inference/models/search', javascript)
         self.assertIn('model.status === "accelerated"', javascript)
+        self.assertIn('aria-label="Backend performance comparison"', html)
+        self.assertIn('aria-label="Performance history trend"', html)
+        self.assertIn("Performance results do not measure model answer quality", html)
+        self.assertLess(html.index("benchmark_leaderboard.js"), html.index("app.js"))
+        self.assertNotIn("chart.js", html.lower())
+        self.assertNotIn("plotly", html.lower())
 
     def test_gpu_telemetry_and_per_model_profile_controls_are_present(self):
         html = self.client.get("/").text

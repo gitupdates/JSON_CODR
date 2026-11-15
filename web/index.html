@@ -49,7 +49,8 @@
             <button type="button" data-hardware-section="runtimes">Hardware &amp; runtimes</button>
             <button type="button" data-hardware-section="compatibility">Model compatibility</button>
             <button type="button" data-hardware-section="model-search">Optimized model search</button>
-            <button type="button" data-hardware-section="benchmarks">Benchmarks</button>
+            <button type="button" data-hardware-section="benchmarks">Performance benchmarks</button>
+            <button type="button" data-hardware-section="leaderboard">Leaderboard</button>
             <button type="button" data-hardware-section="history">Results &amp; history</button>
             <button type="button" data-hardware-section="localperf">LocalPerf packages</button>
           </div>
@@ -278,7 +279,7 @@
           </section>
 
           <section data-hardware-view="benchmarks" aria-labelledby="hardware-section-benchmarks" hidden>
-            <h3 id="hardware-section-benchmarks">Benchmarks</h3>
+            <h3 id="hardware-section-benchmarks">Performance benchmarks</h3>
             <p class="meta">LocalPerf 0.3.0-localperf · LocalPerf-Core-v1. Runs the same versioned 12-prompt workload on CPU first and then each available backend.</p>
             <label class="setting-row" for="hardware-benchmark-suite">Benchmark suite</label>
             <select id="hardware-benchmark-suite" class="setting-select">
@@ -296,6 +297,34 @@
               <span id="hardware-benchmark-status" class="meta" role="status" aria-live="polite"></span>
             </div>
             <div id="hardware-benchmark-results" class="dependency-list"><p class="meta">No benchmark selected.</p></div>
+          </section>
+
+          <section data-hardware-view="leaderboard" aria-labelledby="hardware-section-leaderboard" hidden>
+            <div class="leaderboard-heading">
+              <div><h3 id="hardware-section-leaderboard">LocalPerf leaderboard</h3><p class="meta">Rank and compare measured local inference performance across CPU, GPU, NPU, and optimized runtimes.</p></div>
+              <span id="leaderboard-status" class="meta" role="status" aria-live="polite">Load benchmark history to compare results.</span>
+            </div>
+            <p class="leaderboard-disclaimer">Performance results do not measure model answer quality. Direct ranks use one model, workload, suite, machine, and benchmark session.</p>
+            <div class="leaderboard-filters" aria-label="Leaderboard filters">
+              <label>Search<input id="leaderboard-search" type="search" placeholder="Model or backend" /></label>
+              <label>Model<select id="leaderboard-model-filter"><option value="all">All models</option></select></label>
+              <label>Backend<select id="leaderboard-backend-filter"><option value="all">All backends</option></select></label>
+              <label>Suite<select id="leaderboard-suite-filter"><option value="all">All suites</option></select></label>
+              <label>Rank by<select id="leaderboard-metric"><option value="tokens_per_second">Throughput</option><option value="ttft_ms">Time to first token</option><option value="average_total_seconds">Total duration</option><option value="peak_vram_mb">Peak VRAM</option><option value="performance_index">Performance index</option></select></label>
+            </div>
+            <div id="leaderboard-kpis" class="leaderboard-kpis" aria-label="Benchmark key performance indicators"></div>
+            <div class="leaderboard-table-wrap">
+              <table class="leaderboard-table">
+                <caption class="sr-only">Local inference performance leaderboard</caption>
+                <thead><tr><th scope="col">Rank</th><th scope="col">Model / backend</th><th scope="col">Index</th><th scope="col">Tokens/s</th><th scope="col">TTFT</th><th scope="col">Duration</th><th scope="col">Peak VRAM</th><th scope="col">CPU speed</th><th scope="col">Status</th></tr></thead>
+                <tbody id="leaderboard-table"><tr><td colspan="9" class="meta">No benchmark history loaded.</td></tr></tbody>
+              </table>
+            </div>
+            <div class="leaderboard-charts">
+              <figure id="leaderboard-backend-chart" class="leaderboard-chart" aria-label="Backend performance comparison"><figcaption>Throughput versus responsiveness</figcaption><p class="meta">Run benchmarks to plot backend results.</p></figure>
+              <figure id="leaderboard-trend-chart" class="leaderboard-chart" aria-label="Performance history trend"><figcaption>Performance history</figcaption><p class="meta">Select a tested backend to view its history.</p></figure>
+            </div>
+            <article id="leaderboard-details" class="leaderboard-details" aria-live="polite"><p class="meta">Select a leaderboard row for percentile statistics and per-prompt evidence.</p></article>
           </section>
 
           <section data-hardware-view="history" aria-labelledby="hardware-section-history" hidden>
@@ -356,6 +385,7 @@
       </main>
     </div>
     <script src="/static/dependency_install_queue.js?v=1.0.12" defer></script>
+    <script src="/static/benchmark_leaderboard.js?v=1.0.12" defer></script>
     <script src="/static/app.js?v=1.0.12-global-navigation" defer></script>
   </body>
 </html>
