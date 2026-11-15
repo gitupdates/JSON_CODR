@@ -38,7 +38,7 @@ class EnvironmentManager:
     def install_command(self, provider: ProviderKind) -> str:
         plan = self.plan(provider)
         packages = " ".join(plan.packages)
-        return f'"{sys.executable}" -m venv "{plan.root}"; & "{plan.python}" -m pip install {packages}'
+        return f'& "{sys.executable}" -m venv "{plan.root}"; & "{plan.python}" -m pip install {packages}'
 
     def remove(self, provider: ProviderKind) -> None:
         plan = self.plan(provider)

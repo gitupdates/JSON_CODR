@@ -1,4 +1,5 @@
 import asyncio
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,7 +19,9 @@ class EnvironmentManagerTests(unittest.TestCase):
             self.assertEqual(len({plan.root for plan in plans}), 4)
             self.assertTrue(all(plan.packages for plan in plans))
             self.assertTrue(all(any(character.isdigit() for character in " ".join(plan.packages)) for plan in plans))
-            self.assertIn("-m venv", manager.install_command(ProviderKind.openvino))
+            install_command = manager.install_command(ProviderKind.openvino)
+            self.assertIn("-m venv", install_command)
+            self.assertTrue(install_command.startswith(f'& "{sys.executable}" -m venv'))
 
     def test_base_requirements_do_not_include_optional_runtimes(self):
         requirements = Path("requirements.txt").read_text(encoding="utf-8").lower()
