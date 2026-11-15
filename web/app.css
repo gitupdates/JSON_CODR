@@ -79,6 +79,57 @@ body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 50% -
 .ambient { position: fixed; border-radius: 999px; filter: blur(110px); opacity: .12; pointer-events: none; }
 .ambient-one { width: 340px; height: 340px; background: var(--cyan); top: 12%; left: -180px; }
 .ambient-two { width: 300px; height: 300px; background: var(--lime); right: -170px; bottom: 5%; }
+.nav-symbols { position: absolute; width: 0; height: 0; overflow: hidden; }
+.app-layout { min-height: 100vh; display: grid; grid-template-columns: var(--sidebar-width, 260px) minmax(0, 1fr); }
+.app-sidebar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  height: 100vh;
+  padding: 18px 13px;
+  color: var(--text);
+  background: var(--surface-panel-solid);
+  border-right: 1px solid var(--line-strong);
+  box-shadow: 12px 0 40px color-mix(in srgb, var(--shadow) 38%, transparent);
+}
+.sidebar-brand { min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 7px 15px; border-bottom: 1px solid var(--line); }
+.sidebar-brand-mark { color: var(--lime); font: 700 13px ui-monospace, monospace; }
+.sidebar-brand strong { min-width: 0; overflow: hidden; font: 700 13px ui-monospace, monospace; letter-spacing: .08em; }
+.sidebar-icon-button { width: 34px; min-width: 34px; height: 34px; margin-left: auto; padding: 0; color: var(--text); background: var(--surface-raised); border: 1px solid var(--line); border-radius: 7px; }
+.sidebar-destinations { display: grid; gap: 4px; margin-top: 16px; }
+.sidebar-destination, .hardware-subnavigation button {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-soft);
+  background: transparent;
+  border-radius: 7px;
+  text-align: left;
+}
+.sidebar-destination { height: 44px; padding: 0 11px; }
+.sidebar-destination:hover, .hardware-subnavigation button:hover { color: var(--text); background: var(--surface-raised); }
+.sidebar-destination.is-active { color: var(--accent-contrast); background: var(--lime); }
+.sidebar-destination span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.nav-icon { width: 22px; height: 22px; min-width: 22px; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.hardware-subnavigation { display: grid; gap: 2px; margin: 2px 0 7px 22px; padding: 4px 0 4px 12px; border-left: 1px solid var(--line-strong); }
+.hardware-subnavigation[hidden] { display: none; }
+.hardware-subnavigation button { height: auto; min-height: 34px; padding: 7px 9px; font-size: 11px; }
+.hardware-subnavigation button[aria-current="page"] { color: var(--lime); background: var(--surface-raised); }
+.sidebar-resize-handle { position: absolute; top: 0; right: -5px; width: 10px; height: 100%; cursor: ew-resize; touch-action: none; }
+.sidebar-resize-handle::after { content: ""; position: absolute; top: 42%; left: 3px; width: 3px; height: 64px; border-radius: 4px; background: var(--line-strong); }
+.sidebar-resize-handle:focus-visible::after, .sidebar-resize-handle:hover::after { background: var(--lime); }
+.app-view[hidden], .navigation-backdrop[hidden] { display: none; }
+.navigation-backdrop { position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,.55); }
+.mobile-navigation-toggle { display: none; }
+.sidebar-collapsed .app-layout { grid-template-columns: 68px minmax(0, 1fr); }
+.sidebar-collapsed .app-sidebar { padding-inline: 8px; }
+.sidebar-collapsed .sidebar-brand { justify-content: center; padding-inline: 0; }
+.sidebar-collapsed .sidebar-brand strong, .sidebar-collapsed .sidebar-destination span, .sidebar-collapsed .hardware-subnavigation, .sidebar-collapsed .sidebar-resize-handle { display: none; }
+.sidebar-collapsed .sidebar-brand-mark { display: none; }
+.sidebar-collapsed .sidebar-icon-button { margin: 0; transform: rotate(180deg); }
+.sidebar-collapsed .sidebar-destination { justify-content: center; padding: 0; }
 .shell { width: min(1180px, calc(100% - 36px)); margin: 0 auto; position: relative; }
 .topbar { min-height: 82px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
 .brand { display: flex; gap: 13px; align-items: center; color: inherit; text-decoration: none; }
@@ -208,6 +259,9 @@ footer { padding: 22px 0 34px; color: var(--text-subtle); font: 600 10px ui-mono
 .setting-help { margin: 7px 0 0; }
 .setting-row input { accent-color: var(--accent); }
 #approved-skill-directories code { overflow-wrap: anywhere; color: var(--cyan); }
+.hardware-sections > section { padding-top: 12px; }
+.hardware-sections > section[hidden] { display: none; }
+.hardware-sections h3 { margin: 0 0 12px; font-size: 20px; }
 .terminal-panel { position: sticky; bottom: 0; z-index: 10; margin-top: 18px; border: 1px solid var(--info-line); border-radius: 16px 16px 0 0; background: var(--terminal-panel); box-shadow: 0 -18px 50px var(--shadow); overflow: hidden; }
 .terminal-panel[hidden] { display: none; }
 .terminal-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
@@ -218,7 +272,29 @@ footer { padding: 22px 0 34px; color: var(--text-subtle); font: 600 10px ui-mono
 .terminal-command button { height: 40px; min-width: auto; }
 
 @media (max-width: 700px) {
+  .app-layout { display: block; }
+  .app-sidebar {
+    position: fixed;
+    left: 0;
+    width: min(320px, calc(100vw - 42px));
+    transform: translateX(-105%);
+    transition: transform .16s ease;
+  }
+  .navigation-open .app-sidebar { transform: translateX(0); }
+  .navigation-open .navigation-backdrop { display: block; }
+  .sidebar-collapsed .app-sidebar { padding-inline: 13px; }
+  .sidebar-collapsed .sidebar-brand { justify-content: flex-start; padding-inline: 7px; }
+  .sidebar-collapsed .sidebar-brand strong, .sidebar-collapsed .sidebar-destination span { display: initial; }
+  .sidebar-collapsed .sidebar-brand-mark { display: initial; }
+  .sidebar-collapsed .sidebar-icon-button { margin-left: auto; transform: none; }
+  .sidebar-collapsed .sidebar-destination { justify-content: flex-start; padding: 0 11px; }
+  .sidebar-resize-handle { display: none; }
+  .mobile-navigation-toggle { display: inline-flex; align-items: center; }
   .topbar { flex-wrap: wrap; padding: 12px 0; }
   .scan-controls { flex-direction: column; }
   .skill-row { align-items: flex-start; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-sidebar { transition: none; }
 }

@@ -22,7 +22,42 @@
   <body>
     <div class="ambient ambient-one"></div>
     <div class="ambient ambient-two"></div>
-    <main class="shell">
+    <svg class="nav-symbols" aria-hidden="true">
+      <symbol id="icon-chat" viewBox="0 0 24 24"><path d="M5 5h14v11H9l-4 3V5Z"/><path d="M8 9h8M8 12h5"/></symbol>
+      <symbol id="icon-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></symbol>
+      <symbol id="icon-context" viewBox="0 0 24 24"><path d="M4 6h6l2 2h8v10H4V6Z"/><path d="M8 12h8M8 15h5"/></symbol>
+      <symbol id="icon-skills" viewBox="0 0 24 24"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3Z"/><path d="m18 15 .8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8L18 15Z"/></symbol>
+      <symbol id="icon-hardware" viewBox="0 0 24 24"><path d="M4 12h4l2-6 4 12 2-6h4"/><path d="M4 4v16h16"/></symbol>
+      <symbol id="icon-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1a7 7 0 0 0-1.7-1L14.5 3h-5l-.4 3.1a7 7 0 0 0-1.7 1l-2.4-1-2 3.4L5.1 11a7 7 0 0 0 0 2L3 14.5l2 3.4 2.4-1a7 7 0 0 0 1.7 1l.4 3.1h5l.4-3.1a7 7 0 0 0 1.7-1l2.4 1 2-3.4-2.1-1.5c.1-.3.1-.7.1-1Z"/></symbol>
+    </svg>
+    <div id="navigation-backdrop" class="navigation-backdrop" hidden></div>
+    <div class="app-layout">
+      <nav id="app-sidebar" class="app-sidebar" aria-label="Primary navigation">
+        <div class="sidebar-brand">
+          <span class="sidebar-brand-mark">{ }</span><strong>JSON_CODR</strong>
+          <button id="sidebar-collapse" class="sidebar-icon-button" type="button" aria-label="Collapse navigation" aria-expanded="true">‹</button>
+        </div>
+        <div class="sidebar-destinations">
+          <button class="sidebar-destination is-active" type="button" data-destination="chat" aria-current="page" title="Chat"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-chat"/></svg><span>Chat</span></button>
+          <button class="sidebar-destination" type="button" data-destination="terminal" title="Live CLI"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-terminal"/></svg><span>Live CLI</span></button>
+          <button class="sidebar-destination" type="button" data-destination="context" title="Context &amp; files"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-context"/></svg><span>Context &amp; files</span></button>
+          <button class="sidebar-destination" type="button" data-destination="skills" title="Skills"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-skills"/></svg><span>Skills</span></button>
+          <button class="sidebar-destination" type="button" data-destination="hardware" title="Hardware"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-hardware"/></svg><span>Hardware</span></button>
+          <div id="hardware-subnavigation" class="hardware-subnavigation" hidden>
+            <button type="button" data-hardware-section="overview" aria-current="page">Overview</button>
+            <button type="button" data-hardware-section="profiles">Profiles &amp; optimization</button>
+            <button type="button" data-hardware-section="runtimes">Hardware &amp; runtimes</button>
+            <button type="button" data-hardware-section="compatibility">Model compatibility</button>
+            <button type="button" data-hardware-section="model-search">Optimized model search</button>
+            <button type="button" data-hardware-section="benchmarks">Benchmarks</button>
+            <button type="button" data-hardware-section="history">Results &amp; history</button>
+            <button type="button" data-hardware-section="localperf">LocalPerf packages</button>
+          </div>
+          <button class="sidebar-destination" type="button" data-destination="settings" title="Settings"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-settings"/></svg><span>Settings</span></button>
+        </div>
+        <div id="sidebar-resize-handle" class="sidebar-resize-handle" role="separator" aria-label="Resize navigation" aria-orientation="vertical" aria-valuemin="220" aria-valuemax="380" aria-valuenow="260" tabindex="0"></div>
+      </nav>
+      <main class="shell">
       <header class="topbar">
         <a class="brand" href="/" aria-label="JSON CODR home">
           <span class="brand-mark">{ }</span>
@@ -31,17 +66,13 @@
         <div id="health-status" class="health" role="status" aria-live="polite">
           <span class="health-dot"></span><span>Connecting</span>
         </div>
-        <div class="topbar-actions">
-          <button id="terminal-toggle" class="panel-toggle" type="button" aria-controls="terminal-panel" aria-expanded="false" title="Toggle terminal (Ctrl+J)">CLI</button>
-          <button id="context-toggle" class="panel-toggle" type="button" aria-controls="context-panel" aria-expanded="true" title="Toggle context panel (Ctrl+Alt+B)">Context</button>
-          <button id="skills-toggle" class="panel-toggle" type="button" aria-controls="skills-panel" aria-expanded="true">Skills</button>
-          <button id="settings-toggle" class="panel-toggle" type="button" aria-controls="settings-panel" aria-expanded="false">Settings</button>
-        </div>
+        <button id="mobile-navigation-toggle" class="panel-toggle mobile-navigation-toggle" type="button" aria-controls="app-sidebar" aria-expanded="false">Menu</button>
       </header>
 
+      <section id="view-chat" class="app-view" data-view="chat" aria-labelledby="chat-heading">
       <section class="hero">
         <p class="eyebrow">STRUCTURED INFERENCE / LOCAL ONLY</p>
-        <h1>One prompt.<br /><span>One precise model.</span></h1>
+        <h1 id="chat-heading">One prompt.<br /><span>One precise model.</span></h1>
         <p class="intro">Choose a local coding model and receive a validated response with a clean summary and full result.</p>
       </section>
 
@@ -98,8 +129,9 @@
           <div id="error-output" class="error" role="alert" hidden></div>
         </section>
       </section>
+      </section>
 
-      <aside id="context-panel" class="context-panel" aria-label="Attachment context">
+      <aside id="context-panel" class="context-panel app-view" data-view="context" aria-label="Attachment context" hidden>
         <div class="context-head"><div><span class="eyebrow">MODEL CONTEXT</span><h2>Files &amp; pasted content</h2></div><span id="context-count" class="meta">0 items</span></div>
         <div class="context-actions">
           <label class="secondary file-button" for="attachment-input">Import files</label>
@@ -118,7 +150,7 @@
         </section>
       </aside>
 
-      <aside id="skills-panel" class="context-panel" aria-label="Active installed and saved skills">
+      <aside id="skills-panel" class="context-panel app-view" data-view="skills" aria-label="Active installed and saved skills" hidden>
         <section id="skill-library" aria-label="Installed skill library">
           <div class="dependency-head">
             <div><span class="eyebrow">SKILL LIBRARY</span><strong>Active installed &amp; saved skills</strong></div>
@@ -158,7 +190,7 @@
         </section>
       </aside>
 
-      <aside id="settings-panel" class="context-panel" aria-label="JSON CODR settings" hidden>
+      <aside id="settings-panel" class="context-panel app-view" data-view="settings" aria-label="JSON CODR settings" hidden>
         <div class="context-head"><div><span class="eyebrow">SETTINGS</span><h2>System configuration</h2></div></div>
         <section class="dependency-review">
           <strong>Interface</strong>
@@ -175,15 +207,19 @@
           <strong>Approved skill directories</strong>
           <div id="approved-skill-directories" class="dependency-list"><p class="meta">No folders approved.</p></div>
         </section>
-        <section class="dependency-review" aria-label="Hardware optimization">
-          <div class="context-head"><div><strong>Hardware optimization</strong><p id="hardware-status" class="meta">CPU compatibility mode</p></div></div>
-          <div class="actions" role="tablist" aria-label="Hardware settings">
-            <button id="hardware-tab-optimization" class="secondary" type="button" role="tab" aria-controls="hardware-optimization-view" aria-selected="true">Optimization</button>
-            <button id="hardware-tab-benchmarks" class="secondary" type="button" role="tab" aria-controls="hardware-benchmark-view" aria-selected="false">Benchmarks</button>
-          </div>
-          <div id="hardware-optimization-view" role="tabpanel" aria-labelledby="hardware-tab-optimization">
+      </aside>
+
+      <aside id="hardware-panel" class="context-panel app-view" data-view="hardware" aria-label="Hardware optimization" hidden>
+        <div class="context-head"><div><span class="eyebrow">HARDWARE</span><h2>Hardware optimization</h2><p id="hardware-status" class="meta">CPU compatibility mode</p></div></div>
+        <div class="hardware-sections">
+          <section data-hardware-view="overview" aria-labelledby="hardware-section-overview">
+            <h3 id="hardware-section-overview">Compatibility overview</h3>
             <p class="meta">Ollama remains the compatible default. Optional OpenVINO, Ryzen AI, WinML, and DirectML connectors use isolated environments and activate only after a successful model probe.</p>
             <div id="hardware-telemetry" class="dependency-list" aria-live="polite"><p class="meta">GPU and model telemetry has not been loaded.</p></div>
+          </section>
+
+          <section data-hardware-view="profiles" aria-labelledby="hardware-section-profiles" hidden>
+            <h3 id="hardware-section-profiles">Profiles &amp; optimization</h3>
             <label class="setting-row" for="hardware-profile-model">Optimization target</label>
             <select id="hardware-profile-model" class="setting-select">
               <option value="__default__">All models · default</option>
@@ -210,26 +246,39 @@
             <div class="actions">
               <button id="hardware-profile-save" class="primary" type="button">Save profile</button>
               <button id="hardware-profile-reset" class="secondary" type="button">Reset to Automatic</button>
+              <button id="hardware-restore-cpu" class="secondary" type="button">Restore CPU</button>
               <span id="hardware-profile-status" class="meta" role="status" aria-live="polite"></span>
             </div>
+          </section>
+
+          <section data-hardware-view="runtimes" aria-labelledby="hardware-section-runtimes" hidden>
+            <h3 id="hardware-section-runtimes">Hardware &amp; runtimes</h3>
             <div class="actions">
               <button id="hardware-detect" class="secondary" type="button">Scan again</button>
-              <button id="hardware-restore-cpu" class="secondary" type="button">Restore CPU</button>
             </div>
             <div id="hardware-candidates" class="dependency-list"><p class="meta">Run detection to list compatible backends.</p></div>
-            <section class="dependency-review" aria-label="Optimized model search">
-              <strong>Compatible optimized models</strong>
-              <p class="meta">Pinned models remain available offline. Live remote search runs only when requested; results require download and a successful probe.</p>
-              <select id="optimized-model-search-provider" class="setting-select">
-                <option value="openvino">OpenVINO</option><option value="ryzen_ai">Ryzen AI</option>
-                <option value="winml">WinML</option><option value="directml">DirectML</option>
-              </select>
-              <input id="optimized-model-search-query" class="setting-select" value="coder" aria-label="Optimized model search query" />
-              <button id="optimized-model-search-run" class="secondary" type="button">Search compatible models</button>
-              <div id="optimized-model-search-results" class="dependency-list"><p class="meta">Run an on-demand search to find additional candidates.</p></div>
-            </section>
-          </div>
-          <div id="hardware-benchmark-view" role="tabpanel" aria-labelledby="hardware-tab-benchmarks" hidden>
+          </section>
+
+          <section data-hardware-view="compatibility" aria-labelledby="hardware-section-compatibility" hidden>
+            <h3 id="hardware-section-compatibility">Model compatibility</h3>
+            <p class="meta">Installed models are marked accelerated only after model-specific evidence or a successful provider probe.</p>
+            <div id="hardware-model-compatibility" class="dependency-list"><p class="meta">Run hardware detection to compare installed models with verified runtimes.</p></div>
+          </section>
+
+          <section data-hardware-view="model-search" aria-labelledby="hardware-section-model-search" hidden>
+            <h3 id="hardware-section-model-search">Compatible optimized models</h3>
+            <p class="meta">Pinned models remain available offline. Live remote search runs only when requested; results require download and a successful probe.</p>
+            <select id="optimized-model-search-provider" class="setting-select">
+              <option value="openvino">OpenVINO</option><option value="ryzen_ai">Ryzen AI</option>
+              <option value="winml">WinML</option><option value="directml">DirectML</option>
+            </select>
+            <input id="optimized-model-search-query" class="setting-select" value="coder" aria-label="Optimized model search query" />
+            <button id="optimized-model-search-run" class="secondary" type="button">Search compatible models</button>
+            <div id="optimized-model-search-results" class="dependency-list"><p class="meta">Run an on-demand search to find additional candidates.</p></div>
+          </section>
+
+          <section data-hardware-view="benchmarks" aria-labelledby="hardware-section-benchmarks" hidden>
+            <h3 id="hardware-section-benchmarks">Benchmarks</h3>
             <p class="meta">LocalPerf 0.3.0-localperf · LocalPerf-Core-v1. Runs the same versioned 12-prompt workload on CPU first and then each available backend.</p>
             <label class="setting-row" for="hardware-benchmark-suite">Benchmark suite</label>
             <select id="hardware-benchmark-suite" class="setting-select">
@@ -247,27 +296,32 @@
               <span id="hardware-benchmark-status" class="meta" role="status" aria-live="polite"></span>
             </div>
             <div id="hardware-benchmark-results" class="dependency-list"><p class="meta">No benchmark selected.</p></div>
-            <section class="dependency-review" aria-label="LocalPerf reference packages">
-              <strong>Portable LocalPerf package</strong>
-              <p class="meta">Exports are sanitized by default. Full system details require explicit opt-in.</p>
-              <label class="setting-row"><input id="localperf-include-details" type="checkbox" /> Include full system details in export</label>
-              <div class="actions">
-                <button id="localperf-export" class="secondary" type="button" disabled>Export selected run</button>
-                <label class="secondary file-button" for="localperf-import-input">Choose package</label>
-                <input id="localperf-import-input" type="file" accept=".zip,.localperf.zip,application/zip" hidden />
-                <button id="localperf-import" class="secondary" type="button" disabled>Import reviewed package</button>
-              </div>
-              <label class="setting-row"><input id="localperf-retain-details" type="checkbox" disabled /> Retain imported system details (explicit consent)</label>
-              <p id="localperf-package-status" class="meta" role="status" aria-live="polite">No package selected.</p>
-            </section>
+          </section>
+
+          <section data-hardware-view="history" aria-labelledby="hardware-section-history" hidden>
+            <h3 id="hardware-section-history">Results &amp; history</h3>
             <strong>Previous runs</strong>
             <button id="hardware-benchmark-clear" class="secondary" type="button">Clear benchmark data</button>
             <div id="hardware-benchmark-history" class="dependency-list"><p class="meta">No benchmark history.</p></div>
-          </div>
-        </section>
+          </section>
+
+          <section data-hardware-view="localperf" aria-labelledby="hardware-section-localperf" hidden>
+            <h3 id="hardware-section-localperf">Portable LocalPerf package</h3>
+            <p class="meta">Exports are sanitized by default. Full system details require explicit opt-in.</p>
+            <label class="setting-row"><input id="localperf-include-details" type="checkbox" /> Include full system details in export</label>
+            <div class="actions">
+              <button id="localperf-export" class="secondary" type="button" disabled>Export selected run</button>
+              <label class="secondary file-button" for="localperf-import-input">Choose package</label>
+              <input id="localperf-import-input" type="file" accept=".zip,.localperf.zip,application/zip" hidden />
+              <button id="localperf-import" class="secondary" type="button" disabled>Import reviewed package</button>
+            </div>
+            <label class="setting-row"><input id="localperf-retain-details" type="checkbox" disabled /> Retain imported system details (explicit consent)</label>
+            <p id="localperf-package-status" class="meta" role="status" aria-live="polite">No package selected.</p>
+          </section>
+        </div>
       </aside>
 
-      <section id="terminal-panel" class="terminal-panel" aria-label="Live command line" hidden>
+      <section id="terminal-panel" class="terminal-panel app-view" data-view="terminal" aria-label="Live command line" hidden>
         <div class="terminal-head">
           <div><span class="eyebrow">LOCAL POWERSHELL</span><strong>Live CLI passthrough</strong></div>
           <span id="terminal-status" class="meta">Not started</span>
@@ -299,7 +353,8 @@
       </dialog>
 
       <footer><span>Runs entirely on this machine</span><span>127.0.0.1 · Ollama</span></footer>
-    </main>
+      </main>
+    </div>
     <script src="/static/dependency_install_queue.js?v=1.0.11" defer></script>
     <script src="/static/app.js?v=1.0.11-model-compatibility" defer></script>
   </body>

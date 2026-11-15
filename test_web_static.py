@@ -59,13 +59,42 @@ class WebStaticTests(unittest.TestCase):
         self.assertEqual(javascript.status_code, 200)
         self.assertIn("javascript", javascript.headers["content-type"])
 
+    def test_global_navigation_and_hardware_sections_are_present(self):
+        html = self.client.get("/").text
+        parser = IdCollector()
+        parser.feed(html)
+
+        self.assertTrue({
+            "app-sidebar", "sidebar-collapse", "sidebar-resize-handle",
+            "mobile-navigation-toggle", "navigation-backdrop",
+            "view-chat", "terminal-panel", "context-panel", "skills-panel",
+            "hardware-panel", "settings-panel",
+        }.issubset(parser.ids))
+        for destination in ("chat", "terminal", "context", "skills", "hardware", "settings"):
+            self.assertIn(f'data-destination="{destination}"', html)
+        for section in (
+            "overview", "profiles", "runtimes", "compatibility", "model-search",
+            "benchmarks", "history", "localperf",
+        ):
+            self.assertIn(f'data-hardware-section="{section}"', html)
+            self.assertIn(f'data-hardware-view="{section}"', html)
+        self.assertIn('role="separator"', html)
+        self.assertIn('aria-valuemin="220"', html)
+        self.assertIn('aria-valuemax="380"', html)
+        self.assertIn('class="nav-icon"', html)
+        self.assertIn('stroke="currentColor"', html)
+        self.assertIn('id="terminal-panel"', html)
+        self.assertIn('id="hardware-benchmark-run"', html)
+        self.assertNotIn('role="tablist" aria-label="Hardware settings"', html)
+        self.assertNotIn('id="hardware-tab-optimization"', html)
+        self.assertNotIn('id="hardware-tab-benchmarks"', html)
+
     def test_attachment_context_tray_controls_are_present(self):
         response = self.client.get("/")
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
             {
-                "context-toggle",
                 "context-panel",
                 "attachment-input",
                 "paste-text-button",
@@ -85,7 +114,6 @@ class WebStaticTests(unittest.TestCase):
         parser.feed(response.text)
         self.assertTrue(
             {
-                "terminal-toggle",
                 "terminal-panel",
                 "terminal-output",
                 "terminal-input",
@@ -135,8 +163,6 @@ class WebStaticTests(unittest.TestCase):
         parser.feed(response.text)
         self.assertTrue(
             {
-                "skills-toggle",
-                "settings-toggle",
                 "skills-panel",
                 "settings-panel",
                 "skill-library",
@@ -196,8 +222,7 @@ class WebStaticTests(unittest.TestCase):
         javascript = self.client.get("/static/app.js").text
 
         for identifier in (
-            "hardware-tab-optimization", "hardware-tab-benchmarks", "hardware-optimization-view",
-            "hardware-benchmark-view", "hardware-benchmark-suite", "hardware-benchmark-model",
+            "hardware-panel", "hardware-benchmark-suite", "hardware-benchmark-model",
             "hardware-benchmark-backend",
             "hardware-benchmark-run", "hardware-benchmark-status", "hardware-benchmark-results",
             "hardware-benchmark-history", "hardware-benchmark-clear",
@@ -207,7 +232,9 @@ class WebStaticTests(unittest.TestCase):
             "optimized-model-search-run", "optimized-model-search-results",
         ):
             self.assertIn(f'id="{identifier}"', html)
-        self.assertIn('role="tablist"', html)
+        self.assertIn('data-hardware-view="benchmarks"', html)
+        self.assertIn('data-hardware-view="history"', html)
+        self.assertIn('data-hardware-view="localperf"', html)
         self.assertIn('fetch("/api/hardware/benchmarks"', javascript)
         self.assertIn("speedup_vs_cpu", javascript)
         self.assertIn("tokens_per_second", javascript)
