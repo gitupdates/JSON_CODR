@@ -116,6 +116,7 @@ let persistedThemeMode = null;
 let excludedSkillIds = [];
 let pendingDestructiveAction = null;
 let hardwareDetectionPromise = null;
+const actionButtons = new Map();
 
 const dependencyInstallQueue = createDependencyInstallQueue(async (command) => {
   if (elements.terminalPanel.hidden) {
@@ -189,7 +190,19 @@ async function createTerminalConnection() {
     const message = JSON.parse(event.data);
     if (message.type === "output") appendTerminalOutput(message.data);
     if (message.type === "exit") elements.terminalStatus.textContent = "Stopped";
-    if (message.type === "action_error") showError(message.error || "Approved action failed");
+    if (message.type === "action_started") {
+      elements.terminalStatus.textContent = "Command accepted — installation running...";
+      appendTerminalOutput("Command accepted by PowerShell. Installation is running; initial setup may be quiet.\n");
+      const button = actionButtons.get(message.proposal_id);
+      if (button) button.textContent = "Started";
+    }
+    if (message.type === "action_error") {
+      const button = actionButtons.get(message.proposal_id);
+      if (button) { button.disabled = false; button.textContent = "Approve and run"; }
+      elements.terminalStatus.textContent = "Approved action failed";
+      appendTerminalOutput(`Approved action failed: ${message.error || "Unknown error"}\n`);
+      showError(message.error || "Approved action failed");
+    }
   });
   terminalSocket.addEventListener("close", () => { elements.terminalStatus.textContent = "Disconnected"; });
   await new Promise((resolve, reject) => {
@@ -206,17 +219,20 @@ async function createTerminalConnection() {
   });
 }
 
-async function sendApprovedAction(proposal, token) {
+async function sendApprovedAction(proposal, token, approveButton) {
   await ensureTerminal();
   if (terminalSocket.readyState !== WebSocket.OPEN) {
     await new Promise((resolve) => terminalSocket.addEventListener("open", resolve, { once: true }));
   }
+  elements.terminalStatus.textContent = "Sending approved action...";
+  appendTerminalOutput(`Sending approved action: ${proposal.explanation}\n`);
+  if (approveButton) { approveButton.disabled = true; approveButton.textContent = "Sending..."; }
   terminalSocket.send(JSON.stringify({ type: "approved_action", proposal_id: proposal.id, token }));
   elements.terminalPanel.hidden = false;
   elements.terminalToggle.setAttribute("aria-expanded", "true");
 }
 
-async function approveAction(proposal) {
+async function approveAction(proposal, approveButton) {
   await ensureTerminal();
   const response = await fetch(`/api/sessions/${sessionId}/action-proposals/${proposal.id}/approve`, {
     method: "POST",
@@ -225,8 +241,9 @@ async function approveAction(proposal) {
   });
   const approval = await response.json();
   if (!response.ok) throw new Error(approval.detail || "Unable to approve action");
-  if (!approval.requires_confirmation) return sendApprovedAction(proposal, approval.token);
-  pendingDestructiveAction = { proposal, phrase: approval.confirmation_phrase };
+  if (!approval.requires_confirmation) return sendApprovedAction(proposal, approval.token, approveButton);
+  pendingDestructiveAction = { proposal, phrase: approval.confirmation_phrase, approveButton };
+  approveButton.textContent = "Confirm to run";
   elements.destructiveCommand.textContent = proposal.command;
   elements.destructiveCwd.textContent = proposal.cwd;
   elements.destructiveRisk.textContent = `${proposal.risk}: ${proposal.risk_reason}`;
@@ -238,6 +255,7 @@ async function approveAction(proposal) {
 
 function renderActions(proposals) {
   elements.actionList.replaceChildren();
+  actionButtons.clear();
   elements.actionReview.hidden = !proposals.length;
   for (const proposal of proposals) {
     const card = document.createElement("article"); card.className = "action-card";
@@ -257,7 +275,18 @@ function renderActions(proposals) {
       elements.actionReview.hidden = !elements.actionList.children.length;
     });
     const approve = document.createElement("button"); approve.type = "button"; approve.className = "primary"; approve.textContent = "Approve and run";
-    approve.addEventListener("click", () => approveAction(proposal).catch((error) => showError(error.message)));
+    actionButtons.set(proposal.id, approve);
+    approve.addEventListener("click", async () => {
+      approve.disabled = true;
+      approve.textContent = "Connecting...";
+      try {
+        await approveAction(proposal, approve);
+      } catch (error) {
+        approve.disabled = false;
+        approve.textContent = "Approve and run";
+        showError(error.message);
+      }
+    });
     controls.append(copy, reject, approve);
     card.append(title, command, cwd, risk, controls);
     elements.actionList.append(card);
@@ -1074,7 +1103,7 @@ elements.autoAttachSkills.addEventListener("change", async () => {
 });
 elements.destructiveSubmit.addEventListener("click", async () => {
   if (!pendingDestructiveAction) return;
-  const { proposal, phrase } = pendingDestructiveAction;
+  const { proposal, phrase, approveButton } = pendingDestructiveAction;
   const enteredPhrase = elements.destructiveInput.value.trim().toUpperCase();
   if (enteredPhrase !== phrase) return showError("Confirmation code does not match");
   const response = await fetch(`/api/sessions/${sessionId}/action-proposals/${proposal.id}/confirm-destructive`, {
@@ -1084,9 +1113,16 @@ elements.destructiveSubmit.addEventListener("click", async () => {
   });
   const approval = await response.json();
   if (!response.ok) return showError(approval.detail || "Unable to confirm destructive action");
-  elements.destructiveDialog.close();
   pendingDestructiveAction = null;
-  await sendApprovedAction(proposal, approval.token);
+  elements.destructiveDialog.close();
+  await sendApprovedAction(proposal, approval.token, approveButton);
+});
+elements.destructiveDialog.addEventListener("close", () => {
+  if (!pendingDestructiveAction) return;
+  const { approveButton } = pendingDestructiveAction;
+  approveButton.disabled = false;
+  approveButton.textContent = "Approve and run";
+  pendingDestructiveAction = null;
 });
 elements.contextToggle.addEventListener("click", () => {
   elements.contextPanel.hidden = !elements.contextPanel.hidden;

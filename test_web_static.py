@@ -313,6 +313,11 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn(".trim().toUpperCase()", javascript)
         self.assertIn("if (terminalConnectionPromise) return terminalConnectionPromise", javascript)
         self.assertIn('type: "approved_action", proposal_id: proposal.id, token', javascript)
+        self.assertIn('message.type === "action_started"', javascript)
+        self.assertIn('"Command accepted — installation running..."', javascript)
+        self.assertIn('approve.disabled = true', javascript)
+        server_source = Path("web_app/app.py").read_text(encoding="utf-8")
+        self.assertIn('{"type": "action_started", "proposal_id": proposal_id}', server_source)
         self.assertNotIn("runTerminalCommand(proposal.command)", javascript)
         self.assertIn("textContent", javascript)
 

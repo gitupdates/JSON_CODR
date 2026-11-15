@@ -617,15 +617,21 @@ def create_app(
                 elif message.get("type") == "interrupt":
                     terminals.interrupt(terminal_id)
                 elif message.get("type") == "approved_action":
+                    proposal_id = str(message.get("proposal_id", ""))
                     try:
                         terminals.write_approved(
                             terminal_id,
                             action_proposals,
-                            str(message.get("proposal_id", "")),
+                            proposal_id,
                             str(message.get("token", "")),
                         )
+                        await websocket.send_json({"type": "action_started", "proposal_id": proposal_id})
                     except (KeyError, PermissionError, RuntimeError) as error:
-                        await websocket.send_json({"type": "action_error", "error": str(error)})
+                        await websocket.send_json({
+                            "type": "action_error",
+                            "proposal_id": proposal_id,
+                            "error": str(error),
+                        })
 
         sender = asyncio.create_task(send_output())
         receiver = asyncio.create_task(receive_input())
