@@ -47,6 +47,14 @@ class FakeService:
             },
         ]
 
+    async def running_models(self):
+        return [{
+            "name": "qwen2.5-coder:0.5b",
+            "size": 398_000_000,
+            "size_vram": 398_000_000,
+            "processor": "100% GPU",
+        }]
+
     async def supports_vision(self, model):
         return self.vision
 
@@ -105,6 +113,9 @@ class FakeHardware:
 
     def benchmark_history(self):
         return [{"id": "run-0", "suite": "quick", "model": "model", "results": []}]
+
+    def gpu_telemetry(self):
+        return [{"index": 0, "name": "RTX 4060", "memory_total": 8188, "memory_free": 7956}]
 
 
 class WebApiTests(unittest.TestCase):
@@ -167,6 +178,15 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(hardware.probed, ("cpu", "qwen2.5-coder:0.5b"))
         self.assertEqual(client.post("/api/hardware/restore-cpu").json()["preferred_backend"], "cpu")
 
+    def test_hardware_telemetry_combines_gpu_and_ollama_runtime_data(self):
+        hardware = FakeHardware()
+        client = TestClient(create_app(self.service, self.workspace, hardware=hardware))
+
+        payload = client.get("/api/hardware/telemetry").json()
+
+        self.assertEqual(payload["gpus"][0]["name"], "RTX 4060")
+        self.assertEqual(payload["models"][0]["processor"], "100% GPU")
+
     def test_hardware_benchmark_execution_history_validation_and_busy_conflict(self):
         hardware = FakeHardware()
         client = TestClient(create_app(self.service, self.workspace, hardware=hardware))
@@ -212,6 +232,20 @@ class WebApiTests(unittest.TestCase):
         low_memory = models[names.index("qwen2.5-coder:0.5b")]
         self.assertTrue(low_memory["installed"])
         self.assertEqual(low_memory["size"], 398_000_000)
+
+    def test_running_models_reports_gpu_offload_from_vram_share(self):
+        class RunningClient:
+            async def ps(self):
+                return {"models": [{
+                    "name": "qwen2.5-coder:0.5b",
+                    "size": 400_000_000,
+                    "size_vram": 300_000_000,
+                }]}
+
+        models = asyncio.run(OllamaService(client=RunningClient()).running_models())
+
+        self.assertEqual(models[0]["processor"], "75% GPU")
+        self.assertEqual(models[0]["size_vram"], 300_000_000)
 
     def test_chat_accepts_exact_and_unique_shorthand_models(self):
         for model in ("qwen", "qwen2.5-coder:7b-instruct-q4_K_M"):

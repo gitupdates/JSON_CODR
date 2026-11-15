@@ -28,6 +28,7 @@ class HardwareBackendManager:
         ai_device_detector: Callable[[], list[str]] | None = None,
         benchmark_runner: Callable[[str, str, list[str], int], Awaitable[list[dict]]] | None = None,
         accelerator_detector: AcceleratorDetector | None = None,
+        gpu_telemetry_reader: Callable[[], list[dict]] | None = None,
     ) -> None:
         self.path = Path(data_root).resolve() / "hardware-backend.json"
         self.benchmark_path = Path(data_root).resolve() / "hardware-benchmarks.json"
@@ -38,7 +39,46 @@ class HardwareBackendManager:
         self.ai_device_detector = ai_device_detector or self._detect_windows_ai_devices
         self.benchmark_runner = benchmark_runner or self._run_benchmark_backend
         self.accelerator_detector = accelerator_detector
+        self.gpu_telemetry_reader = gpu_telemetry_reader or self._read_nvidia_telemetry
         self._benchmark_lock = asyncio.Lock()
+
+    def gpu_telemetry(self) -> list[dict]:
+        return self.gpu_telemetry_reader()
+
+    @staticmethod
+    def _read_nvidia_telemetry() -> list[dict]:
+        command = [
+            "nvidia-smi",
+            "--query-gpu=index,name,memory.total,memory.used,memory.free,utilization.gpu,temperature.gpu",
+            "--format=csv,noheader,nounits",
+        ]
+        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        try:
+            result = subprocess.run(
+                command, capture_output=True, text=True, timeout=5, check=False, creationflags=flags
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        if result.returncode != 0:
+            return []
+        gpus = []
+        for line in result.stdout.splitlines():
+            values = [value.strip() for value in line.split(",")]
+            if len(values) != 7:
+                continue
+            try:
+                gpus.append({
+                    "index": int(values[0]),
+                    "name": values[1],
+                    "memory_total": int(values[2]),
+                    "memory_used": int(values[3]),
+                    "memory_free": int(values[4]),
+                    "utilization": int(values[5]),
+                    "temperature": int(values[6]),
+                })
+            except ValueError:
+                continue
+        return gpus
 
     def _read(self) -> dict:
         defaults = {"preferred_backend": "cpu", "last_known_good": "cpu", "quarantined": {}, "last_error": None}

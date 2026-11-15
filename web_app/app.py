@@ -124,6 +124,14 @@ def create_app(
     async def detect_hardware():
         return hardware.detect()
 
+    @application.get("/api/hardware/telemetry")
+    async def hardware_telemetry():
+        gpus, running_models = await asyncio.gather(
+            asyncio.to_thread(hardware.gpu_telemetry),
+            service.running_models(),
+        )
+        return {"gpus": gpus, "models": running_models}
+
     @application.post("/api/hardware/probe")
     async def probe_hardware(request: HardwareProbeRequest):
         try:

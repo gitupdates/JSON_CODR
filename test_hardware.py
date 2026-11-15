@@ -119,6 +119,23 @@ class HardwareBackendTests(unittest.TestCase):
         pending.record_probe("cuda_v12", True)
         self.assertFalse(pending.record_runtime_failure("still running on CPU"))
 
+    def test_gpu_telemetry_returns_bounded_nvidia_metrics(self):
+        manager = HardwareBackendManager(
+            self.root,
+            gpu_telemetry_reader=lambda: [{
+                "index": 0,
+                "name": "NVIDIA GeForce RTX 4060 Laptop GPU",
+                "memory_total": 8188,
+                "memory_used": 512,
+                "memory_free": 7676,
+                "utilization": 12,
+                "temperature": 47,
+            }],
+        )
+
+        self.assertEqual(manager.gpu_telemetry()[0]["memory_free"], 7676)
+        self.assertEqual(manager.gpu_telemetry()[0]["index"], 0)
+
 
 class HardwareBenchmarkTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

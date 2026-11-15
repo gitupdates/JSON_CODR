@@ -59,6 +59,25 @@ class OllamaService:
             )
         return result
 
+    async def running_models(self) -> List[dict]:
+        try:
+            response = await asyncio.wait_for(self.client.ps(), timeout=5)
+        except Exception:
+            return []
+        payload = response.model_dump() if hasattr(response, "model_dump") else response
+        result = []
+        for item in payload.get("models", []):
+            size = int(item.get("size") or 0)
+            size_vram = int(item.get("size_vram") or 0)
+            gpu_percent = round(size_vram * 100 / size) if size else 0
+            result.append({
+                "name": item.get("model") or item.get("name"),
+                "size": size,
+                "size_vram": size_vram,
+                "processor": f"{gpu_percent}% GPU" if gpu_percent else "100% CPU",
+            })
+        return result
+
     async def supports_vision(self, model: str) -> bool:
         resolved = self._resolve(model)
         try:
