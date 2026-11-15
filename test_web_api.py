@@ -92,6 +92,7 @@ class FakeHardware:
         self.benchmarked = None
         self.benchmark_error = None
         self.probe_result = None
+        self.selected_benchmark = None
 
     def status(self):
         return {"preferred_backend": "cpu", "last_known_good": "cpu", "quarantined": {}, "last_error": None}
@@ -110,7 +111,11 @@ class FakeHardware:
         if self.benchmark_error:
             raise self.benchmark_error
         self.benchmarked = (suite, model, backend)
-        return {"id": "run-1", "suite": suite, "model": model, "target_backend": backend, "results": []}
+        return {"id": "run-1", "suite": suite, "model": model, "target_backend": backend, "selected_backend": "cpu", "results": []}
+
+    def apply_benchmark_selection(self, benchmark):
+        self.selected_benchmark = benchmark
+        return {"preferred_backend": benchmark["selected_backend"]}
 
     def benchmark_history(self):
         return [{"id": "run-0", "suite": "quick", "model": "model", "results": []}]
@@ -245,6 +250,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["id"], "run-1")
         self.assertEqual(hardware.benchmarked, ("quick", "qwen2.5-coder:0.5b", "cuda_v12"))
+        self.assertEqual(hardware.selected_benchmark["selected_backend"], "cpu")
         self.assertEqual(client.get("/api/hardware/benchmarks").json()[0]["id"], "run-0")
 
         invalid = client.post("/api/hardware/benchmarks", json={"suite": "overnight", "model": "model"})

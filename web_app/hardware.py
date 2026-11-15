@@ -292,6 +292,23 @@ class HardwareBackendManager:
         self.environment_writer("OLLAMA_LLM_LIBRARY", "cpu")
         return self._write(state)
 
+    def apply_benchmark_selection(self, benchmark: dict) -> dict:
+        backend = benchmark.get("selected_backend") or "cpu"
+        winner = next((item for item in benchmark.get("results", []) if item.get("backend") == backend), None)
+        if backend != "cpu" and (not winner or not winner.get("eligible")):
+            backend = "cpu"
+        state = self._read()
+        state.update({
+            "preferred_backend": backend,
+            "last_known_good": backend,
+            "preferred_model": benchmark.get("model"),
+            "selection_source": "compatibility_benchmark",
+            "last_error": None,
+        })
+        if backend != "ollama_gpu":
+            self.environment_writer("OLLAMA_LLM_LIBRARY", backend)
+        return self._write(state)
+
     def record_runtime_failure(self, error: str) -> bool:
         backend = self.active_backend
         if backend == "cpu":
@@ -377,6 +394,9 @@ class HardwareBackendManager:
                         "verified": candidate["verified"],
                         "active": candidate["id"] == self.active_backend,
                         "status": "unavailable",
+                        "eligible": False,
+                        "selected": False,
+                        "rejection_reasons": [candidate.get("compatibility_reason") or candidate.get("quarantine_reason") or "Backend is not runnable"],
                         "error": candidate.get("compatibility_reason") or candidate.get("quarantine_reason"),
                         "speedup_vs_cpu": None,
                     })
@@ -402,6 +422,15 @@ class HardwareBackendManager:
                         "verified": candidate["verified"],
                         "active": candidate["id"] == self.active_backend,
                         "status": "completed",
+                        "eligible": len(samples) == len(prompts) * repeats and all(
+                            sample.get("tokens", 0) > 0 and sample.get("eval_seconds", 0) > 0
+                            for sample in samples
+                        ),
+                        "selected": False,
+                        "rejection_reasons": [] if len(samples) == len(prompts) * repeats and all(
+                            sample.get("tokens", 0) > 0 and sample.get("eval_seconds", 0) > 0
+                            for sample in samples
+                        ) else [f"Backend returned {len(samples)} of expected {len(prompts) * repeats} successful samples"],
                         "samples": len(samples),
                         "tests": tests,
                         "average_total_seconds": round(sum(sample["total_seconds"] for sample in samples) / len(samples), 3),
@@ -420,6 +449,9 @@ class HardwareBackendManager:
                         "verified": candidate["verified"],
                         "active": candidate["id"] == self.active_backend,
                         "status": "failed",
+                        "eligible": False,
+                        "selected": False,
+                        "rejection_reasons": [str(error)],
                         "error": str(error),
                         "speedup_vs_cpu": None,
                     })
@@ -428,6 +460,19 @@ class HardwareBackendManager:
                 for result in results:
                     if result["status"] == "completed":
                         result["speedup_vs_cpu"] = round(result["tokens_per_second"] / cpu["tokens_per_second"], 3)
+            eligible = [item for item in results if item.get("eligible")]
+            winner = min(
+                eligible,
+                key=lambda item: (
+                    -float(item.get("tokens_per_second") or 0),
+                    float(item.get("average_total_seconds") or float("inf")),
+                    item["backend"],
+                ),
+                default=None,
+            )
+            selected_backend = winner["backend"] if winner else "cpu"
+            for result in results:
+                result["selected"] = result["backend"] == selected_backend
             benchmark = {
                 "id": uuid.uuid4().hex,
                 "created_at": datetime.now(timezone.utc).isoformat(),
@@ -436,6 +481,8 @@ class HardwareBackendManager:
                 "target_backend": backend,
                 "prompt_count": len(prompts),
                 "repeats": repeats,
+                "selected_backend": selected_backend,
+                "selection_reason": "Highest throughput among candidates that completed every compatibility test" if winner else "Ollama CPU compatibility fallback",
                 "results": results,
             }
             self._save_benchmark(benchmark)

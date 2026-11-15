@@ -190,7 +190,13 @@ def create_app(
     @application.post("/api/hardware/benchmarks")
     async def run_hardware_benchmark(request: HardwareBenchmarkRequest):
         try:
-            return await hardware.benchmark(request.suite, request.model, request.backend)
+            benchmark = await hardware.benchmark(request.suite, request.model, request.backend)
+            hardware.apply_benchmark_selection(benchmark)
+            if benchmark.get("selected_backend") == "ollama_gpu":
+                optimization = settings.get().gpu_optimization
+                optimization.model_profiles[request.model] = GpuProfileSettings(mode="gpu_preferred")
+                settings.update(SettingsUpdate(gpu_optimization=optimization))
+            return benchmark
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         except RuntimeError as error:

@@ -313,6 +313,10 @@ class HardwareBenchmarkTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["results"][1]["vram_bytes"], 398_000_000)
         self.assertEqual(result["results"][3]["status"], "unavailable")
         self.assertEqual(result["results"][4]["status"], "unavailable")
+        self.assertEqual(result["selected_backend"], "ollama_gpu")
+        self.assertTrue(result["results"][1]["eligible"])
+        self.assertTrue(result["results"][1]["selected"])
+        self.assertFalse(result["results"][3]["eligible"])
         self.assertEqual(self.manager.status()["preferred_backend"], "cpu")
 
     async def test_selected_accelerator_runs_with_cpu_baseline_and_rejects_unknown_target(self):
@@ -324,6 +328,15 @@ class HardwareBenchmarkTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(ValueError, "target"):
             await self.manager.benchmark("quick", "model", "unknown")
+
+    async def test_applying_benchmark_selection_persists_verified_backend_and_model(self):
+        benchmark = await self.manager.benchmark("quick", "qwen2.5-coder:0.5b")
+
+        state = self.manager.apply_benchmark_selection(benchmark)
+
+        self.assertEqual(state["preferred_backend"], "ollama_gpu")
+        self.assertEqual(state["preferred_model"], "qwen2.5-coder:0.5b")
+        self.assertEqual(state["selection_source"], "compatibility_benchmark")
 
     async def test_thorough_benchmark_repeats_workload_and_persists_bounded_history(self):
         first = await self.manager.benchmark("thorough", "qwen2.5-coder:0.5b")
@@ -355,6 +368,25 @@ class HardwareBenchmarkTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["results"][0]["status"], "failed")
         self.assertEqual(result["results"][1]["status"], "completed")
         self.assertIsNone(result["results"][1]["speedup_vs_cpu"])
+
+    async def test_incomplete_accelerator_samples_are_rejected_and_cpu_is_selected(self):
+        async def incomplete_runner(backend, model, prompts, repeats):
+            samples = [
+                {"total_seconds": 1.0, "load_seconds": 0.1, "tokens": 10, "eval_seconds": 0.5}
+                for _ in range(len(prompts) * repeats)
+            ]
+            return samples if backend == "cpu" else samples[:-1]
+
+        self.manager.benchmark_runner = incomplete_runner
+        self.manager.ollama_gpu_benchmark_runner = incomplete_runner
+
+        result = await self.manager.benchmark("quick", "model")
+
+        self.assertEqual(result["selected_backend"], "cpu")
+        accelerated = [item for item in result["results"] if item["backend"] != "cpu" and item["status"] == "completed"]
+        self.assertTrue(accelerated)
+        self.assertTrue(all(not item["eligible"] for item in accelerated))
+        self.assertTrue(all("expected 3 successful samples" in item["rejection_reasons"][0] for item in accelerated))
 
     async def test_rejects_invalid_suite_and_overlapping_run(self):
         with self.assertRaisesRegex(ValueError, "suite"):
