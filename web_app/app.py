@@ -19,7 +19,7 @@ from web_app.inference.providers.registry import ProviderRegistry
 from web_app.inference.router import InferenceRouter
 from web_app.inference.sidecar import SidecarClient
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, HardwareBenchmarkRequest, HardwareProbeRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
+from web_app.models import ActionApprovalRequest, AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
 from web_app.ollama_service import (
     ModelOutputError,
     ModelTimeoutError,
@@ -140,7 +140,12 @@ def create_app(
     @application.post("/api/hardware/probe")
     async def probe_hardware(request: HardwareProbeRequest):
         try:
-            return await hardware.probe(request.backend, request.model)
+            result = await hardware.probe(request.backend, request.model)
+            if request.backend == "ollama_gpu" and result.get("verified"):
+                optimization = settings.get().gpu_optimization
+                optimization.model_profiles[request.model] = GpuProfileSettings(mode="gpu_preferred")
+                settings.update(SettingsUpdate(gpu_optimization=optimization))
+            return result
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 

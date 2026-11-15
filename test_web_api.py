@@ -91,6 +91,7 @@ class FakeHardware:
         self.probed = None
         self.benchmarked = None
         self.benchmark_error = None
+        self.probe_result = None
 
     def status(self):
         return {"preferred_backend": "cpu", "last_known_good": "cpu", "quarantined": {}, "last_error": None}
@@ -100,7 +101,7 @@ class FakeHardware:
 
     async def probe(self, backend, model):
         self.probed = (backend, model)
-        return {**self.status(), "preferred_backend": backend, "restart_required": True}
+        return self.probe_result or {**self.status(), "preferred_backend": backend, "restart_required": True}
 
     def restore_cpu(self):
         return self.status()
@@ -186,6 +187,28 @@ class WebApiTests(unittest.TestCase):
 
         self.assertEqual(payload["gpus"][0]["name"], "RTX 4060")
         self.assertEqual(payload["models"][0]["processor"], "100% GPU")
+
+    def test_verified_ollama_gpu_probe_saves_gpu_preferred_model_profile(self):
+        hardware = FakeHardware()
+        hardware.probe_result = {
+            **hardware.status(),
+            "preferred_backend": "ollama_gpu",
+            "verified": True,
+            "gpu_percent": 100,
+            "vram_bytes": 398_000_000,
+            "evidence": "100% GPU",
+            "restart_required": False,
+        }
+        client = TestClient(create_app(self.service, self.workspace, hardware=hardware))
+
+        response = client.post(
+            "/api/hardware/probe",
+            json={"backend": "ollama_gpu", "model": "qwen2.5-coder:0.5b"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        profile = client.get("/api/settings").json()["gpu_optimization"]["model_profiles"]["qwen2.5-coder:0.5b"]
+        self.assertEqual(profile["mode"], "gpu_preferred")
 
     def test_hardware_benchmark_execution_history_validation_and_busy_conflict(self):
         hardware = FakeHardware()

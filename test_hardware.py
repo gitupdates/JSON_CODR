@@ -172,6 +172,53 @@ class HardwareBackendTests(unittest.TestCase):
         self.assertEqual(manager.gpu_telemetry()[0]["index"], 0)
 
 
+class HardwareGpuProbeTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary_directory.name)
+
+    async def asyncTearDown(self):
+        self.temporary_directory.cleanup()
+
+    async def test_ollama_gpu_probe_verifies_positive_offload_without_changing_runtime_library(self):
+        writes = []
+
+        async def probe(model):
+            return {"gpu_percent": 100, "vram_bytes": 398_000_000, "evidence": "100% GPU"}
+
+        manager = HardwareBackendManager(
+            self.root,
+            environment_writer=lambda name, value: writes.append((name, value)),
+            gpu_telemetry_reader=lambda: [{"index": 0, "name": "RTX 4060"}],
+            ollama_gpu_probe=probe,
+        )
+
+        result = await manager.probe("ollama_gpu", "qwen2.5-coder:0.5b")
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["gpu_percent"], 100)
+        self.assertEqual(result["vram_bytes"], 398_000_000)
+        self.assertEqual(manager.status()["preferred_backend"], "ollama_gpu")
+        self.assertEqual(writes, [])
+
+    async def test_ollama_gpu_probe_rejects_zero_offload_and_preserves_cpu_fallback(self):
+        async def probe(model):
+            return {"gpu_percent": 0, "vram_bytes": 0, "evidence": "100% CPU"}
+
+        manager = HardwareBackendManager(
+            self.root,
+            environment_writer=lambda name, value: None,
+            gpu_telemetry_reader=lambda: [{"index": 0, "name": "RTX 4060"}],
+            ollama_gpu_probe=probe,
+        )
+
+        result = await manager.probe("ollama_gpu", "qwen2.5-coder:0.5b")
+
+        self.assertFalse(result["verified"])
+        self.assertEqual(manager.status()["preferred_backend"], "cpu")
+        self.assertIn("no GPU offload", result["error"])
+
+
 class HardwareBenchmarkTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temporary_directory = tempfile.TemporaryDirectory()
@@ -199,6 +246,7 @@ class HardwareBenchmarkTests(unittest.IsolatedAsyncioTestCase):
             ai_device_detector=lambda: ["Intel(R) AI Boost"],
             environment_writer=lambda name, value: None,
             benchmark_runner=runner,
+            gpu_telemetry_reader=lambda: [],
         )
 
     async def asyncTearDown(self):

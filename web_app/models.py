@@ -14,7 +14,7 @@ class ChatRequest(BaseModel):
 
 
 class HardwareProbeRequest(BaseModel):
-    backend: Literal["cpu", "cuda_v12", "cuda_v13", "rocm_v7_1", "vulkan"]
+    backend: Literal["cpu", "ollama_gpu", "cuda_v12", "cuda_v13", "rocm_v7_1", "vulkan"]
     model: str = Field(min_length=1, max_length=200)
 
 

@@ -29,6 +29,7 @@ class HardwareBackendManager:
         benchmark_runner: Callable[[str, str, list[str], int], Awaitable[list[dict]]] | None = None,
         accelerator_detector: AcceleratorDetector | None = None,
         gpu_telemetry_reader: Callable[[], list[dict]] | None = None,
+        ollama_gpu_probe: Callable[[str], Awaitable[dict]] | None = None,
     ) -> None:
         self.path = Path(data_root).resolve() / "hardware-backend.json"
         self.benchmark_path = Path(data_root).resolve() / "hardware-benchmarks.json"
@@ -40,10 +41,38 @@ class HardwareBackendManager:
         self.benchmark_runner = benchmark_runner or self._run_benchmark_backend
         self.accelerator_detector = accelerator_detector
         self.gpu_telemetry_reader = gpu_telemetry_reader or self._read_nvidia_telemetry
+        self.ollama_gpu_probe = ollama_gpu_probe or self._probe_ollama_gpu
         self._benchmark_lock = asyncio.Lock()
 
     def gpu_telemetry(self) -> list[dict]:
         return self.gpu_telemetry_reader()
+
+    @staticmethod
+    async def _probe_ollama_gpu(model: str) -> dict:
+        client = ollama.AsyncClient()
+        await client.generate(
+            model=model,
+            prompt="Reply with exactly OK",
+            stream=False,
+            keep_alive="5m",
+            options={"num_gpu": 999, "num_predict": 8},
+        )
+        response = await client.ps()
+        payload = response.model_dump() if hasattr(response, "model_dump") else response
+        running = next(
+            (item for item in payload.get("models", []) if (item.get("model") or item.get("name")) == model),
+            None,
+        )
+        if not running:
+            return {"gpu_percent": 0, "vram_bytes": 0, "evidence": "Model was not reported by Ollama after the probe"}
+        size = int(running.get("size") or 0)
+        vram_bytes = int(running.get("size_vram") or 0)
+        gpu_percent = round(vram_bytes * 100 / size) if size else 0
+        return {
+            "gpu_percent": gpu_percent,
+            "vram_bytes": vram_bytes,
+            "evidence": f"{gpu_percent}% GPU · {vram_bytes} VRAM bytes",
+        }
 
     @staticmethod
     def _read_nvidia_telemetry() -> list[dict]:
@@ -216,12 +245,14 @@ class HardwareBackendManager:
             state["last_known_good"] = backend
             state["quarantined"].pop(backend, None)
             state["last_error"] = None
-            self.environment_writer("OLLAMA_LLM_LIBRARY", backend)
+            if backend != "ollama_gpu":
+                self.environment_writer("OLLAMA_LLM_LIBRARY", backend)
         else:
             state["preferred_backend"] = "cpu"
             state["quarantined"][backend] = error or "Probe failed"
             state["last_error"] = error or "Probe failed"
-            self.environment_writer("OLLAMA_LLM_LIBRARY", "cpu")
+            if backend != "ollama_gpu":
+                self.environment_writer("OLLAMA_LLM_LIBRARY", "cpu")
         return self._write(state)
 
     def restore_cpu(self) -> dict:
@@ -243,6 +274,23 @@ class HardwareBackendManager:
         available = {item["id"] for item in self.detect()}
         if backend not in available:
             raise ValueError("Backend is not available on this machine")
+        if backend == "ollama_gpu":
+            try:
+                evidence = await asyncio.wait_for(self.ollama_gpu_probe(model), timeout=120)
+                verified = int(evidence.get("gpu_percent") or 0) > 0 and int(evidence.get("vram_bytes") or 0) > 0
+                error = None if verified else "Ollama completed the test but reported no GPU offload"
+            except Exception as exception:
+                evidence = {"gpu_percent": 0, "vram_bytes": 0, "evidence": str(exception)}
+                verified = False
+                error = f"Ollama GPU probe failed: {exception}"
+            state = self.record_probe(backend, verified, error)
+            return {
+                **state,
+                **evidence,
+                "verified": verified,
+                "error": error,
+                "restart_required": False,
+            }
         executable = shutil.which("ollama") or str(Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama.exe")
         environment = os.environ.copy()
         environment.update({"OLLAMA_HOST": "127.0.0.1:11435", "OLLAMA_LLM_LIBRARY": backend})
