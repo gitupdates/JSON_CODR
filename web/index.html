@@ -183,6 +183,35 @@
           </div>
           <div id="hardware-optimization-view" role="tabpanel" aria-labelledby="hardware-tab-optimization">
             <p class="meta">Ollama remains the compatible default. Optional OpenVINO, Ryzen AI, WinML, and DirectML connectors use isolated environments and activate only after a successful model probe.</p>
+            <div id="hardware-telemetry" class="dependency-list" aria-live="polite"><p class="meta">GPU and model telemetry has not been loaded.</p></div>
+            <label class="setting-row" for="hardware-profile-model">Optimization target</label>
+            <select id="hardware-profile-model" class="setting-select">
+              <option value="__default__">All models · default</option>
+            </select>
+            <label class="setting-row" for="hardware-profile-mode">GPU / VRAM profile</label>
+            <select id="hardware-profile-mode" class="setting-select">
+              <option value="automatic">Automatic · Ollama managed</option>
+              <option value="gpu_preferred">GPU preferred</option>
+              <option value="balanced">Balanced GPU / CPU offload</option>
+              <option value="vram_conservative">VRAM conservative</option>
+              <option value="cpu_only">CPU only</option>
+              <option value="advanced">Advanced manual</option>
+            </select>
+            <div id="hardware-profile-advanced" hidden>
+              <label class="setting-row" for="hardware-profile-num-gpu">GPU layers</label>
+              <input id="hardware-profile-num-gpu" class="setting-select" type="number" min="0" max="999" placeholder="Automatic" />
+              <label class="setting-row" for="hardware-profile-main-gpu">Primary GPU index</label>
+              <input id="hardware-profile-main-gpu" class="setting-select" type="number" min="0" max="15" placeholder="Automatic" />
+              <label class="setting-row" for="hardware-profile-num-ctx">Context tokens</label>
+              <input id="hardware-profile-num-ctx" class="setting-select" type="number" min="512" max="131072" placeholder="Automatic" />
+              <label class="setting-row" for="hardware-profile-num-batch">Batch size</label>
+              <input id="hardware-profile-num-batch" class="setting-select" type="number" min="1" max="2048" placeholder="Automatic" />
+            </div>
+            <div class="actions">
+              <button id="hardware-profile-save" class="primary" type="button">Save profile</button>
+              <button id="hardware-profile-reset" class="secondary" type="button">Reset to Automatic</button>
+              <span id="hardware-profile-status" class="meta" role="status" aria-live="polite"></span>
+            </div>
             <div class="actions">
               <button id="hardware-detect" class="secondary" type="button">Scan again</button>
               <button id="hardware-restore-cpu" class="secondary" type="button">Restore CPU</button>

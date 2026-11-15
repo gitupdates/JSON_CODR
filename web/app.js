@@ -62,6 +62,17 @@ const elements = {
   hardwareStatus: document.querySelector("#hardware-status"),
   hardwareDetect: document.querySelector("#hardware-detect"),
   hardwareCandidates: document.querySelector("#hardware-candidates"),
+  hardwareTelemetry: document.querySelector("#hardware-telemetry"),
+  hardwareProfileModel: document.querySelector("#hardware-profile-model"),
+  hardwareProfileMode: document.querySelector("#hardware-profile-mode"),
+  hardwareProfileAdvanced: document.querySelector("#hardware-profile-advanced"),
+  hardwareProfileNumGpu: document.querySelector("#hardware-profile-num-gpu"),
+  hardwareProfileMainGpu: document.querySelector("#hardware-profile-main-gpu"),
+  hardwareProfileNumCtx: document.querySelector("#hardware-profile-num-ctx"),
+  hardwareProfileNumBatch: document.querySelector("#hardware-profile-num-batch"),
+  hardwareProfileSave: document.querySelector("#hardware-profile-save"),
+  hardwareProfileReset: document.querySelector("#hardware-profile-reset"),
+  hardwareProfileStatus: document.querySelector("#hardware-profile-status"),
   hardwareRestoreCpu: document.querySelector("#hardware-restore-cpu"),
   hardwareTabOptimization: document.querySelector("#hardware-tab-optimization"),
   hardwareTabBenchmarks: document.querySelector("#hardware-tab-benchmarks"),
@@ -302,6 +313,97 @@ function renderApprovedDirectories() {
   }
 }
 
+function selectedGpuProfile() {
+  const optimization = settingsState?.gpu_optimization;
+  if (!optimization) return { mode: "automatic" };
+  const target = elements.hardwareProfileModel.value;
+  return target === "__default__"
+    ? optimization.default_profile
+    : optimization.model_profiles[target] || optimization.default_profile;
+}
+
+function renderGpuProfileControls() {
+  const selectedTarget = elements.hardwareProfileModel.value || "__default__";
+  elements.hardwareProfileModel.replaceChildren();
+  const defaultOption = document.createElement("option");
+  defaultOption.value = "__default__"; defaultOption.textContent = "All models · default";
+  elements.hardwareProfileModel.append(defaultOption);
+  for (const model of models.filter((item) => item.installed)) {
+    const option = document.createElement("option"); option.value = model.name; option.textContent = model.name;
+    elements.hardwareProfileModel.append(option);
+  }
+  elements.hardwareProfileModel.value = [...elements.hardwareProfileModel.options].some((item) => item.value === selectedTarget)
+    ? selectedTarget : "__default__";
+  const profile = selectedGpuProfile();
+  elements.hardwareProfileMode.value = profile.mode;
+  elements.hardwareProfileAdvanced.hidden = profile.mode !== "advanced";
+  elements.hardwareProfileNumGpu.value = profile.num_gpu ?? "";
+  elements.hardwareProfileMainGpu.value = profile.main_gpu ?? "";
+  elements.hardwareProfileNumCtx.value = profile.num_ctx ?? "";
+  elements.hardwareProfileNumBatch.value = profile.num_batch ?? "";
+}
+
+function numericProfileValue(element) {
+  return element.value === "" ? null : Number(element.value);
+}
+
+async function saveGpuProfile(reset = false) {
+  const current = settingsState.gpu_optimization;
+  const target = elements.hardwareProfileModel.value;
+  const mode = reset ? "automatic" : elements.hardwareProfileMode.value;
+  const profile = { mode, num_gpu: null, main_gpu: null, num_ctx: null, num_batch: null };
+  if (mode === "advanced") {
+    profile.num_gpu = numericProfileValue(elements.hardwareProfileNumGpu);
+    profile.main_gpu = numericProfileValue(elements.hardwareProfileMainGpu);
+    profile.num_ctx = numericProfileValue(elements.hardwareProfileNumCtx);
+    profile.num_batch = numericProfileValue(elements.hardwareProfileNumBatch);
+  }
+  const update = {
+    default_profile: { ...current.default_profile },
+    model_profiles: { ...current.model_profiles },
+  };
+  if (target === "__default__") update.default_profile = profile;
+  else if (reset) delete update.model_profiles[target];
+  else update.model_profiles[target] = profile;
+  elements.hardwareProfileSave.disabled = true;
+  elements.hardwareProfileStatus.textContent = "Saving…";
+  try {
+    await saveSettings({ gpu_optimization: update });
+    elements.hardwareProfileStatus.textContent = reset ? "Automatic profile restored" : "Profile saved";
+    renderGpuProfileControls();
+  } finally {
+    elements.hardwareProfileSave.disabled = false;
+  }
+}
+
+async function loadHardwareTelemetry() {
+  elements.hardwareTelemetry.innerHTML = '<p class="meta">Reading GPU and Ollama runtime data…</p>';
+  const response = await fetch("/api/hardware/telemetry");
+  if (!response.ok) throw new Error("Unable to load hardware telemetry");
+  const payload = await response.json();
+  elements.hardwareTelemetry.replaceChildren();
+  if (!payload.gpus.length && !payload.models.length) {
+    elements.hardwareTelemetry.innerHTML = '<p class="meta">No active GPU or loaded Ollama model telemetry.</p>';
+    return;
+  }
+  for (const gpu of payload.gpus) {
+    const row = document.createElement("div"); row.className = "dependency-row";
+    const label = document.createElement("div");
+    const name = document.createElement("strong"); name.textContent = `GPU ${gpu.index} · ${gpu.name}`;
+    const detail = document.createElement("p"); detail.className = "meta";
+    detail.textContent = `${gpu.memory_free.toLocaleString()} MiB free of ${gpu.memory_total.toLocaleString()} MiB · ${gpu.utilization}% load · ${gpu.temperature}°C`;
+    label.append(name, detail); row.append(label); elements.hardwareTelemetry.append(row);
+  }
+  for (const model of payload.models) {
+    const row = document.createElement("div"); row.className = "dependency-row";
+    const label = document.createElement("div");
+    const name = document.createElement("strong"); name.textContent = model.name;
+    const detail = document.createElement("p"); detail.className = "meta";
+    detail.textContent = `${model.processor} · ${(model.size_vram / 1048576).toFixed(0)} MiB VRAM`;
+    label.append(name, detail); row.append(label); elements.hardwareTelemetry.append(row);
+  }
+}
+
 async function loadSettings() {
   const themeRevisionAtStart = themeSaveRevision;
   const skillsRevisionAtStart = skillsChangeRevision;
@@ -321,6 +423,7 @@ async function loadSettings() {
   elements.settingTheme.disabled = false;
   elements.settingSkillsOpen.disabled = false;
   renderApprovedDirectories();
+  renderGpuProfileControls();
 }
 
 async function loadHardwareStatus() {
@@ -831,6 +934,7 @@ async function loadApplication() {
     elements.model.disabled = installed === 0;
     elements.submit.disabled = installed === 0;
     updateModelDetail();
+    renderGpuProfileControls();
   } catch (error) {
     elements.health.className = "health error";
     elements.health.lastElementChild.textContent = "Service unavailable";
@@ -957,6 +1061,7 @@ elements.hardwareRestoreCpu.addEventListener("click", () => restoreCpuBackend().
 elements.hardwareTabOptimization.addEventListener("click", () => {
   selectHardwareTab("optimization");
   detectHardware().catch((error) => showError(error.message));
+  loadHardwareTelemetry().catch((error) => showError(error.message));
 });
 elements.hardwareTabBenchmarks.addEventListener("click", () => {
   selectHardwareTab("benchmarks");
@@ -965,6 +1070,18 @@ elements.hardwareTabBenchmarks.addEventListener("click", () => {
 });
 elements.hardwareBenchmarkRun.addEventListener("click", () => runHardwareBenchmark().catch((error) => {
   elements.hardwareBenchmarkStatus.textContent = error.message;
+  showError(error.message);
+}));
+elements.hardwareProfileModel.addEventListener("change", renderGpuProfileControls);
+elements.hardwareProfileMode.addEventListener("change", () => {
+  elements.hardwareProfileAdvanced.hidden = elements.hardwareProfileMode.value !== "advanced";
+});
+elements.hardwareProfileSave.addEventListener("click", () => saveGpuProfile().catch((error) => {
+  elements.hardwareProfileStatus.textContent = error.message;
+  showError(error.message);
+}));
+elements.hardwareProfileReset.addEventListener("click", () => saveGpuProfile(true).catch((error) => {
+  elements.hardwareProfileStatus.textContent = error.message;
   showError(error.message);
 }));
 elements.settingSkillsOpen.addEventListener("change", () => {

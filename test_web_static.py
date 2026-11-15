@@ -209,6 +209,24 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("Running standardized benchmark", javascript)
         self.assertIn("candidate.runnable === false", javascript)
 
+    def test_gpu_telemetry_and_per_model_profile_controls_are_present(self):
+        html = self.client.get("/").text
+        javascript = self.client.get("/static/app.js").text
+
+        for identifier in (
+            "hardware-telemetry", "hardware-profile-model", "hardware-profile-mode",
+            "hardware-profile-advanced", "hardware-profile-num-gpu", "hardware-profile-main-gpu",
+            "hardware-profile-num-ctx", "hardware-profile-num-batch", "hardware-profile-save",
+            "hardware-profile-reset", "hardware-profile-status",
+        ):
+            self.assertIn(f'id="{identifier}"', html)
+        self.assertIn('fetch("/api/hardware/telemetry"', javascript)
+        self.assertIn("gpu_optimization", javascript)
+        self.assertIn('mode === "advanced"', javascript)
+        self.assertIn("Automatic · Ollama managed", html)
+        self.assertIn("GPU preferred", html)
+        self.assertIn("VRAM conservative", html)
+
     def test_settings_saves_are_partial_and_serialized(self):
         javascript = self.client.get("/static/app.js").text
         html = self.client.get("/").text
