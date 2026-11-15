@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from web_app.inference.contracts import ProviderKind
 from web_app.inference.detection import AcceleratorDetector
@@ -87,6 +88,14 @@ class AcceleratorDetectionTests(unittest.TestCase):
         ).detect()
         openvino = next(item for item in states if item.provider is ProviderKind.openvino)
         self.assertEqual(openvino.evidence.count("Hardware: Intel(R) AI Boost"), 1)
+
+    def test_directx_detection_never_launches_dxdiag(self):
+        with patch("web_app.inference.detection.os.name", "nt"), patch(
+            "web_app.inference.detection.subprocess.run"
+        ) as run:
+            AcceleratorDetector._directx12_available()
+
+        run.assert_not_called()
 
 
 if __name__ == "__main__":

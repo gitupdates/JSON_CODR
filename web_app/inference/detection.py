@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import importlib.util
 import os
 import platform
@@ -133,10 +134,10 @@ class AcceleratorDetector:
         if os.name != "nt":
             return False
         try:
-            result = subprocess.run(["dxdiag", "/whql:off"], capture_output=True, timeout=10, check=False)
-        except (OSError, subprocess.TimeoutExpired):
+            library = ctypes.WinDLL("d3d12.dll")
+        except (AttributeError, OSError):
             return False
-        return result.returncode == 0
+        return hasattr(library, "D3D12CreateDevice")
 
     @staticmethod
     def _windows_devices() -> list[str]:
