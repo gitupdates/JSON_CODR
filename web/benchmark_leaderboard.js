@@ -1,7 +1,9 @@
 (function attachBenchmarkLeaderboard(root) {
   "use strict";
 
-  const numberOrNull = (value) => Number.isFinite(Number(value)) ? Number(value) : null;
+  const numberOrNull = (value) => value === null || value === undefined || value === ""
+    ? null
+    : (Number.isFinite(Number(value)) ? Number(value) : null);
 
   function percentile(sorted, ratio) {
     if (!sorted.length) return null;

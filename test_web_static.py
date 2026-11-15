@@ -34,7 +34,7 @@ class WebStaticTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.0.12", response.text)
+        self.assertIn("V1.0.13", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -55,7 +55,7 @@ class WebStaticTests(unittest.TestCase):
         html = self.client.get("/").text
         css = self.client.get("/static/app.css")
         javascript = self.client.get("/static/app.js")
-        self.assertIn('/static/app.css?v=1.0.12-global-navigation', html)
+        self.assertIn('/static/app.css?v=1.0.13-benchmark-leaderboard', html)
         self.assertEqual(css.status_code, 200)
         self.assertIn("text/css", css.headers["content-type"])
         self.assertEqual(javascript.status_code, 200)
@@ -311,6 +311,7 @@ class WebStaticTests(unittest.TestCase):
             "renderLeaderboardDetails",
             "renderLeaderboardScatter",
             "renderLeaderboardTrend",
+            "`${row.name} ${metricLabel} over time`",
         ):
             self.assertIn(contract, javascript)
         for identifier in (
@@ -354,7 +355,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("themeRevisionAtStart === themeSaveRevision", javascript)
         self.assertIn("skillsRevisionAtStart === skillsChangeRevision", javascript)
         self.assertIn("navigationRevisionAtStart === navigationChangeRevision", javascript)
-        self.assertIn("queueSettingsLoad().catch", javascript)
+        self.assertIn("loadApplication().then(() => queueSettingsLoad())", javascript)
         self.assertIn('id="setting-theme" class="setting-select" aria-describedby="setting-theme-help" disabled', html)
         self.assertIn('id="setting-skills-open" type="checkbox" disabled', html)
 

@@ -889,12 +889,12 @@ function renderLeaderboardTrend(row) {
     const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = trend.length ? "One matching run is available; run it again to establish a trend." : "No matching historical runs are available."; elements.leaderboardTrendChart.append(empty); return;
   }
   const points = window.JSONCodrLeaderboard.scalePoints(trend.map((point, index) => ({ x: index, y: point.value, point })), { width: 520, height: 240, padding: 34 });
-  const svg = svgNode("svg", { viewBox: "0 0 520 240", role: "img", "aria-label": `${row.name} throughput over time` });
+  const svg = svgNode("svg", { viewBox: "0 0 520 240", role: "img", "aria-label": `${row.name} ${metricLabel} over time` });
   for (const y of [34, 90, 146, 206]) svg.append(svgNode("line", { x1: 34, y1: y, x2: 486, y2: y, class: "chart-grid" }));
   const line = svgNode("polyline", { points: points.map((point) => `${point.cx},${point.cy}`).join(" "), fill: "none", stroke: "currentColor", "stroke-width": 3 }); svg.append(line);
   for (const point of points) {
     const circle = svgNode("circle", { cx: point.cx, cy: point.cy, r: 6, class: "chart-point", role: "img" });
-    circle.setAttribute("tabindex", "0"); circle.setAttribute("aria-label", `${new Date(point.point.created_at).toLocaleDateString()}: ${point.point.value.toFixed(2)} tokens per second`); svg.append(circle);
+    circle.setAttribute("tabindex", "0"); circle.setAttribute("aria-label", `${new Date(point.point.created_at).toLocaleDateString()}: ${point.point.value.toFixed(2)}${metricUnit} ${metricLabel}`); svg.append(circle);
   }
   elements.leaderboardTrendChart.append(svg);
   const summary = document.createElement("p"); summary.className = "meta"; summary.textContent = `${metricLabel}: ${trend.map((point) => `${new Date(point.created_at).toLocaleDateString()}: ${point.value.toFixed(2)}${metricUnit}`).join("; ")}`; elements.leaderboardTrendChart.append(summary);
@@ -1810,8 +1810,7 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-loadApplication();
-queueSettingsLoad().catch((error) => showError(error.message));
+loadApplication().then(() => queueSettingsLoad()).catch((error) => showError(error.message));
 loadHardwareStatus().catch((error) => showError(error.message));
 loadAttachments().catch((error) => showError(error.message));
 loadSkillsets().catch((error) => showError(error.message));

@@ -110,6 +110,14 @@ class BenchmarkLeaderboardTests(unittest.TestCase):
         self.assertEqual(stats["rows"][0]["status"], "unavailable")
         self.assertIsNone(stats["rows"][0]["ttft_ms"])
 
+        null_metrics = run_helper(
+            "globalThis.JSONCodrLeaderboard.buildRows(input.history, [], 'nulls')[0]",
+            {"history": [{"id": "nulls", "results": [{"backend": "gpu", "tokens_per_second": None, "speedup_vs_cpu": None}]}]},
+        )
+        self.assertIsNone(null_metrics["tokens_per_second"])
+        self.assertIsNone(null_metrics["speedup_vs_cpu"])
+        self.assertIsNone(null_metrics["performance_index"])
+
     def test_trend_requires_matching_model_suite_workload_and_backend(self):
         first = session("run-1", "2026-11-15T12:00:00Z")
         second = session("run-2", "2026-11-16T12:00:00Z")
