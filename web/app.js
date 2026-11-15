@@ -515,13 +515,15 @@ async function runHardwareDetection() {
   elements.hardwareDetect.disabled = true;
   elements.hardwareCandidates.innerHTML = '<p class="meta">Detecting local runtimes…</p>';
   try {
-    const [response, catalogResponse] = await Promise.all([
+    const [response, catalogResponse, environmentResponse] = await Promise.all([
       fetch("/api/hardware/detect", { method: "POST" }),
       fetch("/api/inference/catalog"),
+      fetch("/api/inference/environments"),
     ]);
     if (!response.ok) throw new Error((await response.json()).detail || "Hardware detection failed");
     const candidates = await response.json();
     const optimizedCatalog = catalogResponse.ok ? await catalogResponse.json() : [];
+    const providerEnvironments = environmentResponse.ok ? await environmentResponse.json() : [];
     elements.hardwareBenchmarkBackend.replaceChildren();
     const all = document.createElement("option"); all.value = "all"; all.textContent = "All detected and available";
     elements.hardwareBenchmarkBackend.append(all);
@@ -588,6 +590,30 @@ async function runHardwareDetection() {
       }
       row.append(label, control); elements.hardwareCandidates.append(row);
     }
+    for (const environment of providerEnvironments) {
+      const row = document.createElement("div"); row.className = "dependency-row";
+      const label = document.createElement("div");
+      const name = document.createElement("strong"); name.textContent = `${environment.provider} provider environment`;
+      const detail = document.createElement("p"); detail.className = "meta";
+      detail.textContent = environment.installed
+        ? `${environment.status} · Python ${environment.python_version || "unknown"} · isolated runtime`
+        : `not installed · ${environment.environment}`;
+      label.append(name, detail);
+      const install = document.createElement("button"); install.type = "button"; install.className = "secondary";
+      install.textContent = environment.installed && environment.compatible ? "Recheck installed runtime" : "Review runtime install";
+      install.addEventListener("click", async () => {
+        try {
+          await ensureSession();
+          const response = await fetch(`/api/sessions/${sessionId}/hardware/${environment.provider}/install-proposal`, { method: "POST" });
+          const proposals = await response.json();
+          if (!response.ok) throw new Error(proposals.detail || "Unable to prepare runtime installation");
+          elements.empty.hidden = true; elements.result.hidden = false;
+          renderActions(proposals);
+          elements.actionReview.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        } catch (error) { showError(error.message); }
+      });
+      row.append(label, install); elements.hardwareCandidates.append(row);
+    }
   } finally { elements.hardwareDetect.disabled = false; }
 }
 
@@ -619,7 +645,10 @@ function renderBenchmarkResults(benchmark) {
       const gpu = result.gpu_percent > 0
         ? ` · ${result.gpu_percent}% GPU · ${(result.vram_bytes / 1048576).toFixed(0)} MiB VRAM`
         : "";
-      metrics.textContent = `${result.tokens_per_second.toFixed(2)} tokens/s · ${result.average_total_seconds.toFixed(3)}s average · ${relative}${gpu}`;
+      const eligibility = result.selected
+        ? " · Selected for compatibility and performance"
+        : result.eligible ? " · Eligible" : ` · Not eligible: ${(result.rejection_reasons || []).join("; ")}`;
+      metrics.textContent = `${result.tokens_per_second.toFixed(2)} tokens/s · ${result.average_total_seconds.toFixed(3)}s average · ${relative}${gpu}${eligibility}`;
       components = document.createElement("details");
       const summary = document.createElement("summary");
       summary.textContent = `${result.runtime} · ${result.kind} · ${result.verified ? "verified" : "not yet verified"}${result.active ? " · active" : ""}`;
@@ -668,7 +697,7 @@ async function runHardwareBenchmark() {
     if (!response.ok) throw new Error(benchmark.detail || "Benchmark failed");
     renderBenchmarkResults(benchmark);
     await loadBenchmarkHistory();
-    elements.hardwareBenchmarkStatus.textContent = "Benchmark complete";
+    elements.hardwareBenchmarkStatus.textContent = `Benchmark complete · selected ${benchmark.model} on ${benchmark.selected_backend}`;
   } finally {
     elements.hardwareBenchmarkRun.disabled = false;
   }
