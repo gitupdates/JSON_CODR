@@ -799,7 +799,8 @@ function replaceSelectOptions(select, values, allLabel) {
 function updateLeaderboardFilterOptions() {
   replaceSelectOptions(elements.leaderboardModelFilter, leaderboardHistoryCache.map((item) => item.model), "All models");
   replaceSelectOptions(elements.leaderboardSuiteFilter, leaderboardHistoryCache.map((item) => item.suite), "All suites");
-  replaceSelectOptions(elements.leaderboardBackendFilter, leaderboardCandidateCache.map((item) => item.id), "All backends");
+  const historyBackends = leaderboardHistoryCache.flatMap((item) => (item.results || []).map((result) => result.backend || result.runtime));
+  replaceSelectOptions(elements.leaderboardBackendFilter, [...leaderboardCandidateCache.map((item) => item.id), ...historyBackends], "All backends");
 }
 
 function selectLeaderboardSession(sessionId) {
@@ -827,13 +828,48 @@ function renderLeaderboardKpis(rows) {
   const throughput = ranked.filter((row) => Number.isFinite(row.tokens_per_second)).sort((a, b) => b.tokens_per_second - a.tokens_per_second)[0];
   const ttft = ranked.filter((row) => Number.isFinite(row.ttft_ms)).sort((a, b) => a.ttft_ms - b.ttft_ms)[0];
   const vram = ranked.filter((row) => Number.isFinite(row.peak_vram_mb)).sort((a, b) => a.peak_vram_mb - b.peak_vram_mb)[0];
+  const duration = ranked.filter((row) => Number.isFinite(row.average_total_seconds)).sort((a, b) => a.average_total_seconds - b.average_total_seconds)[0];
+  const speedup = ranked.filter((row) => Number.isFinite(row.speedup_vs_cpu)).sort((a, b) => b.speedup_vs_cpu - a.speedup_vs_cpu)[0];
   const tested = rows.filter((row) => row.tested);
+  const verified = tested.filter((row) => row.probe_verified).length;
   elements.leaderboardKpis.append(
     createKpi("Best throughput", throughput ? formatLeaderboardValue(throughput.tokens_per_second, " tok/s") : "—", throughput?.name || "No ranked result"),
     createKpi("Lowest TTFT", ttft ? formatLeaderboardValue(ttft.ttft_ms, " ms", 0) : "—", ttft?.name || "No TTFT evidence"),
     createKpi("Lowest peak VRAM", vram ? formatLeaderboardValue(vram.peak_vram_mb, " MiB", 0) : "—", vram?.name || "No VRAM evidence"),
+    createKpi("Lowest duration", duration ? formatLeaderboardValue(duration.average_total_seconds, " s") : "—", duration?.name || "No duration evidence"),
+    createKpi("Best CPU-relative speed", speedup ? formatLeaderboardValue(speedup.speedup_vs_cpu, "×") : "—", speedup?.name || "No CPU baseline evidence"),
+    createKpi("Probe verification", tested.length ? `${verified} / ${tested.length}` : "—", "Runtime probe verified results"),
     createKpi("Conforming results", tested.length ? `${ranked.length} / ${tested.length}` : "—", `${rows.filter((row) => row.status === "not_tested").length} detected option(s) not tested`),
   );
+}
+
+const LEADERBOARD_METRICS = {
+  tokens_per_second: ["Throughput", " tok/s"],
+  ttft_ms: ["TTFT", " ms"],
+  average_total_seconds: ["Total time", " s"],
+  peak_vram_mb: ["Peak VRAM", " MiB"],
+  speedup_vs_cpu: ["CPU-relative speed", "×"],
+  performance_index: ["Performance index", ""],
+};
+
+function renderLeaderboardMetricComparison(rows) {
+  const metric = elements.leaderboardMetric.value;
+  const [label, unit] = LEADERBOARD_METRICS[metric] || [metric, ""];
+  const values = rows.map((row) => row[metric]).filter(Number.isFinite);
+  const maximum = Math.max(...values, 0);
+  const comparison = document.createElement("div"); comparison.className = "leaderboard-metric-comparison";
+  const heading = document.createElement("strong"); heading.textContent = `${label} by backend`; comparison.append(heading);
+  for (const row of rows) {
+    const item = document.createElement("button"); item.type = "button"; item.className = "leaderboard-metric-row";
+    const name = document.createElement("span"); name.textContent = row.name;
+    const value = document.createElement("span"); value.textContent = formatLeaderboardValue(row[metric], unit);
+    const bar = document.createElement("span"); bar.className = "leaderboard-metric-bar";
+    bar.style.setProperty("--metric-width", Number.isFinite(row[metric]) && maximum ? `${Math.max(3, row[metric] / maximum * 100)}%` : "0%");
+    item.setAttribute("aria-label", `${row.name}: ${value.textContent}; ${row.status === "not_tested" ? "not tested" : row.status}`);
+    item.addEventListener("click", () => { selectedLeaderboardRowId = row.id; renderBenchmarkLeaderboard(); });
+    item.append(name, value, bar); comparison.append(item);
+  }
+  elements.leaderboardBackendChart.append(comparison);
 }
 
 function svgNode(name, attributes = {}) {
@@ -851,7 +887,7 @@ function renderLeaderboardScatter(rows) {
   resetChart(elements.leaderboardBackendChart, "Throughput versus responsiveness");
   const eligible = rows.filter((row) => row.eligible_rank && Number.isFinite(row.tokens_per_second) && Number.isFinite(row.ttft_ms));
   if (!eligible.length) {
-    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "No comparable TTFT and throughput evidence is available."; elements.leaderboardBackendChart.append(empty); return;
+    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "No comparable TTFT and throughput evidence is available."; elements.leaderboardBackendChart.append(empty); renderLeaderboardMetricComparison(rows); return;
   }
   const points = window.JSONCodrLeaderboard.scalePoints(eligible.map((row) => ({ x: row.ttft_ms, y: row.tokens_per_second, row })), { width: 520, height: 240, padding: 34 });
   const svg = svgNode("svg", { viewBox: "0 0 520 240", role: "img", "aria-label": "Higher and farther left indicates faster output and lower time to first token" });
@@ -859,14 +895,18 @@ function renderLeaderboardScatter(rows) {
   const xLabel = svgNode("text", { x: 414, y: 232, class: "chart-label" }); xLabel.textContent = "TTFT (ms)"; svg.append(xLabel);
   const yLabel = svgNode("text", { x: 4, y: 16, class: "chart-label" }); yLabel.textContent = "tokens/s"; svg.append(yLabel);
   for (const point of points) {
-    const circle = svgNode("circle", { cx: point.cx, cy: point.cy, r: 8, class: "chart-point", role: "img" });
+    const circle = svgNode("circle", { cx: point.cx, cy: point.cy, r: 8, class: "chart-point", role: "button" });
     circle.setAttribute("tabindex", "0");
     circle.setAttribute("aria-label", `${point.row.name}: ${point.row.tokens_per_second.toFixed(2)} tokens per second, ${point.row.ttft_ms.toFixed(1)} milliseconds TTFT`);
-    circle.addEventListener("click", () => { selectedLeaderboardRowId = point.row.id; renderBenchmarkLeaderboard(); });
+    const title = svgNode("title"); title.textContent = circle.getAttribute("aria-label"); circle.append(title);
+    const choose = () => { selectedLeaderboardRowId = point.row.id; renderBenchmarkLeaderboard(); };
+    circle.addEventListener("click", choose);
+    circle.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); choose(); } });
     svg.append(circle);
   }
   elements.leaderboardBackendChart.append(svg);
   const summary = document.createElement("p"); summary.className = "meta"; summary.textContent = eligible.map((row) => `${row.name}: ${row.tokens_per_second.toFixed(2)} tok/s at ${row.ttft_ms.toFixed(1)} ms`).join("; "); elements.leaderboardBackendChart.append(summary);
+  renderLeaderboardMetricComparison(rows);
 }
 
 function renderLeaderboardTrend(row) {
@@ -875,36 +915,40 @@ function renderLeaderboardTrend(row) {
     const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "Select a tested backend to view its history."; elements.leaderboardTrendChart.append(empty); return;
   }
   const metric = elements.leaderboardMetric.value;
-  const metricLabels = {
-    tokens_per_second: ["Throughput", " tok/s"],
-    ttft_ms: ["TTFT", " ms"],
-    average_total_seconds: ["Total time", " s"],
-    peak_vram_mb: ["Peak VRAM", " MiB"],
-    speedup_vs_cpu: ["CPU-relative speed", "×"],
-    performance_index: ["Performance index", ""],
-  };
-  const [metricLabel, metricUnit] = metricLabels[metric] || [metric, ""];
+  const [metricLabel, metricUnit] = LEADERBOARD_METRICS[metric] || [metric, ""];
   const trend = window.JSONCodrLeaderboard.buildTrend(leaderboardHistoryCache, row, metric);
-  if (trend.length < 2) {
-    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = trend.length ? "One matching run is available; run it again to establish a trend." : "No matching historical runs are available."; elements.leaderboardTrendChart.append(empty); return;
+  const validTrend = trend.filter((point) => point.eligible && Number.isFinite(point.value));
+  if (validTrend.length < 2) {
+    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = validTrend.length ? `One valid matching run is available (${formatLeaderboardValue(validTrend[0].value, metricUnit)}); run it again to establish a trend.` : "No valid matching historical runs are available."; elements.leaderboardTrendChart.append(empty); return;
   }
-  const points = window.JSONCodrLeaderboard.scalePoints(trend.map((point, index) => ({ x: index, y: point.value, point })), { width: 520, height: 240, padding: 34 });
+  const points = window.JSONCodrLeaderboard.scalePoints(validTrend.map((point) => ({ x: trend.indexOf(point), y: point.value, point })), { width: 520, height: 240, padding: 34 });
+  const pointsBySession = new Map(points.map((point) => [point.point.session_id, point]));
   const svg = svgNode("svg", { viewBox: "0 0 520 240", role: "img", "aria-label": `${row.name} ${metricLabel} over time` });
   for (const y of [34, 90, 146, 206]) svg.append(svgNode("line", { x1: 34, y1: y, x2: 486, y2: y, class: "chart-grid" }));
-  const line = svgNode("polyline", { points: points.map((point) => `${point.cx},${point.cy}`).join(" "), fill: "none", stroke: "currentColor", "stroke-width": 3 }); svg.append(line);
+  const xLabel = svgNode("text", { x: 430, y: 232, class: "chart-label" }); xLabel.textContent = "Run"; svg.append(xLabel);
+  const yLabel = svgNode("text", { x: 4, y: 16, class: "chart-label" }); yLabel.textContent = metricLabel; svg.append(yLabel);
+  let segment = [];
+  const appendSegment = () => { if (segment.length > 1) svg.append(svgNode("polyline", { points: segment.map((point) => `${point.cx},${point.cy}`).join(" "), fill: "none", stroke: "currentColor", "stroke-width": 3 })); segment = []; };
+  for (const trendPoint of trend) { const point = pointsBySession.get(trendPoint.session_id); if (point) segment.push(point); else appendSegment(); }
+  appendSegment();
   for (const point of points) {
     const circle = svgNode("circle", { cx: point.cx, cy: point.cy, r: 6, class: "chart-point", role: "img" });
     circle.setAttribute("tabindex", "0"); circle.setAttribute("aria-label", `${new Date(point.point.created_at).toLocaleDateString()}: ${point.point.value.toFixed(2)}${metricUnit} ${metricLabel}`); svg.append(circle);
+    const title = svgNode("title"); title.textContent = circle.getAttribute("aria-label"); circle.append(title);
   }
   elements.leaderboardTrendChart.append(svg);
-  const summary = document.createElement("p"); summary.className = "meta"; summary.textContent = `${metricLabel}: ${trend.map((point) => `${new Date(point.created_at).toLocaleDateString()}: ${point.value.toFixed(2)}${metricUnit}`).join("; ")}`; elements.leaderboardTrendChart.append(summary);
+  const summary = document.createElement("p"); summary.className = "meta"; summary.textContent = `${metricLabel}: ${trend.map((point) => `${new Date(point.created_at).toLocaleDateString()}: ${point.eligible ? `${point.value.toFixed(2)}${metricUnit}` : "invalid / unavailable gap"}`).join("; ")}`; elements.leaderboardTrendChart.append(summary);
 }
 
 function handoffUntestedBackend(row) {
+  if (!row.runnable || !row.compatible) { elements.leaderboardStatus.textContent = row.availability_reason || "This backend is not currently runnable."; return false; }
   if ([...elements.hardwareBenchmarkModel.options].some((option) => option.value === row.model)) elements.hardwareBenchmarkModel.value = row.model;
   if ([...elements.hardwareBenchmarkSuite.options].some((option) => option.value === row.suite)) elements.hardwareBenchmarkSuite.value = row.suite;
-  if ([...elements.hardwareBenchmarkBackend.options].some((option) => option.value === row.backend && !option.disabled)) elements.hardwareBenchmarkBackend.value = row.backend;
+  const backendOption = [...elements.hardwareBenchmarkBackend.options].find((option) => option.value === row.backend && !option.disabled);
+  if (!backendOption) { elements.leaderboardStatus.textContent = `Backend ${row.backend} is not available in the benchmark runner.`; return false; }
+  elements.hardwareBenchmarkBackend.value = row.backend;
   selectHardwareSection("benchmarks");
+  return true;
 }
 
 function renderLeaderboardDetails(row) {
@@ -913,11 +957,12 @@ function renderLeaderboardDetails(row) {
   selectedLocalperfEvaluationId = row.evaluation_id;
   elements.localperfExport.disabled = !selectedLocalperfEvaluationId;
   const heading = document.createElement("h4"); heading.textContent = `${row.model} · ${row.name}`;
-  const description = document.createElement("p"); description.className = "meta"; description.textContent = `${row.suite} · ${row.workload_version} · ${row.status}${row.probe_verified ? " · runtime probe verified" : " · runtime probe unverified"}`;
+  const description = document.createElement("p"); description.className = "meta"; description.textContent = `${row.suite} · ${row.workload_version} · ${row.status}${row.probe_verified ? " · runtime probe verified" : " · runtime probe unverified"} · Conformance: ${row.conforming ? "valid" : "invalid"}`;
   elements.leaderboardDetails.append(heading, description);
   if (row.status === "not_tested") {
     const action = document.createElement("button"); action.type = "button"; action.className = "primary"; action.textContent = "Test this backend"; action.addEventListener("click", () => handoffUntestedBackend(row)); elements.leaderboardDetails.append(action); return;
   }
+  if (row.availability_reason) { const reason = document.createElement("p"); reason.className = "meta"; reason.textContent = row.availability_reason; elements.leaderboardDetails.append(reason); }
   const metrics = document.createElement("p"); metrics.textContent = `Performance index ${formatLeaderboardValue(row.performance_index, "", 0)} · ${formatLeaderboardValue(row.tokens_per_second, " tok/s")} · ${formatLeaderboardValue(row.ttft_ms, " ms")} TTFT · ${formatLeaderboardValue(row.peak_vram_mb, " MiB", 0)} peak VRAM`; elements.leaderboardDetails.append(metrics);
   const metricNames = [["tokens_per_second", "Throughput"], ["ttft_ms", "TTFT"], ["total_seconds", "Duration"], ["peak_vram_mb", "Peak VRAM"]];
   const stats = document.createElement("ul");
@@ -926,9 +971,12 @@ function renderLeaderboardDetails(row) {
     const item = document.createElement("li"); item.textContent = `${label}: p50 ${formatLeaderboardValue(summary.p50)}, p90 ${formatLeaderboardValue(summary.p90)}, min ${formatLeaderboardValue(summary.min)}, max ${formatLeaderboardValue(summary.max)}`; stats.append(item);
   }
   elements.leaderboardDetails.append(stats);
-  if (row.error || row.rejection_reasons.length) { const warning = document.createElement("p"); warning.className = "error"; warning.textContent = row.error || row.rejection_reasons.join("; "); elements.leaderboardDetails.append(warning); }
+  const metadata = document.createElement("p"); metadata.className = "meta"; metadata.textContent = `Session ${row.session_id} · backend ${row.backend} · evaluation ${row.evaluation_id || "unavailable"} · workload hash ${row.workload_hash || "unavailable"}`; elements.leaderboardDetails.append(metadata);
+  if (row.runtime_metadata) { const runtime = document.createElement("p"); runtime.className = "meta"; runtime.textContent = `Runtime metadata: ${JSON.stringify(row.runtime_metadata)}`; elements.leaderboardDetails.append(runtime); }
+  const validityReasons = [...row.rejection_reasons, ...row.conformance_reasons];
+  if (row.error || validityReasons.length) { const warning = document.createElement("p"); warning.className = "error"; warning.textContent = row.error || validityReasons.join("; "); elements.leaderboardDetails.append(warning); }
   const samples = document.createElement("details"); const summary = document.createElement("summary"); summary.textContent = `Show ${row.tests.length} per-prompt samples`; samples.append(summary);
-  for (const sample of row.tests) { const line = document.createElement("p"); line.className = "meta"; line.textContent = `${sample.prompt_id || sample.test || "sample"} #${sample.repetition || 1}: ${formatLeaderboardValue(Number(sample.tokens_per_second), " tok/s")} · ${formatLeaderboardValue(Number(sample.ttft_ms), " ms")} TTFT · ${formatLeaderboardValue(Number(sample.total_seconds), " s")} total`; samples.append(line); }
+  for (const sample of row.tests) { const line = document.createElement("p"); line.className = "meta"; line.textContent = `${sample.prompt_id || sample.test || "sample"} #${sample.repetition || 1}: ${formatLeaderboardValue(sample.tokens_per_second, " tok/s")} · ${formatLeaderboardValue(sample.ttft_ms, " ms")} TTFT · ${formatLeaderboardValue(sample.total_seconds, " s")} total`; samples.append(line); }
   elements.leaderboardDetails.append(samples);
 }
 
@@ -1655,14 +1703,14 @@ elements.leaderboardMetric.addEventListener("change", renderBenchmarkLeaderboard
 elements.leaderboardModelFilter.addEventListener("change", () => {
   const model = elements.leaderboardModelFilter.value;
   const suite = elements.leaderboardSuiteFilter.value;
-  const session = leaderboardHistoryCache.find((item) => (model === "all" || item.model === model) && (suite === "all" || item.suite === suite));
+  const session = window.JSONCodrLeaderboard.chooseSession(leaderboardHistoryCache, selectedLeaderboardSessionId, model, suite);
   if (session) { selectedLeaderboardSessionId = session.id; selectedLeaderboardRowId = null; }
   renderBenchmarkLeaderboard();
 });
 elements.leaderboardSuiteFilter.addEventListener("change", () => {
   const model = elements.leaderboardModelFilter.value;
   const suite = elements.leaderboardSuiteFilter.value;
-  const session = leaderboardHistoryCache.find((item) => (model === "all" || item.model === model) && (suite === "all" || item.suite === suite));
+  const session = window.JSONCodrLeaderboard.chooseSession(leaderboardHistoryCache, selectedLeaderboardSessionId, model, suite);
   if (session) { selectedLeaderboardSessionId = session.id; selectedLeaderboardRowId = null; }
   renderBenchmarkLeaderboard();
 });

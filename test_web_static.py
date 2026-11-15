@@ -312,6 +312,15 @@ class WebStaticTests(unittest.TestCase):
             "renderLeaderboardScatter",
             "renderLeaderboardTrend",
             "`${row.name} ${metricLabel} over time`",
+            'createKpi("Lowest duration"',
+            'createKpi("Best CPU-relative speed"',
+            'createKpi("Probe verification"',
+            'circle.addEventListener("keydown"',
+            "row.availability_reason",
+            "JSONCodrLeaderboard.chooseSession",
+            "historyBackends",
+            "Conformance:",
+            "renderLeaderboardMetricComparison",
         ):
             self.assertIn(contract, javascript)
         for identifier in (

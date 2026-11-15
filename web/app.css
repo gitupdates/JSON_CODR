@@ -268,7 +268,7 @@ footer { padding: 22px 0 34px; color: var(--text-subtle); font: 600 10px ui-mono
 .leaderboard-filters { display: grid; grid-template-columns: minmax(180px, 1.5fr) repeat(4, minmax(120px, 1fr)); gap: 10px; margin: 18px 0; }
 .leaderboard-filters label { display: grid; gap: 6px; color: var(--muted); font: 10px ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; }
 .leaderboard-filters input, .leaderboard-filters select { min-width: 0; height: 40px; padding: 0 10px; color: var(--text); background: var(--surface-input); border: 1px solid var(--line); font: 12px ui-monospace, monospace; text-transform: none; letter-spacing: 0; }
-.leaderboard-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
+.leaderboard-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 18px; }
 .leaderboard-kpi { min-width: 0; padding: 14px; background: var(--surface-raised); border: 1px solid var(--line); }
 .leaderboard-kpi span { display: block; color: var(--muted); font: 10px ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; }
 .leaderboard-kpi strong { display: block; margin-top: 7px; font-size: 22px; overflow-wrap: anywhere; }
@@ -286,6 +286,10 @@ footer { padding: 22px 0 34px; color: var(--text-subtle); font: 600 10px ui-mono
 .leaderboard-chart .chart-label { fill: var(--muted); font: 10px ui-monospace, monospace; }
 .leaderboard-chart .chart-point { fill: var(--cyan); stroke: var(--surface-raised); stroke-width: 3; }
 .leaderboard-chart .chart-point:focus { outline: none; stroke: var(--lime); stroke-width: 5; }
+.leaderboard-metric-comparison { display: grid; gap: 6px; margin-top: 14px; }
+.leaderboard-metric-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; overflow: hidden; padding: 8px; color: inherit; text-align: left; background: var(--surface-input); border: 1px solid var(--line); }
+.leaderboard-metric-row > span:not(.leaderboard-metric-bar) { position: relative; z-index: 1; }
+.leaderboard-metric-bar { position: absolute; inset: 0 auto 0 0; width: var(--metric-width); background: color-mix(in srgb, var(--cyan) 18%, transparent); pointer-events: none; }
 .leaderboard-details { margin-top: 18px; padding: 16px; background: var(--surface-raised); border: 1px solid var(--line); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 .terminal-panel { position: sticky; bottom: 0; z-index: 10; margin-top: 18px; border: 1px solid var(--info-line); border-radius: 16px 16px 0 0; background: var(--terminal-panel); box-shadow: 0 -18px 50px var(--shadow); overflow: hidden; }

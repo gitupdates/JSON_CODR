@@ -41,8 +41,11 @@
       backend: result.backend || result.runtime || "unknown",
       name: result.name || result.backend || result.runtime || "Unknown backend",
       status,
-      tested: status !== "not_tested",
+      tested: result.tested ?? status !== "not_tested",
       probe_verified: result.verified === true,
+      runnable: result.runnable !== false,
+      compatible: result.compatible !== false,
+      availability_reason: result.availability_reason || result.reason || null,
       conforming,
       eligible_rank: status === "completed" && conforming,
       tokens_per_second: throughput,
@@ -56,6 +59,8 @@
       localperf: result.localperf ? { ...result.localperf } : null,
       error: result.error || null,
       rejection_reasons: Array.isArray(result.rejection_reasons) ? [...result.rejection_reasons] : [],
+      conformance_reasons: Array.isArray(result.localperf?.conformance?.reasons) ? [...result.localperf.conformance.reasons] : [],
+      runtime_metadata: result.runtime_metadata || result.localperf?.runtime_metadata || null,
       tests,
     };
   }
@@ -71,8 +76,12 @@
       rows.push(resultRow(session, {
         backend: candidate.id,
         name: candidate.name || candidate.id,
-        status: "not_tested",
+        status: candidate.runnable === false || candidate.compatible === false ? "unavailable" : "not_tested",
         verified: candidate.verified,
+        runnable: candidate.runnable,
+        compatible: candidate.compatible,
+        availability_reason: candidate.reason || candidate.error || null,
+        tested: false,
         tests: [],
       }));
       seen.add(candidate.id);
@@ -100,7 +109,10 @@
       return left.index - right.index;
     });
     let rank = 0;
-    return ordered.map(({ row }) => ({ ...row, rank: row.eligible_rank ? ++rank : null }));
+    return ordered.map(({ row }) => {
+      const metricEligible = row.eligible_rank && numberOrNull(row[metric]) !== null;
+      return { ...row, rank: metricEligible ? ++rank : null };
+    });
   }
 
   function buildTrend(history, row, metric = "tokens_per_second") {
@@ -111,12 +123,20 @@
       if ((session.workload_version || "Unknown workload") !== row.workload_version) continue;
       if ((session.workload_hash || "") !== row.workload_hash) continue;
       const result = (Array.isArray(session.results) ? session.results : []).find(
-        (item) => (item.backend || item.runtime) === row.backend && item.status === "completed"
+        (item) => (item.backend || item.runtime) === row.backend
       );
-      if (!result) continue;
-      const value = numberOrNull(resultRow(session, result)[metric]);
-      if (value === null) continue;
-      points.push({ session_id: session.id || "legacy", created_at: session.created_at || "", value });
+      if (!result) {
+        points.push({ session_id: session.id || "legacy", created_at: session.created_at || "", value: null, eligible: false });
+        continue;
+      }
+      const normalized = resultRow(session, result);
+      const eligible = normalized.eligible_rank && numberOrNull(normalized[metric]) !== null;
+      points.push({
+        session_id: session.id || "legacy",
+        created_at: session.created_at || "",
+        value: eligible ? numberOrNull(normalized[metric]) : null,
+        eligible,
+      });
     }
     return points.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
   }
@@ -144,5 +164,12 @@
     return rows.find((row) => row.id === selectedId) || rows[0];
   }
 
-  root.JSONCodrLeaderboard = { buildRows, filterAndRank, percentiles, buildTrend, scalePoints, selectRow };
+  function chooseSession(history, selectedId, model = "all", suite = "all") {
+    const sessions = Array.isArray(history) ? history : [];
+    const matches = (session) => (model === "all" || session.model === model) && (suite === "all" || session.suite === suite);
+    const current = sessions.find((session) => session.id === selectedId);
+    return current && matches(current) ? current : sessions.find(matches) || null;
+  }
+
+  root.JSONCodrLeaderboard = { buildRows, filterAndRank, percentiles, buildTrend, scalePoints, selectRow, chooseSession };
 })(typeof window === "undefined" ? globalThis : window);

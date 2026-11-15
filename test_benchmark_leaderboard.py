@@ -101,6 +101,12 @@ class BenchmarkLeaderboardTests(unittest.TestCase):
         self.assertEqual([row["backend"] for row in ranked], ["cuda_v12", "cpu", "vulkan"])
         self.assertEqual([row["rank"] for row in ranked], [1, 2, None])
 
+        missing_metric = run_helper(
+            "globalThis.JSONCodrLeaderboard.filterAndRank(input.rows, {metric:'ttft_ms'})",
+            {"rows": [{"id": "legacy", "eligible_rank": True, "ttft_ms": None}]},
+        )
+        self.assertIsNone(missing_metric[0]["rank"])
+
     def test_percentiles_and_legacy_missing_fields_are_stable(self):
         stats = run_helper(
             "({stats:globalThis.JSONCodrLeaderboard.percentiles(input.values), rows:globalThis.JSONCodrLeaderboard.buildRows(input.history, [], 'legacy')})",
@@ -137,6 +143,46 @@ class BenchmarkLeaderboardTests(unittest.TestCase):
             payload,
         )
         self.assertEqual([point["value"] for point in ttft_trend], [280, 280])
+
+        second["results"][1]["localperf"]["conformance"]["conforming"] = False
+        gap_trend = run_helper(
+            "(()=>{const rows=globalThis.JSONCodrLeaderboard.buildRows(input.history, input.candidates, 'run-1'); return globalThis.JSONCodrLeaderboard.buildTrend(input.history, rows.find(row=>row.backend==='cuda_v12'));})()",
+            payload,
+        )
+        self.assertEqual(gap_trend[0]["value"], 30)
+        self.assertTrue(gap_trend[0]["eligible"])
+        self.assertIsNone(gap_trend[1]["value"])
+        self.assertFalse(gap_trend[1]["eligible"])
+
+        missing_backend = session("run-4", "2026-11-18T12:00:00Z")
+        missing_backend["results"] = [missing_backend["results"][0]]
+        payload["history"].append(missing_backend)
+        missing_trend = run_helper(
+            "(()=>{const rows=globalThis.JSONCodrLeaderboard.buildRows(input.history, input.candidates, 'run-1'); return globalThis.JSONCodrLeaderboard.buildTrend(input.history, rows.find(row=>row.backend==='cuda_v12'));})()",
+            payload,
+        )
+        self.assertIsNone(missing_trend[-1]["value"])
+        self.assertFalse(missing_trend[-1]["eligible"])
+
+    def test_candidate_readiness_and_session_selection_are_preserved(self):
+        candidate = run_helper(
+            "globalThis.JSONCodrLeaderboard.buildRows(input.history, input.candidates, 'run-1').at(-1)",
+            {
+                "history": [session()],
+                "candidates": [{"id": "npu-0", "name": "Intel NPU", "runnable": False, "compatible": False, "reason": "Runtime missing"}],
+            },
+        )
+        self.assertFalse(candidate["runnable"])
+        self.assertFalse(candidate["compatible"])
+        self.assertEqual(candidate["availability_reason"], "Runtime missing")
+        self.assertEqual(candidate["status"], "unavailable")
+        self.assertFalse(candidate["tested"])
+
+        selected = run_helper(
+            "globalThis.JSONCodrLeaderboard.chooseSession(input.history, 'run-2', 'all', 'all').id",
+            {"history": [session("run-1"), session("run-2")]},
+        )
+        self.assertEqual(selected, "run-2")
 
     def test_scale_points_handles_empty_single_and_constant_domains(self):
         scaled = run_helper(
