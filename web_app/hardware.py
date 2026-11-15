@@ -30,6 +30,7 @@ class HardwareBackendManager:
         accelerator_detector: AcceleratorDetector | None = None,
         gpu_telemetry_reader: Callable[[], list[dict]] | None = None,
         ollama_gpu_probe: Callable[[str], Awaitable[dict]] | None = None,
+        ollama_gpu_benchmark_runner: Callable[[str, str, list[str], int], Awaitable[list[dict]]] | None = None,
     ) -> None:
         self.path = Path(data_root).resolve() / "hardware-backend.json"
         self.benchmark_path = Path(data_root).resolve() / "hardware-benchmarks.json"
@@ -42,6 +43,7 @@ class HardwareBackendManager:
         self.accelerator_detector = accelerator_detector
         self.gpu_telemetry_reader = gpu_telemetry_reader or self._read_nvidia_telemetry
         self.ollama_gpu_probe = ollama_gpu_probe or self._probe_ollama_gpu
+        self.ollama_gpu_benchmark_runner = ollama_gpu_benchmark_runner or self._run_ollama_gpu_benchmark
         self._benchmark_lock = asyncio.Lock()
 
     def gpu_telemetry(self) -> list[dict]:
@@ -352,7 +354,8 @@ class HardwareBackendManager:
                     })
                     continue
                 try:
-                    samples = await self.benchmark_runner(candidate["id"], model, prompts, repeats)
+                    runner = self.ollama_gpu_benchmark_runner if candidate["id"] == "ollama_gpu" else self.benchmark_runner
+                    samples = await runner(candidate["id"], model, prompts, repeats)
                     total_tokens = sum(sample["tokens"] for sample in samples)
                     eval_seconds = sum(sample["eval_seconds"] for sample in samples)
                     tests = [{
@@ -376,6 +379,8 @@ class HardwareBackendManager:
                         "average_total_seconds": round(sum(sample["total_seconds"] for sample in samples) / len(samples), 3),
                         "average_load_seconds": round(sum(sample["load_seconds"] for sample in samples) / len(samples), 3),
                         "tokens_per_second": round(total_tokens / eval_seconds, 3) if eval_seconds else 0.0,
+                        "gpu_percent": max((int(sample.get("gpu_percent") or 0) for sample in samples), default=0),
+                        "vram_bytes": max((int(sample.get("vram_bytes") or 0) for sample in samples), default=0),
                         "speedup_vs_cpu": None,
                     })
                 except Exception as error:
@@ -407,6 +412,43 @@ class HardwareBackendManager:
             }
             self._save_benchmark(benchmark)
             return benchmark
+
+    @staticmethod
+    async def _run_ollama_gpu_benchmark(backend: str, model: str, prompts: list[str], repeats: int) -> list[dict]:
+        client = ollama.AsyncClient()
+        options = {"temperature": 0, "num_predict": 96, "num_gpu": 999}
+        await asyncio.wait_for(
+            client.generate(model=model, prompt=prompts[0], options=options, stream=False, keep_alive="5m"),
+            timeout=120,
+        )
+        samples = []
+        for _ in range(repeats):
+            for prompt in prompts:
+                started = time.perf_counter()
+                response = await asyncio.wait_for(
+                    client.generate(model=model, prompt=prompt, options=options, stream=False, keep_alive="5m"),
+                    timeout=120,
+                )
+                samples.append({
+                    "total_seconds": time.perf_counter() - started,
+                    "load_seconds": getattr(response, "load_duration", 0) / 1_000_000_000,
+                    "tokens": getattr(response, "eval_count", 0) or 0,
+                    "eval_seconds": getattr(response, "eval_duration", 0) / 1_000_000_000,
+                })
+        runtime = await client.ps()
+        payload = runtime.model_dump() if hasattr(runtime, "model_dump") else runtime
+        running = next(
+            (item for item in payload.get("models", []) if (item.get("model") or item.get("name")) == model),
+            None,
+        )
+        size = int((running or {}).get("size") or 0)
+        vram_bytes = int((running or {}).get("size_vram") or 0)
+        gpu_percent = round(vram_bytes * 100 / size) if size else 0
+        if gpu_percent <= 0 or vram_bytes <= 0:
+            raise RuntimeError("Ollama benchmark reported no GPU offload")
+        for sample in samples:
+            sample.update({"gpu_percent": gpu_percent, "vram_bytes": vram_bytes})
+        return samples
 
     async def _run_benchmark_backend(self, backend: str, model: str, prompts: list[str], repeats: int) -> list[dict]:
         executable = shutil.which("ollama") or str(Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama.exe")

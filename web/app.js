@@ -470,7 +470,10 @@ async function runHardwareDetection() {
       const stateDetails = candidate.hardware_detected !== undefined
         ? `hardware ${candidate.hardware_detected ? "detected" : "not detected"} · runtime ${candidate.runtime_ready ? "ready" : "missing"} · ${catalogCount} catalog model${catalogCount === 1 ? "" : "s"}`
         : null;
-      detail.textContent = candidate.compatibility_reason || stateDetails || (candidate.verified ? "Verified" : candidate.quarantine_reason ? `Quarantined: ${candidate.quarantine_reason}` : "Available for testing");
+      const readiness = candidate.readiness
+        ? `hardware ${candidate.readiness.hardware ? "ready" : "missing"} · driver ${candidate.readiness.driver ? "ready" : "missing"} · runtime ${candidate.readiness.runtime ? "ready" : "missing"} · model ${candidate.readiness.model ? "ready" : "missing"}`
+        : null;
+      detail.textContent = candidate.compatibility_reason || stateDetails || (candidate.verified ? `Verified · ${readiness}` : candidate.quarantine_reason ? `Quarantined: ${candidate.quarantine_reason}` : readiness || "Available for testing");
       label.append(name, detail);
       const probe = document.createElement("button"); probe.type = "button"; probe.className = "secondary"; probe.textContent = "Test and use";
       if (candidate.runnable === false) { probe.disabled = true; probe.textContent = "Runtime unavailable"; }
@@ -484,6 +487,9 @@ async function runHardwareDetection() {
           const payload = await result.json();
           if (!result.ok) throw new Error(payload.detail || "Backend probe failed");
           await loadHardwareStatus(); await detectHardware();
+          if (candidate.id === "ollama_gpu" && payload.verified) {
+            elements.hardwareStatus.textContent += ` · GPU offload verified: ${payload.gpu_percent}% GPU · ${(payload.vram_bytes / 1048576).toFixed(0)} MiB VRAM`;
+          }
           if (payload.restart_required) elements.hardwareStatus.textContent += " · restart Ollama to activate";
         } catch (error) { showError(error.message); probe.disabled = false; probe.textContent = "Retest"; }
       });
@@ -517,7 +523,10 @@ function renderBenchmarkResults(benchmark) {
     let components = null;
     if (result.status === "completed") {
       const relative = result.speedup_vs_cpu == null ? "CPU baseline unavailable" : `${result.speedup_vs_cpu.toFixed(2)}× CPU`;
-      metrics.textContent = `${result.tokens_per_second.toFixed(2)} tokens/s · ${result.average_total_seconds.toFixed(3)}s average · ${relative}`;
+      const gpu = result.gpu_percent > 0
+        ? ` · ${result.gpu_percent}% GPU · ${(result.vram_bytes / 1048576).toFixed(0)} MiB VRAM`
+        : "";
+      metrics.textContent = `${result.tokens_per_second.toFixed(2)} tokens/s · ${result.average_total_seconds.toFixed(3)}s average · ${relative}${gpu}`;
       components = document.createElement("details");
       const summary = document.createElement("summary");
       summary.textContent = `${result.runtime} · ${result.kind} · ${result.verified ? "verified" : "not yet verified"}${result.active ? " · active" : ""}`;

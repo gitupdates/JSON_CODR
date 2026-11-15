@@ -208,6 +208,9 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("backend: elements.hardwareBenchmarkBackend.value", javascript)
         self.assertIn("Running standardized benchmark", javascript)
         self.assertIn("candidate.runnable === false", javascript)
+        self.assertIn("candidate.readiness", javascript)
+        self.assertIn("result.gpu_percent", javascript)
+        self.assertIn("GPU offload verified", javascript)
 
     def test_gpu_telemetry_and_per_model_profile_controls_are_present(self):
         html = self.client.get("/").text
