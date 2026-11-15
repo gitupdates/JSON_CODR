@@ -60,7 +60,16 @@ class EnvironmentManager:
     def install_command(self, provider: ProviderKind) -> str:
         plan = self.plan(provider)
         packages = " ".join(plan.packages)
-        return f'& "{self.base_python}" -m venv --clear "{plan.root}"; & "{plan.python}" -m pip install {packages}'
+        return "; ".join((
+            f'$providerPython = "{plan.python}"',
+            "$rebuildProviderEnvironment = -not (Test-Path -LiteralPath $providerPython)",
+            "if (-not $rebuildProviderEnvironment) { "
+            "& $providerPython -c 'import sys; raise SystemExit(sys.version_info[:2] not in ((3, 11), (3, 12)))'; "
+            "$rebuildProviderEnvironment = $LASTEXITCODE -ne 0 }",
+            f'if ($rebuildProviderEnvironment) {{ & "{self.base_python}" -m venv --clear "{plan.root}"; '
+            "if ($LASTEXITCODE -ne 0) { throw 'Provider environment creation failed' } }",
+            f"& $providerPython -m pip --disable-pip-version-check install {packages}",
+        ))
 
     def remove(self, provider: ProviderKind) -> None:
         plan = self.plan(provider)

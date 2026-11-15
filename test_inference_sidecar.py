@@ -20,7 +20,7 @@ class EnvironmentManagerTests(unittest.TestCase):
             self.assertTrue(all(any(character.isdigit() for character in " ".join(plan.packages)) for plan in plans))
             install_command = manager.install_command(ProviderKind.openvino)
             self.assertIn("-m venv", install_command)
-            self.assertTrue(install_command.startswith('& "'))
+            self.assertTrue(install_command.startswith('$providerPython = "'))
 
     def test_provider_environment_uses_explicit_compatible_python_and_available_directml_pin(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -29,7 +29,11 @@ class EnvironmentManagerTests(unittest.TestCase):
 
             command = manager.install_command(ProviderKind.directml)
 
-            self.assertTrue(command.startswith(f'& "{compatible_python}" -m venv --clear'))
+            self.assertIn("$rebuildProviderEnvironment = -not (Test-Path -LiteralPath", command)
+            self.assertIn("if (-not $rebuildProviderEnvironment)", command)
+            self.assertIn("sys.version_info[:2] not in ((3, 11), (3, 12))", command)
+            self.assertIn(f'if ($rebuildProviderEnvironment) {{ & "{compatible_python}" -m venv --clear', command)
+            self.assertIn("-m pip --disable-pip-version-check install", command)
             self.assertIn("onnxruntime-genai-directml==0.12.2", command)
 
     def test_base_requirements_do_not_include_optional_runtimes(self):
