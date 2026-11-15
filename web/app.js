@@ -198,6 +198,21 @@ async function createTerminalConnection() {
       const button = actionButtons.get(message.proposal_id);
       if (button) button.textContent = "Started";
     }
+    if (message.type === "action_completed") {
+      elements.terminalOutput.textContent = elements.terminalOutput.textContent.replace(
+        new RegExp(`__JSON_CODR_ACTION_DONE__:${message.proposal_id}:-?\\d+\\r?\\n?`, "g"),
+        "",
+      );
+      elements.terminalStatus.textContent = message.success ? "Installation complete" : "Installation finished with errors";
+      appendTerminalOutput(message.success
+        ? "Approved installation completed successfully.\n"
+        : `Approved installation finished with exit code ${message.exit_code}. Review the output above.\n`);
+      const button = actionButtons.get(message.proposal_id);
+      if (button) {
+        button.disabled = message.success;
+        button.textContent = message.success ? "Completed" : "Retry";
+      }
+    }
     if (message.type === "action_error") {
       if (pendingActionProposalId === message.proposal_id) pendingActionProposalId = null;
       const button = actionButtons.get(message.proposal_id);

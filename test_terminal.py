@@ -51,13 +51,18 @@ class TerminalServiceTests(unittest.TestCase):
                 token = approvals.approve("session", proposal.id, terminal.id).token
                 with self.assertRaises(PermissionError):
                     service.write_approved(terminal.id, approvals, proposal.id, "wrong-token")
-                service.write_approved(terminal.id, approvals, proposal.id, token)
+                expected_marker = f"__JSON_CODR_ACTION_DONE__:{proposal.id}:"
+                completion_marker = service.write_approved(
+                    terminal.id, approvals, proposal.id, token, completion_marker=expected_marker
+                )
+                self.assertEqual(completion_marker, expected_marker)
 
                 deadline = time.monotonic() + 8
                 output = ""
-                while "JSON_CODR_APPROVED_ACTION" not in output and time.monotonic() < deadline:
+                while completion_marker not in output and time.monotonic() < deadline:
                     output += service.read(terminal.id, timeout=0.5)
                 self.assertIn("JSON_CODR_APPROVED_ACTION", output)
+                self.assertIn(f"{completion_marker}0", output)
                 with self.assertRaises(PermissionError):
                     service.write_approved(terminal.id, approvals, proposal.id, token)
             finally:

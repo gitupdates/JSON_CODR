@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import asyncio
+import re
 
 from fastapi import FastAPI, File, Header, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -619,12 +620,27 @@ def create_app(
             await websocket.close(code=1008)
             return
         await websocket.accept()
+        pending_action_markers: dict[str, str] = {}
+        completion_tail = ""
 
         async def send_output():
+            nonlocal completion_tail
             while terminals.get(terminal_id).status == "running":
                 output = await asyncio.to_thread(terminals.read, terminal_id, 0.2)
                 if output:
                     await websocket.send_json({"type": "output", "data": output})
+                    completion_tail = (completion_tail + output)[-2048:]
+                    for marker, proposal_id in list(pending_action_markers.items()):
+                        match = re.search(re.escape(marker) + r"(-?\d+)", completion_tail)
+                        if match:
+                            exit_code = int(match.group(1))
+                            await websocket.send_json({
+                                "type": "action_completed",
+                                "proposal_id": proposal_id,
+                                "success": exit_code == 0,
+                                "exit_code": exit_code,
+                            })
+                            pending_action_markers.pop(marker, None)
             await websocket.send_json({"type": "exit"})
 
         async def receive_input():
@@ -636,15 +652,19 @@ def create_app(
                     terminals.interrupt(terminal_id)
                 elif message.get("type") == "approved_action":
                     proposal_id = str(message.get("proposal_id", ""))
+                    marker = f"__JSON_CODR_ACTION_DONE__:{proposal_id}:"
+                    pending_action_markers[marker] = proposal_id
                     try:
                         terminals.write_approved(
                             terminal_id,
                             action_proposals,
                             proposal_id,
                             str(message.get("token", "")),
+                            completion_marker=marker,
                         )
                         await websocket.send_json({"type": "action_started", "proposal_id": proposal_id})
                     except (KeyError, PermissionError, RuntimeError) as error:
+                        pending_action_markers.pop(marker, None)
                         await websocket.send_json({
                             "type": "action_error",
                             "proposal_id": proposal_id,

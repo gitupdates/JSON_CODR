@@ -91,12 +91,25 @@ class TerminalService:
         terminal.process.stdin.write(data.encode("utf-8"))
         terminal.process.stdin.flush()
 
-    def write_approved(self, terminal_id: str, approvals, proposal_id: str, token: str) -> None:
+    def write_approved(
+        self, terminal_id: str, approvals, proposal_id: str, token: str, completion_marker: str | None = None
+    ) -> str:
         action = approvals.consume(proposal_id, token, terminal_id)
         terminal = self._lookup(terminal_id)
         if Path(terminal.record.cwd).resolve() != Path(action.cwd).resolve():
             raise PermissionError("Action working directory does not match the terminal")
-        self.write(terminal_id, action.command + "\r\n")
+        marker = completion_marker or f"__JSON_CODR_ACTION_DONE__:{proposal_id}:"
+        if terminal.record.shell == "powershell":
+            command = (
+                "$jsonCodrExit=0; try { & { " + action.command
+                + " }; if (-not $?) { $jsonCodrExit=1 } } "
+                + "catch { Write-Error $_; $jsonCodrExit=1 }; "
+                + f'Write-Output ("{marker}" + $jsonCodrExit)'
+            )
+        else:
+            command = f"({action.command}) & echo {marker}%ERRORLEVEL%"
+        self.write(terminal_id, command + "\r\n")
+        return marker
 
     def read(self, terminal_id: str, timeout: float = 0.1) -> str:
         terminal = self._lookup(terminal_id)
