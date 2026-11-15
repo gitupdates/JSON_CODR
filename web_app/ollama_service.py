@@ -35,6 +35,18 @@ class OllamaService:
     def set_optimization_provider(self, provider: Callable[[str], GpuProfileSettings]) -> None:
         self.optimization_provider = provider
 
+    async def _chat_with_optimization(self, model: str, request: dict):
+        options = self.optimization_provider(model).ollama_options()
+        if options:
+            request["options"] = options
+        try:
+            return await asyncio.wait_for(self.client.chat(**request), timeout=self.timeout_seconds)
+        except Exception:
+            if not options:
+                raise
+            request.pop("options", None)
+            return await asyncio.wait_for(self.client.chat(**request), timeout=self.timeout_seconds)
+
     async def health(self) -> Dict[str, bool]:
         try:
             await asyncio.wait_for(self.client.list(), timeout=2)
@@ -116,17 +128,8 @@ class OllamaService:
             "messages": [{"role": "user", "content": prompt, "images": images or None}],
             "format": StructuredCLIResponse.model_json_schema(),
         }
-        options = self.optimization_provider(resolved).ollama_options()
-        if options:
-            request["options"] = options
         try:
-            try:
-                response = await asyncio.wait_for(self.client.chat(**request), timeout=self.timeout_seconds)
-            except Exception:
-                if not options:
-                    raise
-                request.pop("options", None)
-                response = await asyncio.wait_for(self.client.chat(**request), timeout=self.timeout_seconds)
+            response = await self._chat_with_optimization(resolved, request)
         except asyncio.TimeoutError as error:
             raise ModelTimeoutError("Model request timed out") from error
         except Exception as error:
@@ -152,14 +155,11 @@ class OllamaService:
             "installed or executed. Return only the requested structured conversion bundle."
         )
         try:
-            response = await asyncio.wait_for(
-                self.client.chat(
-                    model=resolved,
-                    messages=[{"role": "user", "content": conversion_prompt}],
-                    format=ConversionBundle.model_json_schema(),
-                ),
-                timeout=self.timeout_seconds,
-            )
+            response = await self._chat_with_optimization(resolved, {
+                "model": resolved,
+                "messages": [{"role": "user", "content": conversion_prompt}],
+                "format": ConversionBundle.model_json_schema(),
+            })
         except asyncio.TimeoutError as error:
             raise ModelTimeoutError("Model conversion timed out") from error
         except Exception as error:

@@ -65,6 +65,29 @@ class GpuProfileTests(unittest.TestCase):
         self.assertIn("options", calls[0])
         self.assertNotIn("options", calls[1])
 
+    def test_archive_conversion_uses_the_selected_profile(self):
+        class ConversionClient(ProfileClient):
+            async def chat(self, **kwargs):
+                self.calls.append(kwargs)
+                class ConversionResponse:
+                    class Message:
+                        content = json.dumps({
+                            "summary": "Converted",
+                            "files": [{"path": "README.md", "content": "Ready"}],
+                        })
+                    message = Message()
+                return ConversionResponse()
+
+        client = ConversionClient()
+        service = OllamaService(
+            client=client,
+            optimization_provider=lambda model: GpuProfileSettings(mode="gpu_preferred"),
+        )
+
+        asyncio.run(service.convert_archive("qwen2.5-coder:0.5b", "Convert"))
+
+        self.assertEqual(client.calls[0]["options"], {"num_gpu": 999})
+
 
 if __name__ == "__main__":
     unittest.main()
