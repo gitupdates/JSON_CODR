@@ -89,6 +89,29 @@ class WebStaticTests(unittest.TestCase):
         self.assertNotIn('id="hardware-tab-optimization"', html)
         self.assertNotIn('id="hardware-tab-benchmarks"', html)
 
+    def test_global_navigation_runtime_contracts_are_present(self):
+        javascript = self.client.get("/static/app.js").text
+
+        self.assertIn("const NAVIGATION_DESTINATIONS", javascript)
+        self.assertIn("const HARDWARE_SECTIONS", javascript)
+        self.assertIn("function selectDestination(destination", javascript)
+        self.assertIn("function selectHardwareSection(section", javascript)
+        self.assertIn("function setSidebarCollapsed(collapsed", javascript)
+        self.assertIn("primary_destination: destination", javascript)
+        self.assertIn("hardware_section: section", javascript)
+        self.assertIn("sidebar_collapsed: collapsed", javascript)
+        self.assertIn("sidebar_width: width", javascript)
+        self.assertIn("Math.max(220, Math.min(380", javascript)
+        self.assertIn('addEventListener("pointerup"', javascript)
+        self.assertIn('key === "ArrowLeft"', javascript)
+        self.assertIn('key === "ArrowRight"', javascript)
+        self.assertIn("requestAnimationFrame", javascript)
+        self.assertIn("closeNavigationDrawer", javascript)
+        self.assertIn("mobileNavigationToggle.focus()", javascript)
+        self.assertIn('selectDestination("terminal"', javascript)
+        self.assertIn('selectDestination("context"', javascript)
+        self.assertIn("view.hidden = view.dataset.view !== destination", javascript)
+
     def test_attachment_context_tray_controls_are_present(self):
         response = self.client.get("/")
         parser = IdCollector()
@@ -182,11 +205,12 @@ class WebStaticTests(unittest.TestCase):
         )
 
 
-    def test_settings_toggle_brings_panel_into_view(self):
+    def test_settings_is_a_global_navigation_destination(self):
+        html = self.client.get("/").text
         javascript = self.client.get("/static/app.js").text
-        self.assertIn("elements.settingsPanel.scrollIntoView", javascript)
-        self.assertIn('matchMedia("(prefers-reduced-motion: reduce)")', javascript)
-        self.assertIn("elements.settingTheme.focus", javascript)
+        self.assertIn('data-destination="settings"', html)
+        self.assertIn('data-view="settings"', html)
+        self.assertIn("view.hidden = view.dataset.view !== destination", javascript)
 
     def test_hardware_optimization_controls_are_present(self):
         html = self.client.get("/").text
@@ -208,13 +232,12 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("Review runtime install", javascript)
         self.assertIn("Driver guidance", javascript)
 
-    def test_optimization_tab_runs_a_fresh_hardware_scan(self):
+    def test_hardware_sections_run_fresh_scans_when_needed(self):
         javascript = self.client.get("/static/app.js").text.replace("\r\n", "\n")
-        self.assertIn(
-            'elements.hardwareTabOptimization.addEventListener("click", () => {',
-            javascript,
-        )
-        self.assertIn('selectHardwareTab("optimization");\n  detectHardware().catch', javascript)
+        self.assertIn('section === "runtimes" || section === "compatibility" || section === "benchmarks"', javascript)
+        self.assertIn('detectHardware().catch', javascript)
+        self.assertIn('section === "overview"', javascript)
+        self.assertIn('loadHardwareTelemetry().catch', javascript)
         self.assertIn("let hardwareDetectionPromise = null", javascript)
 
     def test_hardware_benchmark_tab_runs_suites_and_renders_cpu_relative_results(self):
@@ -285,12 +308,16 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("settingsSaveQueue.then", javascript)
         self.assertNotIn("buildUiSettings", javascript)
         self.assertIn('ui: { theme: nextThemeMode }', javascript)
-        self.assertIn('ui: { skill_catalog_open: open }', javascript)
+        self.assertIn('primary_destination: destination', javascript)
+        self.assertIn('hardware_section: section', javascript)
+        self.assertIn('sidebar_collapsed: collapsed', javascript)
+        self.assertIn('sidebar_width: width', javascript)
         self.assertIn("let persistedThemeMode = null", javascript)
         self.assertIn("persistedThemeMode = normalizeThemeMode(settingsState.ui.theme)", javascript)
         self.assertIn("applyThemeMode(persistedThemeMode", javascript)
         self.assertIn("themeRevisionAtStart === themeSaveRevision", javascript)
         self.assertIn("skillsRevisionAtStart === skillsChangeRevision", javascript)
+        self.assertIn("navigationRevisionAtStart === navigationChangeRevision", javascript)
         self.assertIn("queueSettingsLoad().catch", javascript)
         self.assertIn('id="setting-theme" class="setting-select" aria-describedby="setting-theme-help" disabled', html)
         self.assertIn('id="setting-skills-open" type="checkbox" disabled', html)

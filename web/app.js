@@ -15,11 +15,18 @@ const elements = {
   content: document.querySelector("#content-output"),
   artifactOutput: document.querySelector("#artifact-output"),
   error: document.querySelector("#error-output"),
-  contextToggle: document.querySelector("#context-toggle"),
+  appSidebar: document.querySelector("#app-sidebar"),
+  sidebarCollapse: document.querySelector("#sidebar-collapse"),
+  sidebarResizeHandle: document.querySelector("#sidebar-resize-handle"),
+  mobileNavigationToggle: document.querySelector("#mobile-navigation-toggle"),
+  navigationBackdrop: document.querySelector("#navigation-backdrop"),
+  navigationButtons: [...document.querySelectorAll("[data-destination]")],
+  destinationViews: [...document.querySelectorAll("[data-view]")],
+  hardwareSubnavigation: document.querySelector("#hardware-subnavigation"),
+  hardwareSectionButtons: [...document.querySelectorAll("[data-hardware-section]")],
+  hardwareSectionViews: [...document.querySelectorAll("[data-hardware-view]")],
   contextPanel: document.querySelector("#context-panel"),
-  skillsToggle: document.querySelector("#skills-toggle"),
   skillsPanel: document.querySelector("#skills-panel"),
-  settingsToggle: document.querySelector("#settings-toggle"),
   settingsPanel: document.querySelector("#settings-panel"),
   contextCount: document.querySelector("#context-count"),
   attachmentInput: document.querySelector("#attachment-input"),
@@ -74,10 +81,7 @@ const elements = {
   hardwareProfileReset: document.querySelector("#hardware-profile-reset"),
   hardwareProfileStatus: document.querySelector("#hardware-profile-status"),
   hardwareRestoreCpu: document.querySelector("#hardware-restore-cpu"),
-  hardwareTabOptimization: document.querySelector("#hardware-tab-optimization"),
-  hardwareTabBenchmarks: document.querySelector("#hardware-tab-benchmarks"),
-  hardwareOptimizationView: document.querySelector("#hardware-optimization-view"),
-  hardwareBenchmarkView: document.querySelector("#hardware-benchmark-view"),
+  hardwareModelCompatibility: document.querySelector("#hardware-model-compatibility"),
   hardwareBenchmarkSuite: document.querySelector("#hardware-benchmark-suite"),
   hardwareBenchmarkModel: document.querySelector("#hardware-benchmark-model"),
   hardwareBenchmarkBackend: document.querySelector("#hardware-benchmark-backend"),
@@ -96,7 +100,6 @@ const elements = {
   optimizedModelSearchQuery: document.querySelector("#optimized-model-search-query"),
   optimizedModelSearchRun: document.querySelector("#optimized-model-search-run"),
   optimizedModelSearchResults: document.querySelector("#optimized-model-search-results"),
-  terminalToggle: document.querySelector("#terminal-toggle"),
   terminalPanel: document.querySelector("#terminal-panel"),
   terminalOutput: document.querySelector("#terminal-output"),
   terminalInput: document.querySelector("#terminal-input"),
@@ -106,7 +109,10 @@ const elements = {
 };
 
 const VALID_THEME_MODES = new Set(["light", "dark", "system"]);
+const NAVIGATION_DESTINATIONS = new Set(["chat", "terminal", "context", "skills", "hardware", "settings"]);
+const HARDWARE_SECTIONS = new Set(["overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "history", "localperf"]);
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+const narrowNavigationQuery = window.matchMedia("(max-width: 700px)");
 
 let models = [];
 let activeRequest = null;
@@ -124,6 +130,10 @@ let skillFallbackToken = null;
 let settingsSaveQueue = Promise.resolve();
 let themeSaveRevision = 0;
 let skillsChangeRevision = 0;
+let navigationChangeRevision = 0;
+let activeDestination = "chat";
+let activeHardwareSection = "overview";
+let sidebarWidth = 260;
 let currentThemeMode = normalizeThemeMode(localStorage.getItem("json_codr_theme"));
 let persistedThemeMode = null;
 let excludedSkillIds = [];
@@ -133,11 +143,7 @@ let hardwareDetectionPromise = null;
 const actionButtons = new Map();
 
 const dependencyInstallQueue = createDependencyInstallQueue(async (command) => {
-  if (elements.terminalPanel.hidden) {
-    elements.terminalPanel.hidden = false;
-    elements.terminalToggle.setAttribute("aria-expanded", "true");
-    localStorage.setItem("json_codr_terminal_open", "true");
-  }
+  selectDestination("terminal");
   elements.terminalStatus.textContent = "Installing prerequisites...";
   appendTerminalOutput(`Installing prerequisites: ${command}\n`);
   try {
@@ -167,6 +173,84 @@ systemThemeQuery.addEventListener("change", () => {
   if (currentThemeMode === "system") applyThemeMode("system", { cache: false });
 });
 applyThemeMode(currentThemeMode);
+
+function boundedSidebarWidth(value) {
+  return Math.max(220, Math.min(380, Math.round(Number(value) || 260)));
+}
+
+function applySidebarWidth(value) {
+  const width = boundedSidebarWidth(value);
+  sidebarWidth = width;
+  document.documentElement.style.setProperty("--sidebar-width", `${width}px`);
+  elements.sidebarResizeHandle.setAttribute("aria-valuenow", String(width));
+  return width;
+}
+
+function closeNavigationDrawer({ restoreFocus = false } = {}) {
+  document.body.classList.remove("navigation-open");
+  elements.navigationBackdrop.hidden = true;
+  elements.mobileNavigationToggle.setAttribute("aria-expanded", "false");
+  if (restoreFocus) elements.mobileNavigationToggle.focus();
+}
+
+function openNavigationDrawer() {
+  document.body.classList.add("navigation-open");
+  elements.navigationBackdrop.hidden = false;
+  elements.mobileNavigationToggle.setAttribute("aria-expanded", "true");
+}
+
+function setSidebarCollapsed(collapsed, { persist = true } = {}) {
+  navigationChangeRevision += persist ? 1 : 0;
+  document.body.classList.toggle("sidebar-collapsed", collapsed);
+  elements.sidebarCollapse.setAttribute("aria-expanded", String(!collapsed));
+  elements.sidebarCollapse.setAttribute("aria-label", collapsed ? "Expand navigation" : "Collapse navigation");
+  if (persist) saveSettings({ ui: { sidebar_collapsed: collapsed } }).catch((error) => showError(error.message));
+}
+
+function selectHardwareSection(section, { persist = true, focus = false } = {}) {
+  if (!HARDWARE_SECTIONS.has(section)) section = "overview";
+  activeHardwareSection = section;
+  for (const button of elements.hardwareSectionButtons) {
+    if (button.dataset.hardwareSection === section) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  }
+  for (const view of elements.hardwareSectionViews) view.hidden = view.dataset.hardwareView !== section;
+  if (focus) document.querySelector(`[data-hardware-view="${section}"] h3`)?.focus({ preventScroll: true });
+  if (section === "overview") loadHardwareTelemetry().catch((error) => showError(error.message));
+  if (section === "runtimes" || section === "compatibility" || section === "benchmarks") {
+    detectHardware().catch((error) => showError(error.message));
+  }
+  if (section === "benchmarks" || section === "history") loadBenchmarkHistory().catch((error) => showError(error.message));
+  if (persist) {
+    navigationChangeRevision += 1;
+    saveSettings({ ui: { hardware_section: section } }).catch((error) => showError(error.message));
+  }
+}
+
+function selectDestination(destination, { persist = true, focus = false } = {}) {
+  if (!NAVIGATION_DESTINATIONS.has(destination)) destination = "chat";
+  activeDestination = destination;
+  for (const button of elements.navigationButtons) {
+    const selected = button.dataset.destination === destination;
+    button.classList.toggle("is-active", selected);
+    if (selected) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  }
+  for (const view of elements.destinationViews) view.hidden = view.dataset.view !== destination;
+  elements.hardwareSubnavigation.hidden = destination !== "hardware";
+  if (destination === "hardware") selectHardwareSection(activeHardwareSection, { persist: false });
+  if (destination === "terminal") {
+    ensureTerminal().then(() => elements.terminalInput.focus()).catch((error) => appendTerminalOutput(`Error: ${error.message}\n`));
+  }
+  if (focus) elements.destinationViews.find((view) => view.dataset.view === destination)?.querySelector("h1, h2, h3")?.focus({ preventScroll: true });
+  if (narrowNavigationQuery.matches) closeNavigationDrawer();
+  if (persist) {
+    navigationChangeRevision += 1;
+    skillsChangeRevision += 1;
+    elements.settingSkillsOpen.checked = destination === "skills";
+    saveSettings({ ui: { primary_destination: destination, skill_catalog_open: destination === "skills" } }).catch((error) => showError(error.message));
+  }
+}
 
 function appendTerminalOutput(text) {
   elements.terminalOutput.textContent += text;
@@ -276,7 +360,7 @@ async function sendApprovedAction(proposal, token, approveButton) {
     throw error;
   }
   elements.terminalPanel.hidden = false;
-  elements.terminalToggle.setAttribute("aria-expanded", "true");
+  selectDestination("terminal");
 }
 
 async function approveAction(proposal, approveButton) {
@@ -506,18 +590,22 @@ async function loadHardwareTelemetry() {
 async function loadSettings() {
   const themeRevisionAtStart = themeSaveRevision;
   const skillsRevisionAtStart = skillsChangeRevision;
+  const navigationRevisionAtStart = navigationChangeRevision;
   const response = await fetch("/api/settings");
   if (!response.ok) throw new Error("Unable to load settings");
   settingsState = await response.json();
   persistedThemeMode = normalizeThemeMode(settingsState.ui.theme);
-  const open = settingsState.ui.skill_catalog_open;
   if (themeRevisionAtStart === themeSaveRevision) {
     applyThemeMode(persistedThemeMode);
   }
+  if (navigationRevisionAtStart === navigationChangeRevision) {
+    applySidebarWidth(settingsState.ui.sidebar_width);
+    setSidebarCollapsed(settingsState.ui.sidebar_collapsed, { persist: false });
+    selectHardwareSection(settingsState.ui.hardware_section, { persist: false });
+    selectDestination(settingsState.ui.primary_destination, { persist: false });
+  }
   if (skillsRevisionAtStart === skillsChangeRevision) {
-    elements.skillsPanel.hidden = !open;
-    elements.skillsToggle.setAttribute("aria-expanded", String(open));
-    elements.settingSkillsOpen.checked = open;
+    elements.settingSkillsOpen.checked = settingsState.ui.primary_destination === "skills";
   }
   elements.settingTheme.disabled = false;
   elements.settingSkillsOpen.disabled = false;
@@ -554,6 +642,25 @@ async function runHardwareDetection() {
     const optimizedCatalog = catalogResponse.ok ? await catalogResponse.json() : [];
     const providerEnvironments = environmentResponse.ok ? await environmentResponse.json() : [];
     const compatibility = compatibilityResponse.ok ? await compatibilityResponse.json() : [];
+    elements.hardwareModelCompatibility.replaceChildren();
+    if (!compatibility.length) {
+      elements.hardwareModelCompatibility.innerHTML = '<p class="meta">No model-specific compatibility results are available.</p>';
+    }
+    for (const group of compatibility) {
+      const row = document.createElement("div"); row.className = "dependency-row";
+      const label = document.createElement("div");
+      const name = document.createElement("strong"); name.textContent = group.backend_name || group.backend;
+      label.append(name);
+      for (const model of group.models || []) {
+        const line = document.createElement("p"); line.className = "meta";
+        const state = model.status === "accelerated" ? "Accelerated and verified" :
+          model.status === "candidate" ? "Compatible download candidate" :
+          model.status === "runnable" ? "Runnable · acceleration unverified" : model.status;
+        line.textContent = `${model.model} · ${state}${model.reason ? ` · ${model.reason}` : ""}`;
+        label.append(line);
+      }
+      row.append(label); elements.hardwareModelCompatibility.append(row);
+    }
     elements.hardwareBenchmarkBackend.replaceChildren();
     const all = document.createElement("option"); all.value = "all"; all.textContent = "All detected and available";
     elements.hardwareBenchmarkBackend.append(all);
@@ -629,19 +736,6 @@ async function runHardwareDetection() {
         ? `${environment.status} · Python ${environment.python_version || "unknown"} · isolated runtime`
         : `not installed · ${environment.environment}`;
       label.append(name, detail);
-      const modelGroup = compatibility.find((item) => item.backend === candidate.id);
-      if (modelGroup?.models.length) {
-        const models = document.createElement("div"); models.className = "model-compatibility-list";
-        for (const model of modelGroup.models) {
-          const line = document.createElement("p"); line.className = "meta";
-          const state = model.status === "accelerated" ? "Accelerated and verified" :
-            model.status === "candidate" ? "Compatible download candidate" :
-            model.status === "runnable" ? "Runnable · acceleration unverified" : model.status;
-          line.textContent = `${model.model} · ${state}${model.reason ? ` · ${model.reason}` : ""}`;
-          models.append(line);
-        }
-        label.append(models);
-      }
       const install = document.createElement("button"); install.type = "button"; install.className = "secondary";
       install.textContent = environment.installed && environment.compatible ? "Recheck installed runtime" : "Review runtime install";
       install.addEventListener("click", async () => {
@@ -665,14 +759,6 @@ async function restoreCpuBackend() {
   if (!response.ok) throw new Error((await response.json()).detail || "Unable to restore CPU mode");
   await loadHardwareStatus();
   elements.hardwareStatus.textContent += " · restart Ollama to activate";
-}
-
-function selectHardwareTab(tab) {
-  const benchmarks = tab === "benchmarks";
-  elements.hardwareOptimizationView.hidden = benchmarks;
-  elements.hardwareBenchmarkView.hidden = !benchmarks;
-  elements.hardwareTabOptimization.setAttribute("aria-selected", String(!benchmarks));
-  elements.hardwareTabBenchmarks.setAttribute("aria-selected", String(benchmarks));
 }
 
 function renderBenchmarkResults(benchmark) {
@@ -1079,7 +1165,7 @@ async function loadDependencies() {
     send.className = "secondary";
     send.textContent = "Send to CLI";
     send.addEventListener("click", async () => {
-      if (elements.terminalPanel.hidden) elements.terminalToggle.click();
+      selectDestination("terminal");
       elements.terminalInput.value = suggestion.command;
       elements.terminalInput.focus();
       elements.terminalStatus.textContent = "Install command ready · review and press Run";
@@ -1296,41 +1382,52 @@ elements.destructiveDialog.addEventListener("close", () => {
   approveButton.textContent = "Approve and run";
   pendingDestructiveAction = null;
 });
-elements.contextToggle.addEventListener("click", () => {
-  elements.contextPanel.hidden = !elements.contextPanel.hidden;
-  elements.contextToggle.setAttribute("aria-expanded", String(!elements.contextPanel.hidden));
-  localStorage.setItem("json_codr_context_open", String(!elements.contextPanel.hidden));
+for (const button of elements.navigationButtons) {
+  button.addEventListener("click", () => selectDestination(button.dataset.destination));
+}
+for (const button of elements.hardwareSectionButtons) {
+  button.addEventListener("click", () => selectHardwareSection(button.dataset.hardwareSection));
+}
+elements.sidebarCollapse.addEventListener("click", () => {
+  setSidebarCollapsed(!document.body.classList.contains("sidebar-collapsed"));
 });
-elements.skillsToggle.addEventListener("click", () => {
-  skillsChangeRevision += 1;
-  const open = elements.skillsPanel.hidden;
-  elements.skillsPanel.hidden = !open;
-  elements.skillsToggle.setAttribute("aria-expanded", String(open));
-  elements.settingSkillsOpen.checked = open;
-  saveSettings({ ui: { skill_catalog_open: open } }).catch((error) => showError(error.message));
+elements.mobileNavigationToggle.addEventListener("click", () => {
+  if (document.body.classList.contains("navigation-open")) closeNavigationDrawer({ restoreFocus: true });
+  else openNavigationDrawer();
 });
-elements.settingsToggle.addEventListener("click", () => {
-  const open = elements.settingsPanel.hidden;
-  elements.settingsPanel.hidden = !open;
-  elements.settingsToggle.setAttribute("aria-expanded", String(open));
-  if (open) {
-    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    elements.settingsPanel.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
-    elements.settingTheme.focus({ preventScroll: true });
-  }
+elements.navigationBackdrop.addEventListener("click", () => closeNavigationDrawer({ restoreFocus: true }));
+elements.sidebarResizeHandle.addEventListener("pointerdown", (event) => {
+  if (narrowNavigationQuery.matches) return;
+  event.preventDefault();
+  let pendingWidth = sidebarWidth;
+  let resizeFrame = null;
+  const renderResize = () => { resizeFrame = null; applySidebarWidth(pendingWidth); };
+  const onPointerMove = (moveEvent) => {
+    pendingWidth = boundedSidebarWidth(moveEvent.clientX);
+    if (resizeFrame === null) resizeFrame = requestAnimationFrame(renderResize);
+  };
+  const onPointerUp = () => {
+    window.removeEventListener("pointermove", onPointerMove);
+    if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
+    const width = applySidebarWidth(pendingWidth);
+    navigationChangeRevision += 1;
+    saveSettings({ ui: { sidebar_width: width } }).catch((error) => showError(error.message));
+  };
+  window.addEventListener("pointermove", onPointerMove);
+  window.addEventListener("pointerup", onPointerUp, { once: true });
 });
+elements.sidebarResizeHandle.addEventListener("keydown", (event) => {
+  const key = event.key;
+  const delta = key === "ArrowLeft" ? -10 : key === "ArrowRight" ? 10 : 0;
+  if (!delta) return;
+  event.preventDefault();
+  const width = applySidebarWidth(sidebarWidth + delta);
+  navigationChangeRevision += 1;
+  saveSettings({ ui: { sidebar_width: width } }).catch((error) => showError(error.message));
+});
+narrowNavigationQuery.addEventListener("change", () => closeNavigationDrawer());
 elements.hardwareDetect.addEventListener("click", () => detectHardware().catch((error) => showError(error.message)));
 elements.hardwareRestoreCpu.addEventListener("click", () => restoreCpuBackend().catch((error) => showError(error.message)));
-elements.hardwareTabOptimization.addEventListener("click", () => {
-  selectHardwareTab("optimization");
-  detectHardware().catch((error) => showError(error.message));
-  loadHardwareTelemetry().catch((error) => showError(error.message));
-});
-elements.hardwareTabBenchmarks.addEventListener("click", () => {
-  selectHardwareTab("benchmarks");
-  detectHardware().catch((error) => showError(error.message));
-  loadBenchmarkHistory().catch((error) => showError(error.message));
-});
 elements.hardwareBenchmarkRun.addEventListener("click", () => runHardwareBenchmark().catch((error) => {
   elements.hardwareBenchmarkStatus.textContent = error.message;
   showError(error.message);
@@ -1364,9 +1461,7 @@ elements.hardwareProfileReset.addEventListener("click", () => saveGpuProfile(tru
 elements.settingSkillsOpen.addEventListener("change", () => {
   skillsChangeRevision += 1;
   const open = elements.settingSkillsOpen.checked;
-  elements.skillsPanel.hidden = !open;
-  elements.skillsToggle.setAttribute("aria-expanded", String(open));
-  saveSettings({ ui: { skill_catalog_open: open } }).catch((error) => showError(error.message));
+  selectDestination(open ? "skills" : "chat");
 });
 elements.settingTheme.addEventListener("change", async () => {
   const revision = ++themeSaveRevision;
@@ -1445,11 +1540,8 @@ elements.skillSave.addEventListener("click", async () => {
     ? `Saved and applied ${editingSkill.name} to this session`
     : `Saved and disabled ${editingSkill.name}`;
   if (elements.skillsPanel.hidden) {
-    elements.skillsPanel.hidden = false;
-    elements.skillsToggle.setAttribute("aria-expanded", "true");
+    selectDestination("skills");
     elements.settingSkillsOpen.checked = true;
-    skillsChangeRevision += 1;
-    await saveSettings({ ui: { skill_catalog_open: true } });
   }
   await loadSkills();
   elements.skillSave.disabled = false;
@@ -1466,15 +1558,6 @@ elements.skillRemovePack.addEventListener("click", async () => {
   elements.skillRemovePack.disabled = true;
   await loadSkills();
 });
-elements.terminalToggle.addEventListener("click", async () => {
-  elements.terminalPanel.hidden = !elements.terminalPanel.hidden;
-  elements.terminalToggle.setAttribute("aria-expanded", String(!elements.terminalPanel.hidden));
-  localStorage.setItem("json_codr_terminal_open", String(!elements.terminalPanel.hidden));
-  if (!elements.terminalPanel.hidden) {
-    try { await ensureTerminal(); elements.terminalInput.focus(); }
-    catch (error) { appendTerminalOutput(`Error: ${error.message}\n`); }
-  }
-});
 elements.terminalRun.addEventListener("click", () => runTerminalCommand().catch((error) => appendTerminalOutput(`Error: ${error.message}\n`)));
 elements.terminalInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") runTerminalCommand().catch((error) => appendTerminalOutput(`Error: ${error.message}\n`));
@@ -1485,11 +1568,14 @@ elements.terminalStop.addEventListener("click", () => {
 document.addEventListener("keydown", (event) => {
   if (event.ctrlKey && !event.altKey && event.key.toLowerCase() === "j") {
     event.preventDefault();
-    elements.terminalToggle.click();
+    selectDestination("terminal");
   }
   if (event.ctrlKey && event.altKey && event.key.toLowerCase() === "b") {
     event.preventDefault();
-    elements.contextToggle.click();
+    selectDestination("context");
+  }
+  if (event.key === "Escape" && document.body.classList.contains("navigation-open")) {
+    closeNavigationDrawer({ restoreFocus: true });
   }
 });
 
