@@ -14,6 +14,8 @@ from typing import Awaitable, Callable
 
 import ollama
 
+from web_app.inference.detection import AcceleratorDetector
+
 
 class HardwareBackendManager:
     def __init__(
@@ -25,6 +27,7 @@ class HardwareBackendManager:
         active_backend: str | None = None,
         ai_device_detector: Callable[[], list[str]] | None = None,
         benchmark_runner: Callable[[str, str, list[str], int], Awaitable[list[dict]]] | None = None,
+        accelerator_detector: AcceleratorDetector | None = None,
     ) -> None:
         self.path = Path(data_root).resolve() / "hardware-backend.json"
         self.benchmark_path = Path(data_root).resolve() / "hardware-benchmarks.json"
@@ -34,6 +37,7 @@ class HardwareBackendManager:
         self.active_backend = active_backend or os.environ.get("OLLAMA_LLM_LIBRARY", "cpu")
         self.ai_device_detector = ai_device_detector or self._detect_windows_ai_devices
         self.benchmark_runner = benchmark_runner or self._run_benchmark_backend
+        self.accelerator_detector = accelerator_detector
         self._benchmark_lock = asyncio.Lock()
 
     def _read(self) -> dict:
@@ -117,6 +121,22 @@ class HardwareBackendManager:
                 "verified": False,
                 "compatibility_reason": "Detected AI accelerator; no Ollama-compatible NPU backend is installed.",
             })
+        if self.accelerator_detector:
+            for state_record in self.accelerator_detector.detect():
+                state = state_record.model_dump(mode="json")
+                result.append({
+                    "id": state["provider"],
+                    "name": state["name"],
+                    "kind": state["kind"],
+                    "runnable": state["runtime_ready"] and state["model_ready"],
+                    "compatible": state["runtime_ready"],
+                    "verified": state["verified"],
+                    "hardware_detected": state["hardware_detected"],
+                    "runtime_ready": state["runtime_ready"],
+                    "model_ready": state["model_ready"],
+                    "evidence": state["evidence"],
+                    "compatibility_reason": state["reason"],
+                })
         return result
 
     def record_probe(self, backend: str, success: bool, error: str | None = None) -> dict:

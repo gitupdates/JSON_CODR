@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from web_app.hardware import HardwareBackendManager
+from web_app.inference.detection import AcceleratorDetector
 
 
 class HardwareBackendTests(unittest.TestCase):
@@ -51,6 +52,31 @@ class HardwareBackendTests(unittest.TestCase):
         self.assertEqual(npu["name"], "Intel(R) AI Boost")
         self.assertFalse(npu["runnable"])
         self.assertIn("Ollama-compatible NPU backend", npu["compatibility_reason"])
+
+    def test_vendor_provider_states_merge_without_changing_legacy_backends(self):
+        detector = AcceleratorDetector(
+            device_names=lambda: ["Intel(R) AI Boost"],
+            runtime_available=lambda provider: provider == "openvino",
+            provider_devices=lambda provider: ["NPU"] if provider == "openvino" else [],
+            windows_build=lambda: 26100,
+            directx12_available=lambda: False,
+            model_ready=lambda provider: provider == "openvino",
+        )
+        manager = HardwareBackendManager(
+            self.root,
+            command_available=lambda command: False,
+            ai_device_detector=lambda: [],
+            accelerator_detector=detector,
+        )
+
+        result = manager.detect()
+
+        self.assertEqual(result[0]["id"], "cpu")
+        openvino = next(item for item in result if item["id"] == "openvino")
+        self.assertTrue(openvino["hardware_detected"])
+        self.assertTrue(openvino["runtime_ready"])
+        self.assertTrue(openvino["model_ready"])
+        self.assertTrue(openvino["runnable"])
 
     def test_successful_probe_persists_preference_and_failure_quarantines_backend(self):
         manager = HardwareBackendManager(self.root, environment_writer=lambda name, value: None)
