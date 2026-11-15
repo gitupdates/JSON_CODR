@@ -22,7 +22,7 @@ V1.0.10 introduces LocalPerf minimum conformance for repeatable local-inference 
 
 V1.0.11 adds sanitized-by-default portable `.localperf.zip` reference packages with checksums, schemas, methodology, reporting templates, preview/import validation, and explicit consent for system details. Hardware Optimization now reports model-specific acceleration states and provides a pinned offline optimized-model catalog plus explicit on-demand search of approved remote model metadata. A model is labeled accelerated only after model-specific evidence or a successful provider probe.
 
-The **Benchmarks** tab compares CPU with all detected runnable backends or one selected optimization using the same model, generation settings, and three standardized prompts. A selected accelerator is always paired with a fresh CPU baseline. **Quick** runs each prompt once; **Thorough** repeats the set three times. Results show runtime and verification metadata, per-test request/load time and token throughput, aggregate metrics, and relative throughput versus CPU. Benchmarking does not change the active backend, and the most recent 20 runs are stored under the JSON_CODR data root.
+The **Benchmarks** tab compares CPU with all detected runnable backends or one selected optimization using the same model and LocalPerf-Core-v1 workload. A selected accelerator is always paired with a fresh CPU baseline. **Quick** runs 12 prompts three times; **Thorough** runs them seven times after warmup. Results show conformance, model/runtime verification, TTFT, peak VRAM, duration, quality, token throughput, and CPU-relative performance. Benchmarking does not change the active backend, and canonical runs are stored under the JSON_CODR data root.
 
 ## Requirements
 
