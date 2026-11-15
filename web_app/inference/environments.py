@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,8 +13,28 @@ PACKAGES = {
     ProviderKind.openvino: ("openvino-genai==2025.4", "openvino-tokenizers==2025.4", "huggingface-hub==0.36.0"),
     ProviderKind.ryzen_ai: ("onnxruntime-genai==0.19.0", "huggingface-hub==0.36.0"),
     ProviderKind.winml: ("onnxruntime-genai==0.19.0", "huggingface-hub==0.36.0"),
-    ProviderKind.directml: ("onnxruntime-genai-directml==0.19.0", "huggingface-hub==0.36.0"),
+    ProviderKind.directml: ("onnxruntime-genai-directml==0.12.2", "huggingface-hub==0.36.0"),
 }
+
+
+def find_compatible_python() -> Path:
+    if (3, 11) <= sys.version_info[:2] <= (3, 12):
+        return Path(sys.executable)
+    if sys.platform == "win32" and shutil.which("py"):
+        for selector in ("-3.12", "-3.11"):
+            result = subprocess.run(
+                ["py", selector, "-c", "import sys; print(sys.executable)"],
+                capture_output=True,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return Path(result.stdout.strip())
+    for command in ("python3.12", "python3.11"):
+        executable = shutil.which(command)
+        if executable:
+            return Path(executable)
+    raise RuntimeError("Optional hardware runtimes require Python 3.11 or 3.12")
 
 
 @dataclass(frozen=True)
@@ -25,8 +46,9 @@ class EnvironmentPlan:
 
 
 class EnvironmentManager:
-    def __init__(self, data_root: Path) -> None:
+    def __init__(self, data_root: Path, base_python: Path | None = None) -> None:
         self.root = Path(data_root).resolve() / "inference-providers"
+        self.base_python = Path(base_python) if base_python else find_compatible_python()
 
     def plan(self, provider: ProviderKind) -> EnvironmentPlan:
         if provider not in PACKAGES:
@@ -38,7 +60,7 @@ class EnvironmentManager:
     def install_command(self, provider: ProviderKind) -> str:
         plan = self.plan(provider)
         packages = " ".join(plan.packages)
-        return f'& "{sys.executable}" -m venv "{plan.root}"; & "{plan.python}" -m pip install {packages}'
+        return f'& "{self.base_python}" -m venv --clear "{plan.root}"; & "{plan.python}" -m pip install {packages}'
 
     def remove(self, provider: ProviderKind) -> None:
         plan = self.plan(provider)

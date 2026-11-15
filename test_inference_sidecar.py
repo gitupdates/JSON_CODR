@@ -1,5 +1,4 @@
 import asyncio
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,7 +20,17 @@ class EnvironmentManagerTests(unittest.TestCase):
             self.assertTrue(all(any(character.isdigit() for character in " ".join(plan.packages)) for plan in plans))
             install_command = manager.install_command(ProviderKind.openvino)
             self.assertIn("-m venv", install_command)
-            self.assertTrue(install_command.startswith(f'& "{sys.executable}" -m venv'))
+            self.assertTrue(install_command.startswith('& "'))
+
+    def test_provider_environment_uses_explicit_compatible_python_and_available_directml_pin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            compatible_python = Path("C:/Python312/python.exe")
+            manager = EnvironmentManager(Path(directory), base_python=compatible_python)
+
+            command = manager.install_command(ProviderKind.directml)
+
+            self.assertTrue(command.startswith(f'& "{compatible_python}" -m venv --clear'))
+            self.assertIn("onnxruntime-genai-directml==0.12.2", command)
 
     def test_base_requirements_do_not_include_optional_runtimes(self):
         requirements = Path("requirements.txt").read_text(encoding="utf-8").lower()
