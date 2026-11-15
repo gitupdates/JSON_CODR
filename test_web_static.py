@@ -186,6 +186,8 @@ class WebStaticTests(unittest.TestCase):
         response = self.client.get("/")
         parser = IdCollector()
         parser.feed(response.text)
+        self.assertNotIn("Â", response.text)
+        self.assertIn("JSON_CODR skill authoring standard</a> &middot; <a", response.text)
         self.assertTrue(
             {
                 "skills-panel",
