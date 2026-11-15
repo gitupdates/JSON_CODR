@@ -102,6 +102,7 @@ let activeRequest = null;
 let sessionId = localStorage.getItem("json_codr_session");
 let terminalId = null;
 let terminalSocket = null;
+let terminalConnectionPromise = null;
 let skillAttachmentId = null;
 let editingSkill = null;
 let skillLoadGeneration = 0;
@@ -159,6 +160,16 @@ function appendTerminalOutput(text) {
 
 async function ensureTerminal() {
   if (terminalSocket?.readyState === WebSocket.OPEN) return;
+  if (terminalConnectionPromise) return terminalConnectionPromise;
+  terminalConnectionPromise = createTerminalConnection();
+  try {
+    await terminalConnectionPromise;
+  } finally {
+    terminalConnectionPromise = null;
+  }
+}
+
+async function createTerminalConnection() {
   elements.terminalStatus.textContent = "Starting...";
   const response = await fetch("/api/terminals", {
     method: "POST",
@@ -181,6 +192,18 @@ async function ensureTerminal() {
     if (message.type === "action_error") showError(message.error || "Approved action failed");
   });
   terminalSocket.addEventListener("close", () => { elements.terminalStatus.textContent = "Disconnected"; });
+  await new Promise((resolve, reject) => {
+    const cleanup = () => {
+      terminalSocket.removeEventListener("open", onOpen);
+      terminalSocket.removeEventListener("error", onFailure);
+      terminalSocket.removeEventListener("close", onFailure);
+    };
+    const onOpen = () => { cleanup(); resolve(); };
+    const onFailure = () => { cleanup(); reject(new Error("Terminal connection failed")); };
+    terminalSocket.addEventListener("open", onOpen, { once: true });
+    terminalSocket.addEventListener("error", onFailure, { once: true });
+    terminalSocket.addEventListener("close", onFailure, { once: true });
+  });
 }
 
 async function sendApprovedAction(proposal, token) {
