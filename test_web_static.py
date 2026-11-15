@@ -34,7 +34,7 @@ class WebStaticTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.0.5", response.text)
+        self.assertIn("V1.0.6", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -173,6 +173,11 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('fetch("/api/hardware/detect"', javascript)
         self.assertIn('fetch("/api/hardware/probe"', javascript)
         self.assertIn('fetch("/api/hardware/restore-cpu"', javascript)
+        self.assertIn("OpenVINO", html)
+        self.assertIn("Ryzen AI", html)
+        self.assertIn("WinML", html)
+        self.assertIn("DirectML", html)
+        self.assertIn('fetch("/api/inference/catalog"', javascript)
 
     def test_hardware_benchmark_tab_runs_suites_and_renders_cpu_relative_results(self):
         html = self.client.get("/").text

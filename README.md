@@ -1,6 +1,6 @@
 # JSON_CODR
 
-JSON_CODR V1.0.5 is a localhost-only web and CLI interface for structured responses from local Ollama coding models.
+JSON_CODR V1.0.6 is a localhost-only web and CLI interface for structured responses from local Ollama coding models.
 
 ## Skill catalog and settings
 
@@ -17,6 +17,8 @@ Open **Settings** to control whether the Skills panel reopens at startup and to 
 ## Hardware optimization and benchmarks
 
 Open **Settings → Hardware optimization** to detect CPU, supported GPU runtimes, and Windows NPU or AI accelerator devices. CPU is the compatibility fallback. An accelerated Ollama backend is saved only after an isolated model-generation probe succeeds; unavailable NPU runtimes are reported without being executed.
+
+V1.0.6 adds experimental, opt-in connector foundations for Intel OpenVINO GenAI, AMD Ryzen AI, Windows ML, and DirectML. Ollama remains the unchanged default. Each connector uses a separate managed environment, optimized artifacts have provider-qualified names, and the hardware screen reports device, runtime, model, and probe readiness independently. Connector and model installation plans never include vendor drivers or firmware and must be approved through the CLI workflow before use.
 
 The **Benchmarks** tab compares CPU with all detected runnable backends or one selected optimization using the same model, generation settings, and three standardized prompts. A selected accelerator is always paired with a fresh CPU baseline. **Quick** runs each prompt once; **Thorough** repeats the set three times. Results show runtime and verification metadata, per-test request/load time and token throughput, aggregate metrics, and relative throughput versus CPU. Benchmarking does not change the active backend, and the most recent 20 runs are stored under the JSON_CODR data root.
 

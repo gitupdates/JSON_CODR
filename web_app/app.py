@@ -11,6 +11,13 @@ from web_app.actions import ActionProposalService
 from web_app.artifacts import ArtifactService
 from web_app.context import ContextAssembler
 from web_app.hardware import HardwareBackendManager
+from web_app.inference.catalog import OptimizedModelCatalog
+from web_app.inference.contracts import ProviderKind
+from web_app.inference.detection import AcceleratorDetector
+from web_app.inference.environments import EnvironmentManager
+from web_app.inference.providers.registry import ProviderRegistry
+from web_app.inference.router import InferenceRouter
+from web_app.inference.sidecar import SidecarClient
 from web_app.dependencies import DependencyService
 from web_app.models import ActionApprovalRequest, AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, HardwareBenchmarkRequest, HardwareProbeRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
 from web_app.ollama_service import (
@@ -34,6 +41,7 @@ def create_app(
     attachments: AttachmentService | None = None,
     terminals: TerminalService | None = None,
     hardware: HardwareBackendManager | None = None,
+    optimized: bool = False,
 ) -> FastAPI:
     application = FastAPI(title="JSON_CODR", version=APP_VERSION)
     workspace = workspace or WorkspaceService(default_data_root())
@@ -42,7 +50,18 @@ def create_app(
     skill_library.ensure_envelopes()
     skill_converter = SkillConverterService()
     settings = SettingsService(workspace.data_root)
-    hardware = hardware or HardwareBackendManager(workspace.data_root)
+    catalog = OptimizedModelCatalog()
+    environment_manager = EnvironmentManager(workspace.data_root)
+    clients = {
+        provider: SidecarClient(environment_manager.plan(provider).python)
+        for provider in (ProviderKind.openvino, ProviderKind.ryzen_ai, ProviderKind.winml, ProviderKind.directml)
+        if environment_manager.plan(provider).python.is_file()
+    }
+    inference_router = InferenceRouter(service, catalog, ProviderRegistry(clients), set()) if optimized else None
+    hardware = hardware or HardwareBackendManager(
+        workspace.data_root,
+        accelerator_detector=AcceleratorDetector() if optimized else None,
+    )
     skillsets = SkillsetService(workspace.data_root, skill_library)
     recommendations = SkillRecommendationService(skill_library, skillsets, settings)
     skill_discovery = SkillDiscoveryService(skill_library, skill_converter, workspace.data_root)
@@ -66,13 +85,30 @@ def create_app(
     @application.get("/api/models")
     async def models():
         try:
-            return {"models": await service.list_models()}
+            return {"models": await (inference_router.list_models() if inference_router else service.list_models())}
         except OllamaUnavailableError as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
 
     @application.get("/api/settings")
     async def get_settings():
         return settings.get()
+
+    @application.get("/api/inference/catalog")
+    async def inference_catalog():
+        return [model.model_dump(mode="json") for model in catalog.list()]
+
+    @application.get("/api/inference/install-plan/{provider}")
+    async def inference_install_plan(provider: ProviderKind):
+        if provider is ProviderKind.ollama:
+            raise HTTPException(status_code=400, detail="Ollama uses the base installation")
+        plan = environment_manager.plan(provider)
+        return {
+            "provider": provider.value,
+            "command": environment_manager.install_command(provider),
+            "environment": str(plan.root),
+            "packages": plan.packages,
+            "includes_driver": False,
+        }
 
     @application.patch("/api/settings")
     async def update_settings(request: SettingsUpdate):
@@ -611,7 +647,10 @@ def create_app(
                     artifact=artifact,
                 )
             else:
-                result = await service.chat(request.model, model_prompt, images=model_images)
+                result = await (
+                    inference_router.chat(request.model, model_prompt, images=model_images)
+                    if inference_router else service.chat(request.model, model_prompt, images=model_images)
+                )
             if context_result and recommendation_result:
                 result.attached_skills = context_result.attached_skills
                 result.attached_skillsets = context_result.skillsets
@@ -650,4 +689,4 @@ def create_app(
     return application
 
 
-app = create_app(OllamaService())
+app = create_app(OllamaService(), optimized=True)

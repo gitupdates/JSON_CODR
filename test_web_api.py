@@ -114,6 +114,19 @@ class WebApiTests(unittest.TestCase):
         self.workspace = WorkspaceService(Path(self.temporary_directory.name))
         self.client = TestClient(create_app(self.service, self.workspace))
 
+    def test_optimized_connector_catalog_and_install_plans_are_additive(self):
+        client = TestClient(create_app(self.service, self.workspace, optimized=True))
+
+        models = client.get("/api/models").json()["models"]
+        self.assertTrue(any(item["name"].startswith("openvino/") and not item["installed"] for item in models))
+        catalog = client.get("/api/inference/catalog")
+        self.assertEqual(catalog.status_code, 200)
+        self.assertEqual({item["provider"] for item in catalog.json()}, {"openvino", "ryzen_ai"})
+        plan = client.get("/api/inference/install-plan/openvino")
+        self.assertEqual(plan.status_code, 200)
+        self.assertIn("openvino-genai", plan.json()["command"])
+        self.assertFalse(plan.json()["includes_driver"])
+
     def tearDown(self):
         self.temporary_directory.cleanup()
 
@@ -137,9 +150,9 @@ class WebApiTests(unittest.TestCase):
     def test_health_reports_ollama_readiness(self):
         self.assertEqual(
             self.client.get("/api/health").json(),
-            {"status": "ready", "ollama": True, "app_version": "V1.0.5"},
+            {"status": "ready", "ollama": True, "app_version": "V1.0.6"},
         )
-        self.assertEqual(self.client.app.version, "V1.0.5")
+        self.assertEqual(self.client.app.version, "V1.0.6")
         self.service.available = False
         self.assertEqual(self.client.get("/api/health").json()["status"], "degraded")
 

@@ -334,9 +334,13 @@ async function detectHardware() {
   elements.hardwareDetect.disabled = true;
   elements.hardwareCandidates.innerHTML = '<p class="meta">Detecting local runtimes…</p>';
   try {
-    const response = await fetch("/api/hardware/detect", { method: "POST" });
+    const [response, catalogResponse] = await Promise.all([
+      fetch("/api/hardware/detect", { method: "POST" }),
+      fetch("/api/inference/catalog"),
+    ]);
     if (!response.ok) throw new Error((await response.json()).detail || "Hardware detection failed");
     const candidates = await response.json();
+    const optimizedCatalog = catalogResponse.ok ? await catalogResponse.json() : [];
     elements.hardwareBenchmarkBackend.replaceChildren();
     const all = document.createElement("option"); all.value = "all"; all.textContent = "All detected and available";
     elements.hardwareBenchmarkBackend.append(all);
@@ -352,7 +356,11 @@ async function detectHardware() {
       const label = document.createElement("div");
       const name = document.createElement("strong"); name.textContent = candidate.name;
       const detail = document.createElement("p"); detail.className = "meta";
-      detail.textContent = candidate.compatibility_reason || (candidate.verified ? "Verified" : candidate.quarantine_reason ? `Quarantined: ${candidate.quarantine_reason}` : "Available for testing");
+      const catalogCount = optimizedCatalog.filter((model) => model.provider === candidate.id).length;
+      const stateDetails = candidate.hardware_detected !== undefined
+        ? `hardware ${candidate.hardware_detected ? "detected" : "not detected"} · runtime ${candidate.runtime_ready ? "ready" : "missing"} · ${catalogCount} catalog model${catalogCount === 1 ? "" : "s"}`
+        : null;
+      detail.textContent = candidate.compatibility_reason || stateDetails || (candidate.verified ? "Verified" : candidate.quarantine_reason ? `Quarantined: ${candidate.quarantine_reason}` : "Available for testing");
       label.append(name, detail);
       const probe = document.createElement("button"); probe.type = "button"; probe.className = "secondary"; probe.textContent = "Test and use";
       if (candidate.runnable === false) { probe.disabled = true; probe.textContent = "Runtime unavailable"; }
