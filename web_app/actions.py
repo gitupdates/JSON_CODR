@@ -122,7 +122,7 @@ class ActionProposalService:
             self._tokens.pop(proposal.id, None)
             if proposal.risk == "destructive":
                 proposal.status = "awaiting_confirmation"
-                proposal.confirmation_phrase = f"RUN {proposal.id[:8].upper()}"
+                proposal.confirmation_phrase = proposal.id[:8].upper()
                 return ActionApprovalResult(
                     proposal_id=proposal.id,
                     requires_confirmation=True,
@@ -141,7 +141,8 @@ class ActionProposalService:
             proposal = self.get(session_id, proposal_id)
             if proposal.status != "awaiting_confirmation" or not proposal.confirmation_phrase:
                 raise PermissionError("Destructive confirmation was not requested")
-            if not hmac.compare_digest(phrase, proposal.confirmation_phrase):
+            entered_phrase = phrase.strip().upper()
+            if not hmac.compare_digest(entered_phrase, proposal.confirmation_phrase):
                 raise PermissionError("Confirmation phrase does not match")
             return self._issue_token(proposal, terminal_id, DESTRUCTIVE_TOKEN_SECONDS)
 

@@ -1052,11 +1052,12 @@ elements.autoAttachSkills.addEventListener("change", async () => {
 elements.destructiveSubmit.addEventListener("click", async () => {
   if (!pendingDestructiveAction) return;
   const { proposal, phrase } = pendingDestructiveAction;
-  if (elements.destructiveInput.value !== phrase) return showError("Confirmation phrase does not match");
+  const enteredPhrase = elements.destructiveInput.value.trim().toUpperCase();
+  if (enteredPhrase !== phrase) return showError("Confirmation code does not match");
   const response = await fetch(`/api/sessions/${sessionId}/action-proposals/${proposal.id}/confirm-destructive`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
-    body: JSON.stringify({ terminal_id: terminalId, phrase: elements.destructiveInput.value }),
+    body: JSON.stringify({ terminal_id: terminalId, phrase: enteredPhrase }),
   });
   const approval = await response.json();
   if (!response.ok) return showError(approval.detail || "Unable to confirm destructive action");

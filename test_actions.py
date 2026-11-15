@@ -71,10 +71,11 @@ class ActionProposalTests(unittest.TestCase):
 
         self.assertTrue(first.requires_confirmation)
         self.assertIsNone(first.token)
+        self.assertEqual(first.confirmation_phrase, proposal.id[:8].upper())
         with self.assertRaises(PermissionError):
             self.service.confirm_destructive("session-a", proposal.id, "terminal-a", "wrong phrase")
         final = self.service.confirm_destructive(
-            "session-a", proposal.id, "terminal-a", first.confirmation_phrase
+            "session-a", proposal.id, "terminal-a", f"  {first.confirmation_phrase.lower()}  "
         )
         self.assertEqual(final.expires_in, 60)
         self.clock.value += 61

@@ -309,6 +309,8 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('reject.textContent = "Reject"', javascript)
         self.assertIn('approve.textContent = "Approve and run"', javascript)
         self.assertIn("destructive-confirmation-phrase", html)
+        self.assertIn("Confirmation code", html)
+        self.assertIn(".trim().toUpperCase()", javascript)
         self.assertIn('type: "approved_action", proposal_id: proposal.id, token', javascript)
         self.assertNotIn("runTerminalCommand(proposal.command)", javascript)
         self.assertIn("textContent", javascript)
