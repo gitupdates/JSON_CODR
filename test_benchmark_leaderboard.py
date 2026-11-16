@@ -144,6 +144,28 @@ class BenchmarkLeaderboardTests(unittest.TestCase):
         )
         self.assertIsNone(missing_metric[0]["rank"])
 
+    def test_integrity_and_combined_ranking_join_latest_model_quality(self):
+        rows = [
+            {"id": "fast", "model": "fast:7b", "eligible_rank": True, "performance_index": 200},
+            {"id": "safe", "model": "safe:7b", "eligible_rank": True, "performance_index": 100},
+            {"id": "unknown", "model": "unknown:7b", "eligible_rank": True, "performance_index": 300},
+        ]
+        integrity = [
+            {"id": "old", "model": "fast:7b", "created_at": "2026-01-01", "scores": {"integrity": 90, "comprehension": 90, "overall": 90}},
+            {"id": "new", "model": "fast:7b", "created_at": "2026-02-01", "scores": {"integrity": 40, "comprehension": 60, "overall": 50}},
+            {"id": "safe", "model": "safe:7b", "created_at": "2026-02-01", "scores": {"integrity": 95, "comprehension": 85, "overall": 90}},
+        ]
+        ranked = run_helper(
+            "(()=>{const joined=globalThis.JSONCodrLeaderboard.joinIntegrity(input.rows,input.integrity); return {integrity:globalThis.JSONCodrLeaderboard.filterAndRank(joined,{metric:'integrity_overall'}),combined:globalThis.JSONCodrLeaderboard.filterAndRank(joined,{metric:'combined_score'})};})()",
+            {"rows": rows, "integrity": integrity},
+        )
+
+        self.assertEqual([row["id"] for row in ranked["integrity"]], ["safe", "fast", "unknown"])
+        self.assertEqual(ranked["integrity"][1]["integrity_overall"], 50)
+        self.assertEqual([row["id"] for row in ranked["combined"]], ["fast", "safe", "unknown"])
+        self.assertEqual(ranked["combined"][0]["combined_score"], 75)
+        self.assertIsNone(ranked["combined"][2]["combined_score"])
+
     def test_percentiles_and_legacy_missing_fields_are_stable(self):
         stats = run_helper(
             "({stats:globalThis.JSONCodrLeaderboard.percentiles(input.values), rows:globalThis.JSONCodrLeaderboard.buildRows(input.history, [], 'legacy')})",

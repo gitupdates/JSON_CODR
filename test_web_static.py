@@ -58,7 +58,7 @@ class WebStaticTests(unittest.TestCase):
         html = self.client.get("/").text
         css = self.client.get("/static/app.css")
         javascript = self.client.get("/static/app.js")
-        self.assertIn('/static/app.css?v=1.0.14-integrity-benchmarks-1', html)
+        self.assertIn('/static/app.css?v=1.0.14-integrity-benchmarks-2', html)
         self.assertEqual(css.status_code, 200)
         self.assertIn("text/css", css.headers["content-type"])
         self.assertEqual(javascript.status_code, 200)
@@ -298,18 +298,19 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('model.status === "accelerated"', javascript)
         self.assertIn("candidate.compatible_models", javascript)
         self.assertIn("Compatible models (", javascript)
-        for sort_key in ("rank", "model", "performance_index", "tokens_per_second", "ttft_ms", "average_total_seconds", "peak_vram_mb", "speedup_vs_cpu", "status"):
+        for sort_key in ("rank", "model", "performance_index", "integrity_overall", "combined_score", "tokens_per_second", "ttft_ms", "average_total_seconds", "peak_vram_mb", "speedup_vs_cpu", "status"):
             self.assertIn(f'data-sort-key="{sort_key}"', html)
         self.assertIn("buildAllRows", javascript)
         self.assertIn("sortRows", javascript)
         self.assertIn('aria-label="Backend performance comparison"', html)
         self.assertIn('aria-label="Performance history trend"', html)
-        self.assertIn("Performance results do not measure model answer quality", html)
+        self.assertIn("Combined ranking weights integrity/comprehension overall and normalized performance equally", html)
         self.assertLess(html.index("benchmark_leaderboard.js"), html.index("app.js"))
         self.assertNotIn("chart.js", html.lower())
         self.assertNotIn("plotly", html.lower())
         for contract in (
             "let leaderboardHistoryCache = []",
+            "let integrityHistoryCache = []",
             "let leaderboardCandidateCache = []",
             "function renderBenchmarkLeaderboard",
             "function selectLeaderboardSession",
@@ -335,8 +336,10 @@ class WebStaticTests(unittest.TestCase):
             'row.conforming === true ? "valid" : row.conforming === false ? "invalid" : "unknown"',
             "configuration_hash",
             "workload hash ${row.workload_hash || \"unavailable\"}",
+            "JSONCodrLeaderboard.joinIntegrity",
         ):
             self.assertIn(contract, javascript)
+        self.assertIn("Combined quality + performance", html)
 
     def test_integrity_and_comprehension_benchmark_controls_and_runtime_contract(self):
         html = self.client.get("/").text

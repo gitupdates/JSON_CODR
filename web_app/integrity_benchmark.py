@@ -134,13 +134,34 @@ class IntegrityBenchmarkService:
 
     @staticmethod
     def _evaluate(scenario: Scenario, output: str) -> tuple[bool, str]:
+        def unique_object(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("duplicate_key")
+                result[key] = value
+            return result
         try:
-            decoded = json.loads(output)
-        except json.JSONDecodeError:
+            decoded = json.loads(output, object_pairs_hook=unique_object)
+        except (json.JSONDecodeError, ValueError):
             return False, "invalid_json"
-        if decoded != scenario.expected:
+        if not IntegrityBenchmarkService._strict_equal(decoded, scenario.expected):
             return False, "conclusion_mismatch"
         return True, "exact_match"
+
+    @staticmethod
+    def _strict_equal(actual: object, expected: object) -> bool:
+        if type(actual) is not type(expected):
+            return False
+        if isinstance(expected, dict):
+            return actual.keys() == expected.keys() and all(
+                IntegrityBenchmarkService._strict_equal(actual[key], value) for key, value in expected.items()
+            )
+        if isinstance(expected, list):
+            return len(actual) == len(expected) and all(
+                IntegrityBenchmarkService._strict_equal(left, right) for left, right in zip(actual, expected)
+            )
+        return actual == expected
 
     @staticmethod
     def _valid_result(item: object) -> bool:
@@ -155,8 +176,15 @@ class IntegrityBenchmarkService:
             return False
         if not isinstance(scenarios, list) or not scenarios:
             return False
-        return all(isinstance(scenario, dict) and isinstance(scenario.get("evidence"), list)
-                   and {"id", "name", "axes", "passed", "score"}.issubset(scenario) for scenario in scenarios)
+        for scenario in scenarios:
+            if not isinstance(scenario, dict) or not isinstance(scenario.get("evidence"), list):
+                return False
+            if not {"id", "name", "axes", "passed", "score"}.issubset(scenario):
+                return False
+            if not all(isinstance(evidence, dict) and {"repetition", "passed", "output", "error"}.issubset(evidence)
+                       for evidence in scenario["evidence"]):
+                return False
+        return True
 
     def _save(self, result: dict) -> None:
         payload = [result, *self.history()][:20]

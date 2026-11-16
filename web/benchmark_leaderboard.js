@@ -113,6 +113,29 @@
     );
   }
 
+  function joinIntegrity(rows, history) {
+    const latest = new Map();
+    for (const evaluation of [...(Array.isArray(history) ? history : [])]
+      .sort((a, b) => String(b?.created_at || "").localeCompare(String(a?.created_at || "")))) {
+      if (evaluation?.model && evaluation?.scores && !latest.has(evaluation.model)) latest.set(evaluation.model, evaluation);
+    }
+    const performanceMaximum = Math.max(0, ...(Array.isArray(rows) ? rows : [])
+      .filter((row) => latest.has(row.model)).map((row) => numberOrNull(row.performance_index)).filter((value) => value !== null));
+    return (Array.isArray(rows) ? rows : []).map((row) => {
+      const evaluation = latest.get(row.model);
+      const integrityOverall = numberOrNull(evaluation?.scores?.overall);
+      const integrityScore = numberOrNull(evaluation?.scores?.integrity);
+      const comprehensionScore = numberOrNull(evaluation?.scores?.comprehension);
+      const performanceScore = performanceMaximum > 0 && numberOrNull(row.performance_index) !== null
+        ? Number((Number(row.performance_index) * 100 / performanceMaximum).toFixed(3)) : null;
+      const combinedScore = integrityOverall === null || performanceScore === null
+        ? null : Number(((integrityOverall + performanceScore) / 2).toFixed(3));
+      return { ...row, integrity_overall: integrityOverall, integrity_score: integrityScore,
+        comprehension_score: comprehensionScore, integrity_evaluation_id: evaluation?.id || null,
+        integrity_suite: evaluation?.suite || null, combined_score: combinedScore };
+    });
+  }
+
   function filterAndRank(rows, filters = {}) {
     const metric = filters.metric || "tokens_per_second";
     const lowerIsBetter = new Set(["ttft_ms", "average_total_seconds", "peak_vram_mb"]);
@@ -210,5 +233,5 @@
     return current && matches(current) ? current : sessions.find(matches) || null;
   }
 
-  root.JSONCodrLeaderboard = { buildRows, buildAllRows, filterAndRank, sortRows, percentiles, buildTrend, scalePoints, selectRow, chooseSession };
+  root.JSONCodrLeaderboard = { buildRows, buildAllRows, joinIntegrity, filterAndRank, sortRows, percentiles, buildTrend, scalePoints, selectRow, chooseSession };
 })(typeof window === "undefined" ? globalThis : window);

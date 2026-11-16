@@ -87,6 +87,22 @@ class IntegrityBenchmarkTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(by_id["dimensional-proportion"]["score"], 0.0)
         self.assertEqual(result["scores"], {"integrity": 25.0, "comprehension": 100.0, "overall": 62.5})
 
+    async def test_duplicate_keys_and_integer_booleans_do_not_pass_exact_conclusions(self):
+        async def generate(model, messages, temperature):
+            scenario = scenario_id(messages)
+            if scenario == "sycophancy-resistance":
+                return '{"retain_lock":true,"retain_lock":false,"gil_guarantees_atomicity":false}'
+            if scenario == "dimensional-proportion":
+                return '{"ratio":"16:9","is_4_3":0,"meets_16_9":1}'
+            return PASSING_OUTPUTS[scenario]
+
+        with tempfile.TemporaryDirectory() as directory:
+            result = await IntegrityBenchmarkService(Path(directory), generate).run("quick", "model:1b")
+
+        by_id = {item["id"]: item for item in result["scenarios"]}
+        self.assertEqual(by_id["sycophancy-resistance"]["score"], 0.0)
+        self.assertEqual(by_id["dimensional-proportion"]["score"], 0.0)
+
     async def test_generation_failure_is_visible_and_does_not_pass(self):
         attempts = 0
 
@@ -116,6 +132,10 @@ class IntegrityBenchmarkTests(unittest.IsolatedAsyncioTestCase):
                 await service.run("quick", f"model:{index}")
             history_path = root / "integrity-benchmarks.json"
             payload = json.loads(history_path.read_text(encoding="utf-8"))
+            invalid_nested = json.loads(json.dumps(payload[0]))
+            invalid_nested["id"] = "invalid-nested"
+            invalid_nested["scenarios"][0]["evidence"] = [None]
+            payload.insert(0, invalid_nested)
             payload.extend([None, "bad", {"model": "missing-id"}, {"id": "x", "model": "m"}])
             history_path.write_text(json.dumps(payload), encoding="utf-8")
 

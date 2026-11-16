@@ -160,6 +160,7 @@ let pendingDestructiveAction = null;
 let pendingActionProposalId = null;
 let hardwareDetectionPromise = null;
 let leaderboardHistoryCache = [];
+let integrityHistoryCache = [];
 let leaderboardCandidateCache = [];
 let selectedLeaderboardSessionId = null;
 let selectedLeaderboardRowId = null;
@@ -1017,6 +1018,10 @@ function renderLeaderboardDetails(row) {
   }
   if (row.availability_reason) { const reason = document.createElement("p"); reason.className = "meta"; reason.textContent = row.availability_reason; elements.leaderboardDetails.append(reason); }
   const metrics = document.createElement("p"); metrics.textContent = `Performance index ${formatLeaderboardValue(row.performance_index, "", 0)} · ${formatLeaderboardValue(row.tokens_per_second, " tok/s")} · ${formatLeaderboardValue(row.ttft_ms, " ms")} TTFT · ${formatLeaderboardValue(row.peak_vram_mb, " MiB", 0)} peak VRAM`; elements.leaderboardDetails.append(metrics);
+  const quality = document.createElement("p"); quality.textContent = row.integrity_overall == null
+    ? "Integrity evaluation unavailable for this model."
+    : `Integrity ${formatLeaderboardValue(row.integrity_score, "%", 1)} · Comprehension ${formatLeaderboardValue(row.comprehension_score, "%", 1)} · Overall ${formatLeaderboardValue(row.integrity_overall, "%", 1)} · Combined ${formatLeaderboardValue(row.combined_score, "", 1)}`;
+  elements.leaderboardDetails.append(quality);
   const metricNames = [["tokens_per_second", "Throughput"], ["ttft_ms", "TTFT"], ["total_seconds", "Duration"], ["peak_vram_mb", "Peak VRAM"]];
   const stats = document.createElement("ul");
   for (const [key, label] of metricNames) {
@@ -1035,10 +1040,10 @@ function renderLeaderboardDetails(row) {
 
 function renderBenchmarkLeaderboard() {
   if (!leaderboardHistoryCache.length) {
-    elements.leaderboardTable.replaceChildren(); const row = document.createElement("tr"); const cell = document.createElement("td"); cell.colSpan = 9; cell.className = "meta"; cell.textContent = "No benchmark history. Run Performance benchmarks first."; row.append(cell); elements.leaderboardTable.append(row);
+    elements.leaderboardTable.replaceChildren(); const row = document.createElement("tr"); const cell = document.createElement("td"); cell.colSpan = 11; cell.className = "meta"; cell.textContent = "No benchmark history. Run Performance benchmarks first."; row.append(cell); elements.leaderboardTable.append(row);
     elements.leaderboardKpis.replaceChildren(); elements.leaderboardStatus.textContent = "No saved benchmark results."; renderLeaderboardScatter([]); renderLeaderboardTrend(null); renderLeaderboardDetails(null); return;
   }
-  const allRows = window.JSONCodrLeaderboard.buildAllRows(leaderboardHistoryCache);
+  const allRows = window.JSONCodrLeaderboard.joinIntegrity(window.JSONCodrLeaderboard.buildAllRows(leaderboardHistoryCache), integrityHistoryCache);
   const rankedRows = window.JSONCodrLeaderboard.filterAndRank(allRows, {
     search: elements.leaderboardSearch.value,
     model: elements.leaderboardModelFilter.value,
@@ -1057,7 +1062,7 @@ function renderBenchmarkLeaderboard() {
   for (const row of rows) {
     const tableRow = document.createElement("tr"); tableRow.tabIndex = 0; tableRow.classList.toggle("is-selected", row.id === selectedLeaderboardRowId);
     const evidenceStatus = row.status === "not_tested" ? "Not tested" : row.status === "completed" && row.conforming === true ? "Conforming" : row.status === "completed" && row.conforming === false ? "Nonconforming" : row.status === "completed" ? "Unverified evidence" : row.status;
-    const values = [row.rank || "—", `${row.model} · ${row.name}`, formatLeaderboardValue(row.performance_index, "", 0), formatLeaderboardValue(row.tokens_per_second), formatLeaderboardValue(row.ttft_ms, " ms", 0), formatLeaderboardValue(row.average_total_seconds, " s"), formatLeaderboardValue(row.peak_vram_mb, " MiB", 0), formatLeaderboardValue(row.speedup_vs_cpu, "×"), evidenceStatus];
+    const values = [row.rank || "—", `${row.model} · ${row.name}`, formatLeaderboardValue(row.performance_index, "", 0), formatLeaderboardValue(row.integrity_overall, "%", 1), formatLeaderboardValue(row.combined_score, "", 1), formatLeaderboardValue(row.tokens_per_second), formatLeaderboardValue(row.ttft_ms, " ms", 0), formatLeaderboardValue(row.average_total_seconds, " s"), formatLeaderboardValue(row.peak_vram_mb, " MiB", 0), formatLeaderboardValue(row.speedup_vs_cpu, "×"), evidenceStatus];
     for (const value of values) { const cell = document.createElement("td"); cell.textContent = value; tableRow.append(cell); }
     const choose = () => { selectedLeaderboardRowId = row.id; renderBenchmarkLeaderboard(); };
     tableRow.addEventListener("click", choose); tableRow.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); choose(); } }); elements.leaderboardTable.append(tableRow);
@@ -1069,7 +1074,7 @@ async function loadBenchmarkLeaderboard() {
   elements.leaderboardStatus.textContent = "Loading benchmark comparisons…";
   const historyPromise = loadBenchmarkHistory();
   const candidatesPromise = leaderboardCandidateCache.length ? Promise.resolve(leaderboardCandidateCache) : detectHardware();
-  await Promise.all([historyPromise, candidatesPromise]); updateLeaderboardFilterOptions(); renderBenchmarkLeaderboard();
+  await Promise.all([historyPromise, candidatesPromise, loadIntegrityBenchmarkHistory()]); updateLeaderboardFilterOptions(); renderBenchmarkLeaderboard();
 }
 
 function renderBenchmarkResults(benchmark) {
@@ -1202,7 +1207,7 @@ function renderIntegrityBenchmark(benchmark) {
     const summary = document.createElement("summary");
     summary.textContent = `${scenario.passed ? "PASS" : "REVIEW"} · ${scenario.name} · ${Number(scenario.score).toFixed(1)}%`;
     details.append(summary);
-    for (const evidence of scenario.evidence) {
+    for (const evidence of (Array.isArray(scenario.evidence) ? scenario.evidence : []).filter((item) => item && typeof item === "object")) {
       const line = document.createElement("p");
       line.className = "meta integrity-evidence";
       line.textContent = `Run ${evidence.repetition} · ${evidence.passed ? "pass" : "fail"} · ${evidence.evaluation_reason || "unclassified"} · ${evidence.error || evidence.output || "No output"}${evidence.truncated ? ` · truncated from ${evidence.output_length} characters` : ""}`;
@@ -1217,6 +1222,7 @@ async function loadIntegrityBenchmarkHistory() {
   if (!response.ok) throw new Error("Unable to load integrity benchmark history");
   const payload = await response.json();
   const history = Array.isArray(payload) ? payload.filter((benchmark) => benchmark?.scores && Array.isArray(benchmark.scenarios)) : [];
+  integrityHistoryCache = history;
   elements.integrityBenchmarkHistory.replaceChildren();
   if (!history.length) {
     elements.integrityBenchmarkHistory.innerHTML = '<p class="meta">No integrity evaluation history.</p>';
