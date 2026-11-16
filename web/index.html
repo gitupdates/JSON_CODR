@@ -17,7 +17,7 @@
       })();
     </script>
     <title>JSON_CODR · Local model console</title>
-    <link rel="stylesheet" href="/static/app.css?v=1.0.15" />
+    <link rel="stylesheet" href="/static/app.css?v=1.0.16" />
   </head>
   <body>
     <div class="ambient ambient-one"></div>
@@ -62,7 +62,7 @@
       <header class="topbar">
         <a class="brand" href="/" aria-label="JSON CODR home">
           <span class="brand-mark">{ }</span>
-          <span><strong>JSON_CODR</strong><small>V1.0.15 · local model console</small></span>
+          <span><strong>JSON_CODR</strong><small>V1.0.16 · local model console</small></span>
         </a>
         <div id="health-status" class="health" role="status" aria-live="polite">
           <span class="health-dot"></span><span>Connecting</span>
@@ -326,13 +326,13 @@
               <div><h3 id="hardware-section-leaderboard">LocalPerf leaderboard</h3><p class="meta">Rank and compare measured local inference performance across CPU, GPU, NPU, and optimized runtimes.</p></div>
               <span id="leaderboard-status" class="meta" role="status" aria-live="polite">Load benchmark history to compare results.</span>
             </div>
-            <p class="leaderboard-disclaimer">Performance-only ranks do not measure answer quality. Integrity ranks use the latest saved evaluation for each model. Combined ranking weights integrity/comprehension overall and normalized performance equally; models without both results remain unranked.</p>
+            <p class="leaderboard-disclaimer">Holistic capability ranks strict integrity/comprehension tiers first and uses verified performance only to order models within the same capability tier. Performance can never outrank a higher capability result.</p>
             <div class="leaderboard-filters" aria-label="Leaderboard filters">
               <label>Search<input id="leaderboard-search" type="search" placeholder="Model or backend" /></label>
               <label>Model<select id="leaderboard-model-filter"><option value="all">All models</option></select></label>
               <label>Backend<select id="leaderboard-backend-filter"><option value="all">All backends</option></select></label>
               <label>Suite<select id="leaderboard-suite-filter"><option value="all">All suites</option></select></label>
-              <label>Rank by<select id="leaderboard-metric"><option value="tokens_per_second">Throughput</option><option value="ttft_ms">Time to first token</option><option value="average_total_seconds">Total duration</option><option value="peak_vram_mb">Peak VRAM</option><option value="performance_index">Performance index</option><option value="integrity_overall">Integrity &amp; comprehension</option><option value="combined_score">Combined quality + performance</option></select></label>
+              <label>Rank by<select id="leaderboard-metric"><option value="holistic_capability" selected>Holistic capability</option><option value="tokens_per_second">Throughput</option><option value="ttft_ms">Time to first token</option><option value="average_total_seconds">Total duration</option><option value="peak_vram_mb">Peak VRAM</option><option value="performance_index">Performance index</option><option value="integrity_overall">Integrity &amp; comprehension</option><option value="combined_score">Weighted quality + performance</option></select></label>
             </div>
             <div id="leaderboard-kpis" class="leaderboard-kpis" aria-label="Benchmark key performance indicators"></div>
             <div class="leaderboard-table-wrap">
@@ -406,8 +406,8 @@
       <footer><span>Runs entirely on this machine</span><span>127.0.0.1 · Ollama</span></footer>
       </main>
     </div>
-    <script src="/static/dependency_install_queue.js?v=1.0.15" defer></script>
-    <script src="/static/benchmark_leaderboard.js?v=1.0.15" defer></script>
-    <script src="/static/app.js?v=1.0.15" defer></script>
+    <script src="/static/dependency_install_queue.js?v=1.0.16" defer></script>
+    <script src="/static/benchmark_leaderboard.js?v=1.0.16" defer></script>
+    <script src="/static/app.js?v=1.0.16" defer></script>
   </body>
 </html>

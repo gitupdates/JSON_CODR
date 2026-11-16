@@ -37,7 +37,7 @@ class WebStaticTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.0.15", response.text)
+        self.assertIn("V1.0.16", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -58,7 +58,7 @@ class WebStaticTests(unittest.TestCase):
         html = self.client.get("/").text
         css = self.client.get("/static/app.css")
         javascript = self.client.get("/static/app.js")
-        self.assertIn('/static/app.css?v=1.0.15', html)
+        self.assertIn('/static/app.css?v=1.0.16', html)
         self.assertEqual(css.status_code, 200)
         self.assertIn("text/css", css.headers["content-type"])
         self.assertEqual(javascript.status_code, 200)
@@ -304,7 +304,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("sortRows", javascript)
         self.assertIn('aria-label="Backend performance comparison"', html)
         self.assertIn('aria-label="Performance history trend"', html)
-        self.assertIn("Combined ranking weights integrity/comprehension overall and normalized performance equally", html)
+        self.assertIn("Holistic capability ranks strict integrity/comprehension tiers first", html)
         self.assertLess(html.index("benchmark_leaderboard.js"), html.index("app.js"))
         self.assertNotIn("chart.js", html.lower())
         self.assertNotIn("plotly", html.lower())
@@ -339,7 +339,7 @@ class WebStaticTests(unittest.TestCase):
             "JSONCodrLeaderboard.joinIntegrity",
         ):
             self.assertIn(contract, javascript)
-        self.assertIn("Combined quality + performance", html)
+        self.assertIn("Weighted quality + performance", html)
 
     def test_integrity_and_comprehension_benchmark_controls_and_runtime_contract(self):
         html = self.client.get("/").text

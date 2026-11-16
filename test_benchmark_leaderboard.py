@@ -167,6 +167,55 @@ class BenchmarkLeaderboardTests(unittest.TestCase):
         self.assertEqual(ranked["combined"][0]["combined_score"], 75)
         self.assertIsNone(ranked["combined"][2]["combined_score"])
 
+    def test_integrity_join_keeps_models_without_performance_evidence(self):
+        joined = run_helper(
+            "globalThis.JSONCodrLeaderboard.joinIntegrity(input.rows,input.integrity)",
+            {
+                "rows": [{"id": "measured:cpu", "model": "measured:7b", "eligible_rank": True,
+                          "performance_index": 100}],
+                "integrity": [
+                    {"id": "measured-quality", "suite_version": "Integrity-Comprehension-v2",
+                     "model": "measured:7b", "created_at": "2026-11-15T12:00:00Z", "suite": "quick",
+                     "status": "completed", "scores": {"integrity": 80, "comprehension": 70, "overall": 75}},
+                    {"id": "quality-only", "suite_version": "Integrity-Comprehension-v2",
+                     "model": "quality-only:7b", "created_at": "2026-11-15T13:00:00Z", "suite": "quick",
+                     "status": "completed_with_failures",
+                     "scores": {"integrity": 60, "comprehension": 40, "overall": 50}},
+                ],
+            },
+        )
+
+        quality_only = next(row for row in joined if row["model"] == "quality-only:7b")
+        self.assertEqual(quality_only["integrity_overall"], 50)
+        self.assertTrue(quality_only["eligible_rank"])
+        self.assertIsNone(quality_only["performance_index"])
+        self.assertIsNone(quality_only["combined_score"])
+
+    def test_holistic_capability_ranks_capability_tiers_before_performance(self):
+        rows = [
+            {"id": "high-unmeasured", "model": "high", "eligible_rank": True,
+             "integrity_overall": 90, "performance_index": None},
+            {"id": "middle-fast", "model": "middle-fast", "eligible_rank": True,
+             "integrity_overall": 75, "performance_index": 500},
+            {"id": "middle-slow", "model": "middle-slow", "eligible_rank": True,
+             "integrity_overall": 75, "performance_index": 100},
+            {"id": "middle-unmeasured", "model": "middle-unmeasured", "eligible_rank": True,
+             "integrity_overall": 75, "performance_index": None},
+            {"id": "low-fast", "model": "low", "eligible_rank": True,
+             "integrity_overall": 50, "performance_index": 1000},
+        ]
+
+        ranked = run_helper(
+            "globalThis.JSONCodrLeaderboard.filterAndRank(input.rows,{metric:'holistic_capability'})",
+            {"rows": rows},
+        )
+
+        self.assertEqual([row["id"] for row in ranked], [
+            "high-unmeasured", "middle-fast", "middle-slow", "middle-unmeasured", "low-fast"
+        ])
+        self.assertEqual([row["capability_tier"] for row in ranked], [1, 2, 2, 2, 3])
+        self.assertEqual([row["rank"] for row in ranked], [1, 2, 3, 4, 5])
+
     def test_percentiles_and_legacy_missing_fields_are_stable(self):
         stats = run_helper(
             "({stats:globalThis.JSONCodrLeaderboard.percentiles(input.values), rows:globalThis.JSONCodrLeaderboard.buildRows(input.history, [], 'legacy')})",

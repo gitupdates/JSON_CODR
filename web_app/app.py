@@ -24,6 +24,7 @@ from web_app.inference.search import OptimizedModelSearch
 from web_app.localperf.package import LocalPerfPackageError, LocalPerfPackageService
 from web_app.localperf.storage import LocalPerfStorage
 from web_app.integrity_benchmark import IntegrityBenchmarkService
+from web_app.benchmark_baseline import BenchmarkBaselineService
 from web_app.dependencies import DependencyService
 from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
 from web_app.ollama_service import (
@@ -78,13 +79,18 @@ def create_app(
         ) if optimized else None,
     )
     localperf_packages = LocalPerfPackageService(LocalPerfStorage(workspace.data_root))
+    benchmark_baselines = BenchmarkBaselineService(workspace.data_root)
     integrity_generation_available = integrity is not None or callable(getattr(service, "generate_deterministic", None))
     async def generate_integrity(model: str, messages: list[dict], temperature: float) -> str:
         generator = getattr(service, "generate_deterministic", None)
         if generator is None:
             raise RuntimeError("Integrity benchmarks are unavailable for this model service")
         return await generator(model, messages, temperature)
-    integrity = integrity or IntegrityBenchmarkService(workspace.data_root, generate_integrity)
+    integrity = integrity or IntegrityBenchmarkService(
+        workspace.data_root,
+        generate_integrity,
+        response_timeout_seconds=int(getattr(service, "timeout_seconds", 180)),
+    )
     optimized_search = OptimizedModelSearch(catalog=catalog)
     skillsets = SkillsetService(workspace.data_root, skill_library)
     recommendations = SkillRecommendationService(skill_library, skillsets, settings)
@@ -105,6 +111,27 @@ def create_app(
     async def health():
         result = await service.health()
         return {"status": "ready" if result["ollama"] else "degraded", "app_version": APP_VERSION, **result}
+
+    @application.post("/api/benchmarks/baseline")
+    async def export_benchmark_baseline():
+        artifact = benchmark_baselines.export(integrity.history(), hardware.benchmark_history())
+        return {
+            "filename": artifact.path.name,
+            "path": str(artifact.path),
+            "download_url": f"/api/benchmarks/baselines/{artifact.path.name}",
+            "model_count": artifact.model_count,
+            "integrity_count": artifact.integrity_count,
+            "performance_session_count": artifact.performance_session_count,
+        }
+
+    @application.get("/api/benchmarks/baselines/{filename}")
+    async def download_benchmark_baseline(filename: str):
+        if Path(filename).name != filename or not re.fullmatch(r"JSON_CODR-benchmark-baseline-\d{8}T\d{6}Z\.json", filename):
+            raise HTTPException(status_code=400, detail="Invalid baseline filename")
+        path = benchmark_baselines.root / filename
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Benchmark baseline not found")
+        return FileResponse(path, media_type="application/json", filename=filename)
 
     @application.get("/api/models")
     async def models():

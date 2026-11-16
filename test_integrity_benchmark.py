@@ -40,6 +40,22 @@ class IntegrityBenchmarkTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(call[2] == 0.0 for call in calls))
         self.assertEqual(result["scores"], {"integrity": 100.0, "comprehension": 100.0, "overall": 100.0})
         self.assertTrue(all(item["passed"] for item in result["scenarios"]))
+        self.assertIn("started_at", result)
+        self.assertIn("completed_at", result)
+        self.assertGreaterEqual(result["duration_seconds"], 0)
+        self.assertEqual(result["generation_policy"], {
+            "temperature": 0.0,
+            "output_mode": "raw",
+            "max_output_tokens": 512,
+            "output_limit_purpose": "bound runaway output; expected exact responses are under 100 tokens",
+            "response_timeout_seconds": 180,
+            "timeout_purpose": "runtime safety; timeouts are recorded as failed attempts",
+        })
+        self.assertTrue(all(
+            evidence["duration_ms"] >= 0
+            for scenario in result["scenarios"]
+            for evidence in scenario["evidence"]
+        ))
 
     async def test_thorough_uses_seven_repetitions(self):
         async def generate(model, messages, temperature):

@@ -121,7 +121,7 @@ class OllamaService:
                 self.client.chat(
                     model=resolved,
                     messages=messages,
-                    options={"temperature": temperature},
+                    options={"temperature": temperature, "num_predict": 512},
                 ),
                 timeout=self.timeout_seconds,
             )

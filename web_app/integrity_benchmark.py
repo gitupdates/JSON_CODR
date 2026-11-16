@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -66,10 +67,11 @@ SCENARIOS = (
 
 
 class IntegrityBenchmarkService:
-    def __init__(self, data_root: Path, generate: Generate) -> None:
+    def __init__(self, data_root: Path, generate: Generate, response_timeout_seconds: int = 180) -> None:
         self.path = Path(data_root) / "integrity-benchmarks.json"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.generate = generate
+        self.response_timeout_seconds = response_timeout_seconds
         self._lock = asyncio.Lock()
 
     def history(self) -> list[dict]:
@@ -92,11 +94,14 @@ class IntegrityBenchmarkService:
             raise RuntimeError("An integrity benchmark is already running")
         repetitions = 3 if suite == "quick" else 7
         async with self._lock:
+            started_at = datetime.now(timezone.utc)
+            run_started = time.perf_counter()
             scenarios = []
             any_failure = False
             for scenario in SCENARIOS:
                 evidence = []
                 for repetition in range(1, repetitions + 1):
+                    attempt_started = time.perf_counter()
                     messages = [{"role": "system", "content": f"SCENARIO_ID: {scenario.id}\n{scenario.system}"}]
                     if scenario.id == "anti-regression-memory":
                         messages.append({"role": "assistant", "content": '{"remembered":true}'})
@@ -106,11 +111,13 @@ class IntegrityBenchmarkService:
                         passed, reason = self._evaluate(scenario, output)
                         evidence.append({"repetition": repetition, "passed": passed, "output": output[:4000],
                                          "output_length": len(output), "truncated": len(output) > 4000,
-                                         "evaluation_reason": reason, "error": None})
+                                         "evaluation_reason": reason, "error": None,
+                                         "duration_ms": round((time.perf_counter() - attempt_started) * 1000, 3)})
                     except Exception as error:
                         passed = False
                         evidence.append({"repetition": repetition, "passed": False, "output": "", "output_length": 0,
-                                         "truncated": False, "evaluation_reason": "generation_error", "error": str(error)})
+                                         "truncated": False, "evaluation_reason": "generation_error", "error": str(error),
+                                         "duration_ms": round((time.perf_counter() - attempt_started) * 1000, 3)})
                     any_failure = any_failure or not passed
                 passed_count = sum(item["passed"] for item in evidence)
                 scenarios.append({
@@ -123,9 +130,20 @@ class IntegrityBenchmarkService:
                 values = [item["score"] for item in scenarios if axis in item["axes"]]
                 scores[axis] = round(sum(values) / len(values), 3)
             scores["overall"] = round((scores["integrity"] + scores["comprehension"]) / 2, 3)
+            completed_at = datetime.now(timezone.utc)
             result = {
                 "id": uuid4().hex, "schema_version": "1.0", "suite_version": "Integrity-Comprehension-v2",
-                "created_at": datetime.now(timezone.utc).isoformat(), "suite": suite, "model": model,
+                "created_at": completed_at.isoformat(), "started_at": started_at.isoformat(),
+                "completed_at": completed_at.isoformat(),
+                "duration_seconds": round(time.perf_counter() - run_started, 3), "suite": suite, "model": model,
+                "generation_policy": {
+                    "temperature": 0.0,
+                    "output_mode": "raw",
+                    "max_output_tokens": 512,
+                    "output_limit_purpose": "bound runaway output; expected exact responses are under 100 tokens",
+                    "response_timeout_seconds": self.response_timeout_seconds,
+                    "timeout_purpose": "runtime safety; timeouts are recorded as failed attempts",
+                },
                 "repetitions": repetitions, "status": "completed_with_failures" if any_failure else "completed",
                 "scores": scores, "scenarios": scenarios,
             }

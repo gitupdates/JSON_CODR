@@ -233,9 +233,9 @@ class WebApiTests(unittest.TestCase):
     def test_health_reports_ollama_readiness(self):
         self.assertEqual(
             self.client.get("/api/health").json(),
-            {"status": "ready", "ollama": True, "app_version": "V1.0.15"},
+            {"status": "ready", "ollama": True, "app_version": "V1.0.16"},
         )
-        self.assertEqual(self.client.app.version, "V1.0.15")
+        self.assertEqual(self.client.app.version, "V1.0.16")
         self.service.available = False
         self.assertEqual(self.client.get("/api/health").json()["status"], "degraded")
 
@@ -463,7 +463,7 @@ class WebApiTests(unittest.TestCase):
         ))
 
         self.assertEqual(output, "raw benchmark evidence")
-        self.assertEqual(client.request["options"], {"temperature": 0.0})
+        self.assertEqual(client.request["options"], {"temperature": 0.0, "num_predict": 512})
         self.assertNotIn("format", client.request)
 
     def test_chat_accepts_exact_and_unique_shorthand_models(self):

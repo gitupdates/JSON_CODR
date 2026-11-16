@@ -120,10 +120,36 @@
       if (evaluation?.suite_version === "Integrity-Comprehension-v2" && evaluation?.model && evaluation?.scores
         && !latest.has(evaluation.model)) latest.set(evaluation.model, evaluation);
     }
-    const performanceMaximum = Math.max(0, ...(Array.isArray(rows) ? rows : [])
+    const baseRows = [...(Array.isArray(rows) ? rows : [])];
+    const measuredModels = new Set(baseRows.map((row) => row.model));
+    for (const [model, evaluation] of latest) {
+      if (measuredModels.has(model)) continue;
+      baseRows.push({
+        id: `integrity:${evaluation.id}`,
+        session_id: null,
+        created_at: evaluation.created_at || "",
+        model,
+        suite: evaluation.suite || "quick",
+        workload_version: evaluation.suite_version,
+        workload_hash: "",
+        backend: "integrity",
+        name: "Integrity evaluation",
+        status: evaluation.status || "completed_with_failures",
+        tested: true,
+        eligible_rank: true,
+        performance_index: null,
+        tokens_per_second: null,
+        ttft_ms: null,
+        average_total_seconds: null,
+        peak_vram_mb: null,
+        speedup_vs_cpu: null,
+        tests: [],
+      });
+    }
+    const performanceMaximum = Math.max(0, ...baseRows
       .filter((row) => row.eligible_rank && latest.has(row.model))
       .map((row) => numberOrNull(row.performance_index)).filter((value) => value !== null));
-    return (Array.isArray(rows) ? rows : []).map((row) => {
+    return baseRows.map((row) => {
       const evaluation = latest.get(row.model);
       const integrityOverall = numberOrNull(evaluation?.scores?.overall);
       const integrityScore = numberOrNull(evaluation?.scores?.integrity);
@@ -148,6 +174,33 @@
       if (filters.suite && filters.suite !== "all" && row.suite !== filters.suite) return false;
       return !search || `${row.model} ${row.backend} ${row.name}`.toLowerCase().includes(search);
     });
+    if (metric === "holistic_capability") {
+      const ordered = filtered.map((row, index) => ({ row: { ...row }, index })).sort((left, right) => {
+        const leftCapability = numberOrNull(left.row.integrity_overall);
+        const rightCapability = numberOrNull(right.row.integrity_overall);
+        if (leftCapability === null && rightCapability !== null) return 1;
+        if (leftCapability !== null && rightCapability === null) return -1;
+        if (leftCapability !== rightCapability) return rightCapability - leftCapability;
+        const leftPerformance = left.row.eligible_rank ? numberOrNull(left.row.performance_index) : null;
+        const rightPerformance = right.row.eligible_rank ? numberOrNull(right.row.performance_index) : null;
+        if (leftPerformance === null && rightPerformance !== null) return 1;
+        if (leftPerformance !== null && rightPerformance === null) return -1;
+        if (leftPerformance !== rightPerformance) return rightPerformance - leftPerformance;
+        return left.index - right.index;
+      });
+      let rank = 0;
+      let tier = 0;
+      let previousCapability = null;
+      return ordered.map(({ row }) => {
+        const capability = numberOrNull(row.integrity_overall);
+        if (capability === null) return { ...row, rank: null, capability_tier: null };
+        if (previousCapability === null || capability !== previousCapability) {
+          tier += 1;
+          previousCapability = capability;
+        }
+        return { ...row, rank: ++rank, capability_tier: tier, holistic_capability: capability };
+      });
+    }
     const ordered = filtered.map((row, index) => ({ row: { ...row }, index })).sort((left, right) => {
       if (left.row.eligible_rank !== right.row.eligible_rank) return left.row.eligible_rank ? -1 : 1;
       const a = numberOrNull(left.row[metric]);

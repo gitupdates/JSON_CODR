@@ -890,6 +890,7 @@ function renderLeaderboardKpis(rows) {
 }
 
 const LEADERBOARD_METRICS = {
+  holistic_capability: ["Holistic capability", "%"],
   tokens_per_second: ["Throughput", " tok/s"],
   ttft_ms: ["TTFT", " ms"],
   average_total_seconds: ["Total time", " s"],
@@ -903,16 +904,17 @@ const LEADERBOARD_METRICS = {
 function renderLeaderboardMetricComparison(rows) {
   const metric = elements.leaderboardMetric.value;
   const [label, unit] = LEADERBOARD_METRICS[metric] || [metric, ""];
-  const values = rows.map((row) => row[metric]).filter(Number.isFinite);
+  const metricValue = (row) => metric === "holistic_capability" ? row.integrity_overall : row[metric];
+  const values = rows.map(metricValue).filter(Number.isFinite);
   const maximum = Math.max(...values, 0);
   const comparison = document.createElement("div"); comparison.className = "leaderboard-metric-comparison";
   const heading = document.createElement("strong"); heading.textContent = `${label} by backend`; comparison.append(heading);
   for (const row of rows) {
     const item = document.createElement("button"); item.type = "button"; item.className = "leaderboard-metric-row";
     const name = document.createElement("span"); name.textContent = row.name;
-    const value = document.createElement("span"); value.textContent = formatLeaderboardValue(row[metric], unit);
+    const value = document.createElement("span"); value.textContent = formatLeaderboardValue(metricValue(row), unit);
     const bar = document.createElement("span"); bar.className = "leaderboard-metric-bar";
-    bar.style.setProperty("--metric-width", Number.isFinite(row[metric]) && maximum ? `${Math.max(3, row[metric] / maximum * 100)}%` : "0%");
+    bar.style.setProperty("--metric-width", Number.isFinite(metricValue(row)) && maximum ? `${Math.max(3, metricValue(row) / maximum * 100)}%` : "0%");
     item.setAttribute("aria-label", `${row.name}: ${value.textContent}; ${row.status === "not_tested" ? "not tested" : row.status}`);
     item.addEventListener("click", () => { selectedLeaderboardRowId = row.id; renderBenchmarkLeaderboard(); });
     item.append(name, value, bar); comparison.append(item);
@@ -967,7 +969,7 @@ function renderLeaderboardTrend(row) {
   }
   const metric = elements.leaderboardMetric.value;
   const [metricLabel, metricUnit] = LEADERBOARD_METRICS[metric] || [metric, ""];
-  if (metric === "integrity_overall" || metric === "combined_score") {
+  if (metric === "holistic_capability" || metric === "integrity_overall" || metric === "combined_score") {
     const note = document.createElement("p"); note.className = "meta";
     note.textContent = "Quality ranks use the latest strict v2 integrity evaluation. Review its per-scenario history in Performance benchmarks.";
     elements.leaderboardTrendChart.append(note); return;
