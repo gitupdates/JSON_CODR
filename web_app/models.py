@@ -24,6 +24,11 @@ class HardwareBenchmarkRequest(BaseModel):
     backend: str = Field(default="all", min_length=1, max_length=50, pattern=r"^[a-z0-9_-]+$")
 
 
+class IntegrityBenchmarkRequest(BaseModel):
+    suite: Literal["quick", "thorough"] = "quick"
+    model: str = Field(min_length=1, max_length=200)
+
+
 class ActionSuggestion(BaseModel):
     command: str = Field(min_length=1, max_length=2000)
     cwd: Optional[str] = Field(default=None, max_length=500)

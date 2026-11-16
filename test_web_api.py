@@ -58,6 +58,17 @@ class FakeService:
     async def supports_vision(self, model):
         return self.vision
 
+    async def generate_deterministic(self, model, messages, temperature=0.0):
+        scenario = messages[0]["content"].split("SCENARIO_ID:", 1)[1].splitlines()[0].strip()
+        outputs = {
+            "anti-regression-memory": "Use WAL, timeout=30.0, asyncio.Lock(), and Semaphore(25).",
+            "multi-hop-graph": "47 exceeds 42, requiring the Type-D Optical Coupler.",
+            "sycophancy-resistance": "The GIL is insufficient; retain the lock for thread-safe correctness.",
+            "structural-boundary": '{"status":"locked","items":[1,2]}',
+            "dimensional-proportion": "1920x1080 is valid 16:9 and meets the requirement.",
+        }
+        return outputs[scenario]
+
     async def chat(self, model, prompt, images=None):
         self.last_prompt = prompt
         self.last_images = images or []
@@ -122,6 +133,22 @@ class FakeHardware:
 
     def gpu_telemetry(self):
         return [{"index": 0, "name": "RTX 4060", "memory_total": 8188, "memory_free": 7956}]
+
+
+class FakeIntegrityBenchmark:
+    def __init__(self):
+        self.error = None
+        self.runs = []
+
+    async def run(self, suite, model):
+        if self.error:
+            raise self.error
+        result = {"id": "integrity-1", "suite": suite, "model": model, "scores": {"integrity": 100, "comprehension": 100, "overall": 100}, "scenarios": []}
+        self.runs.insert(0, result)
+        return result
+
+    def history(self):
+        return self.runs
 
 
 class WebApiTests(unittest.TestCase):
@@ -279,6 +306,39 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(busy.status_code, 409)
         self.assertIn("already running", busy.json()["detail"])
 
+    def test_integrity_benchmark_execution_history_and_validation(self):
+        response = self.client.post(
+            "/api/integrity-benchmarks",
+            json={"suite": "quick", "model": "qwen2.5-coder:7b-instruct-q4_K_M"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["scores"]["overall"], 100.0)
+        history = self.client.get("/api/integrity-benchmarks")
+        self.assertEqual(history.status_code, 200)
+        self.assertEqual(history.json()[0]["id"], response.json()["id"])
+        invalid = self.client.post(
+            "/api/integrity-benchmarks", json={"suite": "overnight", "model": "model"}
+        )
+        self.assertEqual(invalid.status_code, 422)
+
+    def test_integrity_benchmark_rejects_unavailable_model_and_busy_run(self):
+        unavailable = self.client.post(
+            "/api/integrity-benchmarks", json={"suite": "quick", "model": "opencoder:8b"}
+        )
+        self.assertEqual(unavailable.status_code, 409)
+        self.assertIn("not installed", unavailable.json()["detail"])
+
+        integrity = FakeIntegrityBenchmark()
+        integrity.error = RuntimeError("An integrity benchmark is already running")
+        client = TestClient(create_app(self.service, self.workspace, integrity=integrity))
+        busy = client.post(
+            "/api/integrity-benchmarks",
+            json={"suite": "quick", "model": "qwen2.5-coder:7b-instruct-q4_K_M"},
+        )
+        self.assertEqual(busy.status_code, 409)
+        self.assertIn("already running", busy.json()["detail"])
+
     def test_localperf_package_export_preview_and_import_are_private_by_default(self):
         from web_app.localperf.aggregate import aggregate_run
         from web_app.localperf.models import SampleRecord
@@ -352,6 +412,29 @@ class WebApiTests(unittest.TestCase):
 
         self.assertEqual(models[0]["processor"], "75% GPU")
         self.assertEqual(models[0]["size_vram"], 300_000_000)
+
+    def test_deterministic_generation_uses_zero_temperature_and_raw_text(self):
+        class DeterministicClient:
+            def __init__(self):
+                self.request = None
+
+            async def list(self):
+                return {"models": [{"name": "qwen2.5-coder:0.5b", "details": {}}]}
+
+            async def chat(self, **request):
+                self.request = request
+                return {"message": {"content": "raw benchmark evidence"}}
+
+        client = DeterministicClient()
+        service = OllamaService(client=client)
+
+        output = asyncio.run(service.generate_deterministic(
+            "qwen2.5-coder:0.5b", [{"role": "user", "content": "test"}], 0.0
+        ))
+
+        self.assertEqual(output, "raw benchmark evidence")
+        self.assertEqual(client.request["options"], {"temperature": 0.0})
+        self.assertNotIn("format", client.request)
 
     def test_chat_accepts_exact_and_unique_shorthand_models(self):
         for model in ("qwen", "qwen2.5-coder:7b-instruct-q4_K_M"):

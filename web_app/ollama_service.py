@@ -109,6 +109,28 @@ class OllamaService:
         capabilities = payload.get("capabilities", [])
         return "vision" in capabilities
 
+    async def generate_deterministic(
+        self, model: str, messages: List[dict], temperature: float = 0.0
+    ) -> str:
+        resolved = self._resolve(model)
+        live = await self._live_models()
+        if resolved not in live:
+            raise OllamaUnavailableError("Model is not installed")
+        try:
+            response = await asyncio.wait_for(
+                self.client.chat(
+                    model=resolved,
+                    messages=messages,
+                    options={"temperature": temperature},
+                ),
+                timeout=self.timeout_seconds,
+            )
+        except asyncio.TimeoutError as error:
+            raise ModelTimeoutError("Model request timed out") from error
+        except Exception as error:
+            raise OllamaUnavailableError("Ollama request failed") from error
+        return str(response.message.content if hasattr(response, "message") else response["message"]["content"])
+
     def _resolve(self, requested: str) -> str:
         configured = self.config["jury_models"]
         if requested in configured:
