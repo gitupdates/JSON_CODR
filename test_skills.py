@@ -338,6 +338,60 @@ Review the supplied artifact.
         with self.assertRaises(ValueError):
             discovery.install(archive_item.id)
 
+    def test_uploaded_folder_preserves_structure_and_installs_from_snapshot(self):
+        discovery = SkillDiscoveryService(self.library, self.converter, self.root)
+        entries = [
+            ("selected/review/SKILL.md", b"---\nname: uploaded-review\n---\nReview it"),
+            ("selected/review/reference.txt", b"supporting context"),
+        ]
+
+        result = discovery.scan_uploaded_folder(entries)
+        installed = discovery.install(result.discoveries[0].id)
+
+        self.assertEqual(result.discoveries[0].name, "review")
+        self.assertEqual(installed.skills[0].name, "uploaded-review")
+        self.assertFalse((self.root / "skill-upload-staging").exists())
+
+    def test_uploaded_folder_rejects_unsafe_and_duplicate_paths_without_staging(self):
+        discovery = SkillDiscoveryService(self.library, self.converter, self.root)
+        invalid_sets = [
+            [("../SKILL.md", b"bad")],
+            [("/absolute/SKILL.md", b"bad")],
+            [("C:/skills/SKILL.md", b"bad")],
+            [("skills/SKILL.md", b"one"), ("SKILLS/skill.md", b"two")],
+            [("a/b/c/d/e/f/SKILL.md", b"too deep")],
+        ]
+
+        for entries in invalid_sets:
+            with self.subTest(entries=[name for name, _ in entries]):
+                with self.assertRaises(ValueError):
+                    discovery.scan_uploaded_folder(entries)
+        self.assertFalse((self.root / "skill-upload-staging").exists())
+
+    def test_api_scans_uploaded_skill_folder(self):
+        client = TestClient(create_app(FakeOllamaService(), self.workspace))
+
+        response = client.post(
+            "/api/skills/scan-upload",
+            files=[
+                ("relative_paths", (None, "selected/SKILL.md")),
+                ("files", ("SKILL.md", b"---\nname: browser-skill\n---\nUse it", "text/markdown")),
+            ],
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["discoveries"][0]["skill_count"], 1)
+
+    def test_api_rejects_mismatched_uploaded_skill_folder(self):
+        client = TestClient(create_app(FakeOllamaService(), self.workspace))
+
+        response = client.post(
+            "/api/skills/scan-upload",
+            files=[("files", ("SKILL.md", b"content", "text/markdown"))],
+        )
+
+        self.assertEqual(response.status_code, 422)
+
     def test_empty_scan_authorizes_one_known_location_scan(self):
         empty = self.root / "empty"
         empty.mkdir()

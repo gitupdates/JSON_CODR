@@ -5,7 +5,7 @@ import os
 import re
 import sys
 
-from fastapi import FastAPI, File, Header, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -494,9 +494,18 @@ def create_app(
             raise HTTPException(status_code=404, detail="Session not found") from error
 
     @application.post("/api/sessions/{session_id}/attachments", status_code=201)
-    async def upload_attachment(session_id: str, file: UploadFile = File(...)):
+    async def upload_attachment(
+        session_id: str,
+        file: UploadFile = File(...),
+        relative_path: str | None = Form(None),
+    ):
         try:
-            return attachments.import_stream(session_id, file.filename or "attachment", file.file)
+            return attachments.import_stream(
+                session_id,
+                file.filename or "attachment",
+                file.file,
+                relative_path=relative_path,
+            )
         except AttachmentTooLarge as error:
             raise HTTPException(status_code=413, detail=str(error)) from error
         except (InvalidSessionId, ValueError) as error:
@@ -577,6 +586,26 @@ def create_app(
                 current.skill_scan.approved_directories.append(str(Path(request.directory).resolve()))
                 settings.update(SettingsUpdate(skill_scan=current.skill_scan))
             return result
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @application.post("/api/skills/scan-upload")
+    async def scan_uploaded_skills(
+        files: list[UploadFile] = File(...),
+        relative_paths: list[str] = Form(...),
+    ):
+        if len(files) != len(relative_paths):
+            raise HTTPException(status_code=422, detail="Each uploaded file requires one relative path")
+        try:
+            entries: list[tuple[str, bytes]] = []
+            total_bytes = 0
+            for relative_path, file in zip(relative_paths, files, strict=True):
+                data = await file.read(10 * 1024 * 1024 + 1)
+                total_bytes += len(data)
+                if total_bytes > 10 * 1024 * 1024:
+                    raise ValueError("Folder upload is limited to 10 MB")
+                entries.append((relative_path, data))
+            return skill_discovery.scan_uploaded_folder(entries)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 

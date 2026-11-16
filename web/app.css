@@ -257,8 +257,9 @@ footer { padding: 22px 0 34px; color: var(--text-subtle); font: 600 10px ui-mono
 .confirmation-dialog input { width: 100%; height: 44px; margin-top: 8px; padding: 0 12px; color: var(--text); background: var(--surface-input); border: 1px solid var(--line-strong); }
 .skill-discovery { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
 .skill-discovery strong { display: block; margin-top: 3px; }
-.scan-controls { display: flex; gap: 10px; margin-top: 12px; }
-.scan-controls input { flex: 1; min-width: 0; height: 44px; padding: 0 12px; color: var(--text); background: var(--surface-input); border: 1px solid var(--line); font: 12px ui-monospace, monospace; }
+.scan-controls { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.scan-controls input { flex: 1 1 320px; min-width: 0; height: 44px; padding: 0 12px; color: var(--text); background: var(--surface-input); border: 1px solid var(--line); font: 12px ui-monospace, monospace; }
+.scan-controls .file-button { min-height: 44px; padding: 0 18px; align-items: center; justify-content: center; box-sizing: border-box; white-space: nowrap; }
 .setting-row { display: block; margin-top: 12px; }
 .setting-select { max-width: 280px; margin-top: 8px; }
 .setting-help { margin: 7px 0 0; }

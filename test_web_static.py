@@ -79,7 +79,7 @@ class WebStaticTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.0.17-beta.3", response.text)
+        self.assertIn("V1.0.17-beta.4", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -100,7 +100,7 @@ class WebStaticTests(unittest.TestCase):
         html = self.client.get("/").text
         css = self.client.get("/static/app.css")
         javascript = self.client.get("/static/app.js")
-        self.assertIn('/static/app.css?v=1.0.17-beta.3', html)
+        self.assertIn('/static/app.css?v=1.0.17-beta.4', html)
         self.assertEqual(css.status_code, 200)
         self.assertIn("text/css", css.headers["content-type"])
         self.assertEqual(javascript.status_code, 200)
@@ -178,6 +178,22 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("/original", javascript)
         self.assertIn("/retry", javascript)
 
+    def test_native_file_and_folder_pickers_feed_existing_import_flows(self):
+        html = self.client.get("/").text
+        javascript = self.client.get("/static/app.js").text
+
+        self.assertIn('for="attachment-input">Browse files', html)
+        self.assertIn('id="attachment-folder-input"', html)
+        self.assertIn('id="skill-folder-input"', html)
+        self.assertEqual(html.count("webkitdirectory"), 2)
+        self.assertIn("attachmentFolderInput", javascript)
+        self.assertIn("skillFolderInput", javascript)
+        self.assertIn("file.webkitRelativePath || file.name", javascript)
+        self.assertIn('/api/skills/scan-upload', javascript)
+        self.assertIn("renderSkillDiscoveries(payload)", javascript)
+        self.assertIn('elements.attachmentFolderInput.value = ""', javascript)
+        self.assertIn('elements.skillFolderInput.value = ""', javascript)
+
     def test_live_cli_bottom_panel_controls_are_present(self):
         response = self.client.get("/")
         parser = IdCollector()
@@ -212,6 +228,27 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("lastTerminalSequence", javascript)
         self.assertIn('"json_codr_terminal_sessions"', javascript)
         self.assertIn("restoreTerminalSessions", javascript)
+
+    def test_terminal_uses_global_clipboard_and_interrupt_chord(self):
+        html = self.client.get("/").text
+        javascript = self.client.get("/static/app.js").text
+
+        self.assertIn('/static/terminal_keyboard.js?v=1.0.17-beta.4', html)
+        self.assertIn('/static/app.js?v=1.0.17-beta.4', html)
+        self.assertLess(html.index("terminal_keyboard.js"), html.index("app.js"))
+        self.assertIn("createTerminalKeyboardController", javascript)
+        self.assertIn("attachCustomKeyEventHandler", javascript)
+        self.assertIn("navigator.clipboard.writeText", javascript)
+        self.assertIn("navigator.clipboard.readText", javascript)
+        self.assertIn('JSON.stringify({ type: "interrupt" })', javascript)
+        self.assertIn("navigateHistory", javascript)
+        self.assertIn('command === "clr --history"', javascript)
+        self.assertIn('command === "clr --command"', javascript)
+
+    def test_folder_attachment_upload_sends_relative_paths(self):
+        javascript = self.client.get("/static/app.js").text
+
+        self.assertIn('body.append("relative_path", file.webkitRelativePath)', javascript)
 
     def test_dependency_review_controls_are_present(self):
         response = self.client.get("/")

@@ -559,6 +559,60 @@ class SkillDiscoveryService:
             self._previews.pop(oldest)["snapshot"].unlink(missing_ok=True)
         return SkillScanResult(discoveries=discoveries, warnings=warnings, fallback_token=token)
 
+    def scan_uploaded_folder(self, entries: list[tuple[str, bytes]]) -> SkillScanResult:
+        if not entries:
+            raise ValueError("Select at least one folder entry")
+        if len(entries) > 500:
+            raise ValueError("Folder upload is limited to 500 entries")
+        validated: list[tuple[PurePosixPath, bytes]] = []
+        seen: set[str] = set()
+        total_bytes = 0
+        for raw_path, data in entries:
+            normalized = raw_path.replace("\\", "/")
+            starts_absolute = normalized.startswith("/")
+            normalized = normalized.strip("/")
+            raw_parts = normalized.split("/") if normalized else []
+            path = PurePosixPath(normalized)
+            if (
+                not raw_parts
+                or starts_absolute
+                or path.is_absolute()
+                or any(part in {"", ".", ".."} for part in raw_parts)
+                or ":" in raw_parts[0]
+            ):
+                raise ValueError(f"Unsafe folder entry path: {raw_path}")
+            if len(path.parts) - 1 > 5:
+                raise ValueError(f"Folder entry exceeds depth 5: {raw_path}")
+            key = path.as_posix().casefold()
+            if key in seen:
+                raise ValueError(f"Duplicate folder entry path: {raw_path}")
+            seen.add(key)
+            total_bytes += len(data)
+            if total_bytes > 10 * 1024 * 1024:
+                raise ValueError("Folder upload is limited to 10 MB")
+            validated.append((path, data))
+
+        staging_parent = self.data_root / "skill-upload-staging"
+        staging_root = staging_parent / uuid.uuid4().hex
+        try:
+            staging_root.mkdir(parents=True)
+            for relative_path, data in validated:
+                target = staging_root.joinpath(*relative_path.parts)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            result = self.scan(staging_root)
+            selected_root = validated[0][0].parts[0]
+            for item in result.discoveries:
+                self._previews[item.id]["uploaded"] = True
+                item.source_path = selected_root
+            return result
+        finally:
+            shutil.rmtree(staging_root, ignore_errors=True)
+            try:
+                staging_parent.rmdir()
+            except OSError:
+                pass
+
     def scan_known(self, fallback_token: str) -> SkillScanResult:
         expiry = self._tokens.pop(fallback_token, None)
         if expiry is None or expiry < time.monotonic():
@@ -578,7 +632,7 @@ class SkillDiscoveryService:
         if preview is None or preview["expires"] < time.monotonic():
             raise ValueError("Discovery preview expired; scan again")
         source = preview["path"]
-        if not source.exists() or self._digest(source) != preview["digest"]:
+        if not preview.get("uploaded") and (not source.exists() or self._digest(source) != preview["digest"]):
             preview["snapshot"].unlink(missing_ok=True)
             raise ValueError("Skill source changed after preview; scan again")
         snapshot = preview["snapshot"]

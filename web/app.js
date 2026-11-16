@@ -30,6 +30,7 @@ const elements = {
   settingsPanel: document.querySelector("#settings-panel"),
   contextCount: document.querySelector("#context-count"),
   attachmentInput: document.querySelector("#attachment-input"),
+  attachmentFolderInput: document.querySelector("#attachment-folder-input"),
   pasteTextButton: document.querySelector("#paste-text-button"),
   attachmentList: document.querySelector("#attachment-list"),
   attachmentPreview: document.querySelector("#attachment-preview"),
@@ -49,6 +50,7 @@ const elements = {
   skillScanDirectory: document.querySelector("#skill-scan-directory"),
   skillScan: document.querySelector("#skill-scan"),
   skillScanKnown: document.querySelector("#skill-scan-known"),
+  skillFolderInput: document.querySelector("#skill-folder-input"),
   skillScanResults: document.querySelector("#skill-scan-results"),
   skillsetList: document.querySelector("#skillset-list"),
   skillRecommendations: document.querySelector("#skill-recommendations"),
@@ -139,6 +141,7 @@ const elements = {
 
 const VALID_THEME_MODES = new Set(["light", "dark", "system"]);
 const TERMINAL_SESSIONS_KEY = "json_codr_terminal_sessions";
+const TERMINAL_COMMAND_HISTORY_KEY = "json_codr_terminal_command_history";
 const NAVIGATION_DESTINATIONS = new Set(["chat", "terminal", "context", "skills", "hardware", "settings"]);
 const HARDWARE_SECTIONS = new Set(["overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "leaderboard", "history", "localperf"]);
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -154,6 +157,7 @@ let pendingLocalperfPackage = null;
 let terminalConnectionPromise = null;
 let xterm = null;
 let terminalFitAddon = null;
+let terminalKeyboardController = null;
 let lastTerminalSequence = 0;
 let activeTerminalProfile = "powershell";
 const terminalSessions = new Map();
@@ -377,6 +381,36 @@ function initializeXterm() {
   xterm.open(elements.terminalXterm);
   terminalFitAddon.fit();
   elements.terminalOutput.hidden = true;
+  terminalKeyboardController = window.createTerminalKeyboardController({
+    copyText: async (text) => {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch (error) {
+        appendTerminalOutput(`Clipboard copy failed: ${error.message}\n`);
+      }
+    },
+    pasteText: async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text && terminalSocket?.readyState === WebSocket.OPEN) {
+          terminalSocket.send(JSON.stringify({ type: "input", data: text }));
+        }
+      } catch (error) {
+        appendTerminalOutput(`Clipboard paste failed: ${error.message}\n`);
+      }
+    },
+    interrupt: () => {
+      if (terminalSocket?.readyState === WebSocket.OPEN) {
+        terminalSocket.send(JSON.stringify({ type: "interrupt" }));
+      }
+    },
+    loadHistory: () => JSON.parse(localStorage.getItem(TERMINAL_COMMAND_HISTORY_KEY) || "[]"),
+    saveHistory: (history) => localStorage.setItem(TERMINAL_COMMAND_HISTORY_KEY, JSON.stringify(history)),
+  });
+  xterm.attachCustomKeyEventHandler((event) => terminalKeyboardController.handleKeyEvent(
+    event,
+    xterm.hasSelection() ? xterm.getSelection() : "",
+  ));
   xterm.onData((data) => {
     // ConPTY queries terminal capabilities while PowerShell starts. xterm answers
     // those queries through onData, but PowerShell treats the answers as typed
@@ -702,7 +736,20 @@ function renderActions(proposals) {
 async function runTerminalCommand(command = null) {
   const fromInput = command === null;
   command = fromInput ? elements.terminalInput.value : command;
-  if (!command.trim()) return;
+  command = command.trim();
+  if (!command) return;
+  if (command === "clr --history") {
+    if (xterm) xterm.clear();
+    elements.terminalOutput.textContent = "";
+    if (fromInput) elements.terminalInput.value = "";
+    return;
+  }
+  if (command === "clr --command") {
+    terminalKeyboardController?.clearCommandHistory();
+    if (fromInput) elements.terminalInput.value = "";
+    return;
+  }
+  if (fromInput) terminalKeyboardController?.recordCommand(command);
   await ensureTerminal();
   if (terminalSocket.readyState !== WebSocket.OPEN) {
     await new Promise((resolve, reject) => {
@@ -1945,10 +1992,24 @@ async function uploadFiles(files) {
   for (const file of files) {
     const body = new FormData();
     body.append("file", file);
+    if (file.webkitRelativePath) body.append("relative_path", file.webkitRelativePath);
     const response = await fetch(`/api/sessions/${sessionId}/attachments`, { method: "POST", body });
     if (!response.ok) showError((await response.json()).detail || `Unable to import ${file.name}`);
   }
   await loadAttachments();
+}
+
+async function uploadSkillFolder(files) {
+  if (!files.length) return;
+  const body = new FormData();
+  for (const file of files) {
+    body.append("relative_paths", file.webkitRelativePath || file.name);
+    body.append("files", file, file.name);
+  }
+  const response = await fetch("/api/skills/scan-upload", { method: "POST", body });
+  const payload = await response.json();
+  if (!response.ok) return showError(payload.detail || "Skill folder scan failed");
+  renderSkillDiscoveries(payload);
 }
 
 function selectedModel() {
@@ -2243,7 +2304,20 @@ elements.settingTheme.addEventListener("change", async () => {
     showError(error.message);
   }
 });
-elements.attachmentInput.addEventListener("change", () => uploadFiles(elements.attachmentInput.files));
+elements.attachmentInput.addEventListener("change", async () => {
+  try {
+    await uploadFiles(elements.attachmentInput.files);
+  } finally {
+    elements.attachmentInput.value = "";
+  }
+});
+elements.attachmentFolderInput.addEventListener("change", async () => {
+  try {
+    await uploadFiles(elements.attachmentFolderInput.files);
+  } finally {
+    elements.attachmentFolderInput.value = "";
+  }
+});
 elements.pasteTextButton.addEventListener("click", async () => {
   await ensureSession();
   const text = await navigator.clipboard.readText();
@@ -2253,6 +2327,15 @@ elements.pasteTextButton.addEventListener("click", async () => {
 });
 elements.scanDependencies.addEventListener("click", () => loadDependencies().catch((error) => showError(error.message)));
 elements.skillScan.addEventListener("click", () => scanSkillDirectory().catch((error) => showError(error.message)));
+elements.skillFolderInput.addEventListener("change", async () => {
+  try {
+    await uploadSkillFolder(elements.skillFolderInput.files);
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    elements.skillFolderInput.value = "";
+  }
+});
 elements.skillScanKnown.addEventListener("click", async () => {
   if (!skillFallbackToken || !confirm("No skills were found. Scan known Claude, Codex, and JSON_CODR locations now?")) return;
   const response = await fetch("/api/skills/scan-known", {
@@ -2328,6 +2411,13 @@ elements.skillRemovePack.addEventListener("click", async () => {
 elements.terminalRun.addEventListener("click", () => runTerminalCommand().catch((error) => appendTerminalOutput(`Error: ${error.message}\n`)));
 elements.terminalInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") runTerminalCommand().catch((error) => appendTerminalOutput(`Error: ${error.message}\n`));
+  if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+    event.preventDefault();
+    elements.terminalInput.value = terminalKeyboardController?.navigateHistory(
+      event.key === "ArrowUp" ? -1 : 1,
+      elements.terminalInput.value,
+    ) || "";
+  }
 });
 elements.terminalStop.addEventListener("click", () => {
   if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type: "interrupt" }));

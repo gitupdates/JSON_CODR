@@ -18,7 +18,7 @@
     </script>
     <title>JSON_CODR · Local model console</title>
     <link rel="stylesheet" href="/static/vendor/xterm.css" />
-    <link rel="stylesheet" href="/static/app.css?v=1.0.17-beta.3" />
+    <link rel="stylesheet" href="/static/app.css?v=1.0.17-beta.4" />
   </head>
   <body>
     <div class="ambient ambient-one"></div>
@@ -63,7 +63,7 @@
       <header class="topbar">
         <a class="brand" href="/" aria-label="JSON CODR home">
           <span class="brand-mark">{ }</span>
-          <span><strong>JSON_CODR</strong><small>V1.0.17-beta.3 · local model console</small></span>
+          <span><strong>JSON_CODR</strong><small>V1.0.17-beta.4 · local model console</small></span>
         </a>
         <div id="health-status" class="health" role="status" aria-live="polite">
           <span class="health-dot"></span><span>Connecting</span>
@@ -136,8 +136,10 @@
       <aside id="context-panel" class="context-panel app-view" data-view="context" aria-label="Attachment context" hidden>
         <div class="context-head"><div><span class="eyebrow">MODEL CONTEXT</span><h2>Files &amp; pasted content</h2></div><span id="context-count" class="meta">0 items</span></div>
         <div class="context-actions">
-          <label class="secondary file-button" for="attachment-input">Import files</label>
+          <label class="secondary file-button" for="attachment-input">Browse files</label>
           <input id="attachment-input" type="file" multiple hidden />
+          <label class="secondary file-button" for="attachment-folder-input">Browse folder</label>
+          <input id="attachment-folder-input" type="file" webkitdirectory multiple hidden />
           <button id="paste-text-button" class="secondary" type="button">Paste</button>
           <a id="export-archive" class="secondary file-button" href="#">Export ZIP</a>
         </div>
@@ -185,6 +187,8 @@
             <div class="scan-controls">
               <input id="skill-scan-directory" type="text" placeholder="D:\path\to\skills" aria-label="Skill scan directory" />
               <button id="skill-scan" class="secondary" type="button">Scan folder</button>
+              <label class="secondary file-button" for="skill-folder-input">Browse folder</label>
+              <input id="skill-folder-input" type="file" webkitdirectory multiple hidden />
               <button id="skill-scan-known" class="secondary" type="button" hidden>Scan known locations</button>
             </div>
             <div id="skill-scan-results" class="skill-list"><p class="meta">No scan has run.</p></div>
@@ -424,10 +428,11 @@
       <footer><span>Runs entirely on this machine</span><span>127.0.0.1 · Ollama</span></footer>
       </main>
     </div>
-    <script src="/static/dependency_install_queue.js?v=1.0.17-beta.3" defer></script>
-    <script src="/static/benchmark_leaderboard.js?v=1.0.17-beta.3" defer></script>
+    <script src="/static/dependency_install_queue.js?v=1.0.17-beta.4" defer></script>
+    <script src="/static/benchmark_leaderboard.js?v=1.0.17-beta.4" defer></script>
+    <script src="/static/terminal_keyboard.js?v=1.0.17-beta.4" defer></script>
     <script src="/static/vendor/xterm.js" defer></script>
     <script src="/static/vendor/xterm-addon-fit.js" defer></script>
-    <script src="/static/app.js?v=1.0.17-beta.3" defer></script>
+    <script src="/static/app.js?v=1.0.17-beta.4" defer></script>
   </body>
 </html>
