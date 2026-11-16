@@ -127,27 +127,27 @@ git commit -m "feat(core): persist tasks events and artifacts"
 - Produces: `PolicyService.evaluate(principal, project, capability_call) -> PolicyDecision` and persistent grant/revoke methods.
 - Produces: `CoreService.submit(command)`, `steer(task_id, input)`, `cancel(task_id)`, `retry(task_id)`, `restore(checkpoint_id)`, and `subscribe(task_id, after_sequence)`.
 
-- [ ] **Step 1: Write failing service and policy tests**
+- [x] **Step 1: Write failing service and policy tests**
 
 Test one execution per idempotency key, project-root escape rejection, automatic reads/search/tests/bounded edits, separate approval for network/install/commit/push/destructive operations, schedule-scoped grants, credential references never entering events, brokered fallback allowed only inside the same local privacy/cost boundary, cancellation, and adapter failure producing a truthful failed attempt.
 
-- [ ] **Step 2: Run the focused test and verify failure**
+- [x] **Step 2: Run the focused test and verify failure**
 
 Run: `C:\Python315\python.exe -m unittest test_core_service -v`
 
 Expected: FAIL because service and policy modules do not exist.
 
-- [ ] **Step 3: Implement the dispatcher, adapter protocol, and persistent policy**
+- [x] **Step 3: Implement the dispatcher, adapter protocol, and persistent policy**
 
 Commit task intent before dispatch; append adapter events through `TaskStore`; require a concrete `PolicyDecision` before every capability call.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run: `C:\Python315\python.exe -m unittest test_core_service -v`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add web_app/core test_core_service.py

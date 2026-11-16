@@ -1,3 +1,4 @@
+from web_app.core.adapters import AdapterEvent, CapabilityAdapter, CapabilityCall, ExecutionContext
 from web_app.core.capabilities import CapabilityRegistry
 from web_app.core.contracts import (
     CapabilityManifest,
@@ -17,16 +18,26 @@ from web_app.core.contracts import (
     TaskStatus,
     ThreadId,
 )
+from web_app.core.policy import PolicyDecision, PolicyEffect, PolicyService
+from web_app.core.service import CoreService
 
 __all__ = [
+    "AdapterEvent",
+    "CapabilityAdapter",
+    "CapabilityCall",
     "CapabilityManifest",
     "CapabilityRegistry",
     "CapabilityResult",
     "CapabilityStatus",
+    "CoreService",
     "ExecutionMode",
+    "ExecutionContext",
     "ManifestAuthority",
     "ModelScope",
     "ProbeObservation",
+    "PolicyDecision",
+    "PolicyEffect",
+    "PolicyService",
     "ProjectId",
     "RuntimeIdentity",
     "TaskCommand",
