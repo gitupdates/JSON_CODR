@@ -124,6 +124,22 @@ class CodingAgentService:
                 continue
         return False
 
+    def authorized_grant(self, grant_id: str, working_directory: Path | str, profile: str) -> bool:
+        try:
+            working = self._project(working_directory)
+            normalized_profile = self._tool(profile)
+        except ValueError:
+            return False
+        for item in self._read():
+            if item.get("id") != grant_id or not item.get("enabled") or item.get("profile") != normalized_profile:
+                continue
+            try:
+                working.relative_to(self._project(item.get("project_root", "")))
+                return True
+            except (ValueError, TypeError):
+                return False
+        return False
+
     def status(self) -> dict:
         return {
             "tools": [{"id": tool, "executable": executable, "installed": bool(self.executable_finder(executable))}

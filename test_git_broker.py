@@ -33,6 +33,17 @@ class GitBrokerContractTests(unittest.TestCase):
                 actions=[{"kind": "status"}],
                 baseline_fingerprint="clean",
             )
+        with self.assertRaisesRegex(ValidationError, "push must be the final action"):
+            BrokerActionRequest(
+                schema_version=1, project_root="C:/repo", baseline_fingerprint="clean",
+                actions=[{"kind": "push"}, {"kind": "apply_patch", "patch": "diff"}],
+            )
+        with self.assertRaisesRegex(ValidationError, "aggregate patch"):
+            BrokerActionRequest(
+                schema_version=1, project_root="C:/repo", baseline_fingerprint="clean",
+                actions=[{"kind": "apply_patch", "patch": "x" * 130_000},
+                         {"kind": "apply_patch", "patch": "y" * 130_000}],
+            )
         with self.assertRaises(ValidationError):
             BrokerActionRequest(
                 schema_version=1,
@@ -85,6 +96,10 @@ class GitBrokerInspectionTests(unittest.TestCase):
             self.assertTrue(clean.clean)
             self.assertFalse(dirty.clean)
             self.assertNotEqual(clean.dirty_fingerprint, dirty.dirty_fingerprint)
+
+            first_dirty = dirty.dirty_fingerprint
+            (project / "README.md").write_text("another\n", encoding="utf-8")
+            self.assertNotEqual(first_dirty, service.inspect(project).dirty_fingerprint)
 
     def test_inspect_rejects_non_repository_and_symlink_root(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -216,6 +231,19 @@ class GitBrokerExecutionTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "not configured"):
                 service.execute(request, model="qwen", grant_id="grant-1")
+
+    def test_execute_rechecks_authorization_after_waiting_for_project_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project, _ = self._repository(root)
+            service = GitBrokerService(root / "data")
+            baseline = service.inspect(project)
+            request = BrokerActionRequest(
+                schema_version=1, project_root=str(project), baseline_fingerprint=baseline.dirty_fingerprint,
+                actions=[{"kind": "status"}],
+            )
+            with self.assertRaisesRegex(PermissionError, "revoked"):
+                service.execute(request, model="qwen", grant_id="grant-1", authorized=lambda: False)
 
 
 if __name__ == "__main__":

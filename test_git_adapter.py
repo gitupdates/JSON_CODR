@@ -21,6 +21,8 @@ class GitActionAdapterTests(unittest.TestCase):
                     adapter.parse(response)
         with self.assertRaisesRegex(ValueError, "too large"):
             adapter.parse("x" * 1001)
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            adapter.parse('{"schema_version":1,"schema_version":1,"project_root":"C:/repo","baseline_fingerprint":"abc","actions":[{"kind":"status"}]}')
 
     def test_tool_support_error_routes_to_broker_adapter_without_raw_json(self):
         error = '400 registry.ollama.ai/library/yi-coder:9b-chat does not support tools'

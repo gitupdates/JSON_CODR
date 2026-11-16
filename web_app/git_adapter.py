@@ -6,8 +6,9 @@ from web_app.models import BrokerActionRequest
 
 
 class GitActionAdapter:
-    def __init__(self, max_response_bytes: int = 250_000) -> None:
+    def __init__(self, max_response_bytes: int = 250_000, verification_checks: dict[str, list[str]] | None = None) -> None:
         self.max_response_bytes = max_response_bytes
+        self.verification_checks = verification_checks or {}
 
     def prompt_contract(self, project_root: str, baseline_fingerprint: str) -> str:
         return (
@@ -15,6 +16,7 @@ class GitActionAdapter:
             "Use schema_version 1 with project_root, baseline_fingerprint, and actions. "
             "Allowed actions are status, read, apply_patch, verify, commit, sync, and push. "
             "Patches must be unified diffs; shell commands and environment variables are forbidden. "
+            f"Allowed verification checks are {sorted(self.verification_checks)}. "
             f"project_root={project_root!r}; baseline_fingerprint={baseline_fingerprint!r}."
         )
 
@@ -24,7 +26,15 @@ class GitActionAdapter:
         if response != response.strip() or not response.startswith("{") or not response.endswith("}"):
             raise ValueError("Broker response must be exactly one JSON object")
         try:
-            payload = json.loads(response)
+            def unique_object(pairs):
+                result = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError(f"Broker response contains duplicate key: {key}")
+                    result[key] = value
+                return result
+
+            payload = json.loads(response, object_pairs_hook=unique_object)
         except json.JSONDecodeError as error:
             raise ValueError("Broker response is not valid JSON") from error
         if not isinstance(payload, dict):

@@ -75,6 +75,21 @@ class BrokerActionRequest(BaseModel):
     actions: List[BrokerAction] = Field(min_length=1, max_length=50)
     baseline_fingerprint: str = Field(min_length=1, max_length=128)
 
+    @model_validator(mode="after")
+    def validate_workflow(self):
+        if sum(len(action.patch or "") for action in self.actions) > 250_000:
+            raise ValueError("aggregate patch payload is too large")
+        kinds = [action.kind for action in self.actions]
+        if "push" in kinds and kinds[-1] != "push":
+            raise ValueError("push must be the final action")
+        if "commit" in kinds:
+            commit_index = kinds.index("commit")
+            if "apply_patch" not in kinds[:commit_index]:
+                raise ValueError("commit requires a preceding apply_patch action")
+        if "push" in kinds and "commit" not in kinds[:kinds.index("push")]:
+            raise ValueError("push requires a preceding commit action")
+        return self
+
 
 class ActionProposal(BaseModel):
     id: str

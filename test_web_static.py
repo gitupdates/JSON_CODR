@@ -34,7 +34,7 @@ class WebStaticTests(unittest.TestCase):
         html = Path("web/index.html").read_text(encoding="utf-8")
         script = Path("web/app.js").read_text(encoding="utf-8")
 
-        self.assertIn('<option value="broker" selected>Git broker', html)
+        self.assertIn('<option value="broker" selected>Coding sandbox', html)
         self.assertIn('<option value="shell">Unrestricted shell', html)
         self.assertIn("non-sandboxed", html)
         self.assertIn('/api/git-broker/grants', script)

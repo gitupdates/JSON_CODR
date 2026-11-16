@@ -9,6 +9,7 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from web_app.models import BrokerActionRequest
 
@@ -36,12 +37,14 @@ class BrokerActionResult:
 
 
 class GitBrokerService:
+    _MAX_OUTPUT_BYTES = 200_000
     def __init__(self, data_root: Path, verification_checks: dict[str, list[str]] | None = None) -> None:
         self.data_root = Path(data_root).resolve()
         self.audit_path = self.data_root / "git-broker-audit.json"
         self.verification_checks = verification_checks or {}
         self._locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
+        self._audit_lock = threading.Lock()
 
     @staticmethod
     def _project(path: Path | str) -> Path:
@@ -64,7 +67,47 @@ class GitBrokerService:
         if check and result.returncode:
             message = result.stderr.strip() or result.stdout.strip() or "Git command failed"
             raise ValueError(message)
-        return result.stdout.strip()
+        return result.stdout[:GitBrokerService._MAX_OUTPUT_BYTES].strip()
+
+    @staticmethod
+    def _safe_target(project: Path, relative: str, *, must_exist: bool = False) -> Path:
+        target = project / relative
+        try:
+            target.resolve(strict=False).relative_to(project)
+        except ValueError as error:
+            raise ValueError("Project path leaves the authorized project") from error
+        current = project
+        for part in Path(relative).parts:
+            current /= part
+            if not current.exists():
+                continue
+            details = current.lstat()
+            if current.is_symlink() or bool(getattr(details, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+                raise ValueError("Project paths cannot traverse a reparse point")
+        if must_exist and not target.is_file():
+            raise ValueError(f"Project file not found: {relative}")
+        return target
+
+    @staticmethod
+    def _patch_paths(patch: str) -> list[str]:
+        paths = []
+        for line in patch.splitlines():
+            if not line.startswith(("+++ ", "--- ")):
+                continue
+            value = line[4:].split("\t", 1)[0]
+            if value == "/dev/null":
+                continue
+            expected = "b/" if line.startswith("+++ ") else "a/"
+            if not value.startswith(expected):
+                raise ValueError("Patch targets must use project-relative a/ and b/ paths")
+            relative = value[2:]
+            normalized = relative.replace("\\", "/")
+            if not normalized or normalized.startswith("/") or ":" in normalized or ".." in normalized.split("/"):
+                raise ValueError("Patch path leaves the authorized project")
+            paths.append(relative)
+        if not paths:
+            raise ValueError("Patch does not contain a target file")
+        return list(dict.fromkeys(paths))
 
     def validate_request(self, request: BrokerActionRequest) -> BrokerActionRequest:
         self._project(request.project_root)
@@ -87,14 +130,15 @@ class GitBrokerService:
 
     def record_audit(self, record: dict) -> dict:
         safe = {key: value for key, value in record.items() if key not in {"prompt", "environment", "content", "patch"}}
-        records = self._read_audit()
-        existing = next((item for item in records if item.get("id") == safe.get("id")), None)
-        if existing is None:
-            records.append(safe)
-        else:
-            existing.update(safe)
-            safe = existing
-        self._write_audit(records)
+        with self._audit_lock:
+            records = self._read_audit()
+            existing = next((item for item in records if item.get("id") == safe.get("id")), None)
+            if existing is None:
+                records.append(safe)
+            else:
+                existing.update(safe)
+                safe = existing
+            self._write_audit(records)
         return dict(safe)
 
     def recover_interrupted_tasks(self) -> list[dict]:
@@ -113,10 +157,18 @@ class GitBrokerService:
         with self._locks_guard:
             return self._locks.setdefault(key, threading.Lock())
 
-    def execute(self, request: BrokerActionRequest, model: str, grant_id: str) -> BrokerActionResult:
+    def execute(
+        self,
+        request: BrokerActionRequest,
+        model: str,
+        grant_id: str,
+        authorized: Callable[[], bool] | None = None,
+    ) -> BrokerActionResult:
         request = self.validate_request(request)
         project = self._project(request.project_root)
         with self._lock(project):
+            if authorized is not None and not authorized():
+                raise PermissionError("Authorization was revoked")
             snapshot = self.inspect(project)
             if snapshot.dirty_fingerprint != request.baseline_fingerprint:
                 raise RuntimeError("Project changed since authorization")
@@ -126,26 +178,29 @@ class GitBrokerService:
                 "model": model, "profile": "broker", "grant_id": grant_id,
             })
             commit = None
+            touched_paths: list[str] = []
             status = "completed"
             outputs: dict = {"files": {}, "checks": {}, "diff": ""}
             try:
                 if snapshot.upstream:
                     self._git(project, "fetch", "--quiet")
                 for action in request.actions:
+                    if authorized is not None and not authorized():
+                        raise PermissionError("Authorization was revoked")
                     if action.kind == "apply_patch":
                         patch = action.patch or ""
+                        action_paths = self._patch_paths(patch)
+                        for relative in action_paths:
+                            self._safe_target(project, relative)
                         self._git(project, "apply", "--check", "-", input_text=patch)
                         self._git(project, "apply", "-", input_text=patch)
+                        touched_paths.extend(action_paths)
                     elif action.kind == "read":
                         for relative in action.paths:
-                            target = (project / relative).resolve()
-                            try:
-                                target.relative_to(project)
-                            except ValueError as error:
-                                raise ValueError("Read path leaves the authorized project") from error
-                            if not target.is_file():
-                                raise ValueError(f"Project file not found: {relative}")
-                            outputs["files"][relative] = target.read_text(encoding="utf-8", errors="replace")
+                            target = self._safe_target(project, relative, must_exist=True)
+                            outputs["files"][relative] = target.read_text(
+                                encoding="utf-8", errors="replace"
+                            )[:self._MAX_OUTPUT_BYTES]
                     elif action.kind == "verify":
                         for check_name in action.checks:
                             argv = self.verification_checks.get(check_name)
@@ -156,14 +211,18 @@ class GitBrokerService:
                                 encoding="utf-8", errors="replace", env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
                             )
                             if result.returncode:
-                                raise RuntimeError(result.stderr.strip() or f"Verification failed: {check_name}")
-                            outputs["checks"][check_name] = result.stdout.strip()
+                                raise RuntimeError(
+                                    result.stderr[:self._MAX_OUTPUT_BYTES].strip() or f"Verification failed: {check_name}"
+                                )
+                            outputs["checks"][check_name] = result.stdout[:self._MAX_OUTPUT_BYTES].strip()
                     elif action.kind == "status":
                         summary = self._git(project, "status", "--short", "--untracked-files=all")
                         diff = self._git(project, "diff", "--no-ext-diff", "--")
                         outputs["diff"] = "\n".join(part for part in (summary, diff) if part)
                     elif action.kind == "commit":
-                        self._git(project, "add", "--all")
+                        if not touched_paths:
+                            raise RuntimeError("Commit requires files changed by an apply_patch action")
+                        self._git(project, "add", "--", *list(dict.fromkeys(touched_paths)))
                         message = (action.message or "Apply JSON_CODR model changes").strip()
                         message += (
                             f"\n\nJSON-CODR-Model: {model}\n"
@@ -207,7 +266,23 @@ class GitBrokerService:
         upstream = self._git(project, "rev-parse", "--abbrev-ref", "@{upstream}", check=False) or None
         remote_head = self._git(project, "rev-parse", "@{upstream}", check=False) if upstream else None
         status = self._git(project, "status", "--porcelain=v2", "--untracked-files=all")
-        fingerprint = hashlib.sha256(status.replace("\r\n", "\n").encode("utf-8")).hexdigest()
+        digest = hashlib.sha256()
+        digest.update(f"head={head}\nbranch={branch}\nupstream={upstream}\n".encode("utf-8"))
+        digest.update(status.replace("\r\n", "\n").encode("utf-8"))
+        changed = self._git(project, "status", "--porcelain", "-z", "--untracked-files=all")
+        for record in changed.split("\0"):
+            if not record:
+                continue
+            relative = record.split(" ", 1)[1] if " " in record else ""
+            if " -> " in relative:
+                relative = relative.split(" -> ", 1)[1]
+            target = project / relative
+            digest.update(relative.encode("utf-8", errors="replace"))
+            if target.is_file():
+                with target.open("rb") as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                        digest.update(chunk)
+        fingerprint = digest.hexdigest()
         return RepositorySnapshot(
             root=str(project), head=head, branch=branch, upstream=upstream,
             remote_head=remote_head or None, dirty_fingerprint=fingerprint, clean=not bool(status),

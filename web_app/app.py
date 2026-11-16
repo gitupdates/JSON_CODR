@@ -2,6 +2,7 @@ from pathlib import Path
 
 import asyncio
 import re
+import sys
 
 from fastapi import FastAPI, File, Header, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -108,8 +109,15 @@ def create_app(
     if close_terminals is not None:
         application.router.add_event_handler("shutdown", close_terminals)
     coding_agents = coding_agents or CodingAgentService(workspace.data_root)
-    git_broker = git_broker or GitBrokerService(workspace.data_root)
-    git_adapter = GitActionAdapter()
+    git_broker = git_broker or GitBrokerService(workspace.data_root, verification_checks={
+        "python-compile": [sys.executable, "-m", "compileall", "-q", "."],
+        "python-tests": [sys.executable, "-m", "pytest", "-q"],
+        "node-tests": ["npm", "test"],
+        "node-lint": ["npm", "run", "lint"],
+        "node-build": ["npm", "run", "build"],
+        "git-diff-check": ["git", "diff", "--check"],
+    })
+    git_adapter = GitActionAdapter(verification_checks=git_broker.verification_checks)
     git_broker.recover_interrupted_tasks()
     action_proposals = ActionProposalService()
     web_root = Path(__file__).resolve().parent.parent / "web"
@@ -715,23 +723,23 @@ def create_app(
     @application.post("/api/git-broker/tasks", status_code=201)
     async def execute_git_broker_task(request: BrokerTaskRequest, x_json_codr: str | None = Header(None)):
         require_terminal_header(x_json_codr)
-        grant = next((item for item in coding_agents.status()["grants"] if item.get("id") == request.grant_id), None)
-        if not grant or not grant.get("enabled") or grant.get("profile") != "broker":
-            raise HTTPException(status_code=403, detail="Active broker authorization is required")
-        if not coding_agents.authorized(request.request.project_root, "broker"):
+        def authorized():
+            return coding_agents.authorized_grant(request.grant_id, request.request.project_root, "broker")
+        if not authorized():
             raise HTTPException(status_code=403, detail="Broker authorization does not cover this project")
         try:
-            return await asyncio.to_thread(git_broker.execute, request.request, request.model, request.grant_id)
-        except (ValueError, RuntimeError) as error:
+            return await asyncio.to_thread(
+                git_broker.execute, request.request, request.model, request.grant_id, authorized
+            )
+        except (ValueError, RuntimeError, PermissionError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.post("/api/git-broker/adapter", status_code=201)
     async def execute_git_broker_adapter(request: BrokerAdapterRunRequest, x_json_codr: str | None = Header(None)):
         require_terminal_header(x_json_codr)
-        grant = next((item for item in coding_agents.status()["grants"] if item.get("id") == request.grant_id), None)
-        if not grant or not grant.get("enabled") or grant.get("profile") != "broker":
-            raise HTTPException(status_code=403, detail="Active broker authorization is required")
-        if not coding_agents.authorized(request.project_root, "broker"):
+        def authorized():
+            return coding_agents.authorized_grant(request.grant_id, request.project_root, "broker")
+        if not authorized():
             raise HTTPException(status_code=403, detail="Broker authorization does not cover this project")
         try:
             snapshot = await asyncio.to_thread(git_broker.inspect, request.project_root)
@@ -742,9 +750,11 @@ def create_app(
                 raise ValueError("Model response changed the authorized project root")
             if action_request.baseline_fingerprint != snapshot.dirty_fingerprint:
                 raise ValueError("Model response changed the authorized baseline")
-            result = await asyncio.to_thread(git_broker.execute, action_request, request.model, request.grant_id)
+            result = await asyncio.to_thread(
+                git_broker.execute, action_request, request.model, request.grant_id, authorized
+            )
             return {"compatibility": "broker_adapter", "result": result}
-        except (ValueError, RuntimeError, OllamaUnavailableError, ModelOutputError, ModelTimeoutError) as error:
+        except (ValueError, RuntimeError, PermissionError, OllamaUnavailableError, ModelOutputError, ModelTimeoutError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.post("/api/coding-agents/grants", status_code=201)
