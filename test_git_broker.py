@@ -123,5 +123,59 @@ class GitBrokerAuditTests(unittest.TestCase):
             self.assertNotIn("TOKEN", text)
 
 
+class GitBrokerExecutionTests(unittest.TestCase):
+    def _repository(self, root: Path) -> tuple[Path, Path]:
+        remote = root / "remote.git"
+        project = root / "project"
+        git(root, "init", "--bare", str(remote))
+        git(root, "init", "-b", "main", str(project))
+        git(project, "config", "user.name", "Test User")
+        git(project, "config", "user.email", "test@example.com")
+        (project / "README.md").write_text("initial\n", encoding="utf-8")
+        git(project, "add", "README.md")
+        git(project, "commit", "-m", "initial")
+        git(project, "remote", "add", "origin", str(remote))
+        git(project, "push", "-u", "origin", "main")
+        return project, remote
+
+    def test_execute_applies_commits_rebases_and_pushes_with_attribution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project, remote = self._repository(root)
+            service = GitBrokerService(root / "data")
+            baseline = service.inspect(project)
+            request = BrokerActionRequest(
+                schema_version=1, project_root=str(project), baseline_fingerprint=baseline.dirty_fingerprint,
+                actions=[
+                    {"kind": "apply_patch", "patch": "diff --git a/README.md b/README.md\nindex e79c5e8..b03d9db 100644\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-initial\n+updated\n"},
+                    {"kind": "commit", "message": "Update readme"},
+                    {"kind": "push"},
+                ],
+            )
+
+            result = service.execute(request, model="qwen2.5-coder:7b", grant_id="grant-1")
+
+            self.assertEqual(result.status, "pushed")
+            self.assertEqual(git(project, "show", "-s", "--format=%an <%ae>", "HEAD"), "Test User <test@example.com>")
+            message = git(project, "show", "-s", "--format=%B", "HEAD")
+            self.assertIn("JSON-CODR-Model: qwen2.5-coder:7b", message)
+            self.assertIn("JSON-CODR-Profile: broker", message)
+            self.assertIn("JSON-CODR-Grant: grant-1", message)
+            self.assertEqual(git(remote, "show", "main:README.md"), "updated")
+
+    def test_execute_stops_when_baseline_does_not_match(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project, _ = self._repository(root)
+            service = GitBrokerService(root / "data")
+            request = BrokerActionRequest(
+                schema_version=1, project_root=str(project), baseline_fingerprint="0" * 64,
+                actions=[{"kind": "status"}],
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "changed since authorization"):
+                service.execute(request, model="qwen", grant_id="grant-1")
+
+
 if __name__ == "__main__":
     unittest.main()

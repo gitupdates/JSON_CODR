@@ -5,6 +5,7 @@ import json
 import os
 import stat
 import subprocess
+import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +38,8 @@ class GitBrokerService:
     def __init__(self, data_root: Path) -> None:
         self.data_root = Path(data_root).resolve()
         self.audit_path = self.data_root / "git-broker-audit.json"
+        self._locks: dict[str, threading.Lock] = {}
+        self._locks_guard = threading.Lock()
 
     @staticmethod
     def _project(path: Path | str) -> Path:
@@ -49,12 +52,12 @@ class GitBrokerService:
         return candidate.resolve()
 
     @staticmethod
-    def _git(project: Path, *args: str, check: bool = True) -> str:
+    def _git(project: Path, *args: str, check: bool = True, input_text: str | None = None) -> str:
         environment = os.environ.copy()
         environment["GIT_TERMINAL_PROMPT"] = "0"
         result = subprocess.run(
             ["git", *args], cwd=project, check=False, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", env=environment,
+            encoding="utf-8", errors="replace", env=environment, input=input_text,
         )
         if check and result.returncode:
             message = result.stderr.strip() or result.stdout.strip() or "Git command failed"
@@ -102,6 +105,68 @@ class GitBrokerService:
         if recovered:
             self._write_audit(records)
         return recovered
+
+    def _lock(self, project: Path) -> threading.Lock:
+        key = str(project).casefold()
+        with self._locks_guard:
+            return self._locks.setdefault(key, threading.Lock())
+
+    def execute(self, request: BrokerActionRequest, model: str, grant_id: str) -> BrokerActionResult:
+        request = self.validate_request(request)
+        project = self._project(request.project_root)
+        with self._lock(project):
+            snapshot = self.inspect(project)
+            if snapshot.dirty_fingerprint != request.baseline_fingerprint:
+                raise RuntimeError("Project changed since authorization")
+            task_id = uuid.uuid4().hex
+            self.record_audit({
+                "id": task_id, "status": "running", "project_root": str(project),
+                "model": model, "profile": "broker", "grant_id": grant_id,
+            })
+            commit = None
+            status = "completed"
+            try:
+                if snapshot.upstream:
+                    self._git(project, "fetch", "--quiet")
+                for action in request.actions:
+                    if action.kind == "apply_patch":
+                        patch = action.patch or ""
+                        self._git(project, "apply", "--check", "-", input_text=patch)
+                        self._git(project, "apply", "-", input_text=patch)
+                    elif action.kind == "commit":
+                        self._git(project, "add", "--all")
+                        message = (action.message or "Apply JSON_CODR model changes").strip()
+                        message += (
+                            f"\n\nJSON-CODR-Model: {model}\n"
+                            "JSON-CODR-Profile: broker\n"
+                            f"JSON-CODR-Grant: {grant_id}"
+                        )
+                        self._git(project, "commit", "-m", message)
+                        commit = self._git(project, "rev-parse", "HEAD")
+                        status = "committed"
+                    elif action.kind == "sync":
+                        current = self.inspect(project)
+                        if not current.upstream:
+                            raise RuntimeError("Checked-out branch has no upstream")
+                        self._git(project, "fetch", "--quiet")
+                        self._git(project, "rebase", current.upstream)
+                    elif action.kind == "push":
+                        current = self.inspect(project)
+                        if not current.branch or not current.upstream:
+                            raise RuntimeError("Checked-out branch must have an upstream")
+                        self._git(project, "fetch", "--quiet")
+                        self._git(project, "rebase", current.upstream)
+                        self._git(project, "push", "origin", f"HEAD:{current.branch}")
+                        status = "pushed"
+                final = self.inspect(project)
+                self.record_audit({"id": task_id, "status": status, "commit": commit, "branch": final.branch})
+                return BrokerActionResult(
+                    status=status, snapshot=final, task_id=task_id, commit=commit,
+                    remote="origin" if status == "pushed" else None, branch=final.branch,
+                )
+            except Exception:
+                self.record_audit({"id": task_id, "status": "failed"})
+                raise
 
     def inspect(self, project_root: Path | str) -> RepositorySnapshot:
         project = self._project(project_root)
