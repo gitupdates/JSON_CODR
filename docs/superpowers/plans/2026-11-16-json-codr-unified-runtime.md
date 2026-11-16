@@ -42,30 +42,30 @@
 - Test: `test_core_capabilities.py`
 
 **Interfaces:**
-- Produces: `TaskId`, `ThreadId`, `ProjectId`, `TaskStatus`, `ExecutionMode`, `RuntimeIdentity`, `CapabilityManifest`, `CapabilityResult`, `TaskCommand`, `TaskEvent`, `TaskRecord`.
-- Produces: `CapabilityRegistry.register(manifest, adapter_factory)`, `resolve(request, context)`, `probe(capability_id, context)`, and `describe()`.
+- Produces: schema-versioned validated task/thread/project/command identifiers, `TaskStatus`, `ExecutionMode`, `ModelScope`, `ManifestAuthority`, `RuntimeIdentity`, `CapabilityManifest`, `ProbeObservation`, `CapabilityResult`, `TaskCommand`, `TaskEvent`, and `TaskRecord`.
+- Produces: `CapabilityRegistry.register(manifest, adapter_factory, probe_verifier)`, `resolve(request, context)`, `probe(request, context)`, and `describe()`.
 
-- [ ] **Step 1: Write failing registry contract tests**
+- [x] **Step 1: Write failing registry contract tests**
 
-Add tests named `test_registration_is_deterministic`, `test_duplicate_implementation_is_rejected`, `test_resolution_filters_platform_runtime_model_and_policy`, `test_package_presence_is_not_readiness`, and `test_native_and_brokered_modes_remain_distinct`. Assert exact manifest serialization and that only a successful functional probe makes an implementation runnable.
+Test deterministic registration, duplicate rejection, explicit model applicability, deep command immutability, strict contract fields and identifiers, technical probes independent from authorization, model/mode-specific readiness, structured probe evidence, package presence not implying readiness, and native/brokered separation.
 
-- [ ] **Step 2: Run the focused test and verify failure**
+- [x] **Step 2: Run the focused test and verify failure**
 
 Run: `C:\Python315\python.exe -m unittest test_core_capabilities -v`
 
 Expected: FAIL because `web_app.core` does not exist.
 
-- [ ] **Step 3: Implement immutable Pydantic contracts and the in-memory registry**
+- [x] **Step 3: Implement immutable Pydantic contracts and the in-memory registry**
 
-Keep registry resolution free of execution and persistence. Define stable string identifiers and reject unknown or duplicate implementation identities.
+Keep registry resolution free of execution and persistence. Define stable validated identifiers, canonical bounded JSON payloads, explicit model applicability, manifest authority, host-owned probe verification, and distinct technical-readiness and authorization checks.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run: `C:\Python315\python.exe -m unittest test_core_capabilities -v`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add web_app/core test_core_capabilities.py
@@ -83,6 +83,8 @@ git commit -m "feat(core): add unified capability contracts"
 - Consumes: Task and event contracts from Task 1.
 - Produces: `TaskStore.create(command)`, `append(task_id, event)`, `get(task_id)`, `events(task_id, after_sequence)`, `children(task_id)`, `request_cancel(task_id)`, and `recover_interrupted()`.
 - Produces: `ArtifactStore.put(stream, metadata)`, `open(artifact_id)`, `prune(policy)`, and `export_manifest(task_id)`.
+
+New IDs use UUIDv7. Event envelopes retain task sequence and causation while carrying CloudEvents-compatible identity metadata. Persisted hashes use RFC 8785 canonical JSON. Mutation records carry expected-version or expected-digest preconditions; HTTP mappings use strong `If-Match` semantics and RFC 9457 problem details.
 
 - [ ] **Step 1: Write failing persistence tests**
 

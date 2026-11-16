@@ -102,7 +102,7 @@ Every capability publishes a versioned manifest containing:
 - stable capability and implementation identifiers
 - supported platforms and isolated runtime requirements
 - required permissions and approved-root behavior
-- native-model requirements and brokered availability
+- explicit model applicability (`independent` or an allowlist), native-model requirements, and brokered availability
 - applicable file, project, and artifact types
 - model and hardware compatibility evidence
 - health and functional probes
@@ -111,7 +111,13 @@ Every capability publishes a versioned manifest containing:
 - provenance, signature, and dependency information
 - resource limits and observability fields
 
-Package presence is not readiness. A capability becomes runnable only after its functional probe succeeds for the relevant environment. A model-capability pair becomes verified only after a real operation produces the expected evidence.
+Registration, technical verification, compatibility resolution, authorization, and execution are separate states. Package presence is not readiness, an empty model declaration is not a wildcard, and a manifest cannot verify its own claims. A host-owned verifier evaluates structured probe observations for the exact requested model, effective model, execution mode, adapter, runtime, and hardware identity. Authorization is evaluated only after a technically compatible route is known.
+
+### Contract standards
+
+Durable and wire-visible records carry an explicit schema version, reject unknown fields, and use deeply immutable, bounded JSON values. JSON_CODR generates time-ordered UUIDv7 identifiers for new commands and events while migration adapters may accept validated legacy identifiers. Hashes and signatures use RFC 8785 canonical JSON rather than implementation-specific serialization.
+
+Task events follow the minimal CloudEvents identity model: unique event ID, stable source, event type, subject, schema reference, occurrence time, and immutable data. JSON_CODR retains its own task sequence and causation fields rather than adopting a second event system. HTTP mutation APIs use strong representation preconditions equivalent to RFC 9110 `If-Match`; internal mutation capabilities carry the same expected-version or expected-digest condition. Transport errors use RFC 9457 problem details with stable machine-readable problem types and redacted human detail.
 
 ### TaskStore and event stream
 
@@ -129,12 +135,13 @@ Persistent policy may authorize reads, edits, tests, dependency installation in 
 
 Routing is compatibility-first:
 
-1. Filter to implementations whose functional probes, platform requirements, and policy requirements pass.
-2. Filter to model and hardware pairs verified for the required capability.
-3. Prefer the requested model when it can complete the task truthfully.
-4. Otherwise select an explicit brokered path and disclose it.
-5. Rank remaining paths using task-specific capability quality, stability history, and measured performance.
-6. Retain CPU and the last-known-good route as fallbacks.
+1. Filter to implementations whose platform and runtime requirements pass.
+2. Filter to model, execution-mode, and hardware identities with current host-verified evidence.
+3. Ask `PolicyService` to authorize the concrete candidate and resource scope.
+4. Prefer the requested model when it can complete the task truthfully.
+5. Otherwise select an explicit brokered path and disclose it.
+6. Rank remaining paths using task-specific capability quality, stability history, and measured performance.
+7. Retain CPU and the last-known-good route as fallbacks.
 
 Routing changes metadata and executors; it does not create a second task.
 
