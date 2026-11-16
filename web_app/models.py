@@ -223,6 +223,13 @@ class BrokerTaskRequest(BaseModel):
     request: BrokerActionRequest
 
 
+class BrokerAdapterRunRequest(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+    grant_id: str = Field(min_length=1, max_length=64)
+    project_root: str = Field(min_length=1, max_length=1000)
+    prompt: str = Field(min_length=1, max_length=20_000)
+
+
 class CodingAgentLaunchRequest(CodingAgentGrantRequest):
     model: str = Field(min_length=1, max_length=200)
     mode: Literal["interactive", "delegated"] = "interactive"

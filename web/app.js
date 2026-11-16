@@ -297,7 +297,15 @@ function selectDestination(destination, { persist = true, focus = false } = {}) 
   }
 }
 
+function normalizeTerminalOutput(text) {
+  if (String(text).toLowerCase().includes("does not support tools")) {
+    return "This model uses the JSON_CODR broker adapter for project tools. Select Git broker and launch the delegated task.\n";
+  }
+  return text;
+}
+
 function appendTerminalOutput(text) {
+  text = normalizeTerminalOutput(text);
   if (xterm) xterm.write(text);
   elements.terminalOutput.textContent += text;
   elements.terminalOutput.scrollTop = elements.terminalOutput.scrollHeight;
@@ -524,6 +532,18 @@ async function launchCodingAgent(event) {
       if (!statusResponse.ok) throw new Error(await responseErrorMessage(statusResponse, "Unable to inspect project"));
       const status = await statusResponse.json();
       const repository = status.repository;
+      if (payload.mode === "delegated") {
+        elements.codingAgentStatus.textContent = `Broker adapter running ${payload.model}…`;
+        const executionResponse = await fetch("/api/git-broker/adapter", {
+          method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
+          body: JSON.stringify({ model: payload.model, grant_id: grant.id, project_root: payload.project_root, prompt: payload.prompt }),
+        });
+        if (!executionResponse.ok) throw new Error(await responseErrorMessage(executionResponse, "Broker adapter task failed"));
+        const execution = await executionResponse.json();
+        const result = execution.result;
+        elements.codingAgentStatus.textContent = `Broker adapter ${result.status} · ${result.branch || repository.branch || "detached HEAD"}${result.commit ? ` · ${result.commit.slice(0, 10)}` : ""}`;
+        return;
+      }
       elements.codingAgentStatus.textContent = `Broker adapter ready · ${repository.branch || "detached HEAD"} · ${repository.clean ? "in sync" : "local changes detected"}`;
       return;
     }

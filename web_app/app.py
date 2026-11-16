@@ -27,8 +27,9 @@ from web_app.integrity_benchmark import IntegrityBenchmarkService
 from web_app.benchmark_baseline import BenchmarkBaselineService
 from web_app.coding_agents import CodingAgentService
 from web_app.git_broker import GitBrokerService
+from web_app.git_adapter import GitActionAdapter
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
+from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
 from web_app.ollama_service import (
     ModelOutputError,
     ModelTimeoutError,
@@ -108,6 +109,7 @@ def create_app(
         application.router.add_event_handler("shutdown", close_terminals)
     coding_agents = coding_agents or CodingAgentService(workspace.data_root)
     git_broker = git_broker or GitBrokerService(workspace.data_root)
+    git_adapter = GitActionAdapter()
     git_broker.recover_interrupted_tasks()
     action_proposals = ActionProposalService()
     web_root = Path(__file__).resolve().parent.parent / "web"
@@ -721,6 +723,28 @@ def create_app(
         try:
             return await asyncio.to_thread(git_broker.execute, request.request, request.model, request.grant_id)
         except (ValueError, RuntimeError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @application.post("/api/git-broker/adapter", status_code=201)
+    async def execute_git_broker_adapter(request: BrokerAdapterRunRequest, x_json_codr: str | None = Header(None)):
+        require_terminal_header(x_json_codr)
+        grant = next((item for item in coding_agents.status()["grants"] if item.get("id") == request.grant_id), None)
+        if not grant or not grant.get("enabled") or grant.get("profile") != "broker":
+            raise HTTPException(status_code=403, detail="Active broker authorization is required")
+        if not coding_agents.authorized(request.project_root, "broker"):
+            raise HTTPException(status_code=403, detail="Broker authorization does not cover this project")
+        try:
+            snapshot = await asyncio.to_thread(git_broker.inspect, request.project_root)
+            contract = git_adapter.prompt_contract(snapshot.root, snapshot.dirty_fingerprint)
+            response = await service.chat(request.model, f"{request.prompt}\n\n{contract}")
+            action_request = git_adapter.parse(response.content)
+            if Path(action_request.project_root).resolve() != Path(snapshot.root):
+                raise ValueError("Model response changed the authorized project root")
+            if action_request.baseline_fingerprint != snapshot.dirty_fingerprint:
+                raise ValueError("Model response changed the authorized baseline")
+            result = await asyncio.to_thread(git_broker.execute, action_request, request.model, request.grant_id)
+            return {"compatibility": "broker_adapter", "result": result}
+        except (ValueError, RuntimeError, OllamaUnavailableError, ModelOutputError, ModelTimeoutError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.post("/api/coding-agents/grants", status_code=201)

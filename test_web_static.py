@@ -39,8 +39,11 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("non-sandboxed", html)
         self.assertIn('/api/git-broker/grants', script)
         self.assertIn('/api/git-broker/status', script)
+        self.assertIn('/api/git-broker/adapter', script)
         self.assertIn("broker adapter", script.casefold())
         self.assertIn("Revoke", script)
+        self.assertIn("normalizeTerminalOutput", script)
+        self.assertIn("uses the JSON_CODR broker adapter", script)
     def test_coding_agent_launcher_is_additive_to_live_cli(self):
         html = self.client.get("/").text
         self.assertIn('id="coding-agent-tool"', html)

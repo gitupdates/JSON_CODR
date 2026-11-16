@@ -244,6 +244,42 @@ class WebApiTests(unittest.TestCase):
         })
         self.assertEqual(rejected.status_code, 403)
 
+    def test_broker_adapter_runs_non_tool_model_without_native_tool_schema(self):
+        class BrokerModelService(FakeService):
+            async def chat(self, model, prompt, images=None):
+                baseline = prompt.split("baseline_fingerprint='", 1)[1].split("'", 1)[0]
+                project_root = prompt.split("project_root='", 1)[1].split("';", 1)[0]
+                return ChatResult(
+                    model=model, status="ready", summary="Broker action ready",
+                    content=json.dumps({"schema_version": 1, "project_root": project_root,
+                                        "baseline_fingerprint": baseline, "actions": [{"kind": "status"}]}),
+                )
+
+        project = Path(self.temporary_directory.name) / "adapter-project"
+        project.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=project, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=project, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project, check=True)
+        (project / "README.md").write_text("test\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=project, check=True)
+        subprocess.run(["git", "commit", "-m", "initial"], cwd=project, check=True, capture_output=True)
+        agents = CodingAgentService(self.workspace.data_root, executable_finder=lambda name: None)
+        client = TestClient(create_app(BrokerModelService(), self.workspace, coding_agents=agents))
+        headers = {"X-JSON-CODR": "1"}
+        grant = client.post("/api/git-broker/grants", headers=headers, json={
+            "project_root": str(project), "profile": "broker"
+        }).json()
+
+        response = client.post("/api/git-broker/adapter", headers=headers, json={
+            "model": "yi-coder:9b-chat", "grant_id": grant["id"], "project_root": str(project),
+            "prompt": "Inspect this repository",
+        })
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["compatibility"], "broker_adapter")
+        self.assertEqual(response.json()["result"]["status"], "completed")
+        self.assertNotIn("does not support tools", response.text)
+
     def test_optimized_connector_catalog_and_install_plans_are_additive(self):
         client = TestClient(create_app(self.service, self.workspace, optimized=True))
 
