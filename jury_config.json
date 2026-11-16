@@ -12,6 +12,9 @@
     "deepseek-coder:6.7b-instruct",
     "starcoder2:7b",
     "granite-code:8b-instruct",
-    "codegemma:7b-instruct"
+    "codegemma:7b-instruct",
+    "rnj-1:8b",
+    "deepcoder:1.5b",
+    "qwen2.5-coder:3b"
   ]
 }
