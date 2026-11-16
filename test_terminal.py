@@ -2,13 +2,31 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from web_app.actions import ActionProposalService
+from web_app.coding_agents import CodingAgentLaunchPlan
 from web_app.models import ActionSuggestion
 from web_app.terminal import TerminalService
 
 
 class TerminalServiceTests(unittest.TestCase):
+    @patch("web_app.terminal.shutil.which", return_value=r"C:\Windows\System32\wt.exe")
+    @patch("web_app.terminal.subprocess.Popen")
+    def test_interactive_agent_opens_native_windows_terminal(self, popen, _which):
+        popen.return_value.pid = 42
+        plan = CodingAgentLaunchPlan("aider", ("aider.exe", "--model", "ollama_chat/qwen:7b"), r"D:\project", {}, True)
+
+        terminal = TerminalService().create_agent(plan)
+
+        self.assertTrue(terminal.external)
+        self.assertEqual(terminal.status, "external")
+        popen.assert_called_once()
+        self.assertEqual(
+            popen.call_args.args[0],
+            [r"C:\Windows\System32\wt.exe", "-w", "new", "-d", r"D:\project", "--", "aider.exe", "--model", "ollama_chat/qwen:7b"],
+        )
+
     def test_persistent_powershell_streams_output_and_closes_exact_process(self):
         with tempfile.TemporaryDirectory() as directory:
             service = TerminalService()

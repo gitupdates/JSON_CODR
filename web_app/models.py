@@ -42,6 +42,12 @@ class ActionSuggestion(BaseModel):
         return value
 
 
+class CodingAgentSuggestion(BaseModel):
+    tool: Literal["continue", "aider"]
+    project_root: str = Field(min_length=1, max_length=1000)
+    prompt: str = Field(min_length=1, max_length=20_000)
+
+
 class ActionProposal(BaseModel):
     id: str
     session_id: str
@@ -88,6 +94,7 @@ class ChatResult(BaseModel):
     attached_skillsets: List[str] = Field(default_factory=list)
     skill_recommendations: List["SkillRecommendation"] = Field(default_factory=list)
     actions: List[ActionSuggestion] = Field(default_factory=list)
+    coding_agent_tasks: List[CodingAgentSuggestion] = Field(default_factory=list)
     action_proposals: List[ActionProposal] = Field(default_factory=list)
 
 

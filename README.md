@@ -23,7 +23,7 @@ Open **Live CLI** from the global navigation. The **Beta coding agents** launche
 3. Enter the absolute root of the project the agent may inspect and edit.
 4. Leave **Full persistent authorization** enabled to save an explicit grant for this project and this agent.
 5. Select **Interactive**, then press **Launch agent**.
-6. Use the terminal input normally. Output streams through the existing Live CLI panel; **Stop** interrupts the active process.
+6. JSON_CODR opens the native CLI in a new Windows Terminal window so its interactive interface receives a real console. Operate and close that window normally. The embedded Live CLI remains available for PowerShell and delegated-agent output.
 
 Continue launches with `cn --model ollama/<model>`. Aider launches with `aider --model ollama_chat/<model>` and receives `OLLAMA_API_BASE=http://127.0.0.1:11434` only in its child-process environment.
 
@@ -33,14 +33,17 @@ Continue launches with `cn --model ollama/<model>`. Aider launches with `aider -
 2. Open **Live CLI**, choose the tool, model, and project root, then select **Delegated**.
 3. Press **Launch agent**. JSON_CODR sends the prompt to the chosen CLI only after a matching persistent grant exists.
 
-Continue headless mode receives explicit tool authorization after JSON_CODR validates the project grant. Aider receives its noninteractive message and yes-to-edit flag. This authorization applies only to the canonical project root and selected tool; an Aider grant cannot authorize Continue, and another project needs its own grant.
+Continue headless mode is limited to read, write, and edit tools and explicitly excludes shell execution. Aider runs with subtree-only editing, shell-command suggestions disabled, and automatic commits disabled. This authorization applies only to the canonical project root and selected tool; an Aider grant cannot authorize Continue, and another project needs its own grant.
+
+The selected LLM can also return a structured `coding_agent_tasks` proposal. JSON_CODR displays that proposal in **Review actions**. Select **Review delegated task** to copy its tool, project boundary, and prompt into the launcher, then review the model, persistent authorization, and task before starting it. A model proposal never launches a process by itself.
 
 ### Authorization and safety boundaries
 
 - Grants are stored locally in `%LOCALAPPDATA%\JSON_CODR\coding-agent-grants.json` using atomic replacement.
 - A grant is bound to one canonical project root, one tool, and the `full` scope.
 - Nested folders under that project are allowed. Missing projects, junctions/reparse points, and paths outside the approved root are rejected.
-- The agent may inspect and edit files inside the granted project. Destructive commands, dependency installation, and remote publication remain subject to JSON_CODR's stronger confirmation rules.
+- Delegated agents may inspect and edit files inside the granted project but cannot run shell commands, install dependencies, create automatic commits, or publish remotely through this profile.
+- Interactive sessions are user-operated native CLIs. JSON_CODR validates the project/tool grant before launch, but commands entered or approved inside the native CLI are governed by that CLI rather than JSON_CODR's embedded-terminal confirmation system.
 - Disable a grant with `DELETE /api/coding-agents/grants/<grant-id>`. A settings-based grant manager is planned for a later beta.
 
 ### Direct Ollama fallback

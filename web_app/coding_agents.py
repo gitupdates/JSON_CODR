@@ -146,13 +146,15 @@ class CodingAgentService:
         if normalized_tool == "continue":
             model_name = f"ollama/{model}"
             argv = (executable, "--model", model_name) if interactive else (
-                executable, "-p", prompt.strip(), "--allow", "*", "--model", model_name
+                executable, "-p", prompt.strip(), "--allow", "Read", "--allow", "Write", "--allow", "Edit",
+                "--exclude", "Bash", "--model", model_name
             )
             environment = {}
         else:
             model_name = f"ollama_chat/{model}"
             argv = (executable, "--model", model_name) if interactive else (
-                executable, "--model", model_name, "--message", prompt.strip(), "--yes-always"
+                executable, "--model", model_name, "--message", prompt.strip(), "--subtree-only",
+                "--no-suggest-shell-commands", "--no-auto-commits", "--yes-always"
             )
             environment = {"OLLAMA_API_BASE": "http://127.0.0.1:11434"}
         return CodingAgentLaunchPlan(normalized_tool, argv, str(working), environment, interactive)

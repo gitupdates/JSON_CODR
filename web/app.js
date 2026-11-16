@@ -314,8 +314,24 @@ async function createTerminalConnection() {
   await connectTerminalRecord(terminal);
 }
 
+async function closeActiveTerminal() {
+  const previousId = terminalId;
+  const previousSocket = terminalSocket;
+  terminalId = null;
+  terminalSocket = null;
+  if (previousSocket) previousSocket.close();
+  if (!previousId) return;
+  const response = await fetch(`/api/terminals/${previousId}`, {
+    method: "DELETE",
+    headers: { "X-JSON-CODR": "1" },
+  });
+  if (!response.ok && response.status !== 404) {
+    throw new Error((await response.json()).detail || "Unable to close the previous terminal");
+  }
+}
+
 async function connectTerminalRecord(terminal) {
-  if (terminalSocket) terminalSocket.close();
+  await closeActiveTerminal();
   terminalId = terminal.id;
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   terminalSocket = new WebSocket(`${protocol}//${location.host}/ws/terminals/${terminalId}`);
@@ -405,6 +421,12 @@ async function launchCodingAgent(event) {
   if (!response.ok) throw new Error((await response.json()).detail || "Unable to launch coding agent");
   const terminal = await response.json();
   elements.terminalOutput.textContent = "";
+  if (terminal.external) {
+    await closeActiveTerminal();
+    elements.terminalStatus.textContent = `${terminal.shell} launched`;
+    elements.codingAgentStatus.textContent = `${payload.tool} opened in Windows Terminal with ${payload.model}`;
+    return;
+  }
   await connectTerminalRecord(terminal);
   elements.codingAgentStatus.textContent = `${payload.tool} launched with ${payload.model}`;
 }
@@ -856,6 +878,31 @@ async function runHardwareDetection() {
     if (activeHardwareSection === "leaderboard" && leaderboardHistoryCache.length) renderBenchmarkLeaderboard();
     return candidates;
   } finally { elements.hardwareDetect.disabled = false; }
+}
+
+function renderCodingAgentTasks(tasks) {
+  if (!tasks.length) return;
+  elements.actionReview.hidden = false;
+  for (const task of tasks) {
+    const card = document.createElement("article"); card.className = "action-card";
+    const title = document.createElement("strong"); title.textContent = `Proposed ${task.tool} coding task`;
+    const prompt = document.createElement("p"); prompt.textContent = task.prompt;
+    const cwd = document.createElement("small"); cwd.textContent = `Project boundary: ${task.project_root}`;
+    const controls = document.createElement("div"); controls.className = "action-controls";
+    const review = document.createElement("button"); review.type = "button"; review.className = "primary"; review.textContent = "Review delegated task";
+    review.addEventListener("click", () => {
+      elements.codingAgentTool.value = task.tool;
+      elements.codingAgentProject.value = task.project_root;
+      elements.codingAgentMode.value = "delegated";
+      elements.prompt.value = task.prompt;
+      selectDestination("terminal");
+      elements.codingAgentLauncher.scrollIntoView({ behavior: "smooth", block: "center" });
+      elements.codingAgentStatus.textContent = "Review authorization, model, project, and task before launch.";
+    });
+    controls.append(review);
+    card.append(title, prompt, cwd, controls);
+    elements.actionList.append(card);
+  }
 }
 
 async function restoreCpuBackend() {
@@ -1785,6 +1832,7 @@ async function submitPrompt(event) {
     renderAttachedSkills(payload.attached_skills || []);
     renderRecommendations(payload.skill_recommendations || []);
     renderActions(payload.action_proposals || []);
+    renderCodingAgentTasks(payload.coding_agent_tasks || []);
     elements.artifactOutput.hidden = !payload.artifact;
     if (payload.artifact) {
       elements.artifactOutput.href = payload.artifact.url;

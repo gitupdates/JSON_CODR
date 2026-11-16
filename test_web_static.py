@@ -38,6 +38,11 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('id="coding-agent-persistent"', html)
         self.assertIn('id="coding-agent-launch"', html)
         self.assertIn('id="terminal-input"', html)
+        script = self.client.get("/static/app.js").text
+        self.assertIn("closeActiveTerminal", script)
+        self.assertIn('method: "DELETE"', script)
+        self.assertIn("terminal.external", script)
+        self.assertIn("renderCodingAgentTasks", script)
 
     def setUp(self):
         self.client = TestClient(create_app(FakeService()))

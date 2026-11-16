@@ -71,7 +71,10 @@ class CodingAgentAdapterTests(unittest.TestCase):
             delegated = service.launch_plan("continue", project, "qwen2.5-coder:7b", "delegated", "Fix tests")
 
             self.assertEqual(interactive.argv, ("C:/tools/cn.exe", "--model", "ollama/qwen2.5-coder:7b"))
-            self.assertEqual(delegated.argv, ("C:/tools/cn.exe", "-p", "Fix tests", "--allow", "*", "--model", "ollama/qwen2.5-coder:7b"))
+            self.assertEqual(delegated.argv, (
+                "C:/tools/cn.exe", "-p", "Fix tests", "--allow", "Read", "--allow", "Write", "--allow", "Edit",
+                "--exclude", "Bash", "--model", "ollama/qwen2.5-coder:7b"
+            ))
             self.assertTrue(interactive.interactive)
             self.assertFalse(delegated.interactive)
 
@@ -87,6 +90,11 @@ class CodingAgentAdapterTests(unittest.TestCase):
 
             self.assertEqual(plan.argv, ("C:/tools/aider.exe", "--model", "ollama_chat/qwen2.5-coder:7b"))
             self.assertEqual(plan.environment["OLLAMA_API_BASE"], "http://127.0.0.1:11434")
+
+            delegated = service.launch_plan("aider", project, "qwen2.5-coder:7b", "delegated", "Fix tests")
+            self.assertIn("--subtree-only", delegated.argv)
+            self.assertIn("--no-suggest-shell-commands", delegated.argv)
+            self.assertIn("--no-auto-commits", delegated.argv)
 
     def test_launch_requires_installed_tool_valid_model_and_matching_grant(self):
         with tempfile.TemporaryDirectory() as directory:

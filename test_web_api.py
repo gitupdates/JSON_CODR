@@ -599,6 +599,21 @@ class WebApiTests(unittest.TestCase):
         self.assertNotIn("risk", parsed.actions[0].model_dump())
         self.assertNotIn("approved", parsed.actions[0].model_dump())
 
+    def test_structured_coding_agent_task_is_validated_for_user_review(self):
+        parsed = parse_response_content(json.dumps({
+            "status": "success",
+            "summary": "Delegate the repository edit",
+            "content": "Review the proposed coding-agent task before launch.",
+            "coding_agent_tasks": [{
+                "tool": "aider",
+                "project_root": self.temporary_directory.name,
+                "prompt": "Inspect the failing tests and make the smallest safe fix.",
+            }],
+        }))
+
+        self.assertEqual(len(parsed.coding_agent_tasks), 1)
+        self.assertEqual(parsed.coding_agent_tasks[0].tool, "aider")
+
     def test_chat_creates_server_owned_action_proposals_only_for_structured_actions(self):
         session = self.workspace.create_session()
         self.service.actions = [ActionSuggestion(
