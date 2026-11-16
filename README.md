@@ -6,6 +6,12 @@ V1.0.17-beta.1 adds an additive Continue CLI and Aider launcher to Live CLI. Eac
 
 ## Beta coding agents: Continue CLI and Aider
 
+### Project Git broker
+
+The **Git broker** is the compatible default execution profile. It gives native-tool models and models without Ollama tool support the same validated, project-scoped Git workflow. A persistent grant remains active across restarts until **Revoke** is selected. The broker inspects the current branch, refuses unexpected local changes, serializes model mutations, preserves the user's configured Git identity, records model attribution in commit trailers, synchronizes with the upstream branch, and pushes only after validation succeeds. Models such as Yi-Coder that reject native tool schemas are shown as using the **broker adapter** instead of exposing the provider's raw 400 response.
+
+The **Unrestricted shell** profile is optional and non-sandboxed. Its project directory is the starting directory, not a filesystem security boundary. Continue and Aider remain separately authorized alternatives, and ordinary Chat continues to call Ollama directly when any coding profile is unavailable.
+
 Open **Live CLI** from the global navigation. The **Beta coding agents** launcher appears above the existing PowerShell terminal; the original terminal remains available unchanged.
 
 ### Requirements and status
@@ -23,9 +29,9 @@ Open **Live CLI** from the global navigation. The **Beta coding agents** launche
 3. Enter the absolute root of the project the agent may inspect and edit.
 4. Leave **Full persistent authorization** enabled to save an explicit grant for this project and this agent.
 5. Select **Interactive**, then press **Launch agent**.
-6. JSON_CODR opens the native CLI in a new Windows Terminal window so its interactive interface receives a real console. Operate and close that window normally. The embedded Live CLI remains available for PowerShell and delegated-agent output.
+6. JSON_CODR opens the agent in the embedded terminal. Use the **PowerShell**, **Continue**, and **Aider** tabs to switch sessions without stopping them. Terminal output and keyboard input stay in the page, and a page reload reconnects to running sessions.
 
-Continue launches with `cn --model ollama/<model>`. Aider launches with `aider --model ollama_chat/<model>` and receives `OLLAMA_API_BASE=http://127.0.0.1:11434` only in its child-process environment.
+Continue launches with a generated local configuration that selects Ollama and the exact installed model. Aider launches with `aider --model ollama_chat/<model>` and receives `OLLAMA_API_BASE=http://127.0.0.1:11434` only in its child-process environment. On Windows, JSON_CODR uses ConPTY through pywinpty; the previous pipe or native-console launch remains a compatibility fallback when ConPTY is unavailable.
 
 ### Run a delegated task
 
@@ -43,7 +49,7 @@ The selected LLM can also return a structured `coding_agent_tasks` proposal. JSO
 - A grant is bound to one canonical project root, one tool, and the `full` scope.
 - Nested folders under that project are allowed. Missing projects, junctions/reparse points, and paths outside the approved root are rejected.
 - Delegated agents may inspect and edit files inside the granted project but cannot run shell commands, install dependencies, create automatic commits, or publish remotely through this profile.
-- Interactive sessions are user-operated native CLIs. JSON_CODR validates the project/tool grant before launch, but commands entered or approved inside the native CLI are governed by that CLI rather than JSON_CODR's embedded-terminal confirmation system.
+- Interactive sessions are user-operated CLIs embedded in JSON_CODR. JSON_CODR validates the project/tool grant before launch, but commands entered or approved inside the agent are governed by that CLI rather than JSON_CODR's PowerShell action-confirmation system.
 - Disable a grant with `DELETE /api/coding-agents/grants/<grant-id>`. A settings-based grant manager is planned for a later beta.
 
 ### Direct Ollama fallback

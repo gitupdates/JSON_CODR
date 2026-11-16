@@ -176,6 +176,47 @@ class GitBrokerExecutionTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "changed since authorization"):
                 service.execute(request, model="qwen", grant_id="grant-1")
 
+    def test_execute_can_create_read_review_and_run_allowlisted_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project, _ = self._repository(root)
+            service = GitBrokerService(root / "data", verification_checks={
+                "python-smoke": ["python", "-c", "print('CHECK_OK')"],
+            })
+            baseline = service.inspect(project)
+            patch = (
+                "diff --git a/hello.py b/hello.py\nnew file mode 100644\nindex 0000000..b376c99\n"
+                "--- /dev/null\n+++ b/hello.py\n@@ -0,0 +1 @@\n+print('hello')\n"
+            )
+            request = BrokerActionRequest(
+                schema_version=1, project_root=str(project), baseline_fingerprint=baseline.dirty_fingerprint,
+                actions=[
+                    {"kind": "apply_patch", "patch": patch},
+                    {"kind": "read", "paths": ["hello.py"]},
+                    {"kind": "verify", "checks": ["python-smoke"]},
+                    {"kind": "status"},
+                ],
+            )
+
+            result = service.execute(request, model="qwen", grant_id="grant-1")
+
+            self.assertEqual(result.outputs["files"]["hello.py"], "print('hello')\n")
+            self.assertEqual(result.outputs["checks"]["python-smoke"], "CHECK_OK")
+            self.assertIn("hello.py", result.outputs["diff"])
+
+    def test_execute_rejects_unconfigured_verification_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project, _ = self._repository(root)
+            service = GitBrokerService(root / "data")
+            baseline = service.inspect(project)
+            request = BrokerActionRequest(
+                schema_version=1, project_root=str(project), baseline_fingerprint=baseline.dirty_fingerprint,
+                actions=[{"kind": "verify", "checks": ["arbitrary-shell"]}],
+            )
+            with self.assertRaisesRegex(ValueError, "not configured"):
+                service.execute(request, model="qwen", grant_id="grant-1")
+
 
 if __name__ == "__main__":
     unittest.main()

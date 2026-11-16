@@ -310,13 +310,20 @@ footer { padding: 22px 0 34px; color: var(--text-subtle); font: 600 10px ui-mono
 .terminal-panel[hidden] { display: none; }
 .terminal-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
 .terminal-head strong { display: block; margin-top: 3px; font-size: 13px; }
+.terminal-tabs { display: flex; gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.terminal-tabs button { min-width: 104px; min-height: 36px; padding: 7px 12px; border: 1px solid transparent; background: transparent; color: var(--muted); font-weight: 700; }
+.terminal-tabs button[aria-selected="true"] { border-color: var(--info-line); background: var(--surface-raised); color: var(--text); }
+.terminal-xterm { height: 300px; padding: 10px 12px; background: var(--terminal-bg); }
+.terminal-xterm .xterm { height: 100%; }
 .terminal-output { height: 260px; margin: 0; padding: 16px; overflow: auto; white-space: pre-wrap; color: var(--terminal-text); background: var(--terminal-bg); font: 13px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.terminal-output-fallback[hidden] { display: none; }
 .terminal-command { display: flex; align-items: center; gap: 10px; padding: 10px 12px; color: var(--lime); font: 13px ui-monospace, monospace; border-top: 1px solid var(--line); }
 .terminal-command input { min-width: 0; flex: 1; height: 40px; padding: 0 12px; color: var(--text); background: var(--surface-input); border: 1px solid var(--line); font: inherit; }
 .terminal-command button { height: 40px; min-width: auto; }
 .coding-agent-launcher { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; padding: 16px; border-bottom: 1px solid var(--line); align-items: end; }
 .coding-agent-launcher label { display: grid; gap: 6px; font-size: 0.82rem; }
 .coding-agent-launcher select, .coding-agent-launcher input[type="text"] { min-height: 40px; padding: 8px 10px; border: 1px solid var(--line); background: var(--surface-input); color: var(--text); }
+.coding-agent-grants { display: flex; align-items: center; justify-content: space-between; gap: 12px; grid-column: 1 / -1; }
 
 @media (max-width: 700px) {
   .app-layout { display: block; }

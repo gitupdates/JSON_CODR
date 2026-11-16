@@ -7,7 +7,7 @@ import stat
 import subprocess
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from web_app.models import BrokerActionRequest
@@ -32,12 +32,14 @@ class BrokerActionResult:
     commit: str | None = None
     remote: str | None = None
     branch: str | None = None
+    outputs: dict = field(default_factory=dict)
 
 
 class GitBrokerService:
-    def __init__(self, data_root: Path) -> None:
+    def __init__(self, data_root: Path, verification_checks: dict[str, list[str]] | None = None) -> None:
         self.data_root = Path(data_root).resolve()
         self.audit_path = self.data_root / "git-broker-audit.json"
+        self.verification_checks = verification_checks or {}
         self._locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
 
@@ -125,6 +127,7 @@ class GitBrokerService:
             })
             commit = None
             status = "completed"
+            outputs: dict = {"files": {}, "checks": {}, "diff": ""}
             try:
                 if snapshot.upstream:
                     self._git(project, "fetch", "--quiet")
@@ -133,6 +136,32 @@ class GitBrokerService:
                         patch = action.patch or ""
                         self._git(project, "apply", "--check", "-", input_text=patch)
                         self._git(project, "apply", "-", input_text=patch)
+                    elif action.kind == "read":
+                        for relative in action.paths:
+                            target = (project / relative).resolve()
+                            try:
+                                target.relative_to(project)
+                            except ValueError as error:
+                                raise ValueError("Read path leaves the authorized project") from error
+                            if not target.is_file():
+                                raise ValueError(f"Project file not found: {relative}")
+                            outputs["files"][relative] = target.read_text(encoding="utf-8", errors="replace")
+                    elif action.kind == "verify":
+                        for check_name in action.checks:
+                            argv = self.verification_checks.get(check_name)
+                            if not argv:
+                                raise ValueError(f"Verification check is not configured: {check_name}")
+                            result = subprocess.run(
+                                argv, cwd=project, check=False, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+                            )
+                            if result.returncode:
+                                raise RuntimeError(result.stderr.strip() or f"Verification failed: {check_name}")
+                            outputs["checks"][check_name] = result.stdout.strip()
+                    elif action.kind == "status":
+                        summary = self._git(project, "status", "--short", "--untracked-files=all")
+                        diff = self._git(project, "diff", "--no-ext-diff", "--")
+                        outputs["diff"] = "\n".join(part for part in (summary, diff) if part)
                     elif action.kind == "commit":
                         self._git(project, "add", "--all")
                         message = (action.message or "Apply JSON_CODR model changes").strip()
@@ -163,6 +192,7 @@ class GitBrokerService:
                 return BrokerActionResult(
                     status=status, snapshot=final, task_id=task_id, commit=commit,
                     remote="origin" if status == "pushed" else None, branch=final.branch,
+                    outputs=outputs,
                 )
             except Exception:
                 self.record_audit({"id": task_id, "status": "failed"})

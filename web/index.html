@@ -17,6 +17,7 @@
       })();
     </script>
     <title>JSON_CODR · Local model console</title>
+    <link rel="stylesheet" href="/static/vendor/xterm.css" />
     <link rel="stylesheet" href="/static/app.css?v=1.0.17-beta.1" />
   </head>
   <body>
@@ -377,17 +378,24 @@
           <div><span class="eyebrow">LOCAL POWERSHELL</span><strong>Live CLI passthrough</strong></div>
           <span id="terminal-status" class="meta">Not started</span>
         </div>
+        <div id="terminal-tabs" class="terminal-tabs" role="tablist" aria-label="Terminal sessions">
+          <button type="button" role="tab" data-terminal-profile="powershell" aria-selected="true">PowerShell</button>
+          <button type="button" role="tab" data-terminal-profile="continue" aria-selected="false">Continue</button>
+          <button type="button" role="tab" data-terminal-profile="aider" aria-selected="false">Aider</button>
+        </div>
         <form id="coding-agent-launcher" class="coding-agent-launcher">
-          <div><span class="eyebrow">BETA CODING AGENTS</span><strong>Continue CLI / Aider</strong></div>
-          <label>Agent<select id="coding-agent-tool"><option value="continue">Continue CLI</option><option value="aider">Aider</option></select></label>
+          <div><span class="eyebrow">BETA CODING AGENTS</span><strong>Project execution profiles</strong></div>
+          <label>Agent<select id="coding-agent-tool"><option value="broker" selected>Git broker · compatible default</option><option value="shell">Unrestricted shell · non-sandboxed</option><option value="continue">Continue CLI</option><option value="aider">Aider</option></select></label>
           <label>Model<select id="coding-agent-model"></select></label>
           <label>Project root<input id="coding-agent-project" type="text" value="D:\\JSON_CODR_repo" /></label>
           <label>Mode<select id="coding-agent-mode"><option value="interactive">Interactive</option><option value="delegated">Delegated</option></select></label>
           <label><input id="coding-agent-persistent" type="checkbox" checked /> Full persistent authorization for this project and agent</label>
           <button id="coding-agent-launch" class="primary" type="submit">Launch agent</button>
           <span id="coding-agent-status" class="meta" role="status" aria-live="polite"></span>
+          <div id="coding-agent-grants" class="coding-agent-grants" aria-live="polite"></div>
         </form>
-        <pre id="terminal-output" class="terminal-output" aria-live="polite"></pre>
+        <div id="terminal-xterm" class="terminal-xterm" aria-label="Interactive terminal"></div>
+        <pre id="terminal-output" class="terminal-output terminal-output-fallback" aria-live="polite"></pre>
         <div class="terminal-command">
           <span aria-hidden="true">PS&gt;</span>
           <input id="terminal-input" type="text" autocomplete="off" spellcheck="false" aria-label="PowerShell command" placeholder="Enter a command" />
@@ -418,6 +426,8 @@
     </div>
     <script src="/static/dependency_install_queue.js?v=1.0.17-beta.1" defer></script>
     <script src="/static/benchmark_leaderboard.js?v=1.0.17-beta.1" defer></script>
+    <script src="/static/vendor/xterm.js" defer></script>
+    <script src="/static/vendor/xterm-addon-fit.js" defer></script>
     <script src="/static/app.js?v=1.0.17-beta.1" defer></script>
   </body>
 </html>

@@ -120,6 +120,8 @@ const elements = {
   optimizedModelSearchRun: document.querySelector("#optimized-model-search-run"),
   optimizedModelSearchResults: document.querySelector("#optimized-model-search-results"),
   terminalPanel: document.querySelector("#terminal-panel"),
+  terminalXterm: document.querySelector("#terminal-xterm"),
+  terminalTabs: [...document.querySelectorAll("[data-terminal-profile]")],
   terminalOutput: document.querySelector("#terminal-output"),
   terminalInput: document.querySelector("#terminal-input"),
   terminalRun: document.querySelector("#terminal-run"),
@@ -132,9 +134,11 @@ const elements = {
   codingAgentMode: document.querySelector("#coding-agent-mode"),
   codingAgentPersistent: document.querySelector("#coding-agent-persistent"),
   codingAgentStatus: document.querySelector("#coding-agent-status"),
+  codingAgentGrants: document.querySelector("#coding-agent-grants"),
 };
 
 const VALID_THEME_MODES = new Set(["light", "dark", "system"]);
+const TERMINAL_SESSIONS_KEY = "json_codr_terminal_sessions";
 const NAVIGATION_DESTINATIONS = new Set(["chat", "terminal", "context", "skills", "hardware", "settings"]);
 const HARDWARE_SECTIONS = new Set(["overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "leaderboard", "history", "localperf"]);
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -148,6 +152,12 @@ let terminalSocket = null;
 let selectedLocalperfEvaluationId = null;
 let pendingLocalperfPackage = null;
 let terminalConnectionPromise = null;
+let xterm = null;
+let terminalFitAddon = null;
+let lastTerminalSequence = 0;
+let activeTerminalProfile = "powershell";
+const terminalSessions = new Map();
+let terminalPersistenceTimer = null;
 let skillAttachmentId = null;
 let editingSkill = null;
 let skillLoadGeneration = 0;
@@ -274,7 +284,8 @@ function selectDestination(destination, { persist = true, focus = false } = {}) 
   elements.hardwareSubnavigation.hidden = destination !== "hardware";
   if (destination === "hardware") selectHardwareSection(activeHardwareSection, { persist: false });
   if (destination === "terminal") {
-    ensureTerminal().then(() => elements.terminalInput.focus()).catch((error) => appendTerminalOutput(`Error: ${error.message}\n`));
+    initializeXterm();
+    if (!terminalId) elements.terminalStatus.textContent = "Choose PowerShell, Continue, or Aider";
   }
   if (focus) elements.destinationViews.find((view) => view.dataset.view === destination)?.querySelector("h1, h2, h3")?.focus({ preventScroll: true });
   if (narrowNavigationQuery.matches) closeNavigationDrawer();
@@ -287,6 +298,7 @@ function selectDestination(destination, { persist = true, focus = false } = {}) 
 }
 
 function appendTerminalOutput(text) {
+  if (xterm) xterm.write(text);
   elements.terminalOutput.textContent += text;
   elements.terminalOutput.scrollTop = elements.terminalOutput.scrollHeight;
 }
@@ -302,7 +314,73 @@ async function ensureTerminal() {
   }
 }
 
-async function createTerminalConnection() {
+function persistTerminalSessions() {
+  const sessions = {};
+  for (const [profile, session] of terminalSessions) {
+    if (session.terminal?.id) {
+      sessions[profile] = { id: session.terminal.id, lastSequence: session.lastSequence || 0 };
+    }
+  }
+  localStorage.setItem(TERMINAL_SESSIONS_KEY, JSON.stringify(sessions));
+}
+
+function scheduleTerminalSessionPersistence() {
+  if (terminalPersistenceTimer) return;
+  terminalPersistenceTimer = window.setTimeout(() => {
+    terminalPersistenceTimer = null;
+    persistTerminalSessions();
+  }, 200);
+}
+
+async function restoreTerminalSessions() {
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem(TERMINAL_SESSIONS_KEY) || "{}");
+  } catch (_error) {
+    localStorage.removeItem(TERMINAL_SESSIONS_KEY);
+  }
+  const response = await fetch("/api/terminals");
+  if (!response.ok) return;
+  const running = new Map(
+    (await response.json())
+      .filter((terminal) => terminal.status === "running" && !terminal.external)
+      .map((terminal) => [terminal.id, terminal]),
+  );
+  for (const [profile, session] of Object.entries(saved)) {
+    const terminal = running.get(session.id);
+    if (terminal) terminalSessions.set(profile, { terminal, lastSequence: session.lastSequence || 0 });
+  }
+  persistTerminalSessions();
+}
+
+function initializeXterm() {
+  if (xterm || !window.Terminal || !elements.terminalXterm) return;
+  xterm = new window.Terminal({
+    convertEol: true,
+    cursorBlink: true,
+    fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace",
+    fontSize: 13,
+    scrollback: 5000,
+    theme: { background: "#090d12", foreground: "#e8edf4", cursor: "#b7ff32" },
+  });
+  terminalFitAddon = new window.FitAddon.FitAddon();
+  xterm.loadAddon(terminalFitAddon);
+  xterm.open(elements.terminalXterm);
+  terminalFitAddon.fit();
+  elements.terminalOutput.hidden = true;
+  xterm.onData((data) => {
+    if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type: "input", data }));
+  });
+  xterm.onResize(({ cols, rows }) => {
+    if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type: "resize", cols, rows }));
+  });
+  new ResizeObserver(() => {
+    terminalFitAddon.fit();
+  }).observe(elements.terminalXterm);
+}
+
+async function createTerminalConnection(profile = "powershell") {
+  initializeXterm();
   elements.terminalStatus.textContent = "Starting...";
   const response = await fetch("/api/terminals", {
     method: "POST",
@@ -311,7 +389,7 @@ async function createTerminalConnection() {
   });
   if (!response.ok) throw new Error((await response.json()).detail || "Unable to start terminal");
   const terminal = await response.json();
-  await connectTerminalRecord(terminal);
+  await connectTerminalRecord(terminal, profile);
 }
 
 async function closeActiveTerminal() {
@@ -328,20 +406,44 @@ async function closeActiveTerminal() {
   if (!response.ok && response.status !== 404) {
     throw new Error((await response.json()).detail || "Unable to close the previous terminal");
   }
+  for (const [profile, session] of terminalSessions) {
+    if (session.terminal?.id === previousId) terminalSessions.delete(profile);
+  }
+  persistTerminalSessions();
 }
 
-async function connectTerminalRecord(terminal) {
-  await closeActiveTerminal();
+async function connectTerminalRecord(terminal, profile = activeTerminalProfile) {
+  initializeXterm();
+  const storedSession = terminalSessions.get(profile) || { lastSequence: 0 };
+  if (storedSession.terminal?.id !== terminal.id) storedSession.lastSequence = 0;
+  storedSession.terminal = terminal;
+  terminalSessions.set(profile, storedSession);
+  persistTerminalSessions();
+  if (profile !== activeTerminalProfile) return;
+  if (terminalSocket) terminalSocket.close();
   terminalId = terminal.id;
+  const session = storedSession;
+  lastTerminalSequence = session.lastSequence || 0;
+  if (xterm) xterm.clear();
+  elements.terminalOutput.textContent = "";
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  terminalSocket = new WebSocket(`${protocol}//${location.host}/ws/terminals/${terminalId}`);
+  const socket = new WebSocket(`${protocol}//${location.host}/ws/terminals/${terminalId}?after_seq=${lastTerminalSequence}`);
+  terminalSocket = socket;
   terminalSocket.addEventListener("open", () => {
     elements.terminalStatus.textContent = `${terminal.shell} · PID ${terminal.pid}`;
-    appendTerminalOutput(`${terminal.shell} ready in ${terminal.cwd}\n`);
+    terminalSocket.send(JSON.stringify({ type: "attach", after_seq: lastTerminalSequence }));
+    if (terminal.backend === "conpty" && terminalFitAddon) terminalFitAddon.fit();
   });
   terminalSocket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
-    if (message.type === "output") appendTerminalOutput(message.data);
+    if (message.type === "output") {
+      appendTerminalOutput(message.data);
+      if (Number.isInteger(message.seq)) {
+        lastTerminalSequence = message.seq;
+        session.lastSequence = message.seq;
+        scheduleTerminalSessionPersistence();
+      }
+    }
     if (message.type === "exit") elements.terminalStatus.textContent = "Stopped";
     if (message.type === "action_started") {
       if (pendingActionProposalId === message.proposal_id) pendingActionProposalId = null;
@@ -375,6 +477,7 @@ async function connectTerminalRecord(terminal) {
     }
   });
   terminalSocket.addEventListener("close", () => {
+    if (terminalSocket !== socket) return;
     if (pendingActionProposalId) {
       const button = actionButtons.get(pendingActionProposalId);
       if (button) { button.disabled = false; button.textContent = "Approve and run"; }
@@ -408,18 +511,45 @@ async function launchCodingAgent(event) {
     prompt: elements.codingAgentMode.value === "delegated" ? elements.prompt.value.trim() : null,
   };
   elements.codingAgentStatus.textContent = "Validating authorization…";
+  if (payload.tool === "broker" || payload.tool === "shell") {
+    const grantResponse = await fetch("/api/git-broker/grants", {
+      method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
+      body: JSON.stringify({ profile: payload.tool, project_root: payload.project_root }),
+    });
+    if (!grantResponse.ok) throw new Error(await responseErrorMessage(grantResponse, "Unable to save execution authorization"));
+    const grant = await grantResponse.json();
+    await renderExecutionGrant(grant, payload);
+    if (payload.tool === "broker") {
+      const statusResponse = await fetch(`/api/git-broker/status?project_root=${encodeURIComponent(payload.project_root)}`);
+      if (!statusResponse.ok) throw new Error(await responseErrorMessage(statusResponse, "Unable to inspect project"));
+      const status = await statusResponse.json();
+      const repository = status.repository;
+      elements.codingAgentStatus.textContent = `Broker adapter ready · ${repository.branch || "detached HEAD"} · ${repository.clean ? "in sync" : "local changes detected"}`;
+      return;
+    }
+    const terminalResponse = await fetch("/api/terminals", {
+      method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
+      body: JSON.stringify({ shell: "powershell", cwd: payload.project_root }),
+    });
+    if (!terminalResponse.ok) throw new Error(await responseErrorMessage(terminalResponse, "Unable to launch non-sandboxed shell"));
+    await connectTerminalRecord(await terminalResponse.json(), "powershell");
+    elements.codingAgentStatus.textContent = "Unrestricted non-sandboxed shell launched for the authorized project.";
+    return;
+  }
   if (elements.codingAgentPersistent.checked) {
     const grant = await fetch("/api/coding-agents/grants", {
       method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
       body: JSON.stringify({ tool: payload.tool, project_root: payload.project_root }),
     });
-    if (!grant.ok) throw new Error((await grant.json()).detail || "Unable to save coding-agent authorization");
+    if (!grant.ok) throw new Error(await responseErrorMessage(grant, "Unable to save coding-agent authorization"));
   }
   const response = await fetch("/api/coding-agents/launch", {
     method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" }, body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error((await response.json()).detail || "Unable to launch coding agent");
+  if (!response.ok) throw new Error(await responseErrorMessage(response, "Unable to launch coding agent"));
   const terminal = await response.json();
+  activeTerminalProfile = payload.tool;
+  elements.terminalTabs.forEach((tab) => tab.setAttribute("aria-selected", String(tab.dataset.terminalProfile === activeTerminalProfile)));
   elements.terminalOutput.textContent = "";
   if (terminal.external) {
     await closeActiveTerminal();
@@ -427,8 +557,29 @@ async function launchCodingAgent(event) {
     elements.codingAgentStatus.textContent = `${payload.tool} opened in Windows Terminal with ${payload.model}`;
     return;
   }
-  await connectTerminalRecord(terminal);
+  await connectTerminalRecord(terminal, payload.tool);
   elements.codingAgentStatus.textContent = `${payload.tool} launched with ${payload.model}`;
+}
+
+async function renderExecutionGrant(grant, payload) {
+  elements.codingAgentGrants.replaceChildren();
+  const label = document.createElement("span");
+  label.className = "meta";
+  const support = payload.tool === "broker" ? "broker adapter" : "non-sandboxed shell";
+  label.textContent = `${payload.model} · ${support} · ${payload.project_root}`;
+  const revoke = document.createElement("button");
+  revoke.type = "button";
+  revoke.className = "secondary";
+  revoke.textContent = "Revoke";
+  revoke.addEventListener("click", async () => {
+    const response = await fetch(`/api/git-broker/grants/${encodeURIComponent(grant.id)}`, {
+      method: "DELETE", headers: { "X-JSON-CODR": "1" },
+    });
+    if (!response.ok) throw new Error(await responseErrorMessage(response, "Unable to revoke authorization"));
+    elements.codingAgentGrants.replaceChildren();
+    elements.codingAgentStatus.textContent = `${payload.tool} authorization revoked.`;
+  });
+  elements.codingAgentGrants.append(label, revoke);
 }
 
 async function sendApprovedAction(proposal, token, approveButton) {
@@ -725,7 +876,7 @@ async function runHardwareDetection() {
       fetch("/api/inference/environments"),
       fetch("/api/hardware/model-compatibility"),
     ]);
-    if (!response.ok) throw new Error((await response.json()).detail || "Hardware detection failed");
+    if (!response.ok) throw new Error(await responseErrorMessage(response, "Hardware detection failed"));
     const candidates = await response.json();
     leaderboardCandidateCache = candidates.map((candidate) => ({ ...candidate }));
     const optimizedCatalog = catalogResponse.ok ? await catalogResponse.json() : [];
@@ -1796,11 +1947,26 @@ function setPending(pending) {
   elements.requestStatus.textContent = pending ? "Model is working…" : "";
 }
 
+function markOllamaReady() {
+  elements.health.className = "health ready";
+  elements.health.lastElementChild.textContent = "Ollama ready";
+}
+
 function showError(message) {
   elements.empty.hidden = true;
   elements.result.hidden = true;
   elements.error.hidden = false;
   elements.error.textContent = message;
+}
+
+async function responseErrorMessage(response, fallback) {
+  const body = await response.text();
+  if (!body.trim()) return fallback;
+  try {
+    return JSON.parse(body).detail || fallback;
+  } catch (_error) {
+    return body.trim();
+  }
 }
 
 async function submitPrompt(event) {
@@ -1821,8 +1987,9 @@ async function submitPrompt(event) {
       body: JSON.stringify({ model: elements.model.value, prompt, session_id: sessionId }),
       signal: activeRequest.signal,
     });
+    if (!response.ok) throw new Error(await responseErrorMessage(response, "The model request failed"));
     const payload = await response.json();
-    if (!response.ok) throw new Error(payload.detail || "The model request failed");
+    markOllamaReady();
     elements.empty.hidden = true;
     elements.error.hidden = true;
     elements.result.hidden = false;
@@ -2105,6 +2272,24 @@ elements.terminalInput.addEventListener("keydown", (event) => {
 elements.terminalStop.addEventListener("click", () => {
   if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type: "interrupt" }));
 });
+elements.terminalTabs.forEach((tab) => tab.addEventListener("click", async () => {
+  activeTerminalProfile = tab.dataset.terminalProfile;
+  elements.terminalTabs.forEach((candidate) => candidate.setAttribute(
+    "aria-selected", String(candidate === tab),
+  ));
+  const session = terminalSessions.get(activeTerminalProfile);
+  if (session?.terminal) {
+    await connectTerminalRecord(session.terminal);
+    return;
+  }
+  if (activeTerminalProfile === "powershell") {
+    await createTerminalConnection();
+    return;
+  }
+  elements.codingAgentTool.value = activeTerminalProfile;
+  elements.codingAgentStatus.textContent = `Choose a model and project, then launch ${activeTerminalProfile}.`;
+  elements.codingAgentModel.focus();
+}));
 document.addEventListener("keydown", (event) => {
   if (event.ctrlKey && !event.altKey && event.key.toLowerCase() === "j") {
     event.preventDefault();
@@ -2129,6 +2314,9 @@ elements.codingAgentLauncher.addEventListener("submit", (event) => {
   });
 });
 
+initializeXterm();
+window.addEventListener("beforeunload", persistTerminalSessions);
+restoreTerminalSessions().catch(() => localStorage.removeItem(TERMINAL_SESSIONS_KEY));
 loadApplication().then(() => queueSettingsLoad()).catch((error) => showError(error.message));
 loadHardwareStatus().catch((error) => showError(error.message));
 loadAttachments().catch((error) => showError(error.message));
