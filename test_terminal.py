@@ -7,10 +7,16 @@ from unittest.mock import patch
 from web_app.actions import ActionProposalService
 from web_app.coding_agents import CodingAgentLaunchPlan
 from web_app.models import ActionSuggestion
-from web_app.terminal import TerminalService
+from web_app.terminal import TerminalService, child_environment
 
 
 class TerminalServiceTests(unittest.TestCase):
+    def test_child_environment_restores_windir_from_system_root(self):
+        environment = child_environment({}, {"SystemRoot": r"C:\WINDOWS", "PATH": "test"})
+
+        self.assertEqual(environment["windir"], r"C:\WINDOWS")
+        self.assertEqual(environment["SystemRoot"], r"C:\WINDOWS")
+
     @patch("web_app.terminal.shutil.which", return_value=r"C:\Windows\System32\wt.exe")
     @patch("web_app.terminal.subprocess.Popen")
     def test_interactive_agent_opens_native_windows_terminal(self, popen, _which):

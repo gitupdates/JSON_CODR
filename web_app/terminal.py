@@ -9,6 +9,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+def child_environment(overrides: dict[str, str] | None = None, inherited=None) -> dict[str, str]:
+    environment = dict(os.environ if inherited is None else inherited)
+    system_root = environment.get("SystemRoot") or environment.get("SYSTEMROOT")
+    if system_root and not (environment.get("windir") or environment.get("WINDIR")):
+        environment["windir"] = system_root
+    environment.update(overrides or {})
+    return environment
+
+
 @dataclass
 class TerminalRecord:
     id: str
@@ -45,6 +54,7 @@ class TerminalService:
         process = subprocess.Popen(
             command,
             cwd=working_directory,
+            env=child_environment(),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -63,7 +73,7 @@ class TerminalService:
         return record
 
     def create_agent(self, plan) -> TerminalRecord:
-        environment = {**os.environ, **plan.environment}
+        environment = child_environment(plan.environment)
         if plan.interactive:
             windows_terminal = shutil.which("wt.exe") or shutil.which("wt")
             if not windows_terminal:
