@@ -61,6 +61,7 @@ def create_app(
     workspace = workspace or WorkspaceService(default_data_root())
     attachments = attachments or AttachmentService(workspace)
     skill_library = SkillLibraryService(workspace.data_root)
+    skill_library.ensure_builtin_rea()
     skill_library.ensure_envelopes()
     skill_converter = SkillConverterService()
     settings = SettingsService(workspace.data_root)

@@ -27,6 +27,17 @@ def archive(entries: dict[str, str]) -> bytes:
 
 
 class SkillLibraryTests(unittest.TestCase):
+    def test_builtin_rea_skill_is_available_to_every_model_session(self):
+        library = SkillLibraryService(self.root)
+
+        pack = library.ensure_builtin_rea()
+        installed = next(item for item in library.list() if item.id == "rea-agents")
+
+        self.assertEqual(pack.id, "rea-agents")
+        self.assertTrue(installed.skills[0].enabled)
+        self.assertIn("JSON_CODR_SKILL_SCHEMA: 1", installed.skills[0].content)
+        self.assertIn("rea analyze-javascript-application", installed.skills[0].content)
+
     def test_native_json_codr_envelope_is_imported_without_conversion(self):
         source = self.root / "native.zip"
         native = """---
@@ -231,7 +242,7 @@ Review the supplied artifact.
         self.assertEqual(disabled.status_code, 200)
         self.assertNotIn(selection, skillsets_path.read_text(encoding="utf-8"))
         self.assertEqual(client.delete(f'/api/skills/{installed["id"]}').status_code, 204)
-        self.assertEqual(client.get("/api/skills").json(), [])
+        self.assertEqual([item for item in client.get("/api/skills").json() if item["id"] != "rea-agents"], [])
 
     def test_api_save_and_apply_updates_skill_and_selects_it_for_session(self):
         session = self.workspace.create_session()
@@ -373,7 +384,7 @@ Review the supplied artifact.
 
         preview = client.post("/api/skills/scan", json={"directory": str(scan_root)})
         self.assertEqual(preview.status_code, 200)
-        self.assertEqual(client.get("/api/skills").json(), [])
+        self.assertEqual([item for item in client.get("/api/skills").json() if item["id"] != "rea-agents"], [])
         installed = client.post("/api/skills/install-discovery", json={"discovery_id": preview.json()["discoveries"][0]["id"]})
         self.assertEqual(installed.status_code, 201)
         pack = installed.json()

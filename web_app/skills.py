@@ -215,6 +215,39 @@ class SkillLibraryService:
             return []
         return [SkillPack.model_validate(item) for item in json.loads(self.catalog_path.read_text(encoding="utf-8"))]
 
+    def ensure_builtin_rea(self) -> SkillPack:
+        existing = next((pack for pack in self.list() if pack.id == "rea-agents"), None)
+        if existing is not None:
+            return existing
+        instructions = (
+            "capabilities: Read, project-scoped terminal actions, unified patch editing, verification checks\n\n"
+            "Use REA when the request depends on evidence from a shipped application, package, binary, "
+            "Electron/JavaScript application, website, or recorded runtime behavior. For an extracted "
+            "JavaScript/Electron directory or ASAR, propose the authorized project terminal command "
+            "`rea analyze-javascript-application <absolute-target-path> --json`. Preserve returned Evidence "
+            "IDs, distinguish observations from inferences and unknowns, and explain limitations. After "
+            "collecting evidence, use the JSON_CODR Coding sandbox to inspect the active project, create or "
+            "edit files with unified patches, run the available test/build checks, and show the resulting diff. "
+            "Do not claim native decompilation is available unless REA reports a configured Hopper, Ghidra, "
+            "IDA, or Kuna provider. Never broaden the analyzed target or project boundary without user direction."
+        )
+        skill = SkillRecord(
+            id="reverse-engineer-anything",
+            name="Reverse engineer anything (REA)",
+            description="Collect evidence from applications and use it to build a similar feature in the active project.",
+            content=_wrap_skill_content("Reverse engineer anything (REA)", "Evidence-driven feature reconstruction", instructions),
+            original_content=instructions,
+            enabled=True,
+        )
+        return self.install(SkillPack(
+            id="rea-agents",
+            name="REA agents",
+            source_format="generic",
+            source_name="JSON_CODR built-in REA integration",
+            source_digest="json-codr-rea-agents-6.7.0-v1",
+            skills=[skill],
+        ))
+
     def _save(self, packs: list[SkillPack]) -> None:
         temporary = self.root / f".catalog-{uuid.uuid4().hex}.tmp"
         temporary.write_text(json.dumps([pack.model_dump(mode="json") for pack in packs], indent=2), encoding="utf-8")
