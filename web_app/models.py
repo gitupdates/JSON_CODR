@@ -209,7 +209,18 @@ class TerminalCreateRequest(BaseModel):
 
 class CodingAgentGrantRequest(BaseModel):
     project_root: str = Field(min_length=1, max_length=1000)
-    tool: Literal["continue", "aider"]
+    tool: Literal["broker", "shell", "continue", "aider"]
+
+
+class BrokerGrantRequest(BaseModel):
+    project_root: str = Field(min_length=1, max_length=1000)
+    profile: Literal["broker", "shell", "continue", "aider"] = "broker"
+
+
+class BrokerTaskRequest(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+    grant_id: str = Field(min_length=1, max_length=64)
+    request: BrokerActionRequest
 
 
 class CodingAgentLaunchRequest(CodingAgentGrantRequest):

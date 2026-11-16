@@ -4,6 +4,7 @@ import unittest
 import tempfile
 import io
 import zipfile
+import subprocess
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -14,6 +15,7 @@ from web_app.models import ActionSuggestion, ChatResult, ConversionBundle, Gener
 from web_app.ollama_service import ModelOutputError, ModelTimeoutError, OllamaService, OllamaUnavailableError
 from web_app.workspace import WorkspaceService
 from web_app.coding_agents import CodingAgentService
+from web_app.git_broker import GitBrokerService
 
 
 class FakeService:
@@ -203,6 +205,45 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(direct.status_code, 200)
         self.assertEqual(direct.json()["content"], "Answered: fallback")
 
+    def test_broker_status_grant_execute_and_revoke_are_project_scoped(self):
+        project = Path(self.temporary_directory.name) / "broker-project"
+        project.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=project, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=project, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project, check=True)
+        (project / "README.md").write_text("test\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=project, check=True)
+        subprocess.run(["git", "commit", "-m", "initial"], cwd=project, check=True, capture_output=True)
+        agents = CodingAgentService(self.workspace.data_root, executable_finder=lambda name: None)
+        broker = GitBrokerService(self.workspace.data_root)
+        client = TestClient(create_app(self.service, self.workspace, coding_agents=agents, git_broker=broker))
+        headers = {"X-JSON-CODR": "1"}
+
+        denied = client.post("/api/git-broker/grants", json={"project_root": str(project), "profile": "broker"})
+        self.assertEqual(denied.status_code, 403)
+        granted = client.post("/api/git-broker/grants", headers=headers, json={
+            "project_root": str(project), "profile": "broker"
+        })
+        self.assertEqual(granted.status_code, 201)
+        grant = granted.json()
+        status = client.get("/api/git-broker/status", params={"project_root": str(project)})
+        baseline = status.json()["repository"]["dirty_fingerprint"]
+        executed = client.post("/api/git-broker/tasks", headers=headers, json={
+            "model": "yi-coder:9b-chat", "grant_id": grant["id"],
+            "request": {"schema_version": 1, "project_root": str(project),
+                        "baseline_fingerprint": baseline, "actions": [{"kind": "status"}]},
+        })
+        self.assertEqual(executed.status_code, 201)
+        self.assertEqual(executed.json()["status"], "completed")
+        revoked = client.delete(f"/api/git-broker/grants/{grant['id']}", headers=headers)
+        self.assertEqual(revoked.status_code, 200)
+        rejected = client.post("/api/git-broker/tasks", headers=headers, json={
+            "model": "yi-coder:9b-chat", "grant_id": grant["id"],
+            "request": {"schema_version": 1, "project_root": str(project),
+                        "baseline_fingerprint": baseline, "actions": [{"kind": "status"}]},
+        })
+        self.assertEqual(rejected.status_code, 403)
+
     def test_optimized_connector_catalog_and_install_plans_are_additive(self):
         client = TestClient(create_app(self.service, self.workspace, optimized=True))
 
@@ -254,6 +295,20 @@ class WebApiTests(unittest.TestCase):
                 "evidence": {"execution": "CPU"},
             }],
         )
+
+    def test_hardware_detection_stays_available_while_ollama_model_listing_is_busy(self):
+        class BusyService(FakeService):
+            async def list_models(self):
+                raise OllamaUnavailableError("Ollama is unavailable")
+
+        client = TestClient(create_app(BusyService(), self.workspace, hardware=FakeHardware()))
+
+        response = client.post("/api/hardware/detect")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()[0]["id"], "cpu")
+        self.assertEqual(response.json()[0]["compatible_models"], [])
+        self.assertEqual(response.json()[0]["model_compatibility_error"], "Ollama is unavailable")
 
     def tearDown(self):
         self.temporary_directory.cleanup()

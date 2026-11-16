@@ -26,8 +26,9 @@ from web_app.localperf.storage import LocalPerfStorage
 from web_app.integrity_benchmark import IntegrityBenchmarkService
 from web_app.benchmark_baseline import BenchmarkBaselineService
 from web_app.coding_agents import CodingAgentService
+from web_app.git_broker import GitBrokerService
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
+from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
 from web_app.ollama_service import (
     ModelOutputError,
     ModelTimeoutError,
@@ -52,6 +53,7 @@ def create_app(
     optimized: bool = False,
     integrity: IntegrityBenchmarkService | None = None,
     coding_agents: CodingAgentService | None = None,
+    git_broker: GitBrokerService | None = None,
 ) -> FastAPI:
     application = FastAPI(title="JSON_CODR", version=APP_VERSION)
     workspace = workspace or WorkspaceService(default_data_root())
@@ -101,7 +103,12 @@ def create_app(
     dependency_service = DependencyService(attachments)
     artifact_service = ArtifactService(workspace)
     terminals = terminals or TerminalService()
+    close_terminals = getattr(terminals, "close_all", None)
+    if close_terminals is not None:
+        application.router.add_event_handler("shutdown", close_terminals)
     coding_agents = coding_agents or CodingAgentService(workspace.data_root)
+    git_broker = git_broker or GitBrokerService(workspace.data_root)
+    git_broker.recover_interrupted_tasks()
     action_proposals = ActionProposalService()
     web_root = Path(__file__).resolve().parent.parent / "web"
     application.mount("/static", StaticFiles(directory=web_root), name="static")
@@ -236,7 +243,13 @@ def create_app(
     @application.post("/api/hardware/detect")
     async def detect_hardware():
         detected = hardware.detect()
-        compatibility = await model_compatibility(detected)
+        try:
+            compatibility = await model_compatibility(detected)
+        except OllamaUnavailableError as error:
+            return [
+                {**candidate, "compatible_models": [], "model_compatibility_error": str(error)}
+                for candidate in detected
+            ]
         models_by_backend = {group["backend"]: group["models"] for group in compatibility}
         return [{**candidate, "compatible_models": models_by_backend.get(candidate["id"], [])} for candidate in detected]
 
@@ -673,6 +686,43 @@ def create_app(
     async def coding_agent_status():
         return coding_agents.status()
 
+    @application.get("/api/git-broker/status")
+    async def git_broker_status(project_root: str):
+        try:
+            repository = await asyncio.to_thread(git_broker.inspect, project_root)
+            return {"repository": repository, "grants": coding_agents.status()["grants"]}
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @application.post("/api/git-broker/grants", status_code=201)
+    async def create_git_broker_grant(request: BrokerGrantRequest, x_json_codr: str | None = Header(None)):
+        require_terminal_header(x_json_codr)
+        try:
+            return coding_agents.grant(request.project_root, request.profile)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @application.delete("/api/git-broker/grants/{grant_id}")
+    async def revoke_git_broker_grant(grant_id: str, x_json_codr: str | None = Header(None)):
+        require_terminal_header(x_json_codr)
+        try:
+            return coding_agents.revoke(grant_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Execution grant not found") from error
+
+    @application.post("/api/git-broker/tasks", status_code=201)
+    async def execute_git_broker_task(request: BrokerTaskRequest, x_json_codr: str | None = Header(None)):
+        require_terminal_header(x_json_codr)
+        grant = next((item for item in coding_agents.status()["grants"] if item.get("id") == request.grant_id), None)
+        if not grant or not grant.get("enabled") or grant.get("profile") != "broker":
+            raise HTTPException(status_code=403, detail="Active broker authorization is required")
+        if not coding_agents.authorized(request.request.project_root, "broker"):
+            raise HTTPException(status_code=403, detail="Broker authorization does not cover this project")
+        try:
+            return await asyncio.to_thread(git_broker.execute, request.request, request.model, request.grant_id)
+        except (ValueError, RuntimeError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
     @application.post("/api/coding-agents/grants", status_code=201)
     async def create_coding_agent_grant(request: CodingAgentGrantRequest, x_json_codr: str | None = Header(None)):
         require_terminal_header(x_json_codr)
@@ -801,13 +851,18 @@ def create_app(
         await websocket.accept()
         pending_action_markers: dict[str, str] = {}
         completion_tail = ""
+        try:
+            output_sequence = max(0, int(websocket.query_params.get("after_seq", "0")))
+        except ValueError:
+            output_sequence = 0
 
         async def send_output():
-            nonlocal completion_tail
-            while terminals.get(terminal_id).status == "running":
-                output = await asyncio.to_thread(terminals.read, terminal_id, 0.2)
-                if output:
-                    await websocket.send_json({"type": "output", "data": output})
+            nonlocal completion_tail, output_sequence
+            while True:
+                events = await asyncio.to_thread(terminals.read_after, terminal_id, output_sequence, 0.2)
+                for sequence, output in events:
+                    await websocket.send_json({"type": "output", "seq": sequence, "data": output})
+                    output_sequence = sequence
                     completion_tail = (completion_tail + output)[-2048:]
                     for marker, proposal_id in list(pending_action_markers.items()):
                         match = re.search(re.escape(marker) + r"(-?\d+)", completion_tail)
@@ -820,35 +875,48 @@ def create_app(
                                 "exit_code": exit_code,
                             })
                             pending_action_markers.pop(marker, None)
-            await websocket.send_json({"type": "exit"})
+                if terminals.get(terminal_id).status != "running" and not events:
+                    break
+            await websocket.send_json({"type": "exit", "last_seq": output_sequence})
 
         async def receive_input():
-            while True:
-                message = await websocket.receive_json()
-                if message.get("type") == "input":
-                    terminals.write(terminal_id, str(message.get("data", "")))
-                elif message.get("type") == "interrupt":
-                    terminals.interrupt(terminal_id)
-                elif message.get("type") == "approved_action":
-                    proposal_id = str(message.get("proposal_id", ""))
-                    marker = f"__JSON_CODR_ACTION_DONE__:{proposal_id}:"
-                    pending_action_markers[marker] = proposal_id
-                    try:
-                        terminals.write_approved(
-                            terminal_id,
-                            action_proposals,
-                            proposal_id,
-                            str(message.get("token", "")),
-                            completion_marker=marker,
-                        )
-                        await websocket.send_json({"type": "action_started", "proposal_id": proposal_id})
-                    except (KeyError, PermissionError, RuntimeError) as error:
-                        pending_action_markers.pop(marker, None)
-                        await websocket.send_json({
-                            "type": "action_error",
-                            "proposal_id": proposal_id,
-                            "error": str(error),
-                        })
+            nonlocal output_sequence
+            try:
+                while True:
+                    message = await websocket.receive_json()
+                    if message.get("type") == "input":
+                        terminals.write(terminal_id, str(message.get("data", "")))
+                    elif message.get("type") == "attach":
+                        output_sequence = max(output_sequence, int(message.get("after_seq", 0)))
+                    elif message.get("type") == "resize":
+                        try:
+                            terminals.resize(terminal_id, int(message.get("cols", 0)), int(message.get("rows", 0)))
+                        except (TypeError, ValueError) as error:
+                            await websocket.send_json({"type": "protocol_error", "error": str(error)})
+                    elif message.get("type") == "interrupt":
+                        terminals.interrupt(terminal_id)
+                    elif message.get("type") == "approved_action":
+                        proposal_id = str(message.get("proposal_id", ""))
+                        marker = f"__JSON_CODR_ACTION_DONE__:{proposal_id}:"
+                        pending_action_markers[marker] = proposal_id
+                        try:
+                            terminals.write_approved(
+                                terminal_id,
+                                action_proposals,
+                                proposal_id,
+                                str(message.get("token", "")),
+                                completion_marker=marker,
+                            )
+                            await websocket.send_json({"type": "action_started", "proposal_id": proposal_id})
+                        except (KeyError, PermissionError, RuntimeError) as error:
+                            pending_action_markers.pop(marker, None)
+                            await websocket.send_json({
+                                "type": "action_error",
+                                "proposal_id": proposal_id,
+                                "error": str(error),
+                            })
+            except WebSocketDisconnect:
+                return
 
         sender = asyncio.create_task(send_output())
         receiver = asyncio.create_task(receive_input())
