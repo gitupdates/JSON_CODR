@@ -1,11 +1,45 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 from web_app.coding_agents import CodingAgentService
 
 
 class CodingAgentAuthorizationTests(unittest.TestCase):
+    def test_broker_and_shell_profiles_persist_independently(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            project.mkdir()
+            service = CodingAgentService(root / "data", executable_finder=lambda name: None)
+
+            broker = service.grant(project, "broker")
+            service.grant(project, "shell")
+            reloaded = CodingAgentService(root / "data", executable_finder=lambda name: None)
+
+            self.assertTrue(reloaded.authorized(project, "broker"))
+            self.assertTrue(reloaded.authorized(project, "shell"))
+            reloaded.revoke(broker.id)
+            self.assertFalse(reloaded.authorized(project, "broker"))
+            self.assertTrue(reloaded.authorized(project, "shell"))
+
+    def test_legacy_tool_grant_is_read_as_matching_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            project.mkdir()
+            data = root / "data"
+            data.mkdir()
+            (data / "coding-agent-grants.json").write_text(json.dumps([{
+                "id": "legacy", "project_root": str(project.resolve()), "tool": "aider", "scope": "full",
+                "enabled": True, "created_at": "2026-01-01T00:00:00+00:00", "updated_at": "2026-01-01T00:00:00+00:00",
+            }]), encoding="utf-8")
+
+            status = CodingAgentService(data, executable_finder=lambda name: None).status()
+
+            self.assertEqual(status["grants"][0]["profile"], "aider")
+            self.assertTrue(status["grants"][0]["enabled"])
     def test_full_grant_persists_and_is_bound_to_project_and_tool(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -70,10 +104,14 @@ class CodingAgentAdapterTests(unittest.TestCase):
             interactive = service.launch_plan("continue", project, "qwen2.5-coder:7b", "interactive")
             delegated = service.launch_plan("continue", project, "qwen2.5-coder:7b", "delegated", "Fix tests")
 
-            self.assertEqual(interactive.argv, ("C:/tools/cn.exe", "--model", "ollama/qwen2.5-coder:7b"))
+            config = Path(interactive.argv[2])
+            self.assertEqual(interactive.argv[:2], ("C:/tools/cn.exe", "--config"))
+            self.assertTrue(config.is_file())
+            self.assertIn("provider: ollama", config.read_text(encoding="utf-8"))
+            self.assertIn("model: qwen2.5-coder:7b", config.read_text(encoding="utf-8"))
             self.assertEqual(delegated.argv, (
                 "C:/tools/cn.exe", "-p", "Fix tests", "--allow", "Read", "--allow", "Write", "--allow", "Edit",
-                "--exclude", "Bash", "--model", "ollama/qwen2.5-coder:7b"
+                "--exclude", "Bash", "--config", str(config)
             ))
             self.assertTrue(interactive.interactive)
             self.assertFalse(delegated.interactive)
@@ -88,13 +126,22 @@ class CodingAgentAdapterTests(unittest.TestCase):
 
             plan = service.launch_plan("aider", project, "qwen2.5-coder:7b", "interactive")
 
-            self.assertEqual(plan.argv, ("C:/tools/aider.exe", "--model", "ollama_chat/qwen2.5-coder:7b"))
+            self.assertEqual(plan.argv[:3], ("C:/tools/aider.exe", "--model", "ollama_chat/qwen2.5-coder:7b"))
+            self.assertIn("--no-check-update", plan.argv)
+            self.assertIn("--no-fancy-input", plan.argv)
+            self.assertIn("--no-show-model-warnings", plan.argv)
+            self.assertIn("--set-env", plan.argv)
+            self.assertIn("OLLAMA_API_BASE=http://127.0.0.1:11434", plan.argv)
             self.assertEqual(plan.environment["OLLAMA_API_BASE"], "http://127.0.0.1:11434")
 
             delegated = service.launch_plan("aider", project, "qwen2.5-coder:7b", "delegated", "Fix tests")
             self.assertIn("--subtree-only", delegated.argv)
             self.assertIn("--no-suggest-shell-commands", delegated.argv)
             self.assertIn("--no-auto-commits", delegated.argv)
+            self.assertIn("--no-check-update", delegated.argv)
+            self.assertIn("--no-fancy-input", delegated.argv)
+            self.assertIn("--no-pretty", delegated.argv)
+            self.assertNotIn("--no-stream", delegated.argv)
 
     def test_launch_requires_installed_tool_valid_model_and_matching_grant(self):
         with tempfile.TemporaryDirectory() as directory:

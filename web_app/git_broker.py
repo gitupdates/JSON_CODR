@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import stat
 import subprocess
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,6 +36,7 @@ class BrokerActionResult:
 class GitBrokerService:
     def __init__(self, data_root: Path) -> None:
         self.data_root = Path(data_root).resolve()
+        self.audit_path = self.data_root / "git-broker-audit.json"
 
     @staticmethod
     def _project(path: Path | str) -> Path:
@@ -61,6 +64,44 @@ class GitBrokerService:
     def validate_request(self, request: BrokerActionRequest) -> BrokerActionRequest:
         self._project(request.project_root)
         return request
+
+    def _read_audit(self) -> list[dict]:
+        if not self.audit_path.is_file():
+            return []
+        try:
+            payload = json.loads(self.audit_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        return [dict(item) for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
+
+    def _write_audit(self, records: list[dict]) -> None:
+        self.data_root.mkdir(parents=True, exist_ok=True)
+        temporary = self.data_root / f".git-broker-audit-{uuid.uuid4().hex}.tmp"
+        temporary.write_text(json.dumps(records, indent=2), encoding="utf-8")
+        os.replace(temporary, self.audit_path)
+
+    def record_audit(self, record: dict) -> dict:
+        safe = {key: value for key, value in record.items() if key not in {"prompt", "environment", "content", "patch"}}
+        records = self._read_audit()
+        existing = next((item for item in records if item.get("id") == safe.get("id")), None)
+        if existing is None:
+            records.append(safe)
+        else:
+            existing.update(safe)
+            safe = existing
+        self._write_audit(records)
+        return dict(safe)
+
+    def recover_interrupted_tasks(self) -> list[dict]:
+        records = self._read_audit()
+        recovered = []
+        for record in records:
+            if record.get("status") in {"queued", "running"}:
+                record["status"] = "interrupted"
+                recovered.append(dict(record))
+        if recovered:
+            self._write_audit(records)
+        return recovered
 
     def inspect(self, project_root: Path | str) -> RepositorySnapshot:
         project = self._project(project_root)

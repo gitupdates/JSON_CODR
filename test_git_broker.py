@@ -104,5 +104,24 @@ class GitBrokerInspectionTests(unittest.TestCase):
                 service.inspect(link)
 
 
+class GitBrokerAuditTests(unittest.TestCase):
+    def test_audit_persists_without_prompt_or_environment_and_recovers_running_task(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = GitBrokerService(root / "data")
+            service.record_audit({
+                "id": "task-1", "status": "running", "project_root": "C:/repo", "model": "qwen",
+                "prompt": "secret task", "environment": {"TOKEN": "secret"},
+            })
+
+            reloaded = GitBrokerService(root / "data")
+            recovered = reloaded.recover_interrupted_tasks()
+            text = (root / "data" / "git-broker-audit.json").read_text(encoding="utf-8")
+
+            self.assertEqual(recovered[0]["status"], "interrupted")
+            self.assertNotIn("secret task", text)
+            self.assertNotIn("TOKEN", text)
+
+
 if __name__ == "__main__":
     unittest.main()

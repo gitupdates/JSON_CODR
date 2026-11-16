@@ -13,13 +13,14 @@ from typing import Callable
 
 
 TOOLS = {"continue": "cn", "aider": "aider"}
+PROFILES = {"broker", "shell", *TOOLS}
 
 
 @dataclass(frozen=True)
 class CodingAgentGrant:
     id: str
     project_root: str
-    tool: str
+    profile: str
     scope: str
     enabled: bool
     created_at: str
@@ -53,7 +54,7 @@ class CodingAgentService:
     @staticmethod
     def _tool(tool: str) -> str:
         normalized = tool.strip().lower()
-        if normalized not in TOOLS:
+        if normalized not in PROFILES:
             raise ValueError("Unsupported coding agent")
         return normalized
 
@@ -64,7 +65,16 @@ class CodingAgentService:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return []
-        return [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
+        if not isinstance(payload, list):
+            return []
+        grants = []
+        for value in payload:
+            if not isinstance(value, dict):
+                continue
+            item = dict(value)
+            item["profile"] = item.pop("tool", item.get("profile", ""))
+            grants.append(item)
+        return grants
 
     def _write(self, grants: list[dict]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -77,7 +87,7 @@ class CodingAgentService:
         normalized_tool = self._tool(tool)
         grants = self._read()
         now = datetime.now(timezone.utc).isoformat()
-        existing = next((item for item in grants if item.get("project_root") == project and item.get("tool") == normalized_tool), None)
+        existing = next((item for item in grants if item.get("project_root") == project and item.get("profile") == normalized_tool), None)
         if existing:
             existing.update({"scope": "full", "enabled": True, "updated_at": now})
             record = CodingAgentGrant(**existing)
@@ -104,7 +114,7 @@ class CodingAgentService:
         except ValueError:
             return False
         for item in self._read():
-            if not item.get("enabled") or item.get("tool") != normalized_tool:
+            if not item.get("enabled") or item.get("profile") != normalized_tool:
                 continue
             try:
                 root = self._project(item.get("project_root", ""))
@@ -121,6 +131,32 @@ class CodingAgentService:
             "grants": self._read(),
         }
 
+    def _continue_config(self, model: str) -> Path:
+        directory = self.path.parent / "coding-agent-configs"
+        directory.mkdir(parents=True, exist_ok=True)
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", model).strip("-")
+        target = directory / f"continue-ollama-{safe_name}.yaml"
+        content = (
+            "name: JSON_CODR Local Ollama\n"
+            "version: 1.0.0\n"
+            "schema: v1\n"
+            "models:\n"
+            f"  - name: JSON_CODR {model}\n"
+            "    provider: ollama\n"
+            f"    model: {model}\n"
+            "    apiBase: http://127.0.0.1:11434\n"
+            "    roles:\n"
+            "      - chat\n"
+            "      - edit\n"
+            "      - apply\n"
+            "    capabilities:\n"
+            "      - tool_use\n"
+        )
+        temporary = directory / f".{target.name}.{uuid.uuid4().hex}.tmp"
+        temporary.write_text(content, encoding="utf-8")
+        os.replace(temporary, target)
+        return target
+
     def launch_plan(
         self,
         tool: str,
@@ -130,6 +166,8 @@ class CodingAgentService:
         prompt: str | None = None,
     ) -> CodingAgentLaunchPlan:
         normalized_tool = self._tool(tool)
+        if normalized_tool not in TOOLS:
+            raise ValueError("This execution profile does not launch a coding agent")
         working = self._project(working_directory)
         if not self.authorized(working, normalized_tool):
             raise PermissionError("Coding agent requires persistent authorization for this project and tool")
@@ -144,17 +182,24 @@ class CodingAgentService:
             raise RuntimeError(f"{TOOLS[normalized_tool]} is not installed")
         interactive = mode == "interactive"
         if normalized_tool == "continue":
-            model_name = f"ollama/{model}"
-            argv = (executable, "--model", model_name) if interactive else (
+            config_path = str(self._continue_config(model))
+            argv = (executable, "--config", config_path) if interactive else (
                 executable, "-p", prompt.strip(), "--allow", "Read", "--allow", "Write", "--allow", "Edit",
-                "--exclude", "Bash", "--model", model_name
+                "--exclude", "Bash", "--config", config_path
             )
             environment = {}
         else:
             model_name = f"ollama_chat/{model}"
-            argv = (executable, "--model", model_name) if interactive else (
+            ollama_options = (
+                "--set-env", "OLLAMA_API_BASE=http://127.0.0.1:11434",
+                "--no-show-model-warnings",
+            )
+            argv = (
+                executable, "--model", model_name, "--no-check-update", "--no-fancy-input", *ollama_options
+            ) if interactive else (
                 executable, "--model", model_name, "--message", prompt.strip(), "--subtree-only",
-                "--no-suggest-shell-commands", "--no-auto-commits", "--yes-always"
+                "--no-suggest-shell-commands", "--no-auto-commits", "--yes-always",
+                "--no-check-update", "--no-fancy-input", "--no-pretty", *ollama_options
             )
             environment = {"OLLAMA_API_BASE": "http://127.0.0.1:11434"}
         return CodingAgentLaunchPlan(normalized_tool, argv, str(working), environment, interactive)
