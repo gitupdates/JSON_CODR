@@ -78,7 +78,12 @@ def create_app(
         ) if optimized else None,
     )
     localperf_packages = LocalPerfPackageService(LocalPerfStorage(workspace.data_root))
-    integrity = integrity or IntegrityBenchmarkService(workspace.data_root, service.generate_deterministic)
+    async def generate_integrity(model: str, messages: list[dict], temperature: float) -> str:
+        generator = getattr(service, "generate_deterministic", None)
+        if generator is None:
+            raise RuntimeError("Integrity benchmarks are unavailable for this model service")
+        return await generator(model, messages, temperature)
+    integrity = integrity or IntegrityBenchmarkService(workspace.data_root, generate_integrity)
     optimized_search = OptimizedModelSearch(catalog=catalog)
     skillsets = SkillsetService(workspace.data_root, skill_library)
     recommendations = SkillRecommendationService(skill_library, skillsets, settings)

@@ -239,6 +239,18 @@ class WebApiTests(unittest.TestCase):
         self.service.available = False
         self.assertEqual(self.client.get("/api/health").json()["status"], "degraded")
 
+    def test_app_construction_does_not_require_optional_integrity_capability(self):
+        class MinimalService:
+            async def health(self):
+                return {"ollama": True}
+
+            async def list_models(self):
+                return []
+
+        client = TestClient(create_app(MinimalService(), self.workspace))
+
+        self.assertEqual(client.get("/").status_code, 200)
+
     def test_hardware_detection_probe_and_cpu_restore_are_exposed(self):
         hardware = FakeHardware()
         client = TestClient(create_app(self.service, self.workspace, hardware=hardware))
