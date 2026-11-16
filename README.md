@@ -1,8 +1,8 @@
 # JSON_CODR
 
-JSON_CODR V1.0.17-beta.4 is a localhost-only web and CLI interface for structured responses from local Ollama coding models.
+JSON_CODR V1.0.17-beta.5 is a localhost-only web and CLI interface for structured responses from local Ollama coding models.
 
-V1.0.17-beta.4 adds browser-managed file and folder imports, shared terminal clipboard and command-history controls, and responsive skill-discovery actions. It retains truthful native-versus-delegated tool compatibility reporting, project-scoped Continue CLI and Aider sessions, and direct Ollama chat fallback.
+V1.0.17-beta.5 adds pinned GitHub skill previews and installation through the existing provider-neutral skill envelope. It retains browser-managed local imports, truthful native-versus-delegated tool compatibility reporting, project-scoped Continue CLI and Aider sessions, and direct Ollama chat fallback.
 
 ## Beta coding agents: Continue CLI and Aider
 

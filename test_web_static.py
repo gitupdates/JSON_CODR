@@ -79,7 +79,7 @@ class WebStaticTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.0.17-beta.4", response.text)
+        self.assertIn("V1.0.17-beta.5", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -100,7 +100,7 @@ class WebStaticTests(unittest.TestCase):
         html = self.client.get("/").text
         css = self.client.get("/static/app.css")
         javascript = self.client.get("/static/app.js")
-        self.assertIn('/static/app.css?v=1.0.17-beta.4', html)
+        self.assertIn('/static/app.css?v=1.0.17-beta.5', html)
         self.assertEqual(css.status_code, 200)
         self.assertIn("text/css", css.headers["content-type"])
         self.assertEqual(javascript.status_code, 200)
@@ -233,8 +233,8 @@ class WebStaticTests(unittest.TestCase):
         html = self.client.get("/").text
         javascript = self.client.get("/static/app.js").text
 
-        self.assertIn('/static/terminal_keyboard.js?v=1.0.17-beta.4-clipboard2', html)
-        self.assertIn('/static/app.js?v=1.0.17-beta.4-clipboard2', html)
+        self.assertIn('/static/terminal_keyboard.js?v=1.0.17-beta.5-clipboard2', html)
+        self.assertIn('/static/app.js?v=1.0.17-beta.5-clipboard2', html)
         self.assertLess(html.index("terminal_keyboard.js"), html.index("app.js"))
         self.assertIn("createTerminalKeyboardController", javascript)
         self.assertIn("attachCustomKeyEventHandler", javascript)
@@ -307,6 +307,16 @@ class WebStaticTests(unittest.TestCase):
             }.issubset(parser.ids)
         )
         self.assertIn("markOllamaReady();", self.client.get("/static/app.js").text)
+
+    def test_github_skill_installer_controls_and_runtime_are_present(self):
+        html = self.client.get("/").text
+        javascript = self.client.get("/static/app.js").text
+
+        for identifier in ("skill-github-url", "skill-github-preview", "skill-github-install", "skill-github-status"):
+            self.assertIn(f'id="{identifier}"', html)
+        self.assertIn('/api/skills/github/preview', javascript)
+        self.assertIn('/api/skills/github/install', javascript)
+        self.assertIn("Resolved commit", javascript)
 
 
     def test_settings_is_a_global_navigation_destination(self):

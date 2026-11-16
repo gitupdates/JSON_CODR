@@ -11,6 +11,8 @@ import zipfile
 import tempfile
 import time
 import stat
+import urllib.parse
+import urllib.request
 from pathlib import Path, PurePosixPath
 
 from web_app.models import SkillDiscovery, SkillPack, SkillRecord, SkillScanResult
@@ -639,5 +641,148 @@ class SkillDiscoveryService:
         try:
             pack = self.converter.convert(snapshot, f"{source.name}.zip" if source.is_dir() else source.name)
             return self.library.install(pack)
+        finally:
+            snapshot.unlink(missing_ok=True)
+
+
+class GithubSkillService:
+    def __init__(
+        self,
+        library: SkillLibraryService,
+        converter: SkillConverterService,
+        data_root: Path,
+        fetch=None,
+    ) -> None:
+        self.library = library
+        self.converter = converter
+        self.preview_root = Path(data_root).resolve() / "skill_library" / "github-previews"
+        self.preview_root.mkdir(parents=True, exist_ok=True)
+        self._fetch = fetch or self._fetch_url
+        self._previews: dict[str, dict[str, object]] = {}
+
+    @staticmethod
+    def _fetch_url(url: str) -> bytes:
+        request = urllib.request.Request(
+            url,
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "JSON_CODR-skill-installer"},
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = response.read(25 * 1024 * 1024 + 1)
+        if len(payload) > 25 * 1024 * 1024:
+            raise ValueError("GitHub skill download exceeds 25 MB")
+        return payload
+
+    @staticmethod
+    def _parse_url(url: str) -> tuple[str, str, str, PurePosixPath]:
+        parsed = urllib.parse.urlsplit(url.strip())
+        if parsed.scheme != "https" or parsed.hostname not in {"github.com", "www.github.com"}:
+            raise ValueError("Enter an HTTPS github.com skill URL")
+        parts = [urllib.parse.unquote(part) for part in parsed.path.strip("/").split("/") if part]
+        if len(parts) < 5 or parts[2] not in {"blob", "tree"}:
+            raise ValueError("GitHub URL must point to a SKILL.md file or its containing directory")
+        owner, repository, kind, reference = parts[:4]
+        target = PurePosixPath(*parts[4:])
+        if kind == "blob":
+            if target.name.casefold() != "skill.md":
+                raise ValueError("GitHub file URL must point to SKILL.md")
+            target = target.parent
+        if not owner or not repository or not reference or target.is_absolute() or ".." in target.parts:
+            raise ValueError("Invalid GitHub skill URL")
+        return owner, repository.removesuffix(".git"), reference, target
+
+    def preview(self, url: str) -> dict[str, object]:
+        owner, repository, reference, target = self._parse_url(url)
+        commit_url = (
+            f"https://api.github.com/repos/{urllib.parse.quote(owner)}/{urllib.parse.quote(repository)}"
+            f"/commits/{urllib.parse.quote(reference, safe='')}"
+        )
+        try:
+            commit = json.loads(self._fetch(commit_url))
+            revision = commit["sha"]
+        except (KeyError, TypeError, json.JSONDecodeError) as error:
+            raise ValueError("GitHub did not return a valid commit for this skill URL") from error
+        if not re.fullmatch(r"[0-9a-fA-F]{7,64}", revision):
+            raise ValueError("GitHub returned an invalid commit identifier")
+        preview_id = uuid.uuid4().hex
+        snapshot = self.preview_root / f"{preview_id}.zip"
+        entries = 0
+        total_bytes = 0
+        found_entry = False
+        try:
+            queue = [target]
+            with zipfile.ZipFile(snapshot, "w", zipfile.ZIP_DEFLATED) as output:
+                while queue:
+                    directory = queue.pop(0)
+                    encoded_path = urllib.parse.quote(directory.as_posix(), safe="/")
+                    contents_url = (
+                        f"https://api.github.com/repos/{urllib.parse.quote(owner)}/{urllib.parse.quote(repository)}"
+                        f"/contents/{encoded_path}?ref={urllib.parse.quote(revision, safe='')}"
+                    )
+                    try:
+                        listing = json.loads(self._fetch(contents_url))
+                    except (TypeError, json.JSONDecodeError) as error:
+                        raise ValueError("GitHub returned an invalid skill directory listing") from error
+                    if not isinstance(listing, list):
+                        raise ValueError("GitHub skill URL does not resolve to a directory")
+                    for item in listing:
+                        item_type = item.get("type")
+                        item_path = PurePosixPath(item.get("path", ""))
+                        if item_path.is_absolute() or ".." in item_path.parts or target not in (item_path, *item_path.parents):
+                            raise ValueError("GitHub directory listing contains an unsafe path")
+                        if item_type == "dir":
+                            queue.append(item_path)
+                            continue
+                        if item_type != "file" or not item.get("download_url"):
+                            continue
+                        skill_relative = item_path.relative_to(target)
+                        entries += 1
+                        if entries > self.converter.max_entries:
+                            raise ValueError("GitHub skill directory exceeds installation limits")
+                        data = self._fetch(item["download_url"])
+                        total_bytes += len(data)
+                        if total_bytes > self.converter.max_bytes:
+                            raise ValueError("GitHub skill directory exceeds installation limits")
+                        output.writestr(PurePosixPath(target.name, skill_relative).as_posix(), data)
+                        if skill_relative.name.casefold() == "skill.md":
+                            found_entry = True
+        except Exception:
+            snapshot.unlink(missing_ok=True)
+            raise
+        if not found_entry:
+            snapshot.unlink(missing_ok=True)
+            raise ValueError("The selected GitHub directory does not contain SKILL.md")
+        source_name = f"{owner}-{repository}-{target.name}-{revision[:12]}.zip"
+        try:
+            pack = self.converter.convert(snapshot, source_name).model_copy(update={
+                "source_name": url,
+                "source_path": str(snapshot.resolve()),
+                "source_digest": hashlib.sha256(snapshot.read_bytes()).hexdigest(),
+            })
+        except Exception:
+            snapshot.unlink(missing_ok=True)
+            raise
+        self._previews[preview_id] = {
+            "snapshot": snapshot,
+            "pack": pack,
+            "expires": time.monotonic() + 600,
+            "repository": f"{owner}/{repository}",
+            "revision": revision,
+            "source_path": target.as_posix(),
+        }
+        return {
+            "preview_id": preview_id,
+            "repository": f"{owner}/{repository}",
+            "revision": revision,
+            "source_path": target.as_posix(),
+            "pack": pack.model_dump(mode="json"),
+        }
+
+    def install(self, preview_id: str) -> SkillPack:
+        preview = self._previews.pop(preview_id, None)
+        if preview is None or preview["expires"] < time.monotonic():
+            raise ValueError("GitHub skill preview expired; preview the URL again")
+        snapshot = preview["snapshot"]
+        try:
+            return self.library.install(preview["pack"])
         finally:
             snapshot.unlink(missing_ok=True)

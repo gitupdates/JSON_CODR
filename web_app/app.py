@@ -31,7 +31,7 @@ from web_app.coding_agents import CodingAgentService
 from web_app.git_broker import GitBrokerService
 from web_app.git_adapter import GitActionAdapter
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
+from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
 from web_app.ollama_service import (
     ModelOutputError,
     ModelTimeoutError,
@@ -40,7 +40,7 @@ from web_app.ollama_service import (
 )
 from web_app.workspace import InvalidSessionId, WorkspaceService, default_data_root
 from web_app.terminal import TerminalService
-from web_app.skills import DuplicateSkillPack, SkillConverterService, SkillDiscoveryService, SkillLibraryService
+from web_app.skills import DuplicateSkillPack, GithubSkillService, SkillConverterService, SkillDiscoveryService, SkillLibraryService
 from web_app.settings import SettingsService
 from web_app.skillsets import SkillsetService
 from web_app.recommendations import SkillRecommendationService
@@ -72,6 +72,7 @@ def create_app(
     integrity: IntegrityBenchmarkService | None = None,
     coding_agents: CodingAgentService | None = None,
     git_broker: GitBrokerService | None = None,
+    github_skills: GithubSkillService | None = None,
 ) -> FastAPI:
     application = FastAPI(title="JSON_CODR", version=APP_VERSION)
     workspace = workspace or WorkspaceService(default_data_root())
@@ -119,6 +120,7 @@ def create_app(
     skillsets = SkillsetService(workspace.data_root, skill_library)
     recommendations = SkillRecommendationService(skill_library, skillsets, settings)
     skill_discovery = SkillDiscoveryService(skill_library, skill_converter, workspace.data_root)
+    github_skills = github_skills or GithubSkillService(skill_library, skill_converter, workspace.data_root)
     context_assembler = ContextAssembler(attachments, skills=skill_library)
     dependency_service = DependencyService(attachments)
     artifact_service = ArtifactService(workspace)
@@ -620,6 +622,26 @@ def create_app(
     async def install_discovered_skill(request: DiscoveryInstallRequest):
         try:
             installed = skill_discovery.install(request.discovery_id)
+            skillsets.reconcile()
+            return installed
+        except DuplicateSkillPack as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @application.post("/api/skills/github/preview")
+    async def preview_github_skill(request: GithubSkillPreviewRequest):
+        try:
+            return await asyncio.to_thread(github_skills.preview, request.url)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except Exception as error:
+            raise HTTPException(status_code=502, detail=f"Unable to download GitHub skill: {error}") from error
+
+    @application.post("/api/skills/github/install", status_code=201)
+    async def install_github_skill(request: GithubSkillInstallRequest):
+        try:
+            installed = github_skills.install(request.preview_id)
             skillsets.reconcile()
             return installed
         except DuplicateSkillPack as error:

@@ -52,6 +52,10 @@ const elements = {
   skillScanKnown: document.querySelector("#skill-scan-known"),
   skillFolderInput: document.querySelector("#skill-folder-input"),
   skillScanResults: document.querySelector("#skill-scan-results"),
+  skillGithubUrl: document.querySelector("#skill-github-url"),
+  skillGithubPreview: document.querySelector("#skill-github-preview"),
+  skillGithubInstall: document.querySelector("#skill-github-install"),
+  skillGithubStatus: document.querySelector("#skill-github-status"),
   skillsetList: document.querySelector("#skillset-list"),
   skillRecommendations: document.querySelector("#skill-recommendations"),
   autoAttachSkills: document.querySelector("#auto-attach-skills"),
@@ -167,6 +171,7 @@ let editingSkill = null;
 let skillLoadGeneration = 0;
 let settingsState = null;
 let skillFallbackToken = null;
+let githubSkillPreviewId = null;
 let settingsSaveQueue = Promise.resolve();
 let themeSaveRevision = 0;
 let skillsChangeRevision = 0;
@@ -1965,6 +1970,52 @@ function renderSkillDiscoveries(payload) {
   }
 }
 
+async function previewGithubSkill() {
+  const url = elements.skillGithubUrl.value.trim();
+  if (!url) return showError("Enter a GitHub SKILL.md or skill-folder URL");
+  githubSkillPreviewId = null;
+  elements.skillGithubPreview.disabled = true;
+  elements.skillGithubInstall.disabled = true;
+  elements.skillGithubStatus.textContent = "Resolving GitHub repository and creating an immutable preview...";
+  try {
+    const response = await fetch("/api/skills/github/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || "Unable to preview GitHub skill");
+    githubSkillPreviewId = payload.preview_id;
+    const skills = payload.pack?.skills || [];
+    elements.skillEditor.value = skills.map((skill) => `# ${skill.name}\n${skill.content}`).join("\n\n---\n\n");
+    elements.skillEditor.disabled = false;
+    elements.skillGithubInstall.disabled = false;
+    elements.skillGithubStatus.textContent = `Resolved commit ${payload.revision.slice(0, 12)} · ${payload.repository}/${payload.source_path} · ${skills.length} skill(s) ready to install`;
+  } finally {
+    elements.skillGithubPreview.disabled = false;
+  }
+}
+
+async function installGithubSkill() {
+  if (!githubSkillPreviewId) return showError("Preview the GitHub skill before installing it");
+  elements.skillGithubInstall.disabled = true;
+  elements.skillGithubStatus.textContent = "Installing reviewed GitHub skill...";
+  const response = await fetch("/api/skills/github/install", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ preview_id: githubSkillPreviewId }),
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    elements.skillGithubInstall.disabled = false;
+    throw new Error(payload.detail || "Unable to install GitHub skill");
+  }
+  githubSkillPreviewId = null;
+  skillsChangeRevision += 1;
+  elements.skillGithubStatus.textContent = `Installed ${payload.name} with ${payload.skills.length} enabled skill(s)`;
+  await Promise.all([loadSkills(), loadSkillsets()]);
+}
+
 async function scanSkillDirectory(directory = elements.skillScanDirectory.value) {
   if (!directory.trim()) return showError("Enter a local skill directory to scan");
   elements.skillScanDirectory.value = directory;
@@ -2317,6 +2368,14 @@ elements.pasteTextButton.addEventListener("click", async () => {
 });
 elements.scanDependencies.addEventListener("click", () => loadDependencies().catch((error) => showError(error.message)));
 elements.skillScan.addEventListener("click", () => scanSkillDirectory().catch((error) => showError(error.message)));
+elements.skillGithubPreview.addEventListener("click", () => previewGithubSkill().catch((error) => {
+  elements.skillGithubStatus.textContent = error.message;
+  showError(error.message);
+}));
+elements.skillGithubInstall.addEventListener("click", () => installGithubSkill().catch((error) => {
+  elements.skillGithubStatus.textContent = error.message;
+  showError(error.message);
+}));
 elements.skillFolderInput.addEventListener("change", async () => {
   try {
     await uploadSkillFolder(elements.skillFolderInput.files);

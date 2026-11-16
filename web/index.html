@@ -18,7 +18,7 @@
     </script>
     <title>JSON_CODR · Local model console</title>
     <link rel="stylesheet" href="/static/vendor/xterm.css" />
-    <link rel="stylesheet" href="/static/app.css?v=1.0.17-beta.4" />
+    <link rel="stylesheet" href="/static/app.css?v=1.0.17-beta.5" />
   </head>
   <body>
     <div class="ambient ambient-one"></div>
@@ -63,7 +63,7 @@
       <header class="topbar">
         <a class="brand" href="/" aria-label="JSON CODR home">
           <span class="brand-mark">{ }</span>
-          <span><strong>JSON_CODR</strong><small>V1.0.17-beta.4 · local model console</small></span>
+          <span><strong>JSON_CODR</strong><small>V1.0.17-beta.5 · local model console</small></span>
         </a>
         <div id="health-status" class="health" role="status" aria-live="polite">
           <span class="health-dot"></span><span>Connecting</span>
@@ -182,6 +182,16 @@
               <button id="skill-remove-pack" class="secondary" type="button" disabled>Remove pack</button>
             </div>
           </div>
+          <section class="skill-discovery" aria-label="Install skill from GitHub">
+            <div><span class="eyebrow">GITHUB</span><strong>Install a repository skill</strong></div>
+            <p class="meta">Paste a GitHub SKILL.md or skill-folder URL. JSON_CODR pins its commit, preserves the complete folder, and converts it to the provider-neutral skill envelope.</p>
+            <div class="scan-controls">
+              <input id="skill-github-url" type="url" placeholder="https://github.com/owner/repository/blob/main/path/to/SKILL.md" aria-label="GitHub skill URL" />
+              <button id="skill-github-preview" class="secondary" type="button">Preview GitHub skill</button>
+              <button id="skill-github-install" class="primary" type="button" disabled>Install skill</button>
+            </div>
+            <p id="skill-github-status" class="meta" role="status" aria-live="polite">No GitHub skill has been reviewed.</p>
+          </section>
           <section class="skill-discovery" aria-label="Skill discovery">
             <div><span class="eyebrow">DISCOVERY</span><strong>Scan an approved local folder</strong></div>
             <div class="scan-controls">
@@ -428,11 +438,11 @@
       <footer><span>Runs entirely on this machine</span><span>127.0.0.1 · Ollama</span></footer>
       </main>
     </div>
-    <script src="/static/dependency_install_queue.js?v=1.0.17-beta.4" defer></script>
-    <script src="/static/benchmark_leaderboard.js?v=1.0.17-beta.4" defer></script>
-    <script src="/static/terminal_keyboard.js?v=1.0.17-beta.4-clipboard2" defer></script>
+    <script src="/static/dependency_install_queue.js?v=1.0.17-beta.5" defer></script>
+    <script src="/static/benchmark_leaderboard.js?v=1.0.17-beta.5" defer></script>
+    <script src="/static/terminal_keyboard.js?v=1.0.17-beta.5-clipboard2" defer></script>
     <script src="/static/vendor/xterm.js" defer></script>
     <script src="/static/vendor/xterm-addon-fit.js" defer></script>
-    <script src="/static/app.js?v=1.0.17-beta.4-clipboard2" defer></script>
+    <script src="/static/app.js?v=1.0.17-beta.5-clipboard2" defer></script>
   </body>
 </html>

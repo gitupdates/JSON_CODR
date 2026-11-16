@@ -1,4 +1,5 @@
 import io
+import json
 import tempfile
 import unittest
 import zipfile
@@ -8,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from web_app.app import create_app
 from web_app.attachments import AttachmentService
-from web_app.skills import DuplicateSkillPack, SkillConverterService, SkillDiscoveryService, SkillLibraryService
+from web_app.skills import DuplicateSkillPack, GithubSkillService, SkillConverterService, SkillDiscoveryService, SkillLibraryService
 from web_app.workspace import WorkspaceService
 
 
@@ -27,6 +28,68 @@ def archive(entries: dict[str, str]) -> bytes:
 
 
 class SkillLibraryTests(unittest.TestCase):
+    def test_github_skill_preview_pins_commit_and_installs_complete_skill_directory(self):
+        contents_url = "https://api.github.com/repos/openai/plugins/contents/plugins/superpowers/skills/using-superpowers?ref=deadbeef"
+        responses = {
+            "https://api.github.com/repos/openai/plugins/commits/main": b'{"sha":"deadbeef"}',
+            contents_url: json.dumps([
+                {"type": "file", "name": "SKILL.md", "path": "plugins/superpowers/skills/using-superpowers/SKILL.md", "download_url": "https://raw.test/SKILL.md"},
+                {"type": "file", "name": "reference.md", "path": "plugins/superpowers/skills/using-superpowers/reference.md", "download_url": "https://raw.test/reference.md"},
+            ]).encode(),
+            "https://raw.test/SKILL.md": b"---\nname: using-superpowers\ndescription: Route work through skills\n---\nUse the available skills.",
+            "https://raw.test/reference.md": b"Supporting instructions",
+        }
+        github = GithubSkillService(
+            self.library,
+            self.converter,
+            self.root,
+            fetch=lambda url: responses[url],
+        )
+
+        preview = github.preview(
+            "https://github.com/openai/plugins/blob/main/plugins/superpowers/skills/using-superpowers/SKILL.md"
+        )
+        installed = github.install(preview["preview_id"])
+
+        self.assertEqual(preview["repository"], "openai/plugins")
+        self.assertEqual(preview["revision"], "deadbeef")
+        self.assertEqual([skill.name for skill in installed.skills], ["using-superpowers"])
+        self.assertIn("JSON_CODR_SKILL_SCHEMA: 1", installed.skills[0].content)
+        self.assertTrue(Path(installed.source_path).is_file())
+        with zipfile.ZipFile(installed.source_path) as bundle:
+            self.assertIn("using-superpowers/reference.md", bundle.namelist())
+
+    def test_github_skill_rejects_non_github_and_non_skill_urls(self):
+        github = GithubSkillService(self.library, self.converter, self.root, fetch=lambda _url: b"")
+
+        for url in (
+            "https://example.com/SKILL.md",
+            "https://github.com/openai/plugins/blob/main/README.md",
+        ):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                github.preview(url)
+
+    def test_api_previews_and_installs_github_skill(self):
+        contents_url = "https://api.github.com/repos/openai/plugins/contents/plugins/superpowers/skills/using-superpowers?ref=deadbeef"
+        responses = {
+            "https://api.github.com/repos/openai/plugins/commits/main": b'{"sha":"deadbeef"}',
+            contents_url: json.dumps([
+                {"type": "file", "name": "SKILL.md", "path": "plugins/superpowers/skills/using-superpowers/SKILL.md", "download_url": "https://raw.test/SKILL.md"},
+            ]).encode(),
+            "https://raw.test/SKILL.md": b"---\nname: using-superpowers\n---\nUse skills first.",
+        }
+        github = GithubSkillService(self.library, self.converter, self.root, fetch=lambda url: responses[url])
+        client = TestClient(create_app(FakeOllamaService(), self.workspace, github_skills=github))
+
+        preview = client.post("/api/skills/github/preview", json={
+            "url": "https://github.com/openai/plugins/blob/main/plugins/superpowers/skills/using-superpowers/SKILL.md"
+        })
+        installed = client.post("/api/skills/github/install", json={"preview_id": preview.json()["preview_id"]})
+
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(installed.status_code, 201)
+        self.assertEqual(installed.json()["skills"][0]["name"], "using-superpowers")
+
     def test_builtin_rea_skill_is_available_to_every_model_session(self):
         library = SkillLibraryService(self.root)
 

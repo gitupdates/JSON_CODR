@@ -469,6 +469,14 @@ class DiscoveryInstallRequest(BaseModel):
     discovery_id: str
 
 
+class GithubSkillPreviewRequest(BaseModel):
+    url: str
+
+
+class GithubSkillInstallRequest(BaseModel):
+    preview_id: str
+
+
 class SkillDiscovery(BaseModel):
     id: str
     name: str
