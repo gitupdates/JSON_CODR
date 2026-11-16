@@ -21,7 +21,7 @@ from web_app.inference.environments import EnvironmentManager
 from web_app.inference.providers.registry import ProviderRegistry
 from web_app.inference.router import InferenceRouter
 from web_app.inference.sidecar import SidecarClient
-from web_app.inference.compatibility import ollama_model_status, optimized_model_status
+from web_app.inference.compatibility import attach_agent_compatibility, ollama_model_status, optimized_model_status
 from web_app.inference.search import OptimizedModelSearch
 from web_app.localperf.package import LocalPerfPackageError, LocalPerfPackageService
 from web_app.localperf.storage import LocalPerfStorage
@@ -178,6 +178,13 @@ def create_app(
         except OllamaUnavailableError as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
 
+    @application.get("/api/models/{model:path}/tool-compatibility")
+    async def model_tool_compatibility(model: str):
+        try:
+            return await service.tool_compatibility(model)
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
     @application.get("/api/settings")
     async def get_settings():
         return settings.get()
@@ -252,11 +259,26 @@ def create_app(
     async def model_compatibility(detected: list[dict]) -> list[dict]:
         installed, running = await asyncio.gather(service.list_models(), service.running_models())
         installed_names = [item["name"] for item in installed if item.get("installed")]
+        tool_routes = {
+            name: route
+            for name, route in zip(
+                installed_names,
+                await asyncio.gather(*(service.tool_compatibility(name) for name in installed_names)),
+            )
+        }
+        configured_fallback = str(service.config.get("tool_fallback_model", "")).strip()
+        fallback_route = tool_routes.get(configured_fallback)
         matrix = []
         for candidate in detected:
             backend = candidate["id"]
             if backend in {"cpu", "ollama_gpu"} or backend.startswith(("cuda_", "rocm_", "vulkan")):
-                models = [ollama_model_status(name, backend, running, bool(candidate.get("compatible"))) for name in installed_names]
+                models = [
+                    attach_agent_compatibility(
+                        ollama_model_status(name, backend, running, bool(candidate.get("compatible"))),
+                        tool_routes[name],
+                    )
+                    for name in installed_names
+                ]
             else:
                 models = []
                 for model in catalog.list():
@@ -264,7 +286,15 @@ def create_app(
                         continue
                     installed_model = environment_manager.model_path(model).is_dir()
                     verified = bool(inference_router and model.id in inference_router.verified_models)
-                    models.append(optimized_model_status(model, installed_model, bool(candidate.get("runtime_ready")), verified))
+                    status = optimized_model_status(model, installed_model, bool(candidate.get("runtime_ready")), verified)
+                    delegated = {
+                        "advertised_tools": False,
+                        "native_tools_verified": False,
+                        "route": "delegated_verified" if fallback_route and fallback_route["available"] else "unavailable",
+                        "effective_tool_model": fallback_route["effective_tool_model"] if fallback_route else None,
+                        "available": bool(fallback_route and fallback_route["available"]),
+                    }
+                    models.append(attach_agent_compatibility(status, delegated))
             matrix.append({"backend": backend, "name": candidate["name"], "models": models})
         return matrix
 
@@ -795,10 +825,24 @@ def create_app(
     async def launch_coding_agent(request: CodingAgentLaunchRequest, x_json_codr: str | None = Header(None)):
         require_terminal_header(x_json_codr)
         try:
+            compatibility = await service.tool_compatibility(request.model)
+            if not compatibility["available"]:
+                raise RuntimeError("No verified tool-capable route is available")
+            effective_model = compatibility["effective_tool_model"]
+            fallback_used = compatibility["route"] == "delegated_verified"
             plan = coding_agents.launch_plan(
-                request.tool, request.project_root, request.model, request.mode, request.prompt
+                request.tool, request.project_root, effective_model, request.mode, request.prompt,
+                supports_tools=True,
             )
-            return terminals.create_agent(plan)
+            terminal = terminals.create_agent(plan)
+            terminal_payload = terminal if isinstance(terminal, dict) else terminal.__dict__
+            return {
+                **terminal_payload,
+                "requested_model": request.model,
+                "effective_model": effective_model,
+                "tool_fallback_used": fallback_used,
+                "tool_compatibility": compatibility,
+            }
         except PermissionError as error:
             raise HTTPException(status_code=403, detail=str(error)) from error
         except (ValueError, RuntimeError) as error:

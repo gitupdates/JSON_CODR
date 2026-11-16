@@ -1,8 +1,8 @@
 # JSON_CODR
 
-JSON_CODR V1.0.17-beta.2 is a localhost-only web and CLI interface for structured responses from local Ollama coding models.
+JSON_CODR V1.0.17-beta.3 is a localhost-only web and CLI interface for structured responses from local Ollama coding models.
 
-V1.0.17-beta.2 adds the project-scoped Coding sandbox alongside the Continue CLI and Aider launchers. Each coding profile uses an explicit persistent full-authorization grant bound to one canonical project root and profile. Direct Ollama chat remains the unconditional fallback when a coding CLI is missing, unconfigured, or fails to launch. Aider uses `ollama_chat/<model>` and Continue uses its local Ollama model slug; neither integration changes the Ollama service or active direct-chat model.
+V1.0.17-beta.3 adds truthful native-versus-delegated tool compatibility reporting across installed models and acceleration profiles, while preserving the project-scoped Coding sandbox, Continue CLI, Aider, and direct Ollama chat fallback. Each coding profile uses an explicit persistent full-authorization grant bound to one canonical project root and profile. Models without verified native tool support use a separately identified verified tool-capable route; unavailable acceleration profiles are never reported as verified sessions.
 
 ## Beta coding agents: Continue CLI and Aider
 

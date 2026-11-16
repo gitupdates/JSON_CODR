@@ -147,11 +147,12 @@ class CodingAgentService:
             "grants": self._read(),
         }
 
-    def _continue_config(self, model: str) -> Path:
+    def _continue_config(self, model: str, supports_tools: bool) -> Path:
         directory = self.path.parent / "coding-agent-configs"
         directory.mkdir(parents=True, exist_ok=True)
         safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", model).strip("-")
         target = directory / f"continue-ollama-{safe_name}.yaml"
+        analysis_environment = self._analysis_environment()
         content = (
             "name: JSON_CODR Local Ollama\n"
             "version: 1.0.0\n"
@@ -165,13 +166,37 @@ class CodingAgentService:
             "      - chat\n"
             "      - edit\n"
             "      - apply\n"
-            "    capabilities:\n"
-            "      - tool_use\n"
         )
+        if supports_tools:
+            content += "    capabilities:\n      - tool_use\n"
+        else:
+            content += "experimental:\n  onlyUseSystemMessageTools: true\n"
+        if supports_tools:
+            content += (
+                "mcpServers:\n"
+                "  - name: REA reverse engineering\n"
+                f"    command: {json.dumps(self.executable_finder('rea') or 'rea')}\n"
+                "    args:\n"
+                "      - mcp\n"
+            )
+            if analysis_environment:
+                content += "    env:\n" + "".join(
+                    f"      {key}: {json.dumps(value)}\n" for key, value in analysis_environment.items()
+                )
         temporary = directory / f".{target.name}.{uuid.uuid4().hex}.tmp"
         temporary.write_text(content, encoding="utf-8")
         os.replace(temporary, target)
         return target
+
+    def _analysis_environment(self) -> dict[str, str]:
+        environment = {}
+        ghidra = os.environ.get("GHIDRA_INSTALL_DIR")
+        java_home = os.environ.get("JAVA_HOME")
+        if ghidra:
+            environment["GHIDRA_INSTALL_DIR"] = ghidra
+        if java_home:
+            environment["JAVA_HOME"] = java_home
+        return environment
 
     def launch_plan(
         self,
@@ -180,6 +205,7 @@ class CodingAgentService:
         model: str,
         mode: str,
         prompt: str | None = None,
+        supports_tools: bool = True,
     ) -> CodingAgentLaunchPlan:
         normalized_tool = self._tool(tool)
         if normalized_tool not in TOOLS:
@@ -198,12 +224,20 @@ class CodingAgentService:
             raise RuntimeError(f"{TOOLS[normalized_tool]} is not installed")
         interactive = mode == "interactive"
         if normalized_tool == "continue":
-            config_path = str(self._continue_config(model))
-            argv = (executable, "--config", config_path) if interactive else (
-                executable, "-p", prompt.strip(), "--allow", "Read", "--allow", "Write", "--allow", "Edit",
-                "--exclude", "Bash", "--config", config_path
-            )
-            environment = {}
+            config_path = str(self._continue_config(model, supports_tools))
+            if interactive:
+                argv = (executable, "--config", config_path)
+            elif supports_tools:
+                argv = (
+                    executable, "-p", prompt.strip(), "--allow", "Read", "--allow", "Write", "--allow", "Edit",
+                    "--exclude", "Bash", "--config", config_path
+                )
+            else:
+                excluded_tools = ("Read", "Write", "Edit", "Fetch", "MultiEdit", "Bash", "Skills")
+                argv = (executable, "-p", prompt.strip(), *(
+                    option for name in excluded_tools for option in ("--exclude", name)
+                ), "--config", config_path)
+            environment = self._analysis_environment()
         else:
             model_name = f"ollama_chat/{model}"
             ollama_options = (
@@ -217,5 +251,8 @@ class CodingAgentService:
                 "--no-suggest-shell-commands", "--no-auto-commits", "--yes-always",
                 "--no-check-update", "--no-fancy-input", "--no-pretty", *ollama_options
             )
-            environment = {"OLLAMA_API_BASE": "http://127.0.0.1:11434"}
+            environment = {
+                **self._analysis_environment(),
+                "OLLAMA_API_BASE": "http://127.0.0.1:11434",
+            }
         return CodingAgentLaunchPlan(normalized_tool, argv, str(working), environment, interactive)

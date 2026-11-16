@@ -9,3 +9,4 @@ duplicate_hashes.json
 relocation_journal.json
 model_validation_results.json
 models/
+.aider*

@@ -10,3 +10,4 @@ py7zr>=1,<2
 python-docx>=1.2,<2
 pytesseract>=0.3.13,<1
 uvicorn[standard]>=0.30,<1
+pywinpty>=3.1,<4; platform_system == "Windows"

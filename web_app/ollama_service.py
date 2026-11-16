@@ -109,6 +109,45 @@ class OllamaService:
         capabilities = payload.get("capabilities", [])
         return "vision" in capabilities
 
+    async def supports_tools(self, model: str) -> bool:
+        resolved = self._resolve(model)
+        verified = self.config.get("verified_tool_models")
+        if isinstance(verified, list):
+            return resolved in verified
+        try:
+            response = await asyncio.wait_for(self.client.show(resolved), timeout=5)
+        except Exception:
+            return False
+        payload = response.model_dump() if hasattr(response, "model_dump") else response
+        return "tools" in payload.get("capabilities", [])
+
+    async def tool_compatibility(self, model: str) -> dict:
+        resolved = self._resolve(model)
+        try:
+            response = await asyncio.wait_for(self.client.show(resolved), timeout=5)
+            payload = response.model_dump() if hasattr(response, "model_dump") else response
+            advertised = "tools" in payload.get("capabilities", [])
+        except Exception:
+            advertised = False
+
+        verified = self.config.get("verified_tool_models")
+        verified_models = verified if isinstance(verified, list) else []
+        if resolved in verified_models:
+            route = "native_verified"
+            effective_model = resolved
+        else:
+            fallback = str(self.config.get("tool_fallback_model", "")).strip()
+            effective_model = fallback if fallback in verified_models else None
+            route = "delegated_verified" if effective_model else "unavailable"
+        return {
+            "requested_model": resolved,
+            "advertised_tools": advertised,
+            "native_tools_verified": resolved in verified_models,
+            "route": route,
+            "effective_tool_model": effective_model,
+            "available": effective_model is not None,
+        }
+
     async def generate_deterministic(
         self, model: str, messages: List[dict], temperature: float = 0.0
     ) -> str:

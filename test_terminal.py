@@ -1,5 +1,6 @@
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -12,15 +13,61 @@ from web_app.terminal import TerminalService, child_environment
 
 
 class TerminalServiceTests(unittest.TestCase):
+    class FakePty:
+        def __init__(self, argv, cwd, env, dimensions):
+            self.argv = argv
+            self.cwd = cwd
+            self.env = env
+            self.dimensions = dimensions
+            self.pid = 77
+            self.writes = []
+            self.resizes = []
+            self.closed = False
+            self.alive = True
+            self._output = []
+            self._ready = threading.Condition()
+
+        def read(self):
+            with self._ready:
+                self._ready.wait_for(lambda: self._output or not self.alive, timeout=1)
+                if self._output:
+                    return self._output.pop(0)
+            raise EOFError
+
+        def emit(self, text):
+            with self._ready:
+                self._output.append(text)
+                self._ready.notify_all()
+
+        def write(self, data):
+            self.writes.append(data)
+
+        def setwinsize(self, rows, cols):
+            self.resizes.append((rows, cols))
+
+        def sendintr(self):
+            self.writes.append("\x03")
+
+        def isalive(self):
+            return self.alive
+
+        def close(self, force=False):
+            self.closed = True
+            self.alive = False
+            with self._ready:
+                self._ready.notify_all()
+
     def test_child_environment_restores_windir_from_system_root(self):
         environment = child_environment({}, {"SystemRoot": r"C:\WINDOWS", "PATH": "test"})
 
         self.assertEqual(environment["windir"], r"C:\WINDOWS")
         self.assertEqual(environment["SystemRoot"], r"C:\WINDOWS")
 
-    @patch("web_app.terminal.subprocess.Popen")
-    def test_interactive_agent_opens_native_windows_console(self, popen):
-        popen.return_value.pid = 42
+    def test_interactive_agent_uses_embedded_conpty_when_available(self):
+        created = []
+        def factory(argv, cwd, env, dimensions):
+            created.append(self.FakePty(argv, cwd, env, dimensions))
+            return created[-1]
         plan = CodingAgentLaunchPlan(
             "continue",
             (r"C:\Users\BLACK\AppData\Roaming\npm\cn.CMD", "--model", "ollama/qwen:7b"),
@@ -29,31 +76,66 @@ class TerminalServiceTests(unittest.TestCase):
             True,
         )
 
-        terminal = TerminalService().create_agent(plan)
+        terminal = TerminalService(pty_factory=factory).create_agent(plan)
 
-        self.assertTrue(terminal.external)
-        self.assertEqual(terminal.status, "external")
-        popen.assert_called_once()
-        self.assertEqual(popen.call_args.args[0], [
+        self.assertFalse(terminal.external)
+        self.assertEqual(terminal.backend, "conpty")
+        self.assertEqual(created[0].argv, [
             r"C:\WINDOWS\system32\cmd.exe", "/d", "/s", "/c",
             r"C:\Users\BLACK\AppData\Roaming\npm\cn.CMD --model ollama/qwen:7b",
         ])
-        self.assertEqual(
-            popen.call_args.kwargs["creationflags"],
-            subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP,
-        )
 
-    @patch("web_app.terminal.subprocess.Popen")
-    def test_interactive_executable_launches_directly_in_native_console(self, popen):
-        popen.return_value.pid = 43
+    def test_interactive_agent_falls_back_to_native_console_without_conpty(self):
         plan = CodingAgentLaunchPlan("aider", (r"C:\tools\aider.exe", "--model", "ollama_chat/qwen:7b"), r"D:\project", {}, True)
 
-        TerminalService().create_agent(plan)
+        with patch("web_app.terminal.subprocess.Popen") as popen:
+            popen.return_value.pid = 43
+            terminal = TerminalService(pty_factory=None).create_agent(plan)
 
+        self.assertTrue(terminal.external)
         self.assertEqual(
             popen.call_args.args[0],
             [r"C:\tools\aider.exe", "--model", "ollama_chat/qwen:7b"],
         )
+
+    def test_conpty_resize_and_reconnect_replay(self):
+        created = []
+        def factory(argv, cwd, env, dimensions):
+            created.append(self.FakePty(argv, cwd, env, dimensions))
+            return created[-1]
+
+        with tempfile.TemporaryDirectory() as directory:
+            service = TerminalService(pty_factory=factory, replay_limit=64)
+            terminal = service.create("powershell", Path(directory), 100, 30)
+            created[0].emit("first")
+            created[0].emit("second")
+            deadline = time.monotonic() + 2
+            events = []
+            while len(events) < 2 and time.monotonic() < deadline:
+                events.extend(service.read_after(terminal.id, events[-1][0] if events else 0, timeout=0.2))
+
+            self.assertEqual([event[1] for event in events], ["first", "second"])
+            self.assertEqual(service.read_after(terminal.id, 0, timeout=0), events)
+            service.resize(terminal.id, 132, 43)
+            self.assertEqual(created[0].resizes, [(43, 132)])
+            service.close(terminal.id)
+
+    def test_close_all_stops_every_embedded_terminal(self):
+        processes = []
+
+        def factory(argv, cwd, env, dimensions):
+            process = self.FakePty(argv, cwd, env, dimensions)
+            processes.append(process)
+            return process
+
+        service = TerminalService(pty_factory=factory)
+        service.create("powershell", Path.cwd())
+        service.create("powershell", Path.cwd())
+
+        service.close_all()
+
+        self.assertTrue(all(process.closed for process in processes))
+        self.assertEqual(service.list(), [])
 
     def test_persistent_powershell_streams_output_and_closes_exact_process(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -105,7 +187,7 @@ class TerminalServiceTests(unittest.TestCase):
 
                 deadline = time.monotonic() + 8
                 output = ""
-                while completion_marker not in output and time.monotonic() < deadline:
+                while f"{completion_marker}0" not in output and time.monotonic() < deadline:
                     output += service.read(terminal.id, timeout=0.5)
                 self.assertIn("JSON_CODR_APPROVED_ACTION", output)
                 self.assertIn(f"{completion_marker}0", output)

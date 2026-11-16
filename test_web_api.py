@@ -28,6 +28,7 @@ class FakeService:
         self.last_images = []
         self.vision = False
         self.actions = []
+        self.config = {"tool_fallback_model": "qwen3:4b"}
 
     async def health(self):
         return {"ollama": self.available}
@@ -62,6 +63,21 @@ class FakeService:
 
     async def supports_vision(self, model):
         return self.vision
+
+    async def supports_tools(self, model):
+        return model != "opencoder:8b"
+
+    async def tool_compatibility(self, model):
+        native = await self.supports_tools(model)
+        effective = model if native else self.config["tool_fallback_model"]
+        return {
+            "requested_model": model,
+            "advertised_tools": native,
+            "native_tools_verified": native,
+            "route": "native_verified" if native else "delegated_verified",
+            "effective_tool_model": effective,
+            "available": True,
+        }
 
     async def generate_deterministic(self, model, messages, temperature=0.0):
         scenario = messages[0]["content"].split("SCENARIO_ID:", 1)[1].splitlines()[0].strip()
@@ -212,6 +228,16 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(launched.status_code, 201)
         self.assertEqual(terminals.plans[0].tool, "aider")
 
+        fallback = client.post("/api/coding-agents/launch", headers=headers, json={
+            "project_root": str(project), "tool": "aider", "model": "opencoder:8b",
+            "mode": "delegated", "prompt": "Inspect the project"
+        })
+        self.assertEqual(fallback.status_code, 201)
+        self.assertTrue(fallback.json()["tool_fallback_used"])
+        self.assertEqual(fallback.json()["requested_model"], "opencoder:8b")
+        self.assertEqual(fallback.json()["effective_model"], "qwen3:4b")
+        self.assertIn("ollama_chat/qwen3:4b", terminals.plans[1].argv)
+
         failed = client.post("/api/coding-agents/launch", headers=headers, json={
             "project_root": str(project), "tool": "continue", "model": "qwen2.5-coder:7b-instruct-q4_K_M",
             "mode": "interactive"
@@ -339,14 +365,14 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         cpu = response.json()[0]
         self.assertEqual(cpu["id"], "cpu")
-        self.assertEqual(
-            cpu["compatible_models"],
-            [{
-                "model": "qwen2.5-coder:7b-instruct-q4_K_M",
-                "status": "runnable",
-                "evidence": {"execution": "CPU"},
-            }],
-        )
+        self.assertEqual(len(cpu["compatible_models"]), 1)
+        model = cpu["compatible_models"][0]
+        self.assertEqual(model["model"], "qwen2.5-coder:7b-instruct-q4_K_M")
+        self.assertEqual(model["status"], "runnable")
+        self.assertEqual(model["evidence"], {"execution": "CPU"})
+        self.assertEqual(model["agent_compatibility"]["tool_route"], "native_verified")
+        self.assertTrue(model["agent_compatibility"]["continue_verified"])
+        self.assertTrue(model["agent_compatibility"]["aider_verified"])
 
     def test_hardware_detection_stays_available_while_ollama_model_listing_is_busy(self):
         class BusyService(FakeService):
@@ -385,9 +411,9 @@ class WebApiTests(unittest.TestCase):
     def test_health_reports_ollama_readiness(self):
         self.assertEqual(
             self.client.get("/api/health").json(),
-            {"status": "ready", "ollama": True, "app_version": "V1.0.17-beta.2"},
+            {"status": "ready", "ollama": True, "app_version": "V1.0.17-beta.3"},
         )
-        self.assertEqual(self.client.app.version, "V1.0.17-beta.2")
+        self.assertEqual(self.client.app.version, "V1.0.17-beta.3")
         self.service.available = False
         self.assertEqual(self.client.get("/api/health").json()["status"], "degraded")
 
@@ -594,6 +620,60 @@ class WebApiTests(unittest.TestCase):
 
         self.assertEqual(models[0]["processor"], "75% GPU")
         self.assertEqual(models[0]["size_vram"], 300_000_000)
+
+    def test_model_tool_support_uses_verified_probe_results(self):
+        class CapabilityClient:
+            async def show(self, model):
+                return {"capabilities": ["completion", "tools"]}
+
+        service = OllamaService(client=CapabilityClient())
+        supported = asyncio.run(service.supports_tools("qwen3:8b"))
+        advertised_but_unverified = asyncio.run(service.supports_tools("qwen2.5-coder:7b"))
+
+        self.assertTrue(supported)
+        self.assertFalse(advertised_but_unverified)
+
+    def test_tool_compatibility_distinguishes_advertised_native_and_delegated(self):
+        class CapabilityClient:
+            async def show(self, model):
+                return {"capabilities": ["completion", "tools"]}
+
+        service = OllamaService(client=CapabilityClient())
+
+        delegated = asyncio.run(service.tool_compatibility("qwen2.5-coder:7b"))
+        native = asyncio.run(service.tool_compatibility("qwen3:8b"))
+
+        self.assertEqual(delegated, {
+            "requested_model": "qwen2.5-coder:7b",
+            "advertised_tools": True,
+            "native_tools_verified": False,
+            "route": "delegated_verified",
+            "effective_tool_model": "qwen3:4b",
+            "available": True,
+        })
+        self.assertEqual(native, {
+            "requested_model": "qwen3:8b",
+            "advertised_tools": True,
+            "native_tools_verified": True,
+            "route": "native_verified",
+            "effective_tool_model": "qwen3:8b",
+            "available": True,
+        })
+
+    def test_tool_compatibility_reports_unavailable_without_verified_fallback(self):
+        class CapabilityClient:
+            async def show(self, model):
+                return {"capabilities": ["completion"]}
+
+        service = OllamaService(client=CapabilityClient())
+        service.config["verified_tool_models"] = []
+        service.config["tool_fallback_model"] = ""
+
+        result = asyncio.run(service.tool_compatibility("opencoder:8b"))
+
+        self.assertEqual(result["route"], "unavailable")
+        self.assertIsNone(result["effective_tool_model"])
+        self.assertFalse(result["available"])
 
     def test_deterministic_generation_uses_zero_temperature_and_raw_text(self):
         class DeterministicClient:

@@ -2,6 +2,7 @@ import tempfile
 import unittest
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from web_app.coding_agents import CodingAgentService
 
@@ -101,20 +102,35 @@ class CodingAgentAdapterTests(unittest.TestCase):
             service = self._service(root)
             service.grant(project, "continue")
 
-            interactive = service.launch_plan("continue", project, "qwen2.5-coder:7b", "interactive")
-            delegated = service.launch_plan("continue", project, "qwen2.5-coder:7b", "delegated", "Fix tests")
+            with patch.dict("os.environ", {"GHIDRA_INSTALL_DIR": "C:/tools/ghidra", "JAVA_HOME": "C:/tools/jdk"}):
+                interactive = service.launch_plan("continue", project, "qwen2.5-coder:7b", "interactive")
+                delegated = service.launch_plan("continue", project, "qwen2.5-coder:7b", "delegated", "Fix tests")
 
             config = Path(interactive.argv[2])
             self.assertEqual(interactive.argv[:2], ("C:/tools/cn.exe", "--config"))
             self.assertTrue(config.is_file())
             self.assertIn("provider: ollama", config.read_text(encoding="utf-8"))
             self.assertIn("model: qwen2.5-coder:7b", config.read_text(encoding="utf-8"))
+            self.assertIn("mcpServers:", config.read_text(encoding="utf-8"))
+            self.assertIn("name: REA reverse engineering", config.read_text(encoding="utf-8"))
+            self.assertIn("GHIDRA_INSTALL_DIR:", config.read_text(encoding="utf-8"))
             self.assertEqual(delegated.argv, (
                 "C:/tools/cn.exe", "-p", "Fix tests", "--allow", "Read", "--allow", "Write", "--allow", "Edit",
                 "--exclude", "Bash", "--config", str(config)
             ))
             self.assertTrue(interactive.interactive)
             self.assertFalse(delegated.interactive)
+
+            limited = service.launch_plan(
+                "continue", project, "opencoder:8b", "delegated", "Inspect", supports_tools=False
+            )
+            limited_config = Path(limited.argv[-1]).read_text(encoding="utf-8")
+            self.assertNotIn("tool_use", limited_config)
+            self.assertIn("onlyUseSystemMessageTools: true", limited_config)
+            self.assertNotIn("mcpServers:", limited_config)
+            self.assertNotIn("--allow", limited.argv)
+            for tool in ("Read", "Write", "Edit", "Fetch", "MultiEdit", "Bash", "Skills"):
+                self.assertIn(tool, limited.argv)
 
     def test_aider_plan_uses_ollama_chat_and_local_endpoint(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -124,7 +140,8 @@ class CodingAgentAdapterTests(unittest.TestCase):
             service = self._service(root)
             service.grant(project, "aider")
 
-            plan = service.launch_plan("aider", project, "qwen2.5-coder:7b", "interactive")
+            with patch.dict("os.environ", {"GHIDRA_INSTALL_DIR": "C:/tools/ghidra", "JAVA_HOME": "C:/tools/jdk"}):
+                plan = service.launch_plan("aider", project, "qwen2.5-coder:7b", "interactive")
 
             self.assertEqual(plan.argv[:3], ("C:/tools/aider.exe", "--model", "ollama_chat/qwen2.5-coder:7b"))
             self.assertIn("--no-check-update", plan.argv)
@@ -133,8 +150,11 @@ class CodingAgentAdapterTests(unittest.TestCase):
             self.assertIn("--set-env", plan.argv)
             self.assertIn("OLLAMA_API_BASE=http://127.0.0.1:11434", plan.argv)
             self.assertEqual(plan.environment["OLLAMA_API_BASE"], "http://127.0.0.1:11434")
+            self.assertIn("GHIDRA_INSTALL_DIR", plan.environment)
+            self.assertIn("JAVA_HOME", plan.environment)
 
-            delegated = service.launch_plan("aider", project, "qwen2.5-coder:7b", "delegated", "Fix tests")
+            with patch.dict("os.environ", {"GHIDRA_INSTALL_DIR": "C:/tools/ghidra", "JAVA_HOME": "C:/tools/jdk"}):
+                delegated = service.launch_plan("aider", project, "qwen2.5-coder:7b", "delegated", "Fix tests")
             self.assertIn("--subtree-only", delegated.argv)
             self.assertIn("--no-suggest-shell-commands", delegated.argv)
             self.assertIn("--no-auto-commits", delegated.argv)

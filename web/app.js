@@ -312,7 +312,8 @@ function appendTerminalOutput(text) {
 }
 
 async function ensureTerminal() {
-  if (terminalSocket?.readyState === WebSocket.OPEN) return;
+  const activeSession = terminalSessions.get(activeTerminalProfile);
+  if (terminalSocket?.readyState === WebSocket.OPEN && terminalId === activeSession?.terminal?.id) return;
   if (terminalConnectionPromise) return terminalConnectionPromise;
   terminalConnectionPromise = createTerminalConnection();
   try {
@@ -349,13 +350,13 @@ async function restoreTerminalSessions() {
   }
   const response = await fetch("/api/terminals");
   if (!response.ok) return;
-  const running = new Map(
+  const available = new Map(
     (await response.json())
-      .filter((terminal) => terminal.status === "running" && !terminal.external)
+      .filter((terminal) => !terminal.external)
       .map((terminal) => [terminal.id, terminal]),
   );
   for (const [profile, session] of Object.entries(saved)) {
-    const terminal = running.get(session.id);
+    const terminal = available.get(session.id);
     if (terminal) terminalSessions.set(profile, { terminal, lastSequence: session.lastSequence || 0 });
   }
   persistTerminalSessions();
@@ -377,6 +378,10 @@ function initializeXterm() {
   terminalFitAddon.fit();
   elements.terminalOutput.hidden = true;
   xterm.onData((data) => {
+    // ConPTY queries terminal capabilities while PowerShell starts. xterm answers
+    // those queries through onData, but PowerShell treats the answers as typed
+    // input and leaves them in its command buffer.
+    if (/^\x1b\[(?:\?|>)[0-9;]*c$/.test(data)) return;
     if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type: "input", data }));
   });
   xterm.onResize(({ cols, rows }) => {
@@ -431,7 +436,9 @@ async function connectTerminalRecord(terminal, profile = activeTerminalProfile) 
   if (terminalSocket) terminalSocket.close();
   terminalId = terminal.id;
   const session = storedSession;
-  lastTerminalSequence = session.lastSequence || 0;
+  // The shared xterm surface is cleared when profiles change, so replay this
+  // profile's bounded server history instead of resuming into a blank screen.
+  lastTerminalSequence = 0;
   if (xterm) xterm.clear();
   elements.terminalOutput.textContent = "";
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -568,17 +575,26 @@ async function launchCodingAgent(event) {
   });
   if (!response.ok) throw new Error(await responseErrorMessage(response, "Unable to launch coding agent"));
   const terminal = await response.json();
+  const effectiveModel = terminal.effective_model || payload.model;
+  const compatibility = terminal.tool_compatibility;
+  const modelStatus = compatibility?.route === "delegated_verified"
+    ? `${effectiveModel} · delegated verified tools for ${payload.model} · native tools not verified`
+    : compatibility?.route === "native_verified"
+      ? `${effectiveModel} · native tools verified`
+      : terminal.tool_fallback_used
+        ? `${effectiveModel} (verified tool fallback for ${payload.model})`
+        : effectiveModel;
   activeTerminalProfile = payload.tool;
   elements.terminalTabs.forEach((tab) => tab.setAttribute("aria-selected", String(tab.dataset.terminalProfile === activeTerminalProfile)));
   elements.terminalOutput.textContent = "";
   if (terminal.external) {
     await closeActiveTerminal();
     elements.terminalStatus.textContent = `${terminal.shell} launched`;
-    elements.codingAgentStatus.textContent = `${payload.tool} opened in Windows Terminal with ${payload.model}`;
+    elements.codingAgentStatus.textContent = `${payload.tool} opened in Windows Terminal with ${modelStatus}`;
     return;
   }
   await connectTerminalRecord(terminal, payload.tool);
-  elements.codingAgentStatus.textContent = `${payload.tool} launched with ${payload.model}`;
+  elements.codingAgentStatus.textContent = `${payload.tool} launched with ${modelStatus}`;
 }
 
 async function renderExecutionGrant(grant, payload) {
@@ -890,18 +906,21 @@ async function runHardwareDetection() {
   elements.hardwareDetect.disabled = true;
   elements.hardwareCandidates.innerHTML = '<p class="meta">Detecting local runtimes…</p>';
   try {
-    const [response, catalogResponse, environmentResponse, compatibilityResponse] = await Promise.all([
+    const [response, catalogResponse, environmentResponse] = await Promise.all([
       fetch("/api/hardware/detect", { method: "POST" }),
       fetch("/api/inference/catalog"),
       fetch("/api/inference/environments"),
-      fetch("/api/hardware/model-compatibility"),
     ]);
     if (!response.ok) throw new Error(await responseErrorMessage(response, "Hardware detection failed"));
     const candidates = await response.json();
     leaderboardCandidateCache = candidates.map((candidate) => ({ ...candidate }));
     const optimizedCatalog = catalogResponse.ok ? await catalogResponse.json() : [];
     const providerEnvironments = environmentResponse.ok ? await environmentResponse.json() : [];
-    const compatibility = compatibilityResponse.ok ? await compatibilityResponse.json() : [];
+    const compatibility = candidates.map((candidate) => ({
+      backend: candidate.id,
+      backend_name: candidate.name,
+      models: candidate.compatible_models || [],
+    }));
     elements.hardwareModelCompatibility.replaceChildren();
     if (!compatibility.length) {
       elements.hardwareModelCompatibility.innerHTML = '<p class="meta">No model-specific compatibility results are available.</p>';
@@ -916,7 +935,19 @@ async function runHardwareDetection() {
         const state = model.status === "accelerated" ? "Accelerated and verified" :
           model.status === "candidate" ? "Compatible download candidate" :
           model.status === "runnable" ? "Runnable · acceleration unverified" : model.status;
-        line.textContent = `${model.model} · ${state}${model.reason ? ` · ${model.reason}` : ""}`;
+        const agents = model.agent_compatibility;
+        const routeState = agents?.native_tools_verified
+          ? "native tool route verified"
+          : agents?.tool_route === "delegated_verified"
+            ? `delegated tool route verified via ${agents.effective_tool_model}`
+            : "agent tools unavailable or unverified";
+        const sessionState = agents?.continue_verified && agents?.aider_verified
+          ? "Continue verified · Aider verified"
+          : agents?.tool_route_verified
+            ? "Continue/Aider not verified on this profile"
+            : "Continue/Aider unavailable";
+        const agentState = `${routeState} · ${sessionState}`;
+        line.textContent = `${model.model} · ${state} · ${agentState}${model.reason ? ` · ${model.reason}` : ""}`;
         label.append(line);
       }
       row.append(label); elements.hardwareModelCompatibility.append(row);
@@ -958,7 +989,16 @@ async function runHardwareDetection() {
           const state = model.status === "accelerated" ? "accelerated and verified" :
             model.status === "runnable" ? "ready to test" :
             model.status === "candidate" ? "available to download" : model.status;
-          line.textContent = `${model.model} · ${state}${model.reason ? ` · ${model.reason}` : ""}`;
+          const agents = model.agent_compatibility;
+          const routeState = agents?.native_tools_verified
+            ? "native tool route verified"
+            : agents?.tool_route === "delegated_verified"
+              ? `delegated tool route via ${agents.effective_tool_model}`
+              : "agent tools unverified";
+          const agentState = agents?.continue_verified && agents?.aider_verified
+            ? `${routeState} · Continue/Aider verified`
+            : `${routeState} · Continue/Aider not verified on this profile`;
+          line.textContent = `${model.model} · ${state} · ${agentState}${model.reason ? ` · ${model.reason}` : ""}`;
           modelDetails.append(line);
         }
         label.append(modelDetails);
@@ -2303,7 +2343,7 @@ elements.terminalTabs.forEach((tab) => tab.addEventListener("click", async () =>
     return;
   }
   if (activeTerminalProfile === "powershell") {
-    await createTerminalConnection();
+    await ensureTerminal();
     return;
   }
   elements.codingAgentTool.value = activeTerminalProfile;

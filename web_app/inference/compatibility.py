@@ -3,6 +3,24 @@ from __future__ import annotations
 from web_app.inference.contracts import OptimizedModelRecord
 
 
+def attach_agent_compatibility(status: dict, compatibility: dict) -> dict:
+    route_available = bool(compatibility.get("available"))
+    profile_available = status.get("status") in {"runnable", "accelerated"}
+    session_verified = route_available and profile_available
+    return {
+        **status,
+        "agent_compatibility": {
+            "advertised_tools": bool(compatibility.get("advertised_tools")),
+            "native_tools_verified": bool(compatibility.get("native_tools_verified")),
+            "tool_route": compatibility.get("route", "unavailable"),
+            "effective_tool_model": compatibility.get("effective_tool_model"),
+            "tool_route_verified": route_available,
+            "continue_verified": session_verified,
+            "aider_verified": session_verified,
+        },
+    }
+
+
 def ollama_model_status(model: str, backend: str, running: list[dict], compatible: bool) -> dict:
     active = next((item for item in running if item.get("name") == model), None)
     vram = int((active or {}).get("size_vram") or 0)
