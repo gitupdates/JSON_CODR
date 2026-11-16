@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from enum import Enum
 from typing import Annotated, Literal, Mapping
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, field_serializer, field_validator, model_validator
 
@@ -22,6 +24,7 @@ class TaskStatus(str, Enum):
     failed = "failed"
     cancelled = "cancelled"
     interrupted = "interrupted"
+    cancel_requested = "cancel_requested"
 
 
 class ExecutionMode(str, Enum):
@@ -128,6 +131,7 @@ class TaskCommand(VersionedContract):
     task_id: TaskId
     thread_id: ThreadId
     project_id: ProjectId
+    parent_task_id: TaskId | None = None
     command_type: str = Field(min_length=1)
     payload: Mapping[str, JsonValue] = Field(default_factory=dict)
 
@@ -142,11 +146,10 @@ class TaskCommand(VersionedContract):
         return _thaw_json(value)
 
 
-class TaskEvent(VersionedContract):
-    task_id: TaskId
-    sequence: int = Field(ge=0)
+class _TaskEventContent(VersionedContract):
     event_type: str = Field(min_length=1)
     payload: Mapping[str, JsonValue] = Field(default_factory=dict)
+    causation_id: Identifier | None = None
 
     @field_validator("payload", mode="after")
     @classmethod
@@ -159,10 +162,24 @@ class TaskEvent(VersionedContract):
         return _thaw_json(value)
 
 
+class TaskEventDraft(_TaskEventContent):
+    pass
+
+
+class TaskEvent(_TaskEventContent):
+    event_id: UUID
+    task_id: TaskId
+    sequence: int = Field(ge=0)
+    source: str = Field(min_length=1)
+    subject: str = Field(min_length=1)
+    occurred_at: datetime
+
+
 class TaskRecord(VersionedContract):
     task_id: TaskId
     thread_id: ThreadId
     project_id: ProjectId
+    parent_task_id: TaskId | None = None
     status: TaskStatus = TaskStatus.pending
     events: tuple[TaskEvent, ...] = ()
 

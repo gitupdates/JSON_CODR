@@ -86,27 +86,27 @@ git commit -m "feat(core): add unified capability contracts"
 
 New IDs use UUIDv7. Event envelopes retain task sequence and causation while carrying CloudEvents-compatible identity metadata. Persisted hashes use RFC 8785 canonical JSON. Mutation records carry expected-version or expected-digest preconditions; HTTP mappings use strong `If-Match` semantics and RFC 9457 problem details.
 
-- [ ] **Step 1: Write failing persistence tests**
+- [x] **Step 1: Write failing persistence tests**
 
 Cover atomic task creation, monotonic per-task sequences, concurrent append serialization, idempotency keys, parent-child links, artifact hashes, redacted metadata, retention without broken references, restart recovery, and unresolved running tasks becoming `interrupted` rather than `completed`.
 
-- [ ] **Step 2: Run the focused test and verify failure**
+- [x] **Step 2: Run the focused test and verify failure**
 
 Run: `C:\Python315\python.exe -m unittest test_core_store -v`
 
 Expected: FAIL because the store modules do not exist.
 
-- [ ] **Step 3: Implement a SQLite TaskStore and content-addressed ArtifactStore**
+- [x] **Step 3: Implement a SQLite TaskStore and content-addressed ArtifactStore**
 
 Use one SQLite transaction for each state transition and event append. Store large payloads by artifact reference; never persist raw credentials.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run: `C:\Python315\python.exe -m unittest test_core_store -v`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add web_app/core test_core_store.py
