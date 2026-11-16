@@ -34,7 +34,7 @@ class WebStaticTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.0.13", response.text)
+        self.assertIn("V1.0.14", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -55,7 +55,7 @@ class WebStaticTests(unittest.TestCase):
         html = self.client.get("/").text
         css = self.client.get("/static/app.css")
         javascript = self.client.get("/static/app.js")
-        self.assertIn('/static/app.css?v=1.0.13-benchmark-leaderboard-3', html)
+        self.assertIn('/static/app.css?v=1.0.14-runtime-models-2', html)
         self.assertEqual(css.status_code, 200)
         self.assertIn("text/css", css.headers["content-type"])
         self.assertEqual(javascript.status_code, 200)
@@ -293,6 +293,12 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('/api/hardware/model-compatibility', javascript)
         self.assertIn('/api/inference/models/search', javascript)
         self.assertIn('model.status === "accelerated"', javascript)
+        self.assertIn("candidate.compatible_models", javascript)
+        self.assertIn("Compatible models (", javascript)
+        for sort_key in ("rank", "model", "performance_index", "tokens_per_second", "ttft_ms", "average_total_seconds", "peak_vram_mb", "speedup_vs_cpu", "status"):
+            self.assertIn(f'data-sort-key="{sort_key}"', html)
+        self.assertIn("buildAllRows", javascript)
+        self.assertIn("sortRows", javascript)
         self.assertIn('aria-label="Backend performance comparison"', html)
         self.assertIn('aria-label="Performance history trend"', html)
         self.assertIn("Performance results do not measure model answer quality", html)

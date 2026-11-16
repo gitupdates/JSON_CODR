@@ -217,6 +217,11 @@ footer { padding: 22px 0 34px; color: var(--text-subtle); font: 600 10px ui-mono
 .dependency-list { display: grid; gap: 8px; margin-top: 12px; }
 .dependency-row { padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; }
 .dependency-row code { margin-top: 5px; color: var(--cyan); overflow-wrap: anywhere; font-size: 11px; }
+.runtime-models { margin-top: 9px; max-width: 680px; }
+.runtime-models summary { cursor: pointer; color: var(--text-soft); font-size: 12px; font-weight: 700; }
+.runtime-models p { margin: 6px 0 0; overflow-wrap: anywhere; }
+.runtime-probe-controls { display: grid; gap: 8px; min-width: min(290px, 40vw); }
+.runtime-model-select { height: 38px; }
 .skill-list { display: grid; gap: 12px; margin-top: 14px; }
 .skill-pack { padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
 .skill-pack-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -278,6 +283,9 @@ footer { padding: 22px 0 34px; color: var(--text-subtle); font: 600 10px ui-mono
 .leaderboard-table th { color: var(--muted); background: var(--surface-raised); font: 10px ui-monospace, monospace; letter-spacing: .06em; text-transform: uppercase; }
 .leaderboard-table tbody tr { cursor: pointer; }
 .leaderboard-table tbody tr:hover, .leaderboard-table tbody tr.is-selected { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.leaderboard-table th button { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; }
+.leaderboard-table th button[aria-sort="ascending"]::after { content: " ↑"; }
+.leaderboard-table th button[aria-sort="descending"]::after { content: " ↓"; }
 .leaderboard-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px; }
 .leaderboard-chart { min-width: 0; min-height: 260px; margin: 0; padding: 14px; background: var(--surface-raised); border: 1px solid var(--line); }
 .leaderboard-chart figcaption { margin-bottom: 8px; font-weight: 700; }

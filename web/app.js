@@ -97,6 +97,7 @@ const elements = {
   leaderboardMetric: document.querySelector("#leaderboard-metric"),
   leaderboardKpis: document.querySelector("#leaderboard-kpis"),
   leaderboardTable: document.querySelector("#leaderboard-table"),
+  leaderboardSortButtons: [...document.querySelectorAll("[data-sort-key]")],
   leaderboardBackendChart: document.querySelector("#leaderboard-backend-chart"),
   leaderboardTrendChart: document.querySelector("#leaderboard-trend-chart"),
   leaderboardDetails: document.querySelector("#leaderboard-details"),
@@ -155,6 +156,7 @@ let leaderboardHistoryCache = [];
 let leaderboardCandidateCache = [];
 let selectedLeaderboardSessionId = null;
 let selectedLeaderboardRowId = null;
+let leaderboardSort = { key: "rank", direction: "asc" };
 const actionButtons = new Map();
 
 const dependencyInstallQueue = createDependencyInstallQueue(async (command) => {
@@ -702,14 +704,46 @@ async function runHardwareDetection() {
         : null;
       detail.textContent = candidate.compatibility_reason || stateDetails || (candidate.verified ? `Verified · ${readiness}` : candidate.quarantine_reason ? `Quarantined: ${candidate.quarantine_reason}` : readiness || "Available for testing");
       label.append(name, detail);
+      const compatibleModels = (candidate.compatible_models || []).filter((model) => model.status !== "unsupported");
+      const readyModels = compatibleModels.filter((model) => ["runnable", "accelerated"].includes(model.status));
+      let probeModel = elements.model.value || "qwen2.5-coder:0.5b";
+      if (compatibleModels.length) {
+        const modelDetails = document.createElement("details"); modelDetails.className = "runtime-models";
+        const modelSummary = document.createElement("summary");
+        modelSummary.textContent = `Compatible models (${compatibleModels.length}) · ${readyModels.length} ready`;
+        modelDetails.append(modelSummary);
+        for (const model of compatibleModels) {
+          const line = document.createElement("p"); line.className = "meta";
+          const state = model.status === "accelerated" ? "accelerated and verified" :
+            model.status === "runnable" ? "ready to test" :
+            model.status === "candidate" ? "available to download" : model.status;
+          line.textContent = `${model.model} · ${state}${model.reason ? ` · ${model.reason}` : ""}`;
+          modelDetails.append(line);
+        }
+        label.append(modelDetails);
+      }
       const probe = document.createElement("button"); probe.type = "button"; probe.className = "secondary"; probe.textContent = "Test and use";
       if (candidate.runnable === false) { probe.disabled = true; probe.textContent = "Runtime unavailable"; }
+      const modelSelect = document.createElement("select"); modelSelect.className = "runtime-model-select";
+      modelSelect.setAttribute("aria-label", `${candidate.name} model to test`);
+      for (const model of readyModels) {
+        const option = document.createElement("option"); option.value = model.model; option.textContent = model.model;
+        modelSelect.append(option);
+      }
+      if (readyModels.length) {
+        probeModel = readyModels.some((model) => model.model === probeModel) ? probeModel : readyModels[0].model;
+        modelSelect.value = probeModel;
+        modelSelect.addEventListener("change", () => { probeModel = modelSelect.value; });
+      } else if (candidate.runnable !== false) {
+        probe.disabled = true;
+        probe.textContent = "No ready model";
+      }
       probe.addEventListener("click", async () => {
         probe.disabled = true; probe.textContent = "Testing…";
         try {
           const result = await fetch("/api/hardware/probe", {
             method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ backend: candidate.id, model: elements.model.value || "qwen2.5-coder:0.5b" }),
+            body: JSON.stringify({ backend: candidate.id, model: probeModel }),
           });
           const payload = await result.json();
           if (!result.ok) throw new Error(payload.detail || "Backend probe failed");
@@ -720,7 +754,10 @@ async function runHardwareDetection() {
           if (payload.restart_required) elements.hardwareStatus.textContent += " · restart Ollama to activate";
         } catch (error) { showError(error.message); probe.disabled = false; probe.textContent = "Retest"; }
       });
-      let control = probe;
+      const probeControls = document.createElement("div"); probeControls.className = "runtime-probe-controls";
+      if (readyModels.length) probeControls.append(modelSelect);
+      probeControls.append(probe);
+      let control = probeControls;
       if (candidate.installation?.automatic) {
         const install = document.createElement("button"); install.type = "button"; install.className = "secondary"; install.textContent = "Review runtime install";
         install.addEventListener("click", async () => {
@@ -993,18 +1030,21 @@ function renderBenchmarkLeaderboard() {
     elements.leaderboardTable.replaceChildren(); const row = document.createElement("tr"); const cell = document.createElement("td"); cell.colSpan = 9; cell.className = "meta"; cell.textContent = "No benchmark history. Run Performance benchmarks first."; row.append(cell); elements.leaderboardTable.append(row);
     elements.leaderboardKpis.replaceChildren(); elements.leaderboardStatus.textContent = "No saved benchmark results."; renderLeaderboardScatter([]); renderLeaderboardTrend(null); renderLeaderboardDetails(null); return;
   }
-  const session = leaderboardHistoryCache.find((item) => item.id === selectedLeaderboardSessionId) || leaderboardHistoryCache[0];
-  selectedLeaderboardSessionId = session.id;
-  const allRows = window.JSONCodrLeaderboard.buildRows(leaderboardHistoryCache, leaderboardCandidateCache, session.id);
-  const rows = window.JSONCodrLeaderboard.filterAndRank(allRows, {
+  const allRows = window.JSONCodrLeaderboard.buildAllRows(leaderboardHistoryCache);
+  const rankedRows = window.JSONCodrLeaderboard.filterAndRank(allRows, {
     search: elements.leaderboardSearch.value,
     model: elements.leaderboardModelFilter.value,
     backend: elements.leaderboardBackendFilter.value,
     suite: elements.leaderboardSuiteFilter.value,
     metric: elements.leaderboardMetric.value,
   });
+  const rows = window.JSONCodrLeaderboard.sortRows(rankedRows, leaderboardSort);
   const selected = window.JSONCodrLeaderboard.selectRow(rows, selectedLeaderboardRowId); selectedLeaderboardRowId = selected?.id || null;
-  elements.leaderboardStatus.textContent = `${session.model} · ${session.suite} · ${new Date(session.created_at).toLocaleString()} · ${rows.length} option(s)`;
+  elements.leaderboardStatus.textContent = `${rows.length} non-failed result(s) · sorted by ${leaderboardSort.key.replaceAll("_", " ")}`;
+  for (const button of elements.leaderboardSortButtons) {
+    if (button.dataset.sortKey === leaderboardSort.key) button.setAttribute("aria-sort", leaderboardSort.direction === "asc" ? "ascending" : "descending");
+    else button.removeAttribute("aria-sort");
+  }
   renderLeaderboardKpis(rows); elements.leaderboardTable.replaceChildren();
   for (const row of rows) {
     const tableRow = document.createElement("tr"); tableRow.tabIndex = 0; tableRow.classList.toggle("is-selected", row.id === selectedLeaderboardRowId);
@@ -1709,6 +1749,15 @@ elements.hardwareBenchmarkClear.addEventListener("click", () => clearHardwareBen
 elements.leaderboardSearch.addEventListener("input", renderBenchmarkLeaderboard);
 elements.leaderboardBackendFilter.addEventListener("change", renderBenchmarkLeaderboard);
 elements.leaderboardMetric.addEventListener("change", renderBenchmarkLeaderboard);
+for (const button of elements.leaderboardSortButtons) {
+  button.addEventListener("click", () => {
+    const key = button.dataset.sortKey;
+    leaderboardSort = leaderboardSort.key === key
+      ? { key, direction: leaderboardSort.direction === "asc" ? "desc" : "asc" }
+      : { key, direction: key === "rank" ? "asc" : "desc" };
+    renderBenchmarkLeaderboard();
+  });
+}
 elements.leaderboardModelFilter.addEventListener("change", () => {
   const model = elements.leaderboardModelFilter.value;
   const suite = elements.leaderboardSuiteFilter.value;

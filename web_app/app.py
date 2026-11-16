@@ -175,15 +175,9 @@ def create_app(
     async def hardware_status():
         return hardware.status()
 
-    @application.post("/api/hardware/detect")
-    async def detect_hardware():
-        return hardware.detect()
-
-    @application.get("/api/hardware/model-compatibility")
-    async def hardware_model_compatibility():
+    async def model_compatibility(detected: list[dict]) -> list[dict]:
         installed, running = await asyncio.gather(service.list_models(), service.running_models())
         installed_names = [item["name"] for item in installed if item.get("installed")]
-        detected = hardware.detect()
         matrix = []
         for candidate in detected:
             backend = candidate["id"]
@@ -199,6 +193,17 @@ def create_app(
                     models.append(optimized_model_status(model, installed_model, bool(candidate.get("runtime_ready")), verified))
             matrix.append({"backend": backend, "name": candidate["name"], "models": models})
         return matrix
+
+    @application.post("/api/hardware/detect")
+    async def detect_hardware():
+        detected = hardware.detect()
+        compatibility = await model_compatibility(detected)
+        models_by_backend = {group["backend"]: group["models"] for group in compatibility}
+        return [{**candidate, "compatible_models": models_by_backend.get(candidate["id"], [])} for candidate in detected]
+
+    @application.get("/api/hardware/model-compatibility")
+    async def hardware_model_compatibility():
+        return await model_compatibility(hardware.detect())
 
     @application.get("/api/hardware/telemetry")
     async def hardware_telemetry():

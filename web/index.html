@@ -17,7 +17,7 @@
       })();
     </script>
     <title>JSON_CODR · Local model console</title>
-    <link rel="stylesheet" href="/static/app.css?v=1.0.13-benchmark-leaderboard-3" />
+    <link rel="stylesheet" href="/static/app.css?v=1.0.14-runtime-models-2" />
   </head>
   <body>
     <div class="ambient ambient-one"></div>
@@ -62,7 +62,7 @@
       <header class="topbar">
         <a class="brand" href="/" aria-label="JSON CODR home">
           <span class="brand-mark">{ }</span>
-          <span><strong>JSON_CODR</strong><small>V1.0.13 · local model console</small></span>
+          <span><strong>JSON_CODR</strong><small>V1.0.14 · local model console</small></span>
         </a>
         <div id="health-status" class="health" role="status" aria-live="polite">
           <span class="health-dot"></span><span>Connecting</span>
@@ -304,7 +304,7 @@
               <div><h3 id="hardware-section-leaderboard">LocalPerf leaderboard</h3><p class="meta">Rank and compare measured local inference performance across CPU, GPU, NPU, and optimized runtimes.</p></div>
               <span id="leaderboard-status" class="meta" role="status" aria-live="polite">Load benchmark history to compare results.</span>
             </div>
-            <p class="leaderboard-disclaimer">Performance results do not measure model answer quality. Direct ranks use one model, workload, suite, machine, and benchmark session.</p>
+            <p class="leaderboard-disclaimer">Performance results do not measure answer quality. Cross-model ranks compare the measured model, runtime, and hardware combination; use filters for like-for-like workload comparisons.</p>
             <div class="leaderboard-filters" aria-label="Leaderboard filters">
               <label>Search<input id="leaderboard-search" type="search" placeholder="Model or backend" /></label>
               <label>Model<select id="leaderboard-model-filter"><option value="all">All models</option></select></label>
@@ -316,7 +316,7 @@
             <div class="leaderboard-table-wrap">
               <table class="leaderboard-table">
                 <caption class="sr-only">Local inference performance leaderboard</caption>
-                <thead><tr><th scope="col">Rank</th><th scope="col">Model / backend</th><th scope="col">Index</th><th scope="col">Tokens/s</th><th scope="col">TTFT</th><th scope="col">Duration</th><th scope="col">Peak VRAM</th><th scope="col">CPU speed</th><th scope="col">Status</th></tr></thead>
+                <thead><tr><th scope="col"><button type="button" data-sort-key="rank">Rank</button></th><th scope="col"><button type="button" data-sort-key="model">Model / backend</button></th><th scope="col"><button type="button" data-sort-key="performance_index">Index</button></th><th scope="col"><button type="button" data-sort-key="tokens_per_second">Tokens/s</button></th><th scope="col"><button type="button" data-sort-key="ttft_ms">TTFT</button></th><th scope="col"><button type="button" data-sort-key="average_total_seconds">Duration</button></th><th scope="col"><button type="button" data-sort-key="peak_vram_mb">Peak VRAM</button></th><th scope="col"><button type="button" data-sort-key="speedup_vs_cpu">CPU speed</button></th><th scope="col"><button type="button" data-sort-key="status">Status</button></th></tr></thead>
                 <tbody id="leaderboard-table"><tr><td colspan="9" class="meta">No benchmark history loaded.</td></tr></tbody>
               </table>
             </div>
@@ -384,8 +384,8 @@
       <footer><span>Runs entirely on this machine</span><span>127.0.0.1 · Ollama</span></footer>
       </main>
     </div>
-    <script src="/static/dependency_install_queue.js?v=1.0.13-benchmark-leaderboard-3" defer></script>
-    <script src="/static/benchmark_leaderboard.js?v=1.0.13-benchmark-leaderboard-3" defer></script>
-    <script src="/static/app.js?v=1.0.13-benchmark-leaderboard-3" defer></script>
+    <script src="/static/dependency_install_queue.js?v=1.0.14-runtime-models-2" defer></script>
+    <script src="/static/benchmark_leaderboard.js?v=1.0.14-runtime-models-2" defer></script>
+    <script src="/static/app.js?v=1.0.14-runtime-models-2" defer></script>
   </body>
 </html>

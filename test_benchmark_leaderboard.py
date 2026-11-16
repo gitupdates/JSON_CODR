@@ -72,6 +72,43 @@ def session(session_id="run-1", created_at="2026-11-15T12:00:00Z"):
 
 
 class BenchmarkLeaderboardTests(unittest.TestCase):
+    def test_all_rows_include_every_non_failed_benchmark_result(self):
+        first = session("run-1")
+        second = session("run-2")
+        second["model"] = "other:7b"
+        second["results"][0]["status"] = "failed"
+
+        rows = run_helper(
+            "globalThis.JSONCodrLeaderboard.buildAllRows(input.history)",
+            {"history": [first, second]},
+        )
+
+        self.assertEqual(len(rows), 5)
+        self.assertEqual({row["session_id"] for row in rows}, {"run-1", "run-2"})
+        self.assertFalse(any(row["session_id"] == "run-2" and row["backend"] == "cpu" for row in rows))
+
+    def test_sort_rows_supports_each_leaderboard_column_and_defaults_to_rank(self):
+        rows = [
+            {"id": "b", "rank": 2, "model": "Zulu", "performance_index": 120, "tokens_per_second": 30,
+             "ttft_ms": 200, "average_total_seconds": 3, "peak_vram_mb": 6000, "speedup_vs_cpu": 1.2, "status": "completed"},
+            {"id": "a", "rank": 1, "model": "Alpha", "performance_index": 150, "tokens_per_second": 40,
+             "ttft_ms": 100, "average_total_seconds": 2, "peak_vram_mb": 4000, "speedup_vs_cpu": 1.5, "status": "completed"},
+        ]
+        sorted_rows = run_helper(
+            "Object.fromEntries(input.keys.map(key=>[key,globalThis.JSONCodrLeaderboard.sortRows(input.rows,{key,direction:key==='model'?'desc':'asc'}).map(row=>row.id)]))",
+            {"rows": rows, "keys": ["rank", "model", "performance_index", "tokens_per_second", "ttft_ms", "average_total_seconds", "peak_vram_mb", "speedup_vs_cpu", "status"]},
+        )
+
+        self.assertEqual(sorted_rows["rank"], ["a", "b"])
+        self.assertEqual(sorted_rows["model"], ["b", "a"])
+        self.assertEqual(sorted_rows["performance_index"], ["b", "a"])
+        self.assertEqual(sorted_rows["tokens_per_second"], ["b", "a"])
+        self.assertEqual(sorted_rows["ttft_ms"], ["a", "b"])
+        self.assertEqual(sorted_rows["average_total_seconds"], ["a", "b"])
+        self.assertEqual(sorted_rows["peak_vram_mb"], ["a", "b"])
+        self.assertEqual(sorted_rows["speedup_vs_cpu"], ["b", "a"])
+        self.assertEqual(sorted_rows["status"], ["b", "a"])
+
     def test_build_rows_keeps_concrete_backends_and_adds_detected_untested_options(self):
         payload = {
             "history": [session()],

@@ -168,6 +168,21 @@ class WebApiTests(unittest.TestCase):
         )
         self.assertTrue(all(item["status"] == "missing" for item in response.json()))
 
+    def test_hardware_detection_includes_compatible_installed_models_on_each_runtime(self):
+        response = self.client.post("/api/hardware/detect")
+
+        self.assertEqual(response.status_code, 200)
+        cpu = response.json()[0]
+        self.assertEqual(cpu["id"], "cpu")
+        self.assertEqual(
+            cpu["compatible_models"],
+            [{
+                "model": "qwen2.5-coder:7b-instruct-q4_K_M",
+                "status": "runnable",
+                "evidence": {"execution": "CPU"},
+            }],
+        )
+
     def tearDown(self):
         self.temporary_directory.cleanup()
 
@@ -191,9 +206,9 @@ class WebApiTests(unittest.TestCase):
     def test_health_reports_ollama_readiness(self):
         self.assertEqual(
             self.client.get("/api/health").json(),
-            {"status": "ready", "ollama": True, "app_version": "V1.0.13"},
+            {"status": "ready", "ollama": True, "app_version": "V1.0.14"},
         )
-        self.assertEqual(self.client.app.version, "V1.0.13")
+        self.assertEqual(self.client.app.version, "V1.0.14")
         self.service.available = False
         self.assertEqual(self.client.get("/api/health").json()["status"], "degraded")
 

@@ -105,6 +105,14 @@
     return rows;
   }
 
+  function buildAllRows(history) {
+    return (Array.isArray(history) ? history : []).flatMap((session) =>
+      (Array.isArray(session?.results) ? session.results : [])
+        .filter((result) => result?.status !== "failed")
+        .map((result) => resultRow(session, result || {}))
+    );
+  }
+
   function filterAndRank(rows, filters = {}) {
     const metric = filters.metric || "tokens_per_second";
     const lowerIsBetter = new Set(["ttft_ms", "average_total_seconds", "peak_vram_mb"]);
@@ -129,6 +137,21 @@
       const metricEligible = row.eligible_rank && numberOrNull(row[metric]) !== null;
       return { ...row, rank: metricEligible ? ++rank : null };
     });
+  }
+
+  function sortRows(rows, sort = {}) {
+    const key = sort.key || "rank";
+    const direction = sort.direction === "desc" ? -1 : 1;
+    return (Array.isArray(rows) ? rows : []).map((row, index) => ({ row, index })).sort((left, right) => {
+      const a = left.row[key]; const b = right.row[key];
+      if (a === null || a === undefined || a === "") return b === null || b === undefined || b === "" ? left.index - right.index : 1;
+      if (b === null || b === undefined || b === "") return -1;
+      const numericA = numberOrNull(a); const numericB = numberOrNull(b);
+      const compared = numericA !== null && numericB !== null
+        ? numericA - numericB
+        : String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
+      return compared ? compared * direction : left.index - right.index;
+    }).map(({ row }) => row);
   }
 
   function buildTrend(history, row, metric = "tokens_per_second") {
@@ -187,5 +210,5 @@
     return current && matches(current) ? current : sessions.find(matches) || null;
   }
 
-  root.JSONCodrLeaderboard = { buildRows, filterAndRank, percentiles, buildTrend, scalePoints, selectRow, chooseSession };
+  root.JSONCodrLeaderboard = { buildRows, buildAllRows, filterAndRank, sortRows, percentiles, buildTrend, scalePoints, selectRow, chooseSession };
 })(typeof window === "undefined" ? globalThis : window);
