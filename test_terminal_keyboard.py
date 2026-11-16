@@ -41,8 +41,8 @@ assert.strictEqual(interrupts, 0);
 assert.strictEqual(controller.handleKeyEvent(key("c"), ""), false);
 assert.strictEqual(interrupts, 0);
 
-assert.strictEqual(controller.handleKeyEvent(key("v"), ""), false);
-assert.deepStrictEqual(pasted, ["requested"]);
+assert.strictEqual(controller.handleKeyEvent(key("v"), ""), true);
+assert.deepStrictEqual(pasted, []);
 
 assert.strictEqual(controller.handleKeyEvent(key("x"), ""), false);
 time += 100;
@@ -65,7 +65,7 @@ process.stdout.write(JSON.stringify({ copied, pasted, interrupts }));
         result = self.run_node(source)
         self.assertEqual(
             json.loads(result.stdout),
-            {"copied": ["selected output"], "pasted": ["requested"], "interrupts": 1},
+            {"copied": ["selected output"], "pasted": [], "interrupts": 1},
         )
 
     def test_command_history_navigation_and_clear(self):

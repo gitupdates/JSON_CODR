@@ -5,7 +5,6 @@
 })(typeof window !== "undefined" ? window : globalThis, function () {
   return function createTerminalKeyboardController(options = {}) {
     const copyText = options.copyText || (() => {});
-    const pasteText = options.pasteText || (() => {});
     const interrupt = options.interrupt || (() => {});
     const loadHistory = options.loadHistory || (() => []);
     const saveHistory = options.saveHistory || (() => {});
@@ -76,8 +75,7 @@
 
       if (controlKey && key === "v") {
         interruptChordStartedAt = null;
-        pasteText();
-        return false;
+        return true;
       }
 
       if (!controlKey || !["control", "shift", "alt", "meta"].includes(key)) {

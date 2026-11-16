@@ -233,13 +233,12 @@ class WebStaticTests(unittest.TestCase):
         html = self.client.get("/").text
         javascript = self.client.get("/static/app.js").text
 
-        self.assertIn('/static/terminal_keyboard.js?v=1.0.17-beta.4', html)
-        self.assertIn('/static/app.js?v=1.0.17-beta.4', html)
+        self.assertIn('/static/terminal_keyboard.js?v=1.0.17-beta.4-clipboard2', html)
+        self.assertIn('/static/app.js?v=1.0.17-beta.4-clipboard2', html)
         self.assertLess(html.index("terminal_keyboard.js"), html.index("app.js"))
         self.assertIn("createTerminalKeyboardController", javascript)
         self.assertIn("attachCustomKeyEventHandler", javascript)
         self.assertIn("navigator.clipboard.writeText", javascript)
-        self.assertIn("navigator.clipboard.readText", javascript)
         self.assertIn('JSON.stringify({ type: "interrupt" })', javascript)
         self.assertIn("navigateHistory", javascript)
         self.assertIn('command === "clr --history"', javascript)

@@ -389,16 +389,6 @@ function initializeXterm() {
         appendTerminalOutput(`Clipboard copy failed: ${error.message}\n`);
       }
     },
-    pasteText: async () => {
-      try {
-        const text = await navigator.clipboard.readText();
-        if (text && terminalSocket?.readyState === WebSocket.OPEN) {
-          terminalSocket.send(JSON.stringify({ type: "input", data: text }));
-        }
-      } catch (error) {
-        appendTerminalOutput(`Clipboard paste failed: ${error.message}\n`);
-      }
-    },
     interrupt: () => {
       if (terminalSocket?.readyState === WebSocket.OPEN) {
         terminalSocket.send(JSON.stringify({ type: "interrupt" }));
