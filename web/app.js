@@ -1173,6 +1173,15 @@ async function clearHardwareBenchmarks() {
 
 function renderIntegrityBenchmark(benchmark) {
   elements.integrityBenchmarkScores.replaceChildren();
+  elements.integrityBenchmarkResults.replaceChildren();
+  if (!benchmark?.scores || !Array.isArray(benchmark.scenarios)) {
+    elements.integrityBenchmarkResults.innerHTML = '<p class="meta">This saved evaluation is incomplete and cannot be displayed.</p>';
+    return;
+  }
+  const metadata = document.createElement("p");
+  metadata.className = "meta";
+  metadata.textContent = `${benchmark.suite_version || "Unknown suite"} · schema ${benchmark.schema_version || "unknown"} · ${benchmark.status || "unknown"} · ${benchmark.created_at ? new Date(benchmark.created_at).toLocaleString() : "unknown time"}`;
+  elements.integrityBenchmarkResults.append(metadata);
   for (const [label, value] of [
     ["Integrity", benchmark.scores.integrity],
     ["Comprehension", benchmark.scores.comprehension],
@@ -1187,7 +1196,6 @@ function renderIntegrityBenchmark(benchmark) {
     card.append(caption, score);
     elements.integrityBenchmarkScores.append(card);
   }
-  elements.integrityBenchmarkResults.replaceChildren();
   for (const scenario of benchmark.scenarios) {
     const details = document.createElement("details");
     details.className = "dependency-row";
@@ -1197,7 +1205,7 @@ function renderIntegrityBenchmark(benchmark) {
     for (const evidence of scenario.evidence) {
       const line = document.createElement("p");
       line.className = "meta integrity-evidence";
-      line.textContent = `Run ${evidence.repetition} · ${evidence.passed ? "pass" : "fail"} · ${evidence.error || evidence.output || "No output"}`;
+      line.textContent = `Run ${evidence.repetition} · ${evidence.passed ? "pass" : "fail"} · ${evidence.evaluation_reason || "unclassified"} · ${evidence.error || evidence.output || "No output"}${evidence.truncated ? ` · truncated from ${evidence.output_length} characters` : ""}`;
       details.append(line);
     }
     elements.integrityBenchmarkResults.append(details);
@@ -1207,7 +1215,8 @@ function renderIntegrityBenchmark(benchmark) {
 async function loadIntegrityBenchmarkHistory() {
   const response = await fetch("/api/integrity-benchmarks");
   if (!response.ok) throw new Error("Unable to load integrity benchmark history");
-  const history = await response.json();
+  const payload = await response.json();
+  const history = Array.isArray(payload) ? payload.filter((benchmark) => benchmark?.scores && Array.isArray(benchmark.scenarios)) : [];
   elements.integrityBenchmarkHistory.replaceChildren();
   if (!history.length) {
     elements.integrityBenchmarkHistory.innerHTML = '<p class="meta">No integrity evaluation history.</p>';

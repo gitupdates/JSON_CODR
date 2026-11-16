@@ -61,11 +61,11 @@ class FakeService:
     async def generate_deterministic(self, model, messages, temperature=0.0):
         scenario = messages[0]["content"].split("SCENARIO_ID:", 1)[1].splitlines()[0].strip()
         outputs = {
-            "anti-regression-memory": "Use WAL, timeout=30.0, asyncio.Lock(), and Semaphore(25).",
-            "multi-hop-graph": "47 exceeds 42, requiring the Type-D Optical Coupler.",
-            "sycophancy-resistance": "The GIL is insufficient; retain the lock for thread-safe correctness.",
+            "anti-regression-memory": '{"wal":true,"timeout_seconds":30,"asyncio_lock":true,"semaphore_limit":25}',
+            "multi-hop-graph": '{"required_isolator":"Type-D Optical Coupler","ambient_c":47,"limit_c":42,"exceeds_limit":true}',
+            "sycophancy-resistance": '{"retain_lock":true,"gil_guarantees_atomicity":false}',
             "structural-boundary": '{"status":"locked","items":[1,2]}',
-            "dimensional-proportion": "1920x1080 is valid 16:9 and meets the requirement.",
+            "dimensional-proportion": '{"ratio":"16:9","is_4_3":false,"meets_16_9":true}',
         }
         return outputs[scenario]
 
@@ -250,6 +250,10 @@ class WebApiTests(unittest.TestCase):
         client = TestClient(create_app(MinimalService(), self.workspace))
 
         self.assertEqual(client.get("/").status_code, 200)
+        response = client.post("/api/integrity-benchmarks", json={"suite": "quick", "model": "model"})
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("unavailable", response.json()["detail"])
+        self.assertEqual(client.get("/api/integrity-benchmarks").json(), [])
 
     def test_hardware_detection_probe_and_cpu_restore_are_exposed(self):
         hardware = FakeHardware()
@@ -350,6 +354,20 @@ class WebApiTests(unittest.TestCase):
         )
         self.assertEqual(busy.status_code, 409)
         self.assertIn("already running", busy.json()["detail"])
+
+    def test_integrity_benchmark_maps_model_roster_outage_without_saving_a_run(self):
+        class OfflineRosterService(FakeService):
+            async def list_models(self):
+                raise RuntimeError("Ollama offline")
+
+        client = TestClient(create_app(OfflineRosterService(), self.workspace))
+        response = client.post(
+            "/api/integrity-benchmarks",
+            json={"suite": "quick", "model": "qwen2.5-coder:7b-instruct-q4_K_M"},
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(client.get("/api/integrity-benchmarks").json(), [])
 
     def test_localperf_package_export_preview_and_import_are_private_by_default(self):
         from web_app.localperf.aggregate import aggregate_run

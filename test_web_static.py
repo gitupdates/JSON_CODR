@@ -357,6 +357,8 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("scores.integrity", javascript)
         self.assertIn("scores.comprehension", javascript)
         self.assertIn("scenario.evidence", javascript)
+        self.assertIn("benchmark.suite_version", javascript)
+        self.assertIn("evidence.evaluation_reason", javascript)
         for identifier in (
             "leaderboardSearch", "leaderboardModelFilter", "leaderboardBackendFilter",
             "leaderboardSuiteFilter", "leaderboardMetric",

@@ -78,6 +78,7 @@ def create_app(
         ) if optimized else None,
     )
     localperf_packages = LocalPerfPackageService(LocalPerfStorage(workspace.data_root))
+    integrity_generation_available = integrity is not None or callable(getattr(service, "generate_deterministic", None))
     async def generate_integrity(model: str, messages: list[dict], temperature: float) -> str:
         generator = getattr(service, "generate_deterministic", None)
         if generator is None:
@@ -271,9 +272,12 @@ def create_app(
 
     @application.post("/api/integrity-benchmarks")
     async def run_integrity_benchmark(request: IntegrityBenchmarkRequest):
-        installed = {
-            item["name"] for item in await service.list_models() if item.get("installed")
-        }
+        if not integrity_generation_available:
+            raise HTTPException(status_code=409, detail="Integrity benchmarks are unavailable for this model service")
+        try:
+            installed = {item["name"] for item in await service.list_models() if item.get("installed")}
+        except Exception as error:
+            raise HTTPException(status_code=503, detail="Unable to query installed models") from error
         if request.model not in installed:
             raise HTTPException(status_code=409, detail="Model is not installed")
         try:
