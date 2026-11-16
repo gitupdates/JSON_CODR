@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from web_app.version import APP_VERSION
 
@@ -46,6 +46,34 @@ class CodingAgentSuggestion(BaseModel):
     tool: Literal["continue", "aider"]
     project_root: str = Field(min_length=1, max_length=1000)
     prompt: str = Field(min_length=1, max_length=20_000)
+
+
+class BrokerAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["status", "read", "apply_patch", "verify", "commit", "sync", "push"]
+    paths: List[str] = Field(default_factory=list, max_length=100)
+    patch: Optional[str] = Field(default=None, max_length=200_000)
+    message: Optional[str] = Field(default=None, max_length=500)
+    checks: List[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("paths")
+    @classmethod
+    def paths_stay_relative(cls, values: List[str]) -> List[str]:
+        for value in values:
+            path = value.replace("\\", "/")
+            if not path or path.startswith("/") or ":" in path or ".." in path.split("/"):
+                raise ValueError("Broker paths must stay inside the project")
+        return values
+
+
+class BrokerActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
+    project_root: str = Field(min_length=1, max_length=1000)
+    actions: List[BrokerAction] = Field(min_length=1, max_length=50)
+    baseline_fingerprint: str = Field(min_length=1, max_length=128)
 
 
 class ActionProposal(BaseModel):
