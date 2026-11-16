@@ -84,7 +84,7 @@ git commit -m "feat(core): add unified capability contracts"
 - Produces: `TaskStore.create(command)`, `append(task_id, event)`, `get(task_id)`, `events(task_id, after_sequence)`, `children(task_id)`, `request_cancel(task_id)`, and `recover_interrupted()`.
 - Produces: `ArtifactStore.put(stream, metadata)`, `open(artifact_id)`, `prune(policy)`, and `export_manifest(task_id)`.
 
-New IDs use UUIDv7. Event envelopes retain task sequence and causation while carrying CloudEvents-compatible identity metadata. Persisted hashes use RFC 8785 canonical JSON. Mutation records carry expected-version or expected-digest preconditions; HTTP mappings use strong `If-Match` semantics and RFC 9457 problem details.
+New IDs use UUIDv7. Event envelopes retain task sequence and causation while carrying CloudEvents-compatible identity metadata. Draft events and durable events are separate sibling contracts; only `TaskStore` assigns durable identity and sequence. Persisted hashes use RFC 8785 canonical JSON, and event digests form a verified per-task hash chain. Mutation records carry expected-version or expected-digest preconditions; HTTP mappings use strong `If-Match` semantics and RFC 9457 problem details.
 
 - [x] **Step 1: Write failing persistence tests**
 

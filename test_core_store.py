@@ -7,7 +7,7 @@ from pathlib import Path
 
 from web_app.core.artifact_store import ArtifactMetadata, ArtifactStore, RetentionPolicy
 from web_app.core.contracts import TaskCommand, TaskEvent, TaskEventDraft, TaskStatus
-from web_app.core.store import ConcurrencyConflict, TaskStore
+from web_app.core.store import ConcurrencyConflict, IntegrityViolation, TaskStore
 
 
 def command(task_id: str, command_id: str | None = None, parent_task_id: str | None = None) -> TaskCommand:
@@ -88,6 +88,26 @@ class TaskStoreTests(unittest.TestCase):
 
         with self.assertRaises(ConcurrencyConflict):
             self.store.append("task-1", TaskEventDraft(event_type="worker.progress"), expected_version=0)
+
+    def test_event_hash_chain_detects_persisted_tampering(self):
+        created = self.store.create(command("task-1"))
+        appended = self.store.append("task-1", TaskEventDraft(event_type="task.started"))
+        self.assertEqual(appended.previous_event_digest, created.events[0].event_digest)
+        self.assertRegex(appended.event_digest, r"^sha256:[0-9a-f]{64}$")
+
+        with self.store._connection:
+            row = self.store._connection.execute(
+                "SELECT event_json FROM task_events WHERE task_id = ? AND sequence = 1", ("task-1",)
+            ).fetchone()
+            event = json.loads(row["event_json"])
+            event["payload"] = {"forged": True}
+            self.store._connection.execute(
+                "UPDATE task_events SET event_json = ? WHERE task_id = ? AND sequence = 1",
+                (json.dumps(event), "task-1"),
+            )
+
+        with self.assertRaises(IntegrityViolation):
+            self.store.events("task-1")
 
     def test_parent_child_links_and_cancel_request_are_durable(self):
         self.store.create(command("parent"))

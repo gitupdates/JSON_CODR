@@ -7,10 +7,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid7
 
+from web_app.core.canonical import canonical_digest
 from web_app.core.contracts import TaskCommand, TaskEvent, TaskEventDraft, TaskRecord, TaskStatus
 
 
 class ConcurrencyConflict(RuntimeError):
+    pass
+
+
+class IntegrityViolation(RuntimeError):
     pass
 
 
@@ -140,15 +145,24 @@ class TaskStore:
     def _append_unlocked(self, task_id: str, draft: TaskEventDraft) -> TaskEvent:
         if self._connection.execute("SELECT 1 FROM tasks WHERE task_id = ?", (task_id,)).fetchone() is None:
             raise KeyError(task_id)
+        current_sequence = self._current_sequence(task_id)
+        previous = self._connection.execute(
+            "SELECT event_json FROM task_events WHERE task_id = ? AND sequence = ?",
+            (task_id, current_sequence),
+        ).fetchone()
+        previous_digest = None if previous is None else TaskEvent.model_validate_json(previous["event_json"]).event_digest
         event = TaskEvent(
             **draft.model_dump(mode="python"),
             event_id=uuid7(),
             task_id=task_id,
-            sequence=self._current_sequence(task_id) + 1,
+            sequence=current_sequence + 1,
             source="json-codr://core/task-store",
             subject=f"tasks/{task_id}",
             occurred_at=datetime.now(UTC),
+            previous_event_digest=previous_digest,
+            event_digest="sha256:" + "0" * 64,
         )
+        event = event.model_copy(update={"event_digest": _event_digest(event)})
         self._connection.execute(
             "INSERT INTO task_events VALUES (?, ?, ?, ?)",
             (task_id, event.sequence, str(event.event_id), event.model_dump_json()),
@@ -176,7 +190,18 @@ class TaskStore:
             "SELECT event_json FROM task_events WHERE task_id = ? AND sequence > ? ORDER BY sequence",
             (task_id, after_sequence),
         ).fetchall()
-        return tuple(TaskEvent.model_validate_json(row["event_json"]) for row in rows)
+        events = tuple(TaskEvent.model_validate_json(row["event_json"]) for row in rows)
+        previous = None
+        if after_sequence >= 0:
+            prior_row = self._connection.execute(
+                "SELECT event_json FROM task_events WHERE task_id = ? AND sequence = ?", (task_id, after_sequence)
+            ).fetchone()
+            previous = None if prior_row is None else TaskEvent.model_validate_json(prior_row["event_json"]).event_digest
+        for event in events:
+            if event.previous_event_digest != previous or event.event_digest != _event_digest(event):
+                raise IntegrityViolation(f"event chain verification failed for {task_id} at sequence {event.sequence}")
+            previous = event.event_digest
+        return events
 
     def _current_sequence(self, task_id: str) -> int:
         row = self._connection.execute(
@@ -202,3 +227,8 @@ class _Transaction:
             self._connection.execute("ROLLBACK" if error_type else "COMMIT")
         finally:
             self._lock.release()
+
+
+def _event_digest(event: TaskEvent) -> str:
+    material = event.model_dump(mode="json", exclude={"event_digest"})
+    return canonical_digest(material)

@@ -173,6 +173,8 @@ class TaskEvent(_TaskEventContent):
     source: str = Field(min_length=1)
     subject: str = Field(min_length=1)
     occurred_at: datetime
+    previous_event_digest: Digest | None = None
+    event_digest: Digest
 
 
 class TaskRecord(VersionedContract):
