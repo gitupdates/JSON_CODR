@@ -1,7 +1,6 @@
 import queue
 import os
 import signal
-import shutil
 import subprocess
 import threading
 import uuid
@@ -75,9 +74,6 @@ class TerminalService:
     def create_agent(self, plan) -> TerminalRecord:
         environment = child_environment(plan.environment)
         if plan.interactive:
-            windows_terminal = shutil.which("wt.exe") or shutil.which("wt")
-            if not windows_terminal:
-                raise RuntimeError("Interactive coding agents require Windows Terminal (wt.exe)")
             agent_command = list(plan.argv)
             if Path(plan.argv[0]).suffix.lower() in {".cmd", ".bat"}:
                 command_processor = environment.get("COMSPEC") or str(
@@ -85,12 +81,13 @@ class TerminalService:
                 )
                 agent_command = [command_processor, "/d", "/s", "/c", subprocess.list2cmdline(plan.argv)]
             process = subprocess.Popen(
-                [windows_terminal, "-w", "new", "-d", plan.cwd, "--", *agent_command],
+                agent_command,
                 cwd=plan.cwd,
                 env=environment,
+                creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP,
             )
             return TerminalRecord(
-                uuid.uuid4().hex, process.pid, f"{plan.tool} · Windows Terminal", plan.cwd, "external", True
+                uuid.uuid4().hex, process.pid, f"{plan.tool} · native console", plan.cwd, "external", True
             )
         process = subprocess.Popen(
             list(plan.argv),
