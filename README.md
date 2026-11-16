@@ -1,6 +1,59 @@
 # JSON_CODR
 
-JSON_CODR V1.0.16 is a localhost-only web and CLI interface for structured responses from local Ollama coding models.
+JSON_CODR V1.0.17-beta.1 is a localhost-only web and CLI interface for structured responses from local Ollama coding models.
+
+V1.0.17-beta.1 adds an additive Continue CLI and Aider launcher to Live CLI. Each coding agent uses an explicit persistent full-authorization grant bound to one canonical project root and one tool. Direct Ollama chat remains the unconditional fallback when a coding CLI is missing, unconfigured, or fails to launch. Aider uses `ollama_chat/<model>` and Continue uses its local Ollama model slug; neither integration changes the Ollama service or active direct-chat model.
+
+## Beta coding agents: Continue CLI and Aider
+
+Open **Live CLI** from the global navigation. The **Beta coding agents** launcher appears above the existing PowerShell terminal; the original terminal remains available unchanged.
+
+### Requirements and status
+
+1. Keep Ollama running at `http://127.0.0.1:11434` and install the model you want to use.
+2. Install at least one supported coding CLI and make it available on `PATH`:
+   - Continue CLI: verify with `cn --version`.
+   - Aider: verify with `aider --version`.
+3. `GET /api/coding-agents/status` reports whether each executable is detected and lists saved grants. A missing CLI does not affect ordinary JSON_CODR chat.
+
+### Start an interactive coding session
+
+1. Select **Continue CLI** or **Aider**.
+2. Select any installed Ollama model. Interactive mode permits every installed model, although smaller models may not reliably produce edits.
+3. Enter the absolute root of the project the agent may inspect and edit.
+4. Leave **Full persistent authorization** enabled to save an explicit grant for this project and this agent.
+5. Select **Interactive**, then press **Launch agent**.
+6. Use the terminal input normally. Output streams through the existing Live CLI panel; **Stop** interrupts the active process.
+
+Continue launches with `cn --model ollama/<model>`. Aider launches with `aider --model ollama_chat/<model>` and receives `OLLAMA_API_BASE=http://127.0.0.1:11434` only in its child-process environment.
+
+### Run a delegated task
+
+1. Write the task in the main Chat prompt, including the intended files and expected outcome.
+2. Open **Live CLI**, choose the tool, model, and project root, then select **Delegated**.
+3. Press **Launch agent**. JSON_CODR sends the prompt to the chosen CLI only after a matching persistent grant exists.
+
+Continue headless mode receives explicit tool authorization after JSON_CODR validates the project grant. Aider receives its noninteractive message and yes-to-edit flag. This authorization applies only to the canonical project root and selected tool; an Aider grant cannot authorize Continue, and another project needs its own grant.
+
+### Authorization and safety boundaries
+
+- Grants are stored locally in `%LOCALAPPDATA%\JSON_CODR\coding-agent-grants.json` using atomic replacement.
+- A grant is bound to one canonical project root, one tool, and the `full` scope.
+- Nested folders under that project are allowed. Missing projects, junctions/reparse points, and paths outside the approved root are rejected.
+- The agent may inspect and edit files inside the granted project. Destructive commands, dependency installation, and remote publication remain subject to JSON_CODR's stronger confirmation rules.
+- Disable a grant with `DELETE /api/coding-agents/grants/<grant-id>`. A settings-based grant manager is planned for a later beta.
+
+### Direct Ollama fallback
+
+The normal **Chat** page continues to call Ollama directly. It does not route through Continue or Aider. If either CLI is missing, its configuration is invalid, authorization is absent, or launch fails, return to Chat and run the selected local model normally. Coding-agent failures do not change the active model, Ollama hardware profile, skills, attachments, or benchmark data.
+
+### Troubleshooting
+
+- **`cn is not installed` / `aider is not installed`:** install the CLI, confirm its version in a new PowerShell session, and restart JSON_CODR so the updated `PATH` is inherited.
+- **Persistent authorization required:** enable the authorization checkbox for the exact project/tool pair and launch again.
+- **Invalid model name:** choose an installed model from the selector; manually injected shell characters are rejected.
+- **Model runs but cannot edit reliably:** select a stronger coder model. Availability does not imply autonomous-editing capability.
+- **Ollama connection error:** confirm `http://127.0.0.1:11434/api/tags` responds, then use normal Chat to verify the base model before retrying the coding agent.
 
 ## Skill catalog and settings
 

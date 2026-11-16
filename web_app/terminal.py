@@ -1,4 +1,5 @@
 import queue
+import os
 import signal
 import subprocess
 import threading
@@ -53,6 +54,24 @@ class TerminalService:
             shell=shell,
             cwd=str(working_directory),
         )
+        terminal = _TerminalProcess(record=record, process=process, output=queue.Queue(maxsize=2048))
+        with self._lock:
+            self._terminals[record.id] = terminal
+        threading.Thread(target=self._read_output, args=(terminal,), daemon=True).start()
+        return record
+
+    def create_agent(self, plan) -> TerminalRecord:
+        environment = {**os.environ, **plan.environment}
+        process = subprocess.Popen(
+            list(plan.argv),
+            cwd=plan.cwd,
+            env=environment,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
+        )
+        record = TerminalRecord(uuid.uuid4().hex, process.pid, plan.tool, plan.cwd)
         terminal = _TerminalProcess(record=record, process=process, output=queue.Queue(maxsize=2048))
         with self._lock:
             self._terminals[record.id] = terminal

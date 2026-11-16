@@ -172,6 +172,17 @@ class TerminalCreateRequest(BaseModel):
     cwd: Optional[str] = None
 
 
+class CodingAgentGrantRequest(BaseModel):
+    project_root: str = Field(min_length=1, max_length=1000)
+    tool: Literal["continue", "aider"]
+
+
+class CodingAgentLaunchRequest(CodingAgentGrantRequest):
+    model: str = Field(min_length=1, max_length=200)
+    mode: Literal["interactive", "delegated"] = "interactive"
+    prompt: Optional[str] = Field(default=None, max_length=20_000)
+
+
 class SkillRecord(BaseModel):
     id: str
     name: str

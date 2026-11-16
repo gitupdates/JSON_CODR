@@ -30,6 +30,15 @@ class IdCollector(HTMLParser):
 
 
 class WebStaticTests(unittest.TestCase):
+    def test_coding_agent_launcher_is_additive_to_live_cli(self):
+        html = self.client.get("/").text
+        self.assertIn('id="coding-agent-tool"', html)
+        self.assertIn('id="coding-agent-model"', html)
+        self.assertIn('id="coding-agent-project"', html)
+        self.assertIn('id="coding-agent-persistent"', html)
+        self.assertIn('id="coding-agent-launch"', html)
+        self.assertIn('id="terminal-input"', html)
+
     def setUp(self):
         self.client = TestClient(create_app(FakeService()))
 
@@ -37,7 +46,7 @@ class WebStaticTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.0.16", response.text)
+        self.assertIn("V1.0.17-beta.1", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -58,7 +67,7 @@ class WebStaticTests(unittest.TestCase):
         html = self.client.get("/").text
         css = self.client.get("/static/app.css")
         javascript = self.client.get("/static/app.js")
-        self.assertIn('/static/app.css?v=1.0.16', html)
+        self.assertIn('/static/app.css?v=1.0.17-beta.1', html)
         self.assertEqual(css.status_code, 200)
         self.assertIn("text/css", css.headers["content-type"])
         self.assertEqual(javascript.status_code, 200)

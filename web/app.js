@@ -125,6 +125,13 @@ const elements = {
   terminalRun: document.querySelector("#terminal-run"),
   terminalStop: document.querySelector("#terminal-stop"),
   terminalStatus: document.querySelector("#terminal-status"),
+  codingAgentLauncher: document.querySelector("#coding-agent-launcher"),
+  codingAgentTool: document.querySelector("#coding-agent-tool"),
+  codingAgentModel: document.querySelector("#coding-agent-model"),
+  codingAgentProject: document.querySelector("#coding-agent-project"),
+  codingAgentMode: document.querySelector("#coding-agent-mode"),
+  codingAgentPersistent: document.querySelector("#coding-agent-persistent"),
+  codingAgentStatus: document.querySelector("#coding-agent-status"),
 };
 
 const VALID_THEME_MODES = new Set(["light", "dark", "system"]);
@@ -304,12 +311,17 @@ async function createTerminalConnection() {
   });
   if (!response.ok) throw new Error((await response.json()).detail || "Unable to start terminal");
   const terminal = await response.json();
+  await connectTerminalRecord(terminal);
+}
+
+async function connectTerminalRecord(terminal) {
+  if (terminalSocket) terminalSocket.close();
   terminalId = terminal.id;
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   terminalSocket = new WebSocket(`${protocol}//${location.host}/ws/terminals/${terminalId}`);
   terminalSocket.addEventListener("open", () => {
-    elements.terminalStatus.textContent = `PowerShell · PID ${terminal.pid}`;
-    appendTerminalOutput(`PowerShell ready in ${terminal.cwd}\n`);
+    elements.terminalStatus.textContent = `${terminal.shell} · PID ${terminal.pid}`;
+    appendTerminalOutput(`${terminal.shell} ready in ${terminal.cwd}\n`);
   });
   terminalSocket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
@@ -368,6 +380,33 @@ async function createTerminalConnection() {
     terminalSocket.addEventListener("error", onFailure, { once: true });
     terminalSocket.addEventListener("close", onFailure, { once: true });
   });
+}
+
+async function launchCodingAgent(event) {
+  event.preventDefault();
+  const payload = {
+    tool: elements.codingAgentTool.value,
+    model: elements.codingAgentModel.value,
+    project_root: elements.codingAgentProject.value,
+    mode: elements.codingAgentMode.value,
+    prompt: elements.codingAgentMode.value === "delegated" ? elements.prompt.value.trim() : null,
+  };
+  elements.codingAgentStatus.textContent = "Validating authorization…";
+  if (elements.codingAgentPersistent.checked) {
+    const grant = await fetch("/api/coding-agents/grants", {
+      method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
+      body: JSON.stringify({ tool: payload.tool, project_root: payload.project_root }),
+    });
+    if (!grant.ok) throw new Error((await grant.json()).detail || "Unable to save coding-agent authorization");
+  }
+  const response = await fetch("/api/coding-agents/launch", {
+    method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" }, body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error((await response.json()).detail || "Unable to launch coding agent");
+  const terminal = await response.json();
+  elements.terminalOutput.textContent = "";
+  await connectTerminalRecord(terminal);
+  elements.codingAgentStatus.textContent = `${payload.tool} launched with ${payload.model}`;
 }
 
 async function sendApprovedAction(proposal, token, approveButton) {
@@ -1686,6 +1725,7 @@ async function loadApplication() {
       if (model.installed) {
         elements.hardwareBenchmarkModel.append(option.cloneNode(true));
         elements.integrityBenchmarkModel.append(option.cloneNode(true));
+        elements.codingAgentModel.append(option.cloneNode(true));
       }
     }
     const installed = models.filter((model) => model.installed).length;
@@ -2029,6 +2069,16 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && document.body.classList.contains("navigation-open")) {
     closeNavigationDrawer({ restoreFocus: true });
   }
+});
+elements.codingAgentLauncher.addEventListener("submit", (event) => {
+  if (elements.codingAgentMode.value === "delegated") {
+    const prompt = elements.prompt.value.trim();
+    if (!prompt) { event.preventDefault(); return showError("Enter the delegated task in the main prompt first"); }
+  }
+  launchCodingAgent(event).catch((error) => {
+    elements.codingAgentStatus.textContent = error.message;
+    showError(error.message);
+  });
 });
 
 loadApplication().then(() => queueSettingsLoad()).catch((error) => showError(error.message));

@@ -25,8 +25,9 @@ from web_app.localperf.package import LocalPerfPackageError, LocalPerfPackageSer
 from web_app.localperf.storage import LocalPerfStorage
 from web_app.integrity_benchmark import IntegrityBenchmarkService
 from web_app.benchmark_baseline import BenchmarkBaselineService
+from web_app.coding_agents import CodingAgentService
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
+from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
 from web_app.ollama_service import (
     ModelOutputError,
     ModelTimeoutError,
@@ -50,6 +51,7 @@ def create_app(
     hardware: HardwareBackendManager | None = None,
     optimized: bool = False,
     integrity: IntegrityBenchmarkService | None = None,
+    coding_agents: CodingAgentService | None = None,
 ) -> FastAPI:
     application = FastAPI(title="JSON_CODR", version=APP_VERSION)
     workspace = workspace or WorkspaceService(default_data_root())
@@ -99,6 +101,7 @@ def create_app(
     dependency_service = DependencyService(attachments)
     artifact_service = ArtifactService(workspace)
     terminals = terminals or TerminalService()
+    coding_agents = coding_agents or CodingAgentService(workspace.data_root)
     action_proposals = ActionProposalService()
     web_root = Path(__file__).resolve().parent.parent / "web"
     application.mount("/static", StaticFiles(directory=web_root), name="static")
@@ -665,6 +668,39 @@ def create_app(
     def require_terminal_header(x_json_codr: str | None) -> None:
         if x_json_codr != "1":
             raise HTTPException(status_code=403, detail="Terminal request header required")
+
+    @application.get("/api/coding-agents/status")
+    async def coding_agent_status():
+        return coding_agents.status()
+
+    @application.post("/api/coding-agents/grants", status_code=201)
+    async def create_coding_agent_grant(request: CodingAgentGrantRequest, x_json_codr: str | None = Header(None)):
+        require_terminal_header(x_json_codr)
+        try:
+            return coding_agents.grant(request.project_root, request.tool)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @application.delete("/api/coding-agents/grants/{grant_id}")
+    async def revoke_coding_agent_grant(grant_id: str, x_json_codr: str | None = Header(None)):
+        require_terminal_header(x_json_codr)
+        try:
+            return coding_agents.revoke(grant_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Coding agent grant not found") from error
+
+    @application.post("/api/coding-agents/launch", status_code=201)
+    async def launch_coding_agent(request: CodingAgentLaunchRequest, x_json_codr: str | None = Header(None)):
+        require_terminal_header(x_json_codr)
+        try:
+            plan = coding_agents.launch_plan(
+                request.tool, request.project_root, request.model, request.mode, request.prompt
+            )
+            return terminals.create_agent(plan)
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except (ValueError, RuntimeError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
 
     @application.get("/api/terminals")
     async def list_terminals():

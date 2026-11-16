@@ -13,6 +13,7 @@ from cli import parse_response_content
 from web_app.models import ActionSuggestion, ChatResult, ConversionBundle, GeneratedFile
 from web_app.ollama_service import ModelOutputError, ModelTimeoutError, OllamaService, OllamaUnavailableError
 from web_app.workspace import WorkspaceService
+from web_app.coding_agents import CodingAgentService
 
 
 class FakeService:
@@ -158,6 +159,50 @@ class WebApiTests(unittest.TestCase):
         self.workspace = WorkspaceService(Path(self.temporary_directory.name))
         self.client = TestClient(create_app(self.service, self.workspace))
 
+    def test_coding_agent_grant_launch_and_failure_leave_direct_chat_available(self):
+        class FakeTerminals:
+            def __init__(self):
+                self.plans = []
+
+            def create_agent(self, plan):
+                self.plans.append(plan)
+                return {"id": "agent-terminal", "pid": 123, "shell": plan.tool, "cwd": plan.cwd, "status": "running"}
+
+            def list(self):
+                return []
+
+        project = Path(self.temporary_directory.name) / "project"
+        project.mkdir()
+        terminals = FakeTerminals()
+        agents = CodingAgentService(
+            self.workspace.data_root,
+            executable_finder=lambda name: f"C:/tools/{name}.exe" if name == "aider" else None,
+        )
+        client = TestClient(create_app(self.service, self.workspace, terminals=terminals, coding_agents=agents))
+        headers = {"X-JSON-CODR": "1"}
+
+        status = client.get("/api/coding-agents/status").json()
+        self.assertEqual({item["id"]: item["installed"] for item in status["tools"]}, {"continue": False, "aider": True})
+        grant = client.post("/api/coding-agents/grants", headers=headers, json={
+            "project_root": str(project), "tool": "aider"
+        })
+        self.assertEqual(grant.status_code, 201)
+        launched = client.post("/api/coding-agents/launch", headers=headers, json={
+            "project_root": str(project), "tool": "aider", "model": "qwen2.5-coder:7b-instruct-q4_K_M",
+            "mode": "interactive"
+        })
+        self.assertEqual(launched.status_code, 201)
+        self.assertEqual(terminals.plans[0].tool, "aider")
+
+        failed = client.post("/api/coding-agents/launch", headers=headers, json={
+            "project_root": str(project), "tool": "continue", "model": "qwen2.5-coder:7b-instruct-q4_K_M",
+            "mode": "interactive"
+        })
+        self.assertEqual(failed.status_code, 403)
+        direct = client.post("/api/chat", json={"model": "qwen2.5-coder:7b-instruct-q4_K_M", "prompt": "fallback"})
+        self.assertEqual(direct.status_code, 200)
+        self.assertEqual(direct.json()["content"], "Answered: fallback")
+
     def test_optimized_connector_catalog_and_install_plans_are_additive(self):
         client = TestClient(create_app(self.service, self.workspace, optimized=True))
 
@@ -233,9 +278,9 @@ class WebApiTests(unittest.TestCase):
     def test_health_reports_ollama_readiness(self):
         self.assertEqual(
             self.client.get("/api/health").json(),
-            {"status": "ready", "ollama": True, "app_version": "V1.0.16"},
+            {"status": "ready", "ollama": True, "app_version": "V1.0.17-beta.1"},
         )
-        self.assertEqual(self.client.app.version, "V1.0.16")
+        self.assertEqual(self.client.app.version, "V1.0.17-beta.1")
         self.service.available = False
         self.assertEqual(self.client.get("/api/health").json()["status"], "degraded")
 
