@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import asyncio
+import os
 import re
 import sys
 
@@ -46,6 +47,21 @@ from web_app.recommendations import SkillRecommendationService
 from web_app.version import APP_VERSION
 
 
+def configure_local_analysis_tools(data_root: Path) -> None:
+    if not os.environ.get("GHIDRA_INSTALL_DIR"):
+        candidates = sorted((Path(data_root) / "tools").glob("ghidra_*_PUBLIC"), reverse=True)
+        if candidates:
+            os.environ["GHIDRA_INSTALL_DIR"] = str(candidates[0].resolve())
+    if not os.environ.get("JAVA_HOME") and os.name == "nt":
+        candidates = sorted(Path("C:/Program Files/Microsoft").glob("jdk-*-hotspot"), reverse=True)
+        if candidates:
+            java_home = str(candidates[0].resolve())
+            os.environ["JAVA_HOME"] = java_home
+            java_bin = str(Path(java_home) / "bin")
+            if java_bin.casefold() not in os.environ.get("PATH", "").casefold().split(os.pathsep):
+                os.environ["PATH"] = f"{java_bin}{os.pathsep}{os.environ.get('PATH', '')}"
+
+
 def create_app(
     service: OllamaService,
     workspace: WorkspaceService | None = None,
@@ -59,6 +75,7 @@ def create_app(
 ) -> FastAPI:
     application = FastAPI(title="JSON_CODR", version=APP_VERSION)
     workspace = workspace or WorkspaceService(default_data_root())
+    configure_local_analysis_tools(workspace.data_root)
     attachments = attachments or AttachmentService(workspace)
     skill_library = SkillLibraryService(workspace.data_root)
     skill_library.ensure_builtin_rea()

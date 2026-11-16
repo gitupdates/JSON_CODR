@@ -3,6 +3,7 @@ import json
 import unittest
 import tempfile
 import io
+import os
 import zipfile
 import subprocess
 from pathlib import Path
@@ -10,6 +11,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from web_app.app import create_app
+from web_app.app import configure_local_analysis_tools
 from cli import parse_response_content
 from web_app.models import ActionSuggestion, ChatResult, ConversionBundle, GeneratedFile
 from web_app.ollama_service import ModelOutputError, ModelTimeoutError, OllamaService, OllamaUnavailableError
@@ -155,6 +157,20 @@ class FakeIntegrityBenchmark:
 
 
 class WebApiTests(unittest.TestCase):
+    def test_local_analysis_tools_are_loaded_for_sandbox_sessions(self):
+        tools = self.workspace.data_root / "tools"
+        ghidra = tools / "ghidra_12.1.4_PUBLIC"
+        ghidra.mkdir(parents=True)
+        previous = os.environ.pop("GHIDRA_INSTALL_DIR", None)
+        try:
+            configure_local_analysis_tools(self.workspace.data_root)
+            self.assertEqual(Path(os.environ["GHIDRA_INSTALL_DIR"]), ghidra.resolve())
+        finally:
+            if previous is None:
+                os.environ.pop("GHIDRA_INSTALL_DIR", None)
+            else:
+                os.environ["GHIDRA_INSTALL_DIR"] = previous
+
     def setUp(self):
         self.service = FakeService()
         self.temporary_directory = tempfile.TemporaryDirectory()
