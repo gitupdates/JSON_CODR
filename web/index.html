@@ -297,6 +297,28 @@
               <span id="hardware-benchmark-status" class="meta" role="status" aria-live="polite"></span>
             </div>
             <div id="hardware-benchmark-results" class="dependency-list"><p class="meta">No benchmark selected.</p></div>
+            <section class="integrity-benchmark-panel" aria-labelledby="integrity-benchmark-heading">
+              <div class="leaderboard-heading"><div>
+                <p class="eyebrow">MODEL QUALITY / LOCAL ONLY</p>
+                <h4 id="integrity-benchmark-heading">Integrity &amp; Comprehension</h4>
+                <p class="meta">Tests whether a model understands linked truths and preserves them under pressure. Scores remain separate from LocalPerf performance rankings.</p>
+              </div></div>
+              <label class="setting-row" for="integrity-benchmark-suite">Evaluation suite</label>
+              <select id="integrity-benchmark-suite" class="setting-select">
+                <option value="quick">Quick · 5 scenarios × 3 repetitions</option>
+                <option value="thorough">Thorough · 5 scenarios × 7 repetitions</option>
+              </select>
+              <label class="setting-row" for="integrity-benchmark-model">Evaluation model</label>
+              <select id="integrity-benchmark-model" class="setting-select"></select>
+              <div class="actions">
+                <button id="integrity-benchmark-run" class="primary" type="button">Run integrity evaluation</button>
+                <span id="integrity-benchmark-status" class="meta" role="status" aria-live="polite"></span>
+              </div>
+              <div id="integrity-benchmark-scores" class="integrity-score-grid" aria-label="Integrity and comprehension scores"></div>
+              <div id="integrity-benchmark-results" class="dependency-list"><p class="meta">No integrity evaluation selected.</p></div>
+              <strong>Integrity evaluation history</strong>
+              <div id="integrity-benchmark-history" class="dependency-list"><p class="meta">No integrity evaluation history.</p></div>
+            </section>
           </section>
 
           <section data-hardware-view="leaderboard" aria-labelledby="hardware-section-leaderboard" hidden>

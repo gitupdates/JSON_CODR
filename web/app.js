@@ -90,6 +90,13 @@ const elements = {
   hardwareBenchmarkResults: document.querySelector("#hardware-benchmark-results"),
   hardwareBenchmarkHistory: document.querySelector("#hardware-benchmark-history"),
   hardwareBenchmarkClear: document.querySelector("#hardware-benchmark-clear"),
+  integrityBenchmarkSuite: document.querySelector("#integrity-benchmark-suite"),
+  integrityBenchmarkModel: document.querySelector("#integrity-benchmark-model"),
+  integrityBenchmarkRun: document.querySelector("#integrity-benchmark-run"),
+  integrityBenchmarkStatus: document.querySelector("#integrity-benchmark-status"),
+  integrityBenchmarkScores: document.querySelector("#integrity-benchmark-scores"),
+  integrityBenchmarkResults: document.querySelector("#integrity-benchmark-results"),
+  integrityBenchmarkHistory: document.querySelector("#integrity-benchmark-history"),
   leaderboardSearch: document.querySelector("#leaderboard-search"),
   leaderboardModelFilter: document.querySelector("#leaderboard-model-filter"),
   leaderboardBackendFilter: document.querySelector("#leaderboard-backend-filter"),
@@ -238,6 +245,7 @@ function selectHardwareSection(section, { persist = true, focus = false } = {}) 
     detectHardware().catch((error) => showError(error.message));
   }
   if (section === "benchmarks" || section === "history") loadBenchmarkHistory().catch((error) => showError(error.message));
+  if (section === "benchmarks") loadIntegrityBenchmarkHistory().catch((error) => showError(error.message));
   if (section === "leaderboard") loadBenchmarkLeaderboard().catch((error) => { elements.leaderboardStatus.textContent = error.message; });
   if (persist) {
     navigationChangeRevision += 1;
@@ -1163,6 +1171,82 @@ async function clearHardwareBenchmarks() {
   }
 }
 
+function renderIntegrityBenchmark(benchmark) {
+  elements.integrityBenchmarkScores.replaceChildren();
+  for (const [label, value] of [
+    ["Integrity", benchmark.scores.integrity],
+    ["Comprehension", benchmark.scores.comprehension],
+    ["Overall", benchmark.scores.overall],
+  ]) {
+    const card = document.createElement("article");
+    const caption = document.createElement("span");
+    caption.className = "meta";
+    caption.textContent = label;
+    const score = document.createElement("strong");
+    score.textContent = `${Number(value).toFixed(1)}%`;
+    card.append(caption, score);
+    elements.integrityBenchmarkScores.append(card);
+  }
+  elements.integrityBenchmarkResults.replaceChildren();
+  for (const scenario of benchmark.scenarios) {
+    const details = document.createElement("details");
+    details.className = "dependency-row";
+    const summary = document.createElement("summary");
+    summary.textContent = `${scenario.passed ? "PASS" : "REVIEW"} · ${scenario.name} · ${Number(scenario.score).toFixed(1)}%`;
+    details.append(summary);
+    for (const evidence of scenario.evidence) {
+      const line = document.createElement("p");
+      line.className = "meta integrity-evidence";
+      line.textContent = `Run ${evidence.repetition} · ${evidence.passed ? "pass" : "fail"} · ${evidence.error || evidence.output || "No output"}`;
+      details.append(line);
+    }
+    elements.integrityBenchmarkResults.append(details);
+  }
+}
+
+async function loadIntegrityBenchmarkHistory() {
+  const response = await fetch("/api/integrity-benchmarks");
+  if (!response.ok) throw new Error("Unable to load integrity benchmark history");
+  const history = await response.json();
+  elements.integrityBenchmarkHistory.replaceChildren();
+  if (!history.length) {
+    elements.integrityBenchmarkHistory.innerHTML = '<p class="meta">No integrity evaluation history.</p>';
+    return history;
+  }
+  for (const benchmark of history) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary";
+    button.textContent = `${benchmark.suite} · ${benchmark.model} · ${Number(benchmark.scores.overall).toFixed(1)}% · ${new Date(benchmark.created_at).toLocaleString()}`;
+    button.addEventListener("click", () => renderIntegrityBenchmark(benchmark));
+    elements.integrityBenchmarkHistory.append(button);
+  }
+  renderIntegrityBenchmark(history[0]);
+  return history;
+}
+
+async function runIntegrityBenchmark() {
+  elements.integrityBenchmarkRun.disabled = true;
+  elements.integrityBenchmarkStatus.textContent = "Running integrity and comprehension evaluation…";
+  try {
+    const response = await fetch("/api/integrity-benchmarks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        suite: elements.integrityBenchmarkSuite.value,
+        model: elements.integrityBenchmarkModel.value,
+      }),
+    });
+    const benchmark = await response.json();
+    if (!response.ok) throw new Error(benchmark.detail || "Integrity evaluation failed");
+    renderIntegrityBenchmark(benchmark);
+    await loadIntegrityBenchmarkHistory();
+    elements.integrityBenchmarkStatus.textContent = `Evaluation complete · ${Number(benchmark.scores.overall).toFixed(1)}% overall`;
+  } finally {
+    elements.integrityBenchmarkRun.disabled = false;
+  }
+}
+
 function exportLocalperfPackage() {
   if (!selectedLocalperfEvaluationId) return;
   const details = elements.localperfIncludeDetails.checked ? "true" : "false";
@@ -1575,7 +1659,10 @@ async function loadApplication() {
       option.textContent = `${model.name}${model.installed ? "" : " — not installed"}`;
       option.disabled = !model.installed;
       elements.model.append(option);
-      if (model.installed) elements.hardwareBenchmarkModel.append(option.cloneNode(true));
+      if (model.installed) {
+        elements.hardwareBenchmarkModel.append(option.cloneNode(true));
+        elements.integrityBenchmarkModel.append(option.cloneNode(true));
+      }
     }
     const installed = models.filter((model) => model.installed).length;
     elements.modelCount.textContent = `${installed} of ${models.length} installed`;
@@ -1745,6 +1832,10 @@ elements.hardwareBenchmarkRun.addEventListener("click", () => runHardwareBenchma
 }));
 elements.hardwareBenchmarkClear.addEventListener("click", () => clearHardwareBenchmarks().catch((error) => {
   elements.hardwareBenchmarkStatus.textContent = error.message;
+}));
+elements.integrityBenchmarkRun.addEventListener("click", () => runIntegrityBenchmark().catch((error) => {
+  elements.integrityBenchmarkStatus.textContent = error.message;
+  showError(error.message);
 }));
 elements.leaderboardSearch.addEventListener("input", renderBenchmarkLeaderboard);
 elements.leaderboardBackendFilter.addEventListener("change", renderBenchmarkLeaderboard);

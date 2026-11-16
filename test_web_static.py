@@ -14,6 +14,9 @@ class FakeService:
     async def list_models(self):
         return []
 
+    async def generate_deterministic(self, model, messages, temperature=0.0):
+        return ""
+
 
 class IdCollector(HTMLParser):
     def __init__(self):
@@ -334,6 +337,26 @@ class WebStaticTests(unittest.TestCase):
             "workload hash ${row.workload_hash || \"unavailable\"}",
         ):
             self.assertIn(contract, javascript)
+
+    def test_integrity_and_comprehension_benchmark_controls_and_runtime_contract(self):
+        html = self.client.get("/").text
+        javascript = self.client.get("/static/app.js").text
+
+        for identifier in (
+            "integrity-benchmark-suite", "integrity-benchmark-model", "integrity-benchmark-run",
+            "integrity-benchmark-status", "integrity-benchmark-scores",
+            "integrity-benchmark-results", "integrity-benchmark-history",
+        ):
+            self.assertIn(f'id="{identifier}"', html)
+        self.assertIn("Integrity &amp; Comprehension", html)
+        self.assertIn("3 repetitions", html)
+        self.assertIn("7 repetitions", html)
+        self.assertIn('fetch("/api/integrity-benchmarks"', javascript)
+        self.assertIn("runIntegrityBenchmark", javascript)
+        self.assertIn("renderIntegrityBenchmark", javascript)
+        self.assertIn("scores.integrity", javascript)
+        self.assertIn("scores.comprehension", javascript)
+        self.assertIn("scenario.evidence", javascript)
         for identifier in (
             "leaderboardSearch", "leaderboardModelFilter", "leaderboardBackendFilter",
             "leaderboardSuiteFilter", "leaderboardMetric",
