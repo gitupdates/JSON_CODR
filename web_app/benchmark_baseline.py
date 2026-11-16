@@ -4,7 +4,7 @@ import copy
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -77,8 +77,10 @@ class BenchmarkBaselineService:
             "performance_history": performance,
         }
         self.root.mkdir(parents=True, exist_ok=True)
-        filename = f"JSON_CODR-benchmark-baseline-{created_at.strftime('%Y%m%dT%H%M%SZ')}.json"
-        path = self.root / filename
+        path = self.root / f"JSON_CODR-benchmark-baseline-{created_at.strftime('%Y%m%dT%H%M%SZ')}.json"
+        while path.exists():
+            created_at += timedelta(seconds=1)
+            path = self.root / f"JSON_CODR-benchmark-baseline-{created_at.strftime('%Y%m%dT%H%M%SZ')}.json"
         temporary = self.root / f".{uuid4().hex}.tmp"
         temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         os.replace(temporary, path)
@@ -91,7 +93,8 @@ class BenchmarkBaselineService:
     @classmethod
     def _latest_strict_results(cls, history: list[dict]) -> dict[str, dict]:
         results: dict[str, dict] = {}
-        for item in sorted(history, key=lambda value: str(value.get("created_at", "")), reverse=True):
+        valid = [value for value in history if isinstance(value, dict)]
+        for item in sorted(valid, key=lambda value: str(value.get("created_at", "")), reverse=True):
             model = str(item.get("model", "")).strip()
             if model and item.get("suite_version") == "Integrity-Comprehension-v2" and model not in results:
                 results[model] = item
@@ -101,12 +104,18 @@ class BenchmarkBaselineService:
     def _best_performance(cls, history: list[dict]) -> dict[str, dict]:
         best: dict[str, dict] = {}
         for session in history:
+            if not isinstance(session, dict):
+                continue
             model = str(session.get("model", "")).strip()
             if not model:
                 continue
             for result in session.get("results", []):
+                if not isinstance(result, dict):
+                    continue
                 speedup = cls._number(result.get("speedup_vs_cpu"))
-                conforming = result.get("localperf", {}).get("conformance", {}).get("conforming") is True
+                localperf = result.get("localperf") if isinstance(result.get("localperf"), dict) else {}
+                conformance = localperf.get("conformance") if isinstance(localperf.get("conformance"), dict) else {}
+                conforming = conformance.get("conforming") is True
                 if result.get("status") != "completed" or not conforming or speedup is None:
                     continue
                 candidate = {

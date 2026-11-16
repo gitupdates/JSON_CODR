@@ -1040,7 +1040,7 @@ function renderLeaderboardDetails(row) {
   elements.leaderboardDetails.append(stats);
   const metadata = document.createElement("p"); metadata.className = "meta"; metadata.textContent = `Session ${row.session_id} · backend ${row.backend} · runtime ${row.runtime || "unavailable"} · kind ${row.kind || "unavailable"} · active ${row.active == null ? "unknown" : row.active ? "yes" : "no"} · evaluation ${row.evaluation_id || "unavailable"} · configuration hash ${row.configuration_hash || "unavailable"} · workload hash ${row.workload_hash || "unavailable"}`; elements.leaderboardDetails.append(metadata);
   if (row.runtime_metadata) { const runtime = document.createElement("p"); runtime.className = "meta"; runtime.textContent = `Runtime metadata: ${JSON.stringify(row.runtime_metadata)}`; elements.leaderboardDetails.append(runtime); }
-  const validityReasons = [...row.rejection_reasons, ...row.conformance_reasons, ...(row.compatibility_reasons || []), row.quarantine_reason].filter(Boolean);
+  const validityReasons = [...(row.rejection_reasons || []), ...(row.conformance_reasons || []), ...(row.compatibility_reasons || []), row.quarantine_reason].filter(Boolean);
   if (row.error || validityReasons.length) { const warning = document.createElement("p"); warning.className = "error"; warning.textContent = row.error || validityReasons.join("; "); elements.leaderboardDetails.append(warning); }
   const samples = document.createElement("details"); const summary = document.createElement("summary"); summary.textContent = `Show ${row.tests.length} per-prompt samples`; samples.append(summary);
   for (const sample of row.tests) { const line = document.createElement("p"); line.className = "meta"; line.textContent = `${sample.prompt_id || sample.test || "sample"} #${sample.repetition || 1}: ${formatLeaderboardValue(sample.tokens_per_second, " tok/s")} · ${formatLeaderboardValue(sample.ttft_ms, " ms")} TTFT · ${formatLeaderboardValue(sample.total_seconds, " s")} total`; samples.append(line); }
@@ -1048,7 +1048,7 @@ function renderLeaderboardDetails(row) {
 }
 
 function renderBenchmarkLeaderboard() {
-  if (!leaderboardHistoryCache.length) {
+  if (!leaderboardHistoryCache.length && !integrityHistoryCache.length) {
     elements.leaderboardTable.replaceChildren(); const row = document.createElement("tr"); const cell = document.createElement("td"); cell.colSpan = 11; cell.className = "meta"; cell.textContent = "No benchmark history. Run Performance benchmarks first."; row.append(cell); elements.leaderboardTable.append(row);
     elements.leaderboardKpis.replaceChildren(); elements.leaderboardStatus.textContent = "No saved benchmark results."; renderLeaderboardScatter([]); renderLeaderboardTrend(null); renderLeaderboardDetails(null); return;
   }

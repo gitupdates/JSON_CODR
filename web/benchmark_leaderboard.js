@@ -144,6 +144,9 @@
         peak_vram_mb: null,
         speedup_vs_cpu: null,
         tests: [],
+        rejection_reasons: [],
+        conformance_reasons: [],
+        compatibility_reasons: [],
       });
     }
     const performanceMaximum = Math.max(0, ...baseRows
@@ -175,7 +178,17 @@
       return !search || `${row.model} ${row.backend} ${row.name}`.toLowerCase().includes(search);
     });
     if (metric === "holistic_capability") {
-      const ordered = filtered.map((row, index) => ({ row: { ...row }, index })).sort((left, right) => {
+      const bestByModel = new Map();
+      for (const row of filtered) {
+        if (numberOrNull(row.integrity_overall) === null) continue;
+        const current = bestByModel.get(row.model);
+        const candidatePerformance = row.eligible_rank ? numberOrNull(row.performance_index) : null;
+        const currentPerformance = current?.eligible_rank ? numberOrNull(current.performance_index) : null;
+        if (!current || (candidatePerformance !== null && (currentPerformance === null || candidatePerformance > currentPerformance))) {
+          bestByModel.set(row.model, row);
+        }
+      }
+      const ordered = [...bestByModel.values()].map((row, index) => ({ row: { ...row }, index })).sort((left, right) => {
         const leftCapability = numberOrNull(left.row.integrity_overall);
         const rightCapability = numberOrNull(right.row.integrity_overall);
         if (leftCapability === null && rightCapability !== null) return 1;

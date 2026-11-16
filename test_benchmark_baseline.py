@@ -39,6 +39,18 @@ class BenchmarkBaselineTests(unittest.TestCase):
         self.assertEqual(payload["holistic_ranking"][1]["performance_index"], 1000)
         self.assertRegex(artifact.path.name, r"^JSON_CODR-benchmark-baseline-\d{8}T\d{6}Z\.json$")
 
+    def test_export_tolerates_malformed_legacy_records_and_never_overwrites(self):
+        integrity = [{"id": "valid", "suite_version": "Integrity-Comprehension-v2", "created_at": "2026-11-15T12:00:00Z",
+                      "model": "valid:7b", "scores": {"integrity": 50, "comprehension": 50, "overall": 50}}, "bad"]
+        performance = ["bad", {"model": "valid:7b", "results": [None, {"status": "completed", "localperf": "bad"}]}]
+        with tempfile.TemporaryDirectory() as directory:
+            service = BenchmarkBaselineService(Path(directory))
+            first = service.export(integrity, performance)
+            second = service.export(integrity, performance)
+            self.assertNotEqual(first.path, second.path)
+            self.assertTrue(first.path.is_file())
+            self.assertTrue(second.path.is_file())
+
 
 if __name__ == "__main__":
     unittest.main()
