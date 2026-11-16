@@ -21,7 +21,13 @@ class TerminalServiceTests(unittest.TestCase):
     @patch("web_app.terminal.subprocess.Popen")
     def test_interactive_agent_opens_native_windows_terminal(self, popen, _which):
         popen.return_value.pid = 42
-        plan = CodingAgentLaunchPlan("aider", ("aider.exe", "--model", "ollama_chat/qwen:7b"), r"D:\project", {}, True)
+        plan = CodingAgentLaunchPlan(
+            "continue",
+            (r"C:\Users\BLACK\AppData\Roaming\npm\cn.CMD", "--model", "ollama/qwen:7b"),
+            r"D:\project",
+            {},
+            True,
+        )
 
         terminal = TerminalService().create_agent(plan)
 
@@ -30,7 +36,24 @@ class TerminalServiceTests(unittest.TestCase):
         popen.assert_called_once()
         self.assertEqual(
             popen.call_args.args[0],
-            [r"C:\Windows\System32\wt.exe", "-w", "new", "-d", r"D:\project", "--", "aider.exe", "--model", "ollama_chat/qwen:7b"],
+            [
+                r"C:\Windows\System32\wt.exe", "-w", "new", "-d", r"D:\project", "--",
+                r"C:\WINDOWS\system32\cmd.exe", "/d", "/s", "/c",
+                r"C:\Users\BLACK\AppData\Roaming\npm\cn.CMD --model ollama/qwen:7b",
+            ],
+        )
+
+    @patch("web_app.terminal.shutil.which", return_value=r"C:\Windows\System32\wt.exe")
+    @patch("web_app.terminal.subprocess.Popen")
+    def test_interactive_executable_launches_directly_in_windows_terminal(self, popen, _which):
+        popen.return_value.pid = 43
+        plan = CodingAgentLaunchPlan("aider", (r"C:\tools\aider.exe", "--model", "ollama_chat/qwen:7b"), r"D:\project", {}, True)
+
+        TerminalService().create_agent(plan)
+
+        self.assertEqual(
+            popen.call_args.args[0],
+            [r"C:\Windows\System32\wt.exe", "-w", "new", "-d", r"D:\project", "--", r"C:\tools\aider.exe", "--model", "ollama_chat/qwen:7b"],
         )
 
     def test_persistent_powershell_streams_output_and_closes_exact_process(self):

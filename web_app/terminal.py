@@ -78,8 +78,14 @@ class TerminalService:
             windows_terminal = shutil.which("wt.exe") or shutil.which("wt")
             if not windows_terminal:
                 raise RuntimeError("Interactive coding agents require Windows Terminal (wt.exe)")
+            agent_command = list(plan.argv)
+            if Path(plan.argv[0]).suffix.lower() in {".cmd", ".bat"}:
+                command_processor = environment.get("COMSPEC") or str(
+                    Path(environment["SystemRoot"]) / "System32" / "cmd.exe"
+                )
+                agent_command = [command_processor, "/d", "/s", "/c", subprocess.list2cmdline(plan.argv)]
             process = subprocess.Popen(
-                [windows_terminal, "-w", "new", "-d", plan.cwd, "--", *plan.argv],
+                [windows_terminal, "-w", "new", "-d", plan.cwd, "--", *agent_command],
                 cwd=plan.cwd,
                 env=environment,
             )
