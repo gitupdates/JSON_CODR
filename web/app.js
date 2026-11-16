@@ -896,6 +896,8 @@ const LEADERBOARD_METRICS = {
   peak_vram_mb: ["Peak VRAM", " MiB"],
   speedup_vs_cpu: ["CPU-relative speed", "×"],
   performance_index: ["Performance index", ""],
+  integrity_overall: ["Integrity & comprehension", "%"],
+  combined_score: ["Combined quality + performance", ""],
 };
 
 function renderLeaderboardMetricComparison(rows) {
@@ -965,6 +967,11 @@ function renderLeaderboardTrend(row) {
   }
   const metric = elements.leaderboardMetric.value;
   const [metricLabel, metricUnit] = LEADERBOARD_METRICS[metric] || [metric, ""];
+  if (metric === "integrity_overall" || metric === "combined_score") {
+    const note = document.createElement("p"); note.className = "meta";
+    note.textContent = "Quality ranks use the latest strict v2 integrity evaluation. Review its per-scenario history in Performance benchmarks.";
+    elements.leaderboardTrendChart.append(note); return;
+  }
   const trend = window.JSONCodrLeaderboard.buildTrend(leaderboardHistoryCache, row, metric);
   const validTrend = trend.filter((point) => point.eligible && Number.isFinite(point.value));
   if (validTrend.length < 2) {

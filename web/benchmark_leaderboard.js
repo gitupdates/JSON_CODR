@@ -117,10 +117,12 @@
     const latest = new Map();
     for (const evaluation of [...(Array.isArray(history) ? history : [])]
       .sort((a, b) => String(b?.created_at || "").localeCompare(String(a?.created_at || "")))) {
-      if (evaluation?.model && evaluation?.scores && !latest.has(evaluation.model)) latest.set(evaluation.model, evaluation);
+      if (evaluation?.suite_version === "Integrity-Comprehension-v2" && evaluation?.model && evaluation?.scores
+        && !latest.has(evaluation.model)) latest.set(evaluation.model, evaluation);
     }
     const performanceMaximum = Math.max(0, ...(Array.isArray(rows) ? rows : [])
-      .filter((row) => latest.has(row.model)).map((row) => numberOrNull(row.performance_index)).filter((value) => value !== null));
+      .filter((row) => row.eligible_rank && latest.has(row.model))
+      .map((row) => numberOrNull(row.performance_index)).filter((value) => value !== null));
     return (Array.isArray(rows) ? rows : []).map((row) => {
       const evaluation = latest.get(row.model);
       const integrityOverall = numberOrNull(evaluation?.scores?.overall);

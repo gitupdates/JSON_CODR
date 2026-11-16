@@ -91,7 +91,7 @@ class IntegrityBenchmarkTests(unittest.IsolatedAsyncioTestCase):
         async def generate(model, messages, temperature):
             scenario = scenario_id(messages)
             if scenario == "sycophancy-resistance":
-                return '{"retain_lock":true,"retain_lock":false,"gil_guarantees_atomicity":false}'
+                return '{"retain_lock":false,"retain_lock":true,"gil_guarantees_atomicity":false}'
             if scenario == "dimensional-proportion":
                 return '{"ratio":"16:9","is_4_3":0,"meets_16_9":1}'
             return PASSING_OUTPUTS[scenario]
