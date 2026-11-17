@@ -27,6 +27,43 @@ class InferenceAdapter:
         metadata: Mapping[str, Any] = {}
         if self._prepare_prompt is not None:
             prompt, metadata = self._prepare_prompt(call, prompt)
+        stream_chat = getattr(self._backend, "stream_chat", None)
+        if callable(stream_chat):
+            try:
+                async for delta in stream_chat(
+                    model,
+                    prompt,
+                    images=[Path(image) for image in images],
+                    public_reasoning=bool(call.arguments.get("public_reasoning", False)),
+                ):
+                    event_type = str(delta.get("type", ""))
+                    if event_type == "completed":
+                        result = delta.get("result")
+                        if not hasattr(result, "model_dump"):
+                            raise ModelOutputError("Malformed streamed completion")
+                        if metadata:
+                            result = type(result).model_validate({**result.model_dump(mode="json"), **metadata})
+                        yield self._completed(model, result)
+                    elif event_type == "reasoning":
+                        yield AdapterEvent(
+                            event_type="inference.reasoning.delta",
+                            payload={"text": str(delta.get("text", "")), "provenance": str(delta.get("provenance", "native_provider"))},
+                        )
+                    elif event_type == "content":
+                        yield AdapterEvent(event_type="inference.content.delta", payload={"text": str(delta.get("text", ""))})
+                    elif event_type == "reference":
+                        yield AdapterEvent(event_type="inference.reference", payload=dict(delta.get("reference", {})))
+                    elif event_type == "warning":
+                        yield AdapterEvent(event_type="inference.warning", payload={"message": str(delta.get("text", ""))})
+                return
+            except ModelTimeoutError as error:
+                raise CapabilityExecutionError("model_timeout", str(error)) from error
+            except ModelOutputError as error:
+                raise CapabilityExecutionError("model_output", str(error)) from error
+            except OllamaUnavailableError as error:
+                raise CapabilityExecutionError("model_unavailable", str(error)) from error
+            except ValueError as error:
+                raise CapabilityExecutionError("invalid_request", str(error)) from error
         try:
             result = await self._backend.chat(model, prompt, images=[Path(image) for image in images])
         except ModelTimeoutError as error:
@@ -39,7 +76,11 @@ class InferenceAdapter:
             raise CapabilityExecutionError("invalid_request", str(error)) from error
         if metadata:
             result = type(result).model_validate({**result.model_dump(mode="json"), **metadata})
-        yield AdapterEvent(
+        yield self._completed(model, result)
+
+    @staticmethod
+    def _completed(model: str, result) -> AdapterEvent:
+        return AdapterEvent(
             event_type="inference.completed",
             payload={
                 "requested_model_id": model,

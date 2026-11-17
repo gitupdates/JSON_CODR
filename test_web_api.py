@@ -948,6 +948,24 @@ class WebApiTests(unittest.TestCase):
         self.assertNotIn("risk", parsed.actions[0].model_dump())
         self.assertNotIn("approved", parsed.actions[0].model_dump())
 
+    def test_legacy_response_preserves_explicit_public_reasoning(self):
+        parsed = parse_response_content(
+            '<think>Check the repository evidence before answering.</think>'
+            + json.dumps({
+                "status": "ready",
+                "summary": "Evidence checked",
+                "content": "The public answer remains separate.",
+            })
+        )
+
+        self.assertEqual(parsed.content, "The public answer remains separate.")
+        self.assertEqual(len(parsed.reasoning.entries), 1)
+        self.assertEqual(parsed.reasoning.entries[0].provenance, "provider_tag")
+        self.assertEqual(
+            parsed.reasoning.entries[0].text,
+            "Check the repository evidence before answering.",
+        )
+
     def test_structured_coding_agent_task_is_validated_for_user_review(self):
         parsed = parse_response_content(json.dumps({
             "status": "success",

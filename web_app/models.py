@@ -140,6 +140,8 @@ class ChatResult(BaseModel):
     actions: List[ActionSuggestion] = Field(default_factory=list)
     coding_agent_tasks: List[CodingAgentSuggestion] = Field(default_factory=list)
     action_proposals: List[ActionProposal] = Field(default_factory=list)
+    reasoning: Optional["ReasoningTrace"] = None
+    references: List["ObjectReference"] = Field(default_factory=list)
 
 
 class GeneratedFile(BaseModel):

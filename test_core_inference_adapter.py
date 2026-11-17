@@ -15,6 +15,23 @@ class RecordingBackend:
         return ChatResult(model=model, status="success", summary="ok", content="ok")
 
 
+class StreamingBackend:
+    async def stream_chat(self, model, prompt, images, public_reasoning=False):
+        yield {"type": "reasoning", "text": "Inspect evidence.", "provenance": "native_provider"}
+        yield {"type": "content", "text": "Live "}
+        yield {"type": "content", "text": "answer"}
+        yield {
+            "type": "completed",
+            "result": ChatResult(model=model, status="success", summary="done", content="Live answer"),
+        }
+
+
+class FailingStreamingBackend:
+    async def stream_chat(self, model, prompt, images, public_reasoning=False):
+        yield {"type": "content", "text": "partial"}
+        raise RuntimeError("provider disconnected")
+
+
 class InferenceAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_session_context_is_injected_and_reported_in_result(self):
         backend = RecordingBackend()
@@ -58,6 +75,42 @@ class InferenceAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["attached_skillsets"], ["planning"])
         self.assertEqual(result["attached_skills"][0]["reference"], "rea-agents:reverse-engineer-anything")
         self.assertEqual(caught, [])
+
+    async def test_streaming_backend_emits_real_reasoning_and_content_before_completion(self):
+        adapter = InferenceAdapter(StreamingBackend())
+        call = CapabilityCall(
+            capability_id="inference.generate",
+            operation="generate",
+            project_root=".",
+            arguments={"model": "qwen", "prompt": "Explain", "public_reasoning": True},
+        )
+        context = ExecutionContext(task_id="task-1", project_id="project-1", principal="user")
+
+        events = [event async for event in adapter.execute(call, context)]
+
+        self.assertEqual(
+            [event.event_type for event in events],
+            ["inference.reasoning.delta", "inference.content.delta", "inference.content.delta", "inference.completed"],
+        )
+        self.assertEqual(events[0].payload["provenance"], "native_provider")
+        self.assertEqual(events[-1].payload["result"]["content"], "Live answer")
+
+    async def test_partial_stream_is_not_converted_into_a_false_completion(self):
+        adapter = InferenceAdapter(FailingStreamingBackend())
+        call = CapabilityCall(
+            capability_id="inference.generate",
+            operation="generate",
+            project_root=".",
+            arguments={"model": "qwen", "prompt": "Explain"},
+        )
+        context = ExecutionContext(task_id="task-1", project_id="project-1", principal="user")
+
+        events = []
+        with self.assertRaisesRegex(RuntimeError, "provider disconnected"):
+            async for event in adapter.execute(call, context):
+                events.append(event)
+
+        self.assertEqual([event.event_type for event in events], ["inference.content.delta"])
 
 
 if __name__ == "__main__":

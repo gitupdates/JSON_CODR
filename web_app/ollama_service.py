@@ -5,7 +5,8 @@ import ollama
 from pydantic import ValidationError
 
 from cli import StructuredCLIResponse, load_config, parse_response_content
-from web_app.models import ChatResult, ConversionBundle, GpuProfileSettings
+from web_app.models import ChatResult, ConversionBundle, GpuProfileSettings, ReasoningEntry, ReasoningTrace
+from web_app.reasoning import ReasoningNormalizer
 
 
 class OllamaUnavailableError(RuntimeError):
@@ -201,6 +202,79 @@ class OllamaService:
         except (ValidationError, KeyError, TypeError, AttributeError) as error:
             raise ModelOutputError("Malformed structured output") from error
         return ChatResult(model=resolved, **parsed.model_dump())
+
+    async def stream_chat(
+        self,
+        model: str,
+        prompt: str,
+        images: Optional[List[Any]] = None,
+        public_reasoning: bool = False,
+    ):
+        resolved = self._resolve(model)
+        live = await self._live_models()
+        if resolved not in live:
+            raise OllamaUnavailableError("Model is not installed")
+        messages = []
+        if public_reasoning:
+            messages.append({
+                "role": "system",
+                "content": (
+                    "Provide an auditable public rationale inside <think> and </think> tags before the final answer. "
+                    "State assumptions, evidence, uncertainty, and verification. Do not claim tools or files were used unless supplied."
+                ),
+            })
+        messages.append({"role": "user", "content": prompt, "images": images or None})
+        request = {"model": resolved, "messages": messages, "stream": True}
+        normalizer = ReasoningNormalizer()
+        content_parts: list[str] = []
+        reasoning_entries: list[ReasoningEntry] = []
+        warnings: list[str] = []
+        try:
+            stream = await self._chat_with_optimization(resolved, request)
+            async with asyncio.timeout(self.timeout_seconds):
+                async for chunk in stream:
+                    message = chunk.message if hasattr(chunk, "message") else chunk.get("message", {})
+                    content = getattr(message, "content", None) if not isinstance(message, dict) else message.get("content")
+                    reasoning = getattr(message, "thinking", None) if not isinstance(message, dict) else message.get("thinking")
+                    for delta in normalizer.feed({"content": content or "", "reasoning": reasoning or ""}):
+                        event = self._stream_delta(delta, reasoning_entries, content_parts, warnings)
+                        if event:
+                            yield event
+                for delta in normalizer.finish():
+                    event = self._stream_delta(delta, reasoning_entries, content_parts, warnings)
+                    if event:
+                        yield event
+        except TimeoutError as error:
+            raise ModelTimeoutError("Model request timed out") from error
+        except (ModelTimeoutError, ModelOutputError, OllamaUnavailableError, ValueError):
+            raise
+        except Exception as error:
+            raise OllamaUnavailableError("Ollama request failed") from error
+        content = "".join(content_parts).strip()
+        if not content:
+            raise ModelOutputError("Model returned no answer content")
+        summary = next((line.strip() for line in content.splitlines() if line.strip()), "Model response")[:240]
+        trace = ReasoningTrace(entries=reasoning_entries, warnings=warnings) if reasoning_entries or warnings else None
+        yield {
+            "type": "completed",
+            "result": ChatResult(model=resolved, status="success", summary=summary, content=content, reasoning=trace),
+        }
+
+    @staticmethod
+    def _stream_delta(delta, reasoning_entries, content_parts, warnings):
+        if delta.channel == "content":
+            content_parts.append(delta.text)
+            return {"type": "content", "text": delta.text}
+        if delta.channel == "reasoning":
+            reasoning_entries.append(ReasoningEntry(
+                sequence=len(reasoning_entries),
+                kind="analysis",
+                text=delta.text,
+                provenance=delta.provenance,
+            ))
+            return {"type": "reasoning", "text": delta.text, "provenance": delta.provenance}
+        warnings.append(delta.text)
+        return {"type": "warning", "text": delta.text}
 
     async def convert_archive(self, model: str, prompt: str) -> ConversionBundle:
         resolved = self._resolve(model)
