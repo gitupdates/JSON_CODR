@@ -14,6 +14,7 @@ from web_app.attachments import AttachmentService, AttachmentTooLarge
 from web_app.actions import ActionProposalService
 from web_app.artifacts import ArtifactService
 from web_app.context import ContextAssembler
+from web_app.conversation import ConversationService
 from web_app.hardware import HardwareBackendManager
 from web_app.inference.catalog import OptimizedModelCatalog
 from web_app.inference.contracts import ProviderKind
@@ -149,6 +150,12 @@ def create_app(
     context_assembler = ContextAssembler(attachments, skills=skill_library)
     dependency_service = DependencyService(attachments)
     artifact_service = ArtifactService(workspace)
+    conversation_service = ConversationService(
+        workspace,
+        attachments,
+        Path(__file__).resolve().parent.parent,
+        artifact_service,
+    )
     terminals = terminals or TerminalService(shim_root=component_root / "shims")
     close_terminals = getattr(terminals, "close_all", None)
     if close_terminals is not None:
@@ -595,6 +602,85 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(error)) from error
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Session not found") from error
+
+    @application.get("/api/sessions/{session_id}/conversation")
+    async def get_conversation(session_id: str):
+        try:
+            return conversation_service.history(session_id)
+        except InvalidSessionId as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Session not found") from error
+
+    @application.post("/api/sessions/{session_id}/conversation", status_code=201)
+    async def append_conversation_message(session_id: str, message: ChatMessage):
+        try:
+            return conversation_service.append(session_id, message)
+        except InvalidSessionId as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Session not found") from error
+
+    @application.get("/api/sessions/{session_id}/conversation/export")
+    async def export_conversation(
+        session_id: str,
+        format: str = "markdown",
+        include_binaries: bool = False,
+    ):
+        try:
+            payload, media_type, filename = conversation_service.export_session(
+                session_id,
+                format,
+                include_binaries=include_binaries,
+            )
+        except InvalidSessionId as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Session not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return Response(
+            content=payload,
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @application.get("/api/sessions/{session_id}/messages/{message_id}/export")
+    async def export_conversation_message(
+        session_id: str,
+        message_id: str,
+        format: str = "markdown",
+    ):
+        try:
+            payload, media_type, filename = conversation_service.export_message(
+                session_id,
+                message_id,
+                format,
+            )
+        except InvalidSessionId as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Message not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return Response(
+            content=payload,
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @application.get("/api/sessions/{session_id}/references/{reference_id}")
+    async def download_conversation_reference(session_id: str, reference_id: str):
+        try:
+            reference = conversation_service.find_reference(session_id, reference_id)
+            path, media_type = conversation_service.resolve_reference(session_id, reference)
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail="Reference is outside the active scope") from error
+        except InvalidSessionId as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except (KeyError, ValueError) as error:
+            raise HTTPException(status_code=404, detail="Reference not found") from error
+        return FileResponse(path, media_type=media_type, filename=reference.label)
 
     @application.post("/api/sessions/{session_id}/skill-recommendations")
     async def preview_skill_recommendations(session_id: str, request: SkillRecommendationRequest):
