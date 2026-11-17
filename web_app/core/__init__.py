@@ -1,5 +1,14 @@
 from web_app.core.adapters import AdapterEvent, CapabilityAdapter, CapabilityCall, CapabilityExecutionError, ExecutionContext
 from web_app.core.agent_runtime import AgentRuntime
+from web_app.core.analysis_adapter import AnalysisAdapter
+from web_app.core.assimilation import (
+    AssimilationService,
+    ComponentManifest,
+    FunctionalProbeResult,
+    ProvenanceRecord,
+    QuarantineRecord,
+)
+from web_app.core.browser_adapter import BrowserAdapter
 from web_app.core.capabilities import CapabilityRegistry
 from web_app.core.contracts import (
     CapabilityManifest,
@@ -22,7 +31,9 @@ from web_app.core.contracts import (
 from web_app.core.context_service import CompactionRecord, ContextBundle, ContextService, ContextSource
 from web_app.core.credentials import CredentialBroker
 from web_app.core.inference_adapter import InferenceAdapter
+from web_app.core.language_adapter import LanguageAdapter
 from web_app.core.memory import MemoryRecord, MemoryStore
+from web_app.core.mcp_adapter import McpAdapter
 from web_app.core.provider_manager import ProviderManager
 from web_app.core.provider_protocol import ProviderEvent, ProviderLock, ProviderManifest, ProviderProcess, ProviderRequest
 from web_app.core.policy import PolicyDecision, PolicyEffect, PolicyService
@@ -49,15 +60,21 @@ __all__ = [
     "CoreService",
     "CredentialBroker",
     "AgentRuntime",
+    "AnalysisAdapter",
+    "AssimilationService",
+    "BrowserAdapter",
+    "ComponentManifest",
     "ExecutionCandidate",
     "ExecutionMode",
     "ExecutionContext",
     "ExecutionRoute",
     "ExecutionRouter",
+    "FunctionalProbeResult",
     "ExternalChangeEvent",
     "ManifestAuthority",
     "MemoryRecord",
     "MemoryStore",
+    "McpAdapter",
     "ModelScope",
     "ProbeObservation",
     "PolicyDecision",
@@ -73,6 +90,8 @@ __all__ = [
     "ProjectAdapter",
     "ProjectSnapshot",
     "ProjectWatcher",
+    "ProvenanceRecord",
+    "QuarantineRecord",
     "RuntimeIdentity",
     "RouteConsentRequired",
     "TaskCommand",
@@ -85,4 +104,5 @@ __all__ = [
     "TerminalSessionRecord",
     "ThreadId",
     "InferenceAdapter",
+    "LanguageAdapter",
 ]

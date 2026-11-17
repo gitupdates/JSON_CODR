@@ -313,17 +313,17 @@ git commit -m "feat(core): isolate optional capability providers"
 - Produces capabilities `code.parse`, `code.symbols`, `code.diagnostics`, `browser.inspect`, `browser.interact`, `browser.capture`, `mcp.discover`, `mcp.invoke`, `rea.inspect`, `ghidra.analyze`, `component.identify`, `component.install`, `component.enable`, and `component.remove`.
 - Produces: `ComponentManifest`, `ProvenanceRecord`, `QuarantineRecord`, and `FunctionalProbeResult`.
 
-- [ ] **Step 1: Write failing capability and assimilation tests**
+- [x] **Step 1: Write failing capability and assimilation tests**
 
 Test Tree-sitter/LSP fallback, browser screenshot and DOM evidence, MCP schemas and permission mediation, REA/Ghidra applicable versus unavailable results, GitHub/local/archive/skill/MCP identification, duplicate content hashes, quarantine, signature/provenance recording, project-only initial enablement, promotion, removal, rollback, and no execution before the functional probe passes.
 
-- [ ] **Step 2: Run focused old and new tests and verify new cases fail**
+- [x] **Step 2: Run focused old and new tests and verify new cases fail**
 
 Run: `C:\Python315\python.exe -m unittest test_core_extended_capabilities test_skills test_skills_import test_extraction -v`
 
 Expected: new unified capability cases fail.
 
-- [ ] **Step 3: Implement adapters through `ProviderManager` where isolation is required**
+- [x] **Step 3: Implement adapters through `ProviderManager` where isolation is required**
 
 Dependencies are pinned only after isolated installation and probe tests pass. Adapter absence must degrade to a clear unavailable result, not break core startup.
 
