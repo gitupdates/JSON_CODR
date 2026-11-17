@@ -44,6 +44,7 @@ from web_app.core.project_adapter import ProjectAdapter
 from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
 from web_app.core.component_manager import ComponentManager
+from web_app.core.component_adapter import LazyComponentExecutionAdapter
 from web_app.core.terminal_adapter import TerminalAdapter
 from web_app.dependencies import DependencyService
 from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
@@ -244,6 +245,7 @@ def create_app(
                 "terminal.interrupt": core_terminal_adapter,
                 "terminal.close": core_terminal_adapter,
                 "component.install": component_adapter,
+                "component.execute": LazyComponentExecutionAdapter(get_component_manager),
             }
             mcp_adapters, mcp_backends = build_mcp_adapters(
                 workspace.data_root / "mcp_servers.json",

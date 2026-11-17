@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
 import tomllib
 from pathlib import Path
 
 from web_app.core.component_acquisition import AcquiredComponent
 from web_app.core.component_registry import ComponentPlan, ComponentRegistry, ComponentRequest, ComponentScope
+
+_COMMAND_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 class ComponentInspector:
@@ -32,7 +35,7 @@ class ComponentInspector:
         if pyproject is not None:
             document = tomllib.loads(pyproject.read_text(encoding="utf-8"))
             scripts = document.get("project", {}).get("scripts", {})
-            entry_points = tuple(sorted(str(name) for name in scripts))
+            entry_points = _validated_commands(scripts)
             runtime_kind = "python"
             executable = bool(entry_points)
             effects = ("filesystem_write", "dependency_network", "build_hook")
@@ -41,14 +44,14 @@ class ComponentInspector:
             bins = document.get("bin", {})
             if isinstance(bins, str):
                 bins = {str(document.get("name", "component")): bins}
-            entry_points = tuple(sorted(str(name) for name in bins)) if isinstance(bins, dict) else ()
+            entry_points = _validated_commands(bins) if isinstance(bins, dict) else ()
             runtime_kind = "node"
             executable = bool(entry_points)
             effects = ("filesystem_write", "dependency_network", "build_hook")
         elif mcp_manifest is not None:
             document = json.loads(mcp_manifest.read_text(encoding="utf-8"))
             servers = document.get("mcpServers", {})
-            entry_points = tuple(sorted(str(name) for name in servers)) if isinstance(servers, dict) else ()
+            entry_points = _validated_commands(servers) if isinstance(servers, dict) else ()
             runtime_kind = "mcp"
             executable = bool(entry_points)
             effects = ("filesystem_write", "process_launch")
@@ -81,3 +84,10 @@ def _first(root: Path, name: str) -> Path | None:
         return direct
     matches = sorted(root.glob(f"*/{name}"))
     return matches[0] if matches else None
+
+
+def _validated_commands(mapping: dict) -> tuple[str, ...]:
+    names = tuple(sorted(str(name) for name in mapping))
+    if any(not _COMMAND_NAME.fullmatch(name) for name in names):
+        raise ValueError("component command names must be portable identifiers")
+    return names

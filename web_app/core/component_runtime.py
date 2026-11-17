@@ -35,6 +35,17 @@ class ComponentRuntimeInstaller:
                 return self._install_python(plan, source, staging, destination)
             copied = staging / "source"
             shutil.copytree(source, copied)
+            if plan.runtime_kind == "node":
+                package = json.loads((copied / "package.json").read_text(encoding="utf-8"))
+                if package.get("dependencies") or package.get("optionalDependencies"):
+                    if not (copied / "package-lock.json").is_file():
+                        raise ValueError("Node components with dependencies require package-lock.json")
+                    completed = subprocess.run(
+                        ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"], cwd=copied,
+                        capture_output=True, text=True, timeout=300,
+                    )
+                    if completed.returncode:
+                        raise RuntimeError((completed.stderr or completed.stdout).strip())
             commands = self._commands(plan, copied)
             (staging / "runtime.json").write_text(json.dumps({key: list(value) for key, value in commands.items()}), encoding="utf-8")
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -98,6 +109,13 @@ class ComponentRuntimeInstaller:
             if isinstance(bins, str):
                 bins = {package.get("name", "component"): bins}
             commands = {name: ("node", str(source / relative)) for name, relative in bins.items()}
+        if plan.runtime_kind == "mcp":
+            manifest = json.loads((source / "mcp_servers.json").read_text(encoding="utf-8"))
+            commands = {
+                name: (str(config["command"]), *(str(item) for item in config.get("args", [])))
+                for name, config in manifest.get("mcpServers", {}).items()
+                if isinstance(config, dict) and isinstance(config.get("command"), str)
+            }
         return commands
 
 

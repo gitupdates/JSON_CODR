@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+import json
 
 from web_app.core.component_acquisition import AcquiredComponent, ComponentAcquirer
 from web_app.core.component_catalog import ComponentCatalog
@@ -24,6 +25,8 @@ class ComponentManager:
         self.catalog = ComponentCatalog(self.registry)
         self.shims = ShimManager(self.root / "shims")
         self._acquired: dict[str, AcquiredComponent] = {}
+        self.pending = self.root / "pending"
+        self.pending.mkdir(exist_ok=True)
         self.registry.recover()
         self.installer.recover(self.root / "runtimes")
 
@@ -34,13 +37,19 @@ class ComponentManager:
         acquired = self.acquirer.acquire(request, self.root / "staging")
         plan = self.inspector.inspect(acquired, request.scope, project_id=request.project_id)
         self._acquired[plan.plan_id] = acquired
+        (self.pending / f"{plan.plan_id}.json").write_text(acquired.model_dump_json(), encoding="utf-8")
         return plan
 
-    def install(self, plan_id: str) -> dict:
+    def install(self, plan_id: str, approved_digest: str) -> dict:
+        request = self.registry.request_for_plan(plan_id)
+        if self.registry.plan_digest(plan_id) != approved_digest:
+            raise PermissionError("approved component plan digest does not match")
         acquired = self._acquired.pop(plan_id, None)
+        pending = self.pending / f"{plan_id}.json"
+        if acquired is None and pending.is_file():
+            acquired = AcquiredComponent.model_validate_json(pending.read_text(encoding="utf-8"))
         if acquired is None:
             raise KeyError(plan_id)
-        request = self.registry.request_for_plan(plan_id)
         plan = self.inspector.inspect(acquired, request.scope, project_id=request.project_id)
         generation = self.registry.stage(plan)
         try:
@@ -60,6 +69,7 @@ class ComponentManager:
             return {"status": "active" if request.activation else "verified", "generation": verified.model_dump(mode="json")}
         finally:
             shutil.rmtree(acquired.source_root, ignore_errors=True)
+            pending.unlink(missing_ok=True)
 
     def list(self, project_id: str) -> tuple[dict, ...]:
         return tuple(item.model_dump(mode="json") for item in self.catalog.resolve_components(project_id))

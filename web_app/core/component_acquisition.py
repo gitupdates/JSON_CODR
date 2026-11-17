@@ -37,7 +37,7 @@ class ComponentAcquirer:
         if request.source_kind is ComponentSource.archive:
             return self._archive(request, target)
         if request.source_kind in {ComponentSource.python, ComponentSource.node}:
-            return self._package(request, target)
+            raise ValueError("remote package coordinates are not enabled; use a reviewed local or Git source")
         raise ValueError(f"unsupported component source: {request.source_kind.value}")
 
     def _git(self, request: ComponentRequest, target: Path) -> AcquiredComponent:
@@ -119,21 +119,6 @@ class ComponentAcquirer:
             content_digest=_tree_digest(target),
             requested_version=request.requested_version,
         )
-
-    def _package(self, request: ComponentRequest, target: Path) -> AcquiredComponent:
-        if not self._package_coordinate.fullmatch(request.source):
-            raise ValueError("invalid package coordinate")
-        target.mkdir()
-        coordinate = request.source + (f"@{request.requested_version}" if request.requested_version else "")
-        (target / "component-coordinate.txt").write_text(coordinate, encoding="utf-8")
-        return AcquiredComponent(
-            source_kind=request.source_kind,
-            canonical_source=request.source,
-            source_root=str(target),
-            content_digest=_tree_digest(target),
-            requested_version=request.requested_version,
-        )
-
 
 def _tree_digest(root: Path, *, exclude: set[str] | None = None) -> str:
     excluded = exclude or set()

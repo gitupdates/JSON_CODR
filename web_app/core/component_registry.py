@@ -271,6 +271,14 @@ class ComponentRegistry:
             raise KeyError(plan_id)
         return ComponentRequest.model_validate(json.loads(row["request_json"]))
 
+    def plan_digest(self, plan_id: str) -> str:
+        row = self._connection.execute(
+            "SELECT content_digest FROM component_plans WHERE plan_id = ?", (plan_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(plan_id)
+        return str(row["content_digest"])
+
     def generations(self, component_id: str | None = None) -> tuple[ComponentGeneration, ...]:
         if component_id is None:
             rows = self._connection.execute(
@@ -377,10 +385,16 @@ class ComponentRegistry:
         activation = self.resolve(component_id, project_id)
         if activation is None:
             raise KeyError(component_id)
+        return self.acquire_generation_lease(component_id, activation.generation, project_id)
+
+    def acquire_generation_lease(self, component_id: str, generation: int, project_id: str) -> ComponentLease:
+        candidate = self.generation(component_id, generation)
+        if candidate.state != "verified":
+            raise PermissionError("component generation is not verified")
         lease = ComponentLease(
             lease_id=str(uuid7()),
             component_id=component_id,
-            generation=activation.generation,
+            generation=generation,
             project_id=project_id,
         )
         with self._transaction():

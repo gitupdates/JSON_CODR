@@ -5,12 +5,24 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from web_app.core.component_acquisition import ComponentAcquirer
+from web_app.core.component_acquisition import AcquiredComponent, ComponentAcquirer
 from web_app.core.component_inspection import ComponentInspector
-from web_app.core.component_registry import ComponentRegistry, ComponentRequest, ComponentScope
+from web_app.core.component_registry import ComponentRegistry, ComponentRequest, ComponentScope, ComponentSource
 
 
 class ComponentAcquisitionTests(unittest.TestCase):
+    def test_inspector_rejects_unsafe_command_names(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"; source.mkdir()
+            (source / "pyproject.toml").write_text("[project]\nname='bad'\nversion='1'\n[project.scripts]\n'../../escape'='bad:main'\n")
+            acquired = AcquiredComponent(source_kind=ComponentSource.local, canonical_source=str(source), source_root=str(source), content_digest="sha256:" + "1" * 64)
+            registry = ComponentRegistry(root / "registry.sqlite")
+            try:
+                with self.assertRaises(ValueError):
+                    ComponentInspector(registry).inspect(acquired, ComponentScope.global_)
+            finally:
+                registry.close()
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)

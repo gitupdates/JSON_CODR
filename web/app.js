@@ -2464,7 +2464,7 @@ componentPlanButton?.addEventListener("click", async () => {
 componentInstallButton?.addEventListener("click", async () => {
   if (!pendingComponentPlan) return;
   componentInstallButton.disabled = true;
-  const result = await coreClient.installComponent(pendingComponentPlan.plan_id);
+  const result = await coreClient.installComponent(pendingComponentPlan.plan_id, pendingComponentPlan.content_digest);
   document.querySelector("#component-plan-details").textContent = JSON.stringify(result, null, 2);
   pendingComponentPlan = null;
   await loadComponents();

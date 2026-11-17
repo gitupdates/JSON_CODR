@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -18,8 +19,11 @@ class ShimManager:
         for component_id, commands in components.items():
             safe_component = component_id.removeprefix("component-")
             for command, argv in commands.items():
+                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", command):
+                    raise ValueError("unsafe component command name")
                 body = "@echo off\r\n" + subprocess.list2cmdline(argv) + " %*\r\n"
-                (self.root / f"borg-{safe_component}-{command}.cmd").write_text(body, encoding="utf-8")
+                target = (self.root / f"borg-{safe_component}-{command}.cmd").resolve()
+                target.relative_to(self.root.resolve())
+                target.write_text(body, encoding="utf-8")
                 if counts[command.casefold()] == 1 and command.casefold() not in reserved:
                     (self.root / f"{command}.cmd").write_text(body, encoding="utf-8")
-

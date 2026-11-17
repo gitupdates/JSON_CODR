@@ -78,8 +78,8 @@
       return this.request("/api/components/plan", { method: "POST", body: request });
     }
 
-    async installComponent(planId) {
-      return this.request(`/api/components/install/${encodeURIComponent(planId)}`, { method: "POST" });
+    async installComponent(planId, approvedDigest) {
+      return this.request(`/api/components/install/${encodeURIComponent(planId)}`, { method: "POST", body: { approved_digest: approvedDigest } });
     }
 
     async listComponents(projectId = "") {

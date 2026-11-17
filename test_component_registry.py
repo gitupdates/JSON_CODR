@@ -6,6 +6,17 @@ from web_app.core.component_registry import ComponentRegistry, ComponentRequest,
 
 
 class ComponentRegistryTests(unittest.TestCase):
+    def test_exact_generation_lease_never_re_resolves_activation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            registry = ComponentRegistry(Path(temporary) / "registry.sqlite")
+            try:
+                first = self.verified_generation(registry)
+                registry.activate(first.component_id, first.generation, scope=ComponentScope.global_)
+                lease = registry.acquire_generation_lease(first.component_id, first.generation, "project")
+                self.assertEqual(first.generation, lease.generation)
+                registry.release_lease(lease.lease_id)
+            finally:
+                registry.close()
     def request(self, source="https://example.test/tool.git", *, scope=ComponentScope.global_, project_id=None):
         return ComponentRequest(source_kind="git", source=source, scope=scope, project_id=project_id)
 

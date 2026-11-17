@@ -16,12 +16,26 @@ class ComponentManagerTests(unittest.TestCase):
             manager = ComponentManager(root / "data")
             plan = manager.plan(ComponentRequest(source_kind=ComponentSource.local, source=str(tool)))
             self.assertEqual(ComponentScope.global_, plan.scope)
-            result = manager.install(plan.plan_id)
+            result = manager.install(plan.plan_id, plan.content_digest)
             self.assertEqual("active", result["status"])
             self.assertEqual(1, len(manager.list("project-a")))
             manager.disable(plan.component_id, ComponentScope.global_)
             self.assertEqual(0, len(manager.list("project-a")))
             manager.close()
+
+    def test_plan_survives_restart_and_requires_matching_digest(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); tool = root / "tool"; tool.mkdir()
+            (tool / "hello.cmd").write_text("@echo HELLO\n")
+            manager = ComponentManager(root / "data")
+            plan = manager.plan(ComponentRequest(source_kind=ComponentSource.local, source=str(tool)))
+            manager.close()
+            manager = ComponentManager(root / "data")
+            try:
+                with self.assertRaises(PermissionError): manager.install(plan.plan_id, "sha256:" + "0" * 64)
+                self.assertEqual("active", manager.install(plan.plan_id, plan.content_digest)["status"])
+            finally:
+                manager.close()
 
 
 if __name__ == "__main__": unittest.main()

@@ -30,6 +30,11 @@ class RestoreRequest(BaseModel):
     checkpoint_id: str = Field(min_length=1, max_length=512)
 
 
+class ComponentInstallApproval(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    approved_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
 def create_core_router(
     runtime: RuntimeProvider,
     *,
@@ -46,11 +51,13 @@ def create_core_router(
         return components().plan(request)
 
     @router.post("/api/components/install/{plan_id}")
-    def install_component(plan_id: str):
+    def install_component(plan_id: str, approval: ComponentInstallApproval):
         if components is None:
             raise HTTPException(status_code=503, detail="component registry unavailable")
         try:
-            return components().install(plan_id)
+            return components().install(plan_id, approval.approved_digest)
+        except PermissionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         except KeyError as error:
             raise HTTPException(status_code=404, detail="component plan not found") from error
 
