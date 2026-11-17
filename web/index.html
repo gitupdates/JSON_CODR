@@ -19,7 +19,7 @@
     <title>JSON_CODR · Local model console</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/static/vendor/xterm.css" />
-    <link rel="stylesheet" href="/static/app.css?v=1.0.18-alpha.3" />
+    <link rel="stylesheet" href="/static/app.css?v=1.0.18-alpha.4" />
   </head>
   <body>
     <div class="ambient ambient-one"></div>
@@ -64,7 +64,7 @@
       <header class="topbar">
         <a class="brand" href="/" aria-label="JSON CODR home">
           <span class="brand-mark">{ }</span>
-          <span><strong>JSON_CODR</strong><small>V1.0.18-alpha.3 · unified local agent</small></span>
+          <span><strong>JSON_CODR</strong><small>V1.0.18-alpha.4 · unified local agent</small></span>
         </a>
         <div id="health-status" class="health" role="status" aria-live="polite">
           <span class="health-dot"></span><span>Connecting</span>
@@ -243,7 +243,7 @@
           <label class="setting-row" for="component-source">Source path, public Git URL, or package coordinate</label>
           <input id="component-source" class="setting-select" type="text" placeholder="D:\path\to\tool or https://github.com/owner/repo" />
           <label class="setting-row" for="component-source-kind">Source type</label>
-          <select id="component-source-kind" class="setting-select"><option value="local">Local path</option><option value="git">Public Git</option><option value="archive">ZIP archive</option><option value="mcp">MCP manifest</option><option value="executable">Executable</option></select>
+          <select id="component-source-kind" class="setting-select"><option value="local">Local path</option><option value="git">Public Git</option><option value="archive">ZIP archive</option><option value="python">PyPI package</option><option value="node">npm package</option><option value="mcp">MCP manifest</option><option value="executable">Executable</option></select>
           <label class="setting-row" for="component-scope">Activation scope</label>
           <select id="component-scope" class="setting-select"><option value="global">Global</option><option value="project">Current project</option></select>
           <div class="actions"><button id="component-plan" class="secondary" type="button">Review installation plan</button><button id="component-install" class="primary" type="button" disabled>Install verified component</button></div>
@@ -452,13 +452,13 @@
       <footer><span>Runs entirely on this machine</span><span>127.0.0.1 · Ollama</span></footer>
       </main>
     </div>
-    <script src="/static/dependency_install_queue.js?v=1.0.18-alpha.3" defer></script>
-    <script src="/static/benchmark_leaderboard.js?v=1.0.18-alpha.3" defer></script>
-    <script src="/static/terminal_keyboard.js?v=1.0.18-alpha.3" defer></script>
-    <script src="/static/core_client.js?v=1.0.18-alpha.3" defer></script>
-    <script src="/static/task_view.js?v=1.0.18-alpha.3" defer></script>
+    <script src="/static/dependency_install_queue.js?v=1.0.18-alpha.4" defer></script>
+    <script src="/static/benchmark_leaderboard.js?v=1.0.18-alpha.4" defer></script>
+    <script src="/static/terminal_keyboard.js?v=1.0.18-alpha.4" defer></script>
+    <script src="/static/core_client.js?v=1.0.18-alpha.4" defer></script>
+    <script src="/static/task_view.js?v=1.0.18-alpha.4" defer></script>
     <script src="/static/vendor/xterm.js" defer></script>
     <script src="/static/vendor/xterm-addon-fit.js" defer></script>
-    <script src="/static/app.js?v=1.0.18-alpha.3" defer></script>
+    <script src="/static/app.js?v=1.0.18-alpha.4" defer></script>
   </body>
 </html>

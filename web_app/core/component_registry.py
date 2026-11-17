@@ -56,10 +56,12 @@ class ComponentPlan(FrozenContract):
     scope: ComponentScope
     project_id: str | None = None
     content_digest: Digest
+    approval_digest: Digest
     effects: tuple[str, ...] = ()
     executable: bool = False
     entry_points: tuple[str, ...] = ()
     runtime_kind: str = "resource"
+    normalization: dict = Field(default_factory=dict)
 
 
 class ComponentGeneration(FrozenContract):
@@ -138,6 +140,10 @@ class ComponentRegistry:
             );
             """
         )
+        columns = {row[1] for row in self._connection.execute("PRAGMA table_info(component_plans)")}
+        if "approval_digest" not in columns:
+            self._connection.execute("ALTER TABLE component_plans ADD COLUMN approval_digest TEXT")
+            self._connection.execute("UPDATE component_plans SET approval_digest = content_digest WHERE approval_digest IS NULL")
 
     def close(self) -> None:
         self._connection.close()
@@ -151,6 +157,7 @@ class ComponentRegistry:
         executable: bool = False,
         entry_points: tuple[str, ...] = (),
         runtime_kind: str = "resource",
+        normalization: dict | None = None,
     ) -> ComponentPlan:
         canonical = json.dumps(request.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
         component_id = "component-" + hashlib.sha256(
@@ -165,11 +172,13 @@ class ComponentRegistry:
                 "executable": executable,
                 "entry_points": entry_points,
                 "runtime_kind": runtime_kind,
+                "normalization": normalization or {},
             },
             sort_keys=True,
             separators=(",", ":"),
         )
         plan_id = "plan-" + hashlib.sha256(plan_material.encode("utf-8")).hexdigest()[:24]
+        approval_digest = "sha256:" + hashlib.sha256(plan_material.encode("utf-8")).hexdigest()
         plan = ComponentPlan(
             plan_id=plan_id,
             component_id=component_id,
@@ -179,14 +188,19 @@ class ComponentRegistry:
             scope=request.scope,
             project_id=request.project_id,
             content_digest=digest,
+            approval_digest=approval_digest,
             effects=effects,
             executable=executable,
             entry_points=entry_points,
             runtime_kind=runtime_kind,
+            normalization=normalization or {},
         )
         with self._transaction():
             self._connection.execute(
-                "INSERT OR IGNORE INTO component_plans VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                """INSERT OR IGNORE INTO component_plans
+                   (plan_id, component_id, request_json, content_digest, effects_json, executable,
+                    entry_points_json, runtime_kind, created_at, approval_digest)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     plan.plan_id,
                     plan.component_id,
@@ -197,6 +211,7 @@ class ComponentRegistry:
                     json.dumps(plan.entry_points),
                     plan.runtime_kind,
                     datetime.now(UTC).isoformat(),
+                    plan.approval_digest,
                 ),
             )
             self._event("component.plan.created", {"plan_id": plan.plan_id, "component_id": component_id})
@@ -273,11 +288,11 @@ class ComponentRegistry:
 
     def plan_digest(self, plan_id: str) -> str:
         row = self._connection.execute(
-            "SELECT content_digest FROM component_plans WHERE plan_id = ?", (plan_id,)
+            "SELECT approval_digest FROM component_plans WHERE plan_id = ?", (plan_id,)
         ).fetchone()
         if row is None:
             raise KeyError(plan_id)
-        return str(row["content_digest"])
+        return str(row["approval_digest"])
 
     def generations(self, component_id: str | None = None) -> tuple[ComponentGeneration, ...]:
         if component_id is None:

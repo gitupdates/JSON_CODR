@@ -1,6 +1,6 @@
 # JSON_CODR
 
-JSON_CODR V1.0.18-alpha.3 is a localhost-only, unified project agent for local Ollama models.
+JSON_CODR V1.0.18-alpha.4 is a localhost-only, unified project agent for local Ollama models.
 
 ## Unified project workflow
 
@@ -11,6 +11,8 @@ The response panel shows live activity and the requested and effective model ide
 Local reads, searches, tests, bounded edits, and inference can run automatically inside the selected project boundary. Network access, installation, Git publication, destructive changes, and budget overrides require policy approval. Persistent grants remain project-scoped and can be revoked. A model without native tool calling may use a verified brokered route; JSON_CODR always displays the requested and effective model and never labels that route as native.
 
 Attachments and folders can be selected or dropped into the page. Skills, MCP resources, browser automation, REA/Ghidra analysis, language intelligence, schedules, hooks, and child tasks use the same capability and policy path. Imported components are staged, probed, provenance-recorded, and either activated or quarantined. Optional provider failure leaves the base Ollama/CPU path available.
+
+Remote PyPI and npm components require exact coordinates such as `cowsay==6.1` or `cowsay@1.6.0`. Before approval, BORG displays extracted identity, dependencies, hashes, entry points, blocked build behavior, and every required compatibility alteration. Installation preserves the acquired package, records observed native launchers separately from effective normalized commands, and activates only after a real probe succeeds. Local, Git, and archive sources cannot claim trusted registry provenance merely by including manifest filenames.
 
 ### Headless use
 

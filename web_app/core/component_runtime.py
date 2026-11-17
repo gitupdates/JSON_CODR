@@ -11,7 +11,9 @@ from pathlib import Path
 from uuid import uuid7
 
 from web_app.core.component_registry import ComponentPlan
+from web_app.core.component_acquisition import _file_sha256, _tree_digest
 from web_app.core.contracts import FrozenContract
+from web_app.core.component_normalization import persist_installation_report
 
 
 class InstalledRuntime(FrozenContract):
@@ -31,13 +33,16 @@ class ComponentRuntimeInstaller:
         destination = base / plan.component_id / plan.plan_id
         staging.mkdir(parents=True)
         try:
-            if plan.runtime_kind == "python":
-                return self._install_python(plan, source, staging, destination)
             copied = staging / "source"
-            shutil.copytree(source, copied)
+            shutil.copytree(source, copied, symlinks=True)
+            if _tree_digest(copied) != plan.content_digest:
+                raise ValueError("component source no longer matches the approved content digest")
+            if plan.runtime_kind == "python":
+                return self._install_python(plan, copied, staging, destination)
             if plan.runtime_kind == "node":
                 package = json.loads((copied / "package.json").read_text(encoding="utf-8"))
-                if package.get("dependencies") or package.get("optionalDependencies"):
+                is_resolved_coordinate = plan.source_kind.value == "node"
+                if not is_resolved_coordinate and (package.get("dependencies") or package.get("optionalDependencies")):
                     if not (copied / "package-lock.json").is_file():
                         raise ValueError("Node components with dependencies require package-lock.json")
                     completed = subprocess.run(
@@ -47,12 +52,20 @@ class ComponentRuntimeInstaller:
                     if completed.returncode:
                         raise RuntimeError((completed.stderr or completed.stdout).strip())
             commands = self._commands(plan, copied)
-            (staging / "runtime.json").write_text(json.dumps({key: list(value) for key, value in commands.items()}), encoding="utf-8")
+            resolved_commands = {name: tuple(_replace_root(argv, staging, destination)) for name, argv in commands.items()}
+            (staging / "runtime.json").write_text(json.dumps({key: list(value) for key, value in resolved_commands.items()}), encoding="utf-8")
+            persist_installation_report(
+                staging, runtime_root=destination, approved_report=plan.normalization,
+                ecosystem=plan.runtime_kind, coordinate=plan.source,
+                declared_command_names=list(resolved_commands),
+                native_commands=_observed_native_commands(plan, staging, destination, resolved_commands),
+                effective_commands={name: list(argv) for name, argv in resolved_commands.items()},
+            )
             destination.parent.mkdir(parents=True, exist_ok=True)
             os.replace(staging, destination)
             return InstalledRuntime(
                 component_id=plan.component_id, runtime_root=str(destination), runtime_kind=plan.runtime_kind,
-                entry_points={name: tuple(_replace_root(argv, staging, destination)) for name, argv in commands.items()},
+                entry_points=resolved_commands,
             )
         except BaseException:
             shutil.rmtree(staging, ignore_errors=True)
@@ -62,25 +75,58 @@ class ComponentRuntimeInstaller:
         environment = staging / "venv"
         venv.EnvBuilder(with_pip=True, clear=True).create(environment)
         python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-        completed = subprocess.run(
-            [str(python), "-m", "pip", "install", "--disable-pip-version-check", "--no-deps", str(source)],
-            capture_output=True, text=True, timeout=300,
-        )
+        resolution_path = source / "component-resolution.json"
+        if plan.source_kind.value == "python":
+            if not resolution_path.is_file():
+                raise ValueError("registry Python package is missing its trusted resolution manifest")
+            resolution = json.loads(resolution_path.read_text(encoding="utf-8"))
+            requirements = staging / "requirements.txt"
+            lines = []
+            for artifact in resolution["artifacts"]:
+                wheel = source / "artifacts" / artifact["filename"]
+                if _file_sha256(wheel) != artifact["sha256"]:
+                    raise ValueError("package artifact no longer matches its approved hash")
+                lines.append(f'{artifact["name"]}=={artifact["version"]} --hash=sha256:{artifact["sha256"]}')
+            requirements.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            command = [
+                str(python), "-m", "pip", "install", "--disable-pip-version-check", "--no-index",
+                "--find-links", str(source / "artifacts"), "--require-hashes", "--only-binary=:all:",
+                "--requirement", str(requirements),
+            ]
+        else:
+            resolution = None
+            command = [str(python), "-m", "pip", "install", "--disable-pip-version-check", "--no-deps", str(source)]
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=300)
         if completed.returncode:
             raise RuntimeError((completed.stderr or completed.stdout).strip())
-        document = tomllib.loads((source / "pyproject.toml").read_text(encoding="utf-8"))
-        scripts = document.get("project", {}).get("scripts", {})
+        if resolution is not None:
+            scripts = resolution.get("entry_points", {})
+            distribution_name = resolution["coordinate"].split("==", 1)[0]
+        else:
+            document = tomllib.loads((source / "pyproject.toml").read_text(encoding="utf-8"))
+            scripts = document.get("project", {}).get("scripts", {})
+            distribution_name = document.get("project", {}).get("name")
         commands = {}
         for name in plan.entry_points:
-            target = scripts[name]
-            module, function = target.split(":", 1)
-            commands[name] = (str(python), "-c", f"from {module} import {function}; {function}()")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(staging, destination)
+            invocation = (
+                "from importlib.metadata import distribution; import sys; "
+                f"ep=next(ep for ep in distribution({distribution_name!r}).entry_points "
+                f"if ep.group == 'console_scripts' and ep.name == {name!r}); sys.exit(ep.load()())"
+            )
+            commands[name] = (str(python), "-c", invocation)
         resolved_commands = {name: tuple(_replace_root(argv, staging, destination)) for name, argv in commands.items()}
-        (destination / "runtime.json").write_text(
+        (staging / "runtime.json").write_text(
             json.dumps({name: list(argv) for name, argv in resolved_commands.items()}), encoding="utf-8"
         )
+        persist_installation_report(
+            staging, runtime_root=destination, approved_report=plan.normalization,
+            ecosystem="python", coordinate=plan.source,
+            declared_command_names=list(resolved_commands),
+            native_commands=_observed_native_commands(plan, staging, destination, resolved_commands),
+            effective_commands={name: list(argv) for name, argv in resolved_commands.items()},
+        )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(staging, destination)
         return InstalledRuntime(
             component_id=plan.component_id, runtime_root=str(destination), runtime_kind="python",
             interpreter=str(destination / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")),
@@ -104,11 +150,28 @@ class ComponentRuntimeInstaller:
             if target is not None:
                 commands[name] = (str(target),)
         if plan.runtime_kind == "node":
-            package = json.loads((source / "package.json").read_text(encoding="utf-8"))
-            bins = package.get("bin", {})
-            if isinstance(bins, str):
-                bins = {package.get("name", "component"): bins}
-            commands = {name: ("node", str(source / relative)) for name, relative in bins.items()}
+            resolution_path = source / "component-resolution.json"
+            if plan.source_kind.value == "node":
+                resolution = json.loads(resolution_path.read_text(encoding="utf-8"))
+                bins = resolution.get("entry_points", {})
+            else:
+                package = json.loads((source / "package.json").read_text(encoding="utf-8"))
+                bins = package.get("bin", {})
+                if isinstance(bins, str):
+                    bins = {package.get("name", "component"): bins}
+            node = shutil.which("node.exe") or shutil.which("node")
+            if node is None:
+                raise RuntimeError("Node.js is required to install Node components")
+            commands = {}
+            for name, relative in bins.items():
+                target = (source / str(relative)).resolve()
+                try:
+                    target.relative_to(source.resolve())
+                except ValueError as error:
+                    raise ValueError("Node bin target escapes its approved source") from error
+                if not target.is_file():
+                    raise ValueError("Node bin target is missing from its approved source")
+                commands[name] = (str(Path(node).resolve()), str(target))
         if plan.runtime_kind == "mcp":
             manifest = json.loads((source / "mcp_servers.json").read_text(encoding="utf-8"))
             commands = {
@@ -121,3 +184,26 @@ class ComponentRuntimeInstaller:
 
 def _replace_root(argv: tuple[str, ...], old: Path, new: Path) -> tuple[str, ...]:
     return tuple(value.replace(str(old), str(new)) for value in argv)
+
+
+def _observed_native_commands(
+    plan: ComponentPlan, staging: Path, destination: Path,
+    effective_commands: dict[str, tuple[str, ...]],
+) -> dict[str, list[str]]:
+    observed = {}
+    if plan.runtime_kind == "python":
+        roots = (staging / "venv" / "Scripts", staging / "venv" / "bin")
+        suffixes = (".exe", ".cmd", ".bat", "")
+    elif plan.runtime_kind == "node":
+        roots = (staging / "source" / "node_modules" / ".bin",)
+        suffixes = (".cmd", ".exe", "")
+    else:
+        return {name: list(argv) for name, argv in effective_commands.items()}
+    for name in effective_commands:
+        candidate = next(
+            (root / f"{name}{suffix}" for root in roots for suffix in suffixes if (root / f"{name}{suffix}").is_file()),
+            None,
+        )
+        if candidate is not None:
+            observed[name] = [str(candidate).replace(str(staging), str(destination))]
+    return observed

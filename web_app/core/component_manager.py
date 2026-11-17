@@ -11,6 +11,7 @@ from web_app.core.component_probe import ComponentProbe
 from web_app.core.component_registry import ComponentPlan, ComponentRegistry, ComponentRequest, ComponentScope
 from web_app.core.component_runtime import ComponentRuntimeInstaller
 from web_app.core.component_shims import ShimManager
+from web_app.core.component_normalization import record_verification
 
 
 class ComponentManager:
@@ -51,10 +52,16 @@ class ComponentManager:
         if acquired is None:
             raise KeyError(plan_id)
         plan = self.inspector.inspect(acquired, request.scope, project_id=request.project_id)
+        if plan.plan_id != plan_id:
+            raise PermissionError("component interpretation changed after approval")
         generation = self.registry.stage(plan)
         try:
             runtime = self.installer.install(plan, acquired.source_root, self.root / "runtimes")
             observation = self.probe.probe(plan, runtime)
+            normalization = record_verification(
+                runtime.runtime_root, succeeded=observation.succeeded, exit_code=observation.exit_code,
+                evidence_digest=observation.evidence_digest, output=observation.output,
+            )
             verified = self.registry.record_probe(
                 plan.component_id, generation.generation, succeeded=observation.succeeded,
                 evidence_digest=observation.evidence_digest,
@@ -62,11 +69,14 @@ class ComponentManager:
                 runtime_root=runtime.runtime_root,
             )
             if not observation.succeeded:
-                return {"status": "quarantined", "generation": verified.model_dump(mode="json")}
+                return {"status": "quarantined", "generation": verified.model_dump(mode="json"), "normalization": normalization}
             if request.activation:
                 self.registry.activate(plan.component_id, generation.generation, scope=request.scope, project_id=request.project_id)
             self.refresh_shims()
-            return {"status": "active" if request.activation else "verified", "generation": verified.model_dump(mode="json")}
+            return {
+                "status": "active" if request.activation else "verified",
+                "generation": verified.model_dump(mode="json"), "normalization": normalization,
+            }
         finally:
             shutil.rmtree(acquired.source_root, ignore_errors=True)
             pending.unlink(missing_ok=True)
