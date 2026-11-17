@@ -263,6 +263,14 @@ class ComponentRegistry:
             raise KeyError((component_id, generation))
         return self._generation(row)
 
+    def request_for_plan(self, plan_id: str) -> ComponentRequest:
+        row = self._connection.execute(
+            "SELECT request_json FROM component_plans WHERE plan_id = ?", (plan_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(plan_id)
+        return ComponentRequest.model_validate(json.loads(row["request_json"]))
+
     def generations(self, component_id: str | None = None) -> tuple[ComponentGeneration, ...]:
         if component_id is None:
             rows = self._connection.execute(

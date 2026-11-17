@@ -66,10 +66,14 @@ class ComponentRuntimeInstaller:
             commands[name] = (str(python), "-c", f"from {module} import {function}; {function}()")
         destination.parent.mkdir(parents=True, exist_ok=True)
         os.replace(staging, destination)
+        resolved_commands = {name: tuple(_replace_root(argv, staging, destination)) for name, argv in commands.items()}
+        (destination / "runtime.json").write_text(
+            json.dumps({name: list(argv) for name, argv in resolved_commands.items()}), encoding="utf-8"
+        )
         return InstalledRuntime(
             component_id=plan.component_id, runtime_root=str(destination), runtime_kind="python",
             interpreter=str(destination / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")),
-            entry_points={name: tuple(_replace_root(argv, staging, destination)) for name, argv in commands.items()},
+            entry_points=resolved_commands,
         )
 
     @staticmethod
