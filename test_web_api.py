@@ -219,7 +219,9 @@ class WebApiTests(unittest.TestCase):
             self.workspace.data_root,
             executable_finder=lambda name: f"C:/tools/{name}.exe" if name == "aider" else None,
         )
-        client = TestClient(create_app(self.service, self.workspace, terminals=terminals, coding_agents=agents))
+        client = self.track_core_client(
+            TestClient(create_app(self.service, self.workspace, terminals=terminals, coding_agents=agents))
+        )
         headers = {"X-JSON-CODR": "1"}
 
         status = client.get("/api/coding-agents/status").json()
@@ -368,6 +370,20 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(len(commands), 3)
         self.assertIn('"command_type":"terminal.interrupt"', commands[1])
         self.assertIn('"command_type":"terminal.close"', commands[2])
+
+    def test_ordinary_chat_generation_is_recorded_by_core_service(self):
+        response = self.client.post("/api/chat", json={"model": "qwen", "prompt": "hello"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["content"], "Answered: hello")
+        with closing(sqlite3.connect(self.workspace.data_root / "core" / "tasks.sqlite")) as database:
+            command = database.execute("SELECT command_json FROM tasks").fetchone()[0]
+            event_types = [
+                json.loads(row[0])["event_type"]
+                for row in database.execute("SELECT event_json FROM task_events ORDER BY sequence")
+            ]
+        self.assertIn('"command_type":"inference.generate"', command)
+        self.assertIn("inference.completed", event_types)
 
     def test_broker_adapter_runs_non_tool_model_without_native_tool_schema(self):
         class BrokerModelService(FakeService):
@@ -836,7 +852,7 @@ class WebApiTests(unittest.TestCase):
             )],
         ))
         self.client.close()
-        self.client = TestClient(create_app(self.service, self.workspace))
+        self.client = self.track_core_client(TestClient(create_app(self.service, self.workspace)))
         session = self.workspace.create_session()
 
         response = self.client.post(

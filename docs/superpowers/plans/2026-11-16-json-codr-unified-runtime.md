@@ -220,35 +220,35 @@ git commit -m "refactor(core): unify project git and terminal execution"
 - Produces: `AgentRuntime.run(task_id)`, `steer(task_id, input)`, and `resume(task_id)`.
 - Produces capabilities `inference.generate`, `agent.plan`, `agent.invoke_capability`, and `agent.verify`.
 
-- [ ] **Step 1: Write failing agent-loop tests**
+- [x] **Step 1: Write failing agent-loop tests**
 
 Use deterministic fake models and adapters to test read-edit-test-correct-verify completion, steering during a task, native tool calls, brokered calls without false native claims, automatic local fallback, consent for cloud/cost/privacy changes, context-source provenance, compaction retaining links to original events, requested/effective model reporting, and last-known-good CPU/Ollama recovery after provider failure.
 
-- [ ] **Step 2: Run focused tests and verify failure**
+- [x] **Step 2: Run focused tests and verify failure**
 
 Run: `C:\Python315\python.exe -m unittest test_agent_runtime test_context test_inference_router -v`
 
 Expected: new agent-runtime cases fail.
 
-- [ ] **Step 3: Implement layered context and disposable search indexes**
+- [x] **Step 3: Implement layered context and disposable search indexes**
 
 Keep source records authoritative; use SQLite FTS5 initially and make any vector index rebuildable.
 
-- [ ] **Step 4: Implement compatibility-first routing and the observable loop**
+- [x] **Step 4: Implement compatibility-first routing and the observable loop**
 
 Every planned action becomes a concrete capability call authorized by Task 3 and recorded by Task 2. Do not embed filesystem, Git, terminal, or installer behavior in the runtime.
 
-- [ ] **Step 5: Migrate ordinary chat generation through `CoreService`**
+- [x] **Step 5: Migrate ordinary chat generation through `CoreService`**
 
 Preserve the direct Ollama path as a registered last-known-good adapter, not a handler shortcut.
 
-- [ ] **Step 6: Run focused inference, context, chat, and runtime tests**
+- [x] **Step 6: Run focused inference, context, chat, and runtime tests**
 
 Run: `C:\Python315\python.exe -m unittest test_agent_runtime test_context test_inference_contracts test_inference_compatibility test_inference_router test_web_api -v`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add web_app test_agent_runtime.py test_context.py test_inference_*.py test_web_api.py

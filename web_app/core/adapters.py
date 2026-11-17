@@ -42,5 +42,12 @@ class AdapterEvent(FrozenContract):
     payload: Mapping[str, JsonValue] = Field(default_factory=dict)
 
 
+class CapabilityExecutionError(RuntimeError):
+    def __init__(self, code: str, safe_message: str) -> None:
+        super().__init__(safe_message)
+        self.code = code
+        self.safe_message = safe_message
+
+
 class CapabilityAdapter(Protocol):
     def execute(self, call: CapabilityCall, context: ExecutionContext) -> AsyncIterator[AdapterEvent]: ...

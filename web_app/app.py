@@ -34,6 +34,7 @@ from web_app.git_adapter import GitActionAdapter
 from web_app.core.adapters import CapabilityCall
 from web_app.core.contracts import TaskCommand, TaskStatus
 from web_app.core.git_adapter import GitExecutionAdapter
+from web_app.core.inference_adapter import InferenceAdapter
 from web_app.core.policy import PolicyService
 from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
@@ -156,6 +157,7 @@ def create_app(
             core_tasks = TaskStore(core_root / "tasks.sqlite")
             core_policy = PolicyService(core_root / "policy.sqlite")
             core_terminal_adapter = TerminalAdapter(terminals)
+            core_inference_adapter = InferenceAdapter(inference_router or service)
             core_git_adapter = GitExecutionAdapter(
                 git_broker,
                 lambda grant_id, project_root: coding_agents.authorized_grant(grant_id, project_root, "broker"),
@@ -165,6 +167,7 @@ def create_app(
                 core_policy,
                 {
                     "git.execute": core_git_adapter,
+                    "inference.generate": core_inference_adapter,
                     "terminal.session": core_terminal_adapter,
                     "terminal.execute": core_terminal_adapter,
                     "terminal.interrupt": core_terminal_adapter,
@@ -1183,6 +1186,36 @@ def create_app(
         except WebSocketDisconnect:
             pass
 
+    async def generate_chat_through_core(model: str, prompt: str, images: list[Path], thread_id: str) -> ChatResult:
+        core_service, _, _ = get_core_runtime()
+        call = CapabilityCall(
+            capability_id="inference.generate",
+            operation="generate",
+            project_root=str(Path(__file__).resolve().parent.parent),
+            arguments={"model": model, "prompt": prompt, "images": [str(path) for path in images]},
+        )
+        task_id = str(uuid7())
+        record = await core_service.submit(TaskCommand(
+            command_id=str(uuid7()),
+            task_id=task_id,
+            thread_id=thread_id,
+            project_id="legacy",
+            command_type="inference.generate",
+            payload=call.model_dump(mode="json"),
+        ))
+        if record.status is not TaskStatus.completed:
+            failure = record.events[-1].payload
+            code = failure.get("code")
+            reason = failure.get("reason", "Model request failed")
+            status = {"model_timeout": 504, "model_output": 502, "invalid_request": 400}.get(code, 502)
+            if code == "model_unavailable":
+                status = 409 if reason == "Model is not installed" else 502
+                if status == 502:
+                    hardware.record_runtime_failure(reason)
+            raise HTTPException(status_code=status, detail=reason)
+        completed = next(event for event in reversed(record.events) if event.event_type == "inference.completed")
+        return ChatResult.model_validate(completed.payload["result"])
+
     @application.post("/api/chat", response_model=ChatResult)
     async def chat(request: ChatRequest, http_request: Request):
         if not request.prompt.strip():
@@ -1236,9 +1269,11 @@ def create_app(
                     artifact=artifact,
                 )
             else:
-                result = await (
-                    inference_router.chat(request.model, model_prompt, images=model_images)
-                    if inference_router else service.chat(request.model, model_prompt, images=model_images)
+                result = await generate_chat_through_core(
+                    request.model,
+                    model_prompt,
+                    model_images,
+                    request.session_id or f"chat:{uuid7()}",
                 )
             if context_result and recommendation_result:
                 result.attached_skills = context_result.attached_skills

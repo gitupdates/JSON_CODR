@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections.abc import Mapping
 
-from web_app.core.adapters import AdapterEvent, CapabilityAdapter, CapabilityCall, ExecutionContext
+from web_app.core.adapters import AdapterEvent, CapabilityAdapter, CapabilityCall, CapabilityExecutionError, ExecutionContext
 from web_app.core.contracts import JsonValue, TaskCommand, TaskEvent, TaskEventDraft, TaskRecord, TaskStatus
 from web_app.core.policy import PolicyEffect, PolicyService
 from web_app.core.store import TaskStore
@@ -64,6 +64,15 @@ class CoreService:
                         TaskEventDraft(event_type=event.event_type, payload=_redact(event.payload)),
                     )
                 self._tasks.append(command.task_id, TaskEventDraft(event_type="task.completed"))
+            except CapabilityExecutionError as error:
+                logger.info("Capability execution rejected", extra={"task_id": str(command.task_id), "code": error.code})
+                self._tasks.append(
+                    command.task_id,
+                    TaskEventDraft(
+                        event_type="task.failed",
+                        payload={"reason": error.safe_message, "code": error.code},
+                    ),
+                )
             except KeyError:
                 logger.info("Capability target not found", extra={"task_id": str(command.task_id)})
                 self._tasks.append(

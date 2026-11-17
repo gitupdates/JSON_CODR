@@ -123,6 +123,13 @@ class TaskStore:
             ).fetchall()
             return tuple(self._get_unlocked(row["task_id"]) for row in rows)
 
+    def for_thread(self, thread_id: str) -> tuple[TaskRecord, ...]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT task_id FROM tasks WHERE thread_id = ? ORDER BY rowid", (thread_id,)
+            ).fetchall()
+            return tuple(self._get_unlocked(row["task_id"]) for row in rows)
+
     def request_cancel(self, task_id: str) -> TaskRecord:
         with self._transaction():
             record = self._get_unlocked(task_id)
