@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
+from web_app.core.adapters import AdapterEvent, CapabilityCall, CapabilityExecutionError, ExecutionContext
 from web_app.core.contracts import FrozenContract
+from web_app.models import SkillPack
 
 
 class ComponentManifest(FrozenContract):
@@ -47,7 +51,6 @@ class AssimilationService:
     def identify(self, source: str | Path) -> ComponentManifest:
         path = Path(source).resolve()
         payload = path.read_bytes()
-        digest = "sha256:" + hashlib.sha256(payload).hexdigest()
         if path.name.casefold() == "skill.md":
             kind = "skill"
         elif path.suffix.casefold() in {".zip", ".7z"}:
@@ -56,22 +59,31 @@ class AssimilationService:
             kind = "mcp"
         else:
             kind = "resource"
+        return self.identify_payload(str(path), kind, payload)
+
+    def identify_payload(self, source: str, kind: str, payload: bytes) -> ComponentManifest:
+        digest = "sha256:" + hashlib.sha256(payload).hexdigest()
         return ComponentManifest(
             component_id=f"{kind}-{digest.removeprefix('sha256:')[:16]}",
             kind=kind,
-            source=str(path),
+            source=source,
             content_digest=digest,
         )
 
     async def install(self, manifest: ComponentManifest) -> QuarantineRecord:
+        return await self.install_payload(manifest, Path(manifest.source).read_bytes())
+
+    async def install_payload(self, manifest: ComponentManifest, payload: bytes) -> QuarantineRecord:
         existing = self._records.get(manifest.component_id)
         if existing is not None:
             return existing
         staged = self.root / "quarantine" / manifest.component_id
+        if staged.exists():
+            shutil.rmtree(staged)
         staged.mkdir(parents=True, exist_ok=False)
-        source = Path(manifest.source)
-        target = staged / source.name
-        shutil.copy2(source, target)
+        source_name = Path(manifest.source).name or "component.bin"
+        target = staged / source_name
+        target.write_bytes(payload)
         self._records[manifest.component_id] = QuarantineRecord(
             component_id=manifest.component_id, state="quarantined"
         )
@@ -117,3 +129,46 @@ class AssimilationService:
         provenance = self._provenance.pop(component_id)
         self._records.pop(component_id)
         shutil.rmtree(provenance.staged_path)
+
+
+class SkillInstallAdapter:
+    def __init__(
+        self,
+        assimilation: AssimilationService,
+        resolve: Callable[[str, dict], tuple[SkillPack, Callable[[], None]]],
+        install: Callable[[SkillPack], SkillPack],
+        duplicate_error: type[Exception],
+    ) -> None:
+        self._assimilation = assimilation
+        self._resolve = resolve
+        self._install = install
+        self._duplicate_error = duplicate_error
+
+    async def execute(self, call: CapabilityCall, context: ExecutionContext) -> AsyncIterator[AdapterEvent]:
+        if call.operation != "install":
+            raise CapabilityExecutionError("invalid_request", "Unsupported component operation")
+        source_kind = str(call.arguments.get("source_kind", ""))
+        reference = dict(call.arguments.get("reference", {}))
+        cleanup = lambda: None
+        try:
+            pack, cleanup = self._resolve(source_kind, reference)
+            payload = json.dumps(pack.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode("utf-8")
+            manifest = self._assimilation.identify_payload(pack.source_name, "skill-pack", payload)
+            record = await self._assimilation.install_payload(manifest, payload)
+            if record.state != "verified":
+                raise CapabilityExecutionError(
+                    "component_probe_failed", record.reason or "Component functional probe failed"
+                )
+            installed = self._install(pack)
+            yield AdapterEvent(event_type="component.installed", payload={
+                "source_kind": source_kind,
+                "component_id": manifest.component_id,
+                "provenance": self._assimilation.provenance(manifest.component_id).model_dump(mode="json"),
+                "result": installed.model_dump(mode="json"),
+            })
+        except self._duplicate_error as error:
+            raise CapabilityExecutionError("component_duplicate", str(error)) from error
+        except ValueError as error:
+            raise CapabilityExecutionError("invalid_request", str(error)) from error
+        finally:
+            cleanup()

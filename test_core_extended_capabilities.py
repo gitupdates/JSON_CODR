@@ -92,6 +92,42 @@ class ExtendedCapabilityTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(KeyError):
                 service.status(first.component_id)
 
+    async def test_assimilation_rejects_payload_before_installation_when_probe_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            installs = []
+
+            async def probe(_manifest, _staged):
+                return {"success": False, "reason": "invalid skill envelope"}
+
+            service = AssimilationService(Path(directory) / "components", probe)
+            manifest = service.identify_payload("invalid.json", "skill-pack", b"{}")
+            record = await service.install_payload(manifest, b"{}")
+
+            if record.state == "verified":
+                installs.append(record.component_id)
+            self.assertEqual(installs, [])
+            self.assertEqual(record.state, "quarantined")
+            self.assertEqual(record.reason, "invalid skill envelope")
+
+    async def test_assimilation_reprobes_digest_staged_by_previous_process(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "components"
+            probes = []
+
+            async def probe(manifest, _staged):
+                probes.append(manifest.component_id)
+                return {"success": True, "evidence": "verified"}
+
+            first_service = AssimilationService(root, probe)
+            manifest = first_service.identify_payload("pack.json", "skill-pack", b"{}")
+            await first_service.install_payload(manifest, b"{}")
+            restarted_service = AssimilationService(root, probe)
+
+            record = await restarted_service.install_payload(manifest, b"{}")
+
+            self.assertEqual(record.state, "verified")
+            self.assertEqual(probes, [manifest.component_id, manifest.component_id])
+
 
 if __name__ == "__main__":
     unittest.main()

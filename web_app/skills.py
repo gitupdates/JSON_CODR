@@ -630,6 +630,13 @@ class SkillDiscoveryService:
         return combined
 
     def install(self, discovery_id: str) -> SkillPack:
+        pack, cleanup = self.prepare_install(discovery_id)
+        try:
+            return self.library.install(pack)
+        finally:
+            cleanup()
+
+    def prepare_install(self, discovery_id: str):
         preview = self._previews.pop(discovery_id, None)
         if preview is None or preview["expires"] < time.monotonic():
             raise ValueError("Discovery preview expired; scan again")
@@ -640,9 +647,10 @@ class SkillDiscoveryService:
         snapshot = preview["snapshot"]
         try:
             pack = self.converter.convert(snapshot, f"{source.name}.zip" if source.is_dir() else source.name)
-            return self.library.install(pack)
-        finally:
+        except Exception:
             snapshot.unlink(missing_ok=True)
+            raise
+        return pack, lambda: snapshot.unlink(missing_ok=True)
 
 
 class GithubSkillService:
@@ -778,11 +786,15 @@ class GithubSkillService:
         }
 
     def install(self, preview_id: str) -> SkillPack:
+        pack, cleanup = self.prepare_install(preview_id)
+        try:
+            return self.library.install(pack)
+        finally:
+            cleanup()
+
+    def prepare_install(self, preview_id: str):
         preview = self._previews.pop(preview_id, None)
         if preview is None or preview["expires"] < time.monotonic():
             raise ValueError("GitHub skill preview expired; preview the URL again")
         snapshot = preview["snapshot"]
-        try:
-            return self.library.install(preview["pack"])
-        finally:
-            snapshot.unlink(missing_ok=True)
+        return preview["pack"], lambda: snapshot.unlink(missing_ok=True)

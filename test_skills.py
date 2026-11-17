@@ -79,16 +79,20 @@ class SkillLibraryTests(unittest.TestCase):
             "https://raw.test/SKILL.md": b"---\nname: using-superpowers\n---\nUse skills first.",
         }
         github = GithubSkillService(self.library, self.converter, self.root, fetch=lambda url: responses[url])
-        client = TestClient(create_app(FakeOllamaService(), self.workspace, github_skills=github))
+        with TestClient(create_app(FakeOllamaService(), self.workspace, github_skills=github)) as client:
+            preview = client.post("/api/skills/github/preview", json={
+                "url": "https://github.com/openai/plugins/blob/main/plugins/superpowers/skills/using-superpowers/SKILL.md"
+            })
+            installed = client.post("/api/skills/github/install", json={"preview_id": preview.json()["preview_id"]})
 
-        preview = client.post("/api/skills/github/preview", json={
-            "url": "https://github.com/openai/plugins/blob/main/plugins/superpowers/skills/using-superpowers/SKILL.md"
-        })
-        installed = client.post("/api/skills/github/install", json={"preview_id": preview.json()["preview_id"]})
-
-        self.assertEqual(preview.status_code, 200)
-        self.assertEqual(installed.status_code, 201)
-        self.assertEqual(installed.json()["skills"][0]["name"], "using-superpowers")
+            self.assertEqual(preview.status_code, 200)
+            self.assertEqual(installed.status_code, 201)
+            self.assertEqual(installed.json()["skills"][0]["name"], "using-superpowers")
+            tasks = client.app.state.core_task_store.for_thread("component:github")
+            self.assertEqual(len(tasks), 1)
+            event = next(item for item in tasks[0].events if item.event_type == "component.installed")
+            self.assertEqual(event.payload["source_kind"], "github")
+            self.assertEqual(event.payload["result"]["id"], installed.json()["id"])
 
     def test_builtin_rea_skill_is_available_to_every_model_session(self):
         library = SkillLibraryService(self.root)
@@ -131,8 +135,20 @@ Review the supplied artifact.
         self.workspace = WorkspaceService(self.root)
         self.library = SkillLibraryService(self.root)
         self.converter = SkillConverterService()
+        self.clients = []
 
-    def tearDown(self): self.temporary_directory.cleanup()
+    def client(self, app):
+        client = TestClient(app)
+        self.clients.append(client)
+        return client
+
+    def tearDown(self):
+        for client in reversed(self.clients):
+            if hasattr(client.app.state, "core_policy"):
+                client.app.state.core_policy.close()
+                client.app.state.core_task_store.close()
+            client.close()
+        self.temporary_directory.cleanup()
 
     def test_detects_and_converts_claude_codex_and_generic_packs(self):
         fixtures = [
@@ -282,7 +298,7 @@ Review the supplied artifact.
             "skills.zip",
             io.BytesIO(archive({"skills/review/SKILL.md": "---\nname: review\ndescription: Review code\n---\nDo a careful review."})),
         )
-        client = TestClient(create_app(FakeOllamaService(), self.workspace, attachments))
+        client = self.client(create_app(FakeOllamaService(), self.workspace, attachments))
         preview = client.post(f"/api/sessions/{session.id}/attachments/{record.id}/skill-preview")
         self.assertEqual(preview.status_code, 200)
         installed = client.post(f"/api/sessions/{session.id}/attachments/{record.id}/skill-install").json()
@@ -315,7 +331,7 @@ Review the supplied artifact.
             "skills.zip",
             io.BytesIO(archive({"skills/review/SKILL.md": "---\nname: review\n---\nOriginal instructions"})),
         )
-        client = TestClient(create_app(FakeOllamaService(), self.workspace, attachments))
+        client = self.client(create_app(FakeOllamaService(), self.workspace, attachments))
         installed = client.post(
             f"/api/sessions/{session.id}/attachments/{record.id}/skill-install"
         ).json()
@@ -342,7 +358,7 @@ Review the supplied artifact.
         record = attachments.import_stream(
             session.id, "skills.zip", io.BytesIO(archive({"SKILL.md": "---\nname: review\n---\nReview"})),
         )
-        client = TestClient(create_app(FakeOllamaService(), self.workspace, attachments))
+        client = self.client(create_app(FakeOllamaService(), self.workspace, attachments))
         installed = client.post(f"/api/sessions/{session.id}/attachments/{record.id}/skill-install").json()
 
         renamed = client.patch(f'/api/skills/{installed["id"]}', json={"name": "Greenfield Analysis Suite"})
@@ -360,7 +376,7 @@ Review the supplied artifact.
             "skills.zip",
             io.BytesIO(archive({"skills/review/SKILL.md": "---\nname: review\n---\nReview carefully"})),
         )
-        client = TestClient(create_app(FakeOllamaService(), self.workspace, attachments))
+        client = self.client(create_app(FakeOllamaService(), self.workspace, attachments))
         endpoint = f"/api/sessions/{session.id}/attachments/{record.id}/skill-install"
 
         self.assertEqual(client.post(endpoint).status_code, 201)
@@ -432,7 +448,7 @@ Review the supplied artifact.
         self.assertFalse((self.root / "skill-upload-staging").exists())
 
     def test_api_scans_uploaded_skill_folder(self):
-        client = TestClient(create_app(FakeOllamaService(), self.workspace))
+        client = self.client(create_app(FakeOllamaService(), self.workspace))
 
         response = client.post(
             "/api/skills/scan-upload",
@@ -446,7 +462,7 @@ Review the supplied artifact.
         self.assertEqual(response.json()["discoveries"][0]["skill_count"], 1)
 
     def test_api_rejects_mismatched_uploaded_skill_folder(self):
-        client = TestClient(create_app(FakeOllamaService(), self.workspace))
+        client = self.client(create_app(FakeOllamaService(), self.workspace))
 
         response = client.post(
             "/api/skills/scan-upload",
@@ -497,7 +513,7 @@ Review the supplied artifact.
         scan_root.mkdir()
         (scan_root / "SKILL.md").write_text("---\nname: scanned\ndescription: Scanned skill\n---\nUse it", encoding="utf-8")
         workspace = WorkspaceService(self.root)
-        client = TestClient(create_app(FakeOllamaService(), workspace))
+        client = self.client(create_app(FakeOllamaService(), workspace))
 
         preview = client.post("/api/skills/scan", json={"directory": str(scan_root)})
         self.assertEqual(preview.status_code, 200)

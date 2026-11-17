@@ -327,17 +327,17 @@ Expected: new unified capability cases fail.
 
 Dependencies are pinned only after isolated installation and probe tests pass. Adapter absence must degrade to a clear unavailable result, not break core startup.
 
-- [ ] **Step 4: Move skill and component imports behind assimilation**
+- [x] **Step 4: Move skill and component imports behind assimilation**
 
 Preserve installed JSON_CODR skills and envelope formats; eliminate direct installation from HTTP handlers.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 Run: `C:\Python315\python.exe -m unittest test_core_extended_capabilities test_skills test_skills_import test_extraction test_dependencies -v`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add web_app test_core_extended_capabilities.py test_skills*.py test_extraction.py test_dependencies.py

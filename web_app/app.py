@@ -32,6 +32,7 @@ from web_app.coding_agents import CodingAgentService
 from web_app.git_broker import GitBrokerService
 from web_app.git_adapter import GitActionAdapter
 from web_app.core.adapters import CapabilityCall
+from web_app.core.assimilation import AssimilationService, FunctionalProbeResult, SkillInstallAdapter
 from web_app.core.contracts import TaskCommand, TaskStatus
 from web_app.core.git_adapter import GitExecutionAdapter
 from web_app.core.inference_adapter import InferenceAdapter
@@ -40,7 +41,7 @@ from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
 from web_app.core.terminal_adapter import TerminalAdapter
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
+from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
 from web_app.ollama_service import (
     ModelOutputError,
     ModelTimeoutError,
@@ -150,6 +151,27 @@ def create_app(
     git_broker.recover_interrupted_tasks()
     core_runtime = None
 
+    async def probe_component(manifest, staged):
+        if manifest.kind != "skill-pack":
+            return FunctionalProbeResult(success=False, reason="Unsupported component kind")
+        try:
+            payload_path = next(staged.iterdir())
+            pack = SkillPack.model_validate_json(payload_path.read_text(encoding="utf-8"))
+        except (OSError, StopIteration, ValueError) as error:
+            return FunctionalProbeResult(success=False, reason=f"Invalid skill pack: {error}")
+        if not pack.skills or any("JSON_CODR_SKILL_SCHEMA: 1" not in skill.content for skill in pack.skills):
+            return FunctionalProbeResult(success=False, reason="Skill pack is missing the JSON_CODR envelope")
+        return FunctionalProbeResult(success=True, evidence=f"verified:{manifest.content_digest}")
+
+    def resolve_skill_install(source_kind: str, reference: dict):
+        if source_kind == "discovery":
+            return skill_discovery.prepare_install(str(reference["discovery_id"]))
+        if source_kind == "github":
+            return github_skills.prepare_install(str(reference["preview_id"]))
+        if source_kind == "attachment":
+            return convert_attachment(str(reference["session_id"]), str(reference["attachment_id"])), lambda: None
+        raise ValueError("Unsupported skill source")
+
     def get_core_runtime():
         nonlocal core_runtime
         if core_runtime is None:
@@ -162,6 +184,12 @@ def create_app(
                 git_broker,
                 lambda grant_id, project_root: coding_agents.authorized_grant(grant_id, project_root, "broker"),
             )
+            component_adapter = SkillInstallAdapter(
+                AssimilationService(core_root / "components", probe_component),
+                resolve_skill_install,
+                skill_library.install,
+                DuplicateSkillPack,
+            )
             core_service = CoreService(
                 core_tasks,
                 core_policy,
@@ -172,6 +200,7 @@ def create_app(
                     "terminal.execute": core_terminal_adapter,
                     "terminal.interrupt": core_terminal_adapter,
                     "terminal.close": core_terminal_adapter,
+                    "component.install": component_adapter,
                 },
             )
             core_runtime = (core_service, core_tasks, core_policy)
@@ -666,10 +695,37 @@ def create_app(
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
+    async def install_skill_through_core(source_kind: str, reference: dict):
+        core_service, _, core_policy = get_core_runtime()
+        call = CapabilityCall(
+            capability_id="component.install",
+            operation="install",
+            project_root=str(Path(__file__).resolve().parent.parent),
+            arguments={"source_kind": source_kind, "reference": reference},
+        )
+        core_policy.grant("user", "legacy", call, scope="project")
+        task_id = str(uuid7())
+        record = await core_service.submit(TaskCommand(
+            command_id=str(uuid7()),
+            task_id=task_id,
+            thread_id=f"component:{source_kind}",
+            project_id="legacy",
+            command_type="component.install",
+            payload=call.model_dump(mode="json"),
+        ))
+        if record.status is not TaskStatus.completed:
+            failure = record.events[-1].payload
+            code = failure.get("code")
+            reason = failure.get("reason", "Component installation failed")
+            status = 409 if code == "component_duplicate" else 422 if code in {"invalid_request", "component_probe_failed"} else 500
+            raise HTTPException(status_code=status, detail=reason)
+        completed = next(event for event in reversed(record.events) if event.event_type == "component.installed")
+        return SkillPack.model_validate(completed.payload["result"])
+
     @application.post("/api/skills/install-discovery", status_code=201)
     async def install_discovered_skill(request: DiscoveryInstallRequest):
         try:
-            installed = skill_discovery.install(request.discovery_id)
+            installed = await install_skill_through_core("discovery", {"discovery_id": request.discovery_id})
             skillsets.reconcile()
             return installed
         except DuplicateSkillPack as error:
@@ -689,7 +745,7 @@ def create_app(
     @application.post("/api/skills/github/install", status_code=201)
     async def install_github_skill(request: GithubSkillInstallRequest):
         try:
-            installed = github_skills.install(request.preview_id)
+            installed = await install_skill_through_core("github", {"preview_id": request.preview_id})
             skillsets.reconcile()
             return installed
         except DuplicateSkillPack as error:
@@ -725,7 +781,10 @@ def create_app(
     @application.post("/api/sessions/{session_id}/attachments/{attachment_id}/skill-install", status_code=201)
     async def install_skill_pack(session_id: str, attachment_id: str):
         try:
-            installed = skill_library.install(convert_attachment(session_id, attachment_id))
+            installed = await install_skill_through_core("attachment", {
+                "session_id": session_id,
+                "attachment_id": attachment_id,
+            })
             skillsets.reconcile()
             return installed
         except DuplicateSkillPack as error:
