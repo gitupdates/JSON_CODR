@@ -398,27 +398,27 @@ git commit -m "feat(core): add bounded automation and delegation"
 - Produces neutral `/api/tasks`, `/api/projects/{project_id}/threads`, `/api/capabilities`, task steering/cancel/retry/restore endpoints, and `/ws/tasks`.
 - Produces `python -m web_app.core.cli run --project ... --output text|json|stream-json` with deterministic exit codes.
 
-- [ ] **Step 1: Write failing transport tests**
+- [x] **Step 1: Write failing transport tests**
 
 Test command submission, invalid contracts, permission-required responses, event replay from a cursor, multiple observers, one command execution across reconnect, steering, cancellation, artifact download authorization, structured headless output, exit codes, and redaction.
 
-- [ ] **Step 2: Run focused tests and verify failure**
+- [x] **Step 2: Run focused tests and verify failure**
 
 Run: `C:\Python315\python.exe -m unittest test_core_api test_core_cli -v`
 
 Expected: FAIL because the transports do not exist.
 
-- [ ] **Step 3: Implement thin transports over `CoreService`**
+- [x] **Step 3: Implement thin transports over `CoreService`**
 
 Routes decode, call one service method, and encode. They contain no product execution logic.
 
-- [ ] **Step 4: Run focused transport tests**
+- [x] **Step 4: Run focused transport tests**
 
 Run: `C:\Python315\python.exe -m unittest test_core_api test_core_cli test_web_api -v`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add web_app/core web_app/app.py test_core_api.py test_core_cli.py test_web_api.py

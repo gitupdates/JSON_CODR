@@ -140,6 +140,13 @@ class ArtifactStore:
             ).fetchall()
             return [self._row_record(row).model_dump(mode="json") for row in rows]
 
+    def belongs_to(self, task_id: str, artifact_id: str) -> bool:
+        with self._lock:
+            return self._connection.execute(
+                "SELECT 1 FROM task_artifacts WHERE task_id = ? AND artifact_id = ?",
+                (task_id, artifact_id),
+            ).fetchone() is not None
+
     def _record(self, artifact_id: str) -> ArtifactRecord:
         with self._lock:
             row = self._connection.execute("SELECT * FROM artifacts WHERE artifact_id = ?", (artifact_id,)).fetchone()

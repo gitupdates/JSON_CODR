@@ -32,6 +32,8 @@ from web_app.coding_agents import CodingAgentService
 from web_app.git_broker import GitBrokerService
 from web_app.git_adapter import GitActionAdapter
 from web_app.core.adapters import CapabilityCall
+from web_app.core.api import create_core_router
+from web_app.core.artifact_store import ArtifactStore
 from web_app.core.assimilation import AssimilationService, FunctionalProbeResult, SkillInstallAdapter
 from web_app.core.contracts import TaskCommand, TaskStatus
 from web_app.core.git_adapter import GitExecutionAdapter
@@ -150,6 +152,8 @@ def create_app(
     git_adapter = GitActionAdapter(verification_checks=git_broker.verification_checks)
     git_broker.recover_interrupted_tasks()
     core_runtime = None
+    core_artifacts = None
+    core_capabilities = ()
 
     async def probe_component(manifest, staged):
         if manifest.kind != "skill-pack":
@@ -173,7 +177,7 @@ def create_app(
         raise ValueError("Unsupported skill source")
 
     def get_core_runtime():
-        nonlocal core_runtime
+        nonlocal core_runtime, core_capabilities
         if core_runtime is None:
             core_root = workspace.data_root / "core"
             core_tasks = TaskStore(core_root / "tasks.sqlite")
@@ -190,32 +194,51 @@ def create_app(
                 skill_library.install,
                 DuplicateSkillPack,
             )
+            adapters = {
+                "git.execute": core_git_adapter,
+                "inference.generate": core_inference_adapter,
+                "terminal.session": core_terminal_adapter,
+                "terminal.execute": core_terminal_adapter,
+                "terminal.interrupt": core_terminal_adapter,
+                "terminal.close": core_terminal_adapter,
+                "component.install": component_adapter,
+            }
             core_service = CoreService(
                 core_tasks,
                 core_policy,
-                {
-                    "git.execute": core_git_adapter,
-                    "inference.generate": core_inference_adapter,
-                    "terminal.session": core_terminal_adapter,
-                    "terminal.execute": core_terminal_adapter,
-                    "terminal.interrupt": core_terminal_adapter,
-                    "terminal.close": core_terminal_adapter,
-                    "component.install": component_adapter,
-                },
+                adapters,
             )
+            core_capabilities = tuple({"capability_id": capability_id} for capability_id in sorted(adapters))
             core_runtime = (core_service, core_tasks, core_policy)
             application.state.core_service = core_service
             application.state.core_task_store = core_tasks
             application.state.core_policy = core_policy
         return core_runtime
 
+    def get_core_artifacts() -> ArtifactStore:
+        nonlocal core_artifacts
+        if core_artifacts is None:
+            core_root = workspace.data_root / "core"
+            core_artifacts = ArtifactStore(core_root / "artifacts", core_root / "artifacts.sqlite")
+            application.state.core_artifact_store = core_artifacts
+        return core_artifacts
+
     def close_core_runtime() -> None:
         if core_runtime is not None:
             _, core_tasks, core_policy = core_runtime
+            if core_artifacts is not None:
+                core_artifacts.close()
             core_policy.close()
             core_tasks.close()
 
     application.router.add_event_handler("shutdown", close_core_runtime)
+    application.include_router(
+        create_core_router(
+            get_core_runtime,
+            artifact_store=get_core_artifacts,
+            capabilities=lambda: core_capabilities if get_core_runtime() else (),
+        )
+    )
     action_proposals = ActionProposalService()
     web_root = Path(__file__).resolve().parent.parent / "web"
     application.mount("/static", StaticFiles(directory=web_root), name="static")
