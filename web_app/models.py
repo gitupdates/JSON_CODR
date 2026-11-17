@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Dict, List, Literal, Optional
+import uuid
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -173,10 +174,54 @@ class ExtractionState(str, Enum):
     failed = "failed"
 
 
+class ReasoningEntry(BaseModel):
+    sequence: int = Field(ge=0)
+    kind: Literal["assumption", "plan", "analysis", "evidence", "uncertainty", "verification", "conclusion"]
+    text: str = Field(min_length=1, max_length=100_000)
+    provenance: Literal["native_provider", "provider_tag", "public_rationale"]
+    reference_ids: List[str] = Field(default_factory=list, max_length=100)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ReasoningTrace(BaseModel):
+    schema_version: Literal[1] = 1
+    entries: List[ReasoningEntry] = Field(default_factory=list, max_length=10_000)
+    warnings: List[str] = Field(default_factory=list, max_length=100)
+
+
+class ObjectReference(BaseModel):
+    id: str = Field(min_length=1, max_length=256)
+    kind: Literal["attachment", "artifact", "project_file", "url", "skill", "task", "command"]
+    label: str = Field(min_length=1, max_length=500)
+    target: str = Field(min_length=1, max_length=2000)
+    preview_url: Optional[str] = Field(default=None, max_length=2000)
+    download_url: Optional[str] = Field(default=None, max_length=2000)
+    available: bool = True
+
+
+class MessageArtifact(BaseModel):
+    id: str = Field(min_length=1, max_length=256)
+    filename: str = Field(min_length=1, max_length=500)
+    media_type: str = Field(min_length=1, max_length=200)
+    size: int = Field(ge=0)
+    download_url: str = Field(min_length=1, max_length=2000)
+
+
 class ChatMessage(BaseModel):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex, pattern=r"^[0-9a-f]{32}$")
     role: Literal["user", "assistant", "system"]
     content: str
+    status: Literal["pending", "streaming", "completed", "incomplete", "failed"] = "completed"
+    task_id: Optional[str] = Field(default=None, max_length=128)
+    requested_model: Optional[str] = Field(default=None, max_length=500)
+    effective_model: Optional[str] = Field(default=None, max_length=500)
+    reasoning: Optional[ReasoningTrace] = None
+    references: List[ObjectReference] = Field(default_factory=list, max_length=1000)
+    attachment_ids: List[str] = Field(default_factory=list, max_length=1000)
+    artifacts: List[MessageArtifact] = Field(default_factory=list, max_length=1000)
+    parent_message_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{32}$")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class AttachmentRecord(BaseModel):
