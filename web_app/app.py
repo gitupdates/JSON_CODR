@@ -4,6 +4,7 @@ import asyncio
 import os
 import re
 import sys
+from uuid import uuid7
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -30,6 +31,13 @@ from web_app.benchmark_baseline import BenchmarkBaselineService
 from web_app.coding_agents import CodingAgentService
 from web_app.git_broker import GitBrokerService
 from web_app.git_adapter import GitActionAdapter
+from web_app.core.adapters import CapabilityCall
+from web_app.core.contracts import TaskCommand, TaskStatus
+from web_app.core.git_adapter import GitExecutionAdapter
+from web_app.core.policy import PolicyService
+from web_app.core.service import CoreService
+from web_app.core.store import TaskStore
+from web_app.core.terminal_adapter import TerminalAdapter
 from web_app.dependencies import DependencyService
 from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
 from web_app.ollama_service import (
@@ -139,6 +147,43 @@ def create_app(
     })
     git_adapter = GitActionAdapter(verification_checks=git_broker.verification_checks)
     git_broker.recover_interrupted_tasks()
+    core_runtime = None
+
+    def get_core_runtime():
+        nonlocal core_runtime
+        if core_runtime is None:
+            core_root = workspace.data_root / "core"
+            core_tasks = TaskStore(core_root / "tasks.sqlite")
+            core_policy = PolicyService(core_root / "policy.sqlite")
+            core_terminal_adapter = TerminalAdapter(terminals)
+            core_git_adapter = GitExecutionAdapter(
+                git_broker,
+                lambda grant_id, project_root: coding_agents.authorized_grant(grant_id, project_root, "broker"),
+            )
+            core_service = CoreService(
+                core_tasks,
+                core_policy,
+                {
+                    "git.execute": core_git_adapter,
+                    "terminal.session": core_terminal_adapter,
+                    "terminal.execute": core_terminal_adapter,
+                    "terminal.interrupt": core_terminal_adapter,
+                    "terminal.close": core_terminal_adapter,
+                },
+            )
+            core_runtime = (core_service, core_tasks, core_policy)
+            application.state.core_service = core_service
+            application.state.core_task_store = core_tasks
+            application.state.core_policy = core_policy
+        return core_runtime
+
+    def close_core_runtime() -> None:
+        if core_runtime is not None:
+            _, core_tasks, core_policy = core_runtime
+            core_policy.close()
+            core_tasks.close()
+
+    application.router.add_event_handler("shutdown", close_core_runtime)
     action_proposals = ActionProposalService()
     web_root = Path(__file__).resolve().parent.parent / "web"
     application.mount("/static", StaticFiles(directory=web_root), name="static")
@@ -819,6 +864,38 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Execution grant not found") from error
 
+    async def execute_git_through_core(action_request, model: str, grant_id: str):
+        core_service, _, core_policy = get_core_runtime()
+        operation = next(
+            (kind for kind in ("push", "commit", "sync") if any(action.kind == kind for action in action_request.actions)),
+            "bounded_edit" if any(action.kind == "apply_patch" for action in action_request.actions) else "read",
+        )
+        call = CapabilityCall(
+            capability_id="git.execute",
+            operation=operation,
+            project_root=action_request.project_root,
+            arguments={
+                "request": action_request.model_dump(mode="json"),
+                "model": model,
+                "grant_id": grant_id,
+            },
+        )
+        if operation in {"push", "commit", "sync"}:
+            core_policy.grant("user", "legacy", call, scope="project")
+        task_id = str(uuid7())
+        record = await core_service.submit(TaskCommand(
+            command_id=str(uuid7()),
+            task_id=task_id,
+            thread_id=f"legacy:{task_id}",
+            project_id="legacy",
+            command_type="git.execute",
+            payload=call.model_dump(mode="json"),
+        ))
+        if record.status is not TaskStatus.completed:
+            raise RuntimeError(record.events[-1].payload.get("reason", "Git execution failed"))
+        completed = next(event for event in reversed(record.events) if event.event_type == "git.completed")
+        return completed.payload["result"]
+
     @application.post("/api/git-broker/tasks", status_code=201)
     async def execute_git_broker_task(request: BrokerTaskRequest, x_json_codr: str | None = Header(None)):
         require_terminal_header(x_json_codr)
@@ -827,9 +904,7 @@ def create_app(
         if not authorized():
             raise HTTPException(status_code=403, detail="Broker authorization does not cover this project")
         try:
-            return await asyncio.to_thread(
-                git_broker.execute, request.request, request.model, request.grant_id, authorized
-            )
+            return await execute_git_through_core(request.request, request.model, request.grant_id)
         except (ValueError, RuntimeError, PermissionError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
@@ -849,9 +924,7 @@ def create_app(
                 raise ValueError("Model response changed the authorized project root")
             if action_request.baseline_fingerprint != snapshot.dirty_fingerprint:
                 raise ValueError("Model response changed the authorized baseline")
-            result = await asyncio.to_thread(
-                git_broker.execute, action_request, request.model, request.grant_id, authorized
-            )
+            result = await execute_git_through_core(action_request, request.model, request.grant_id)
             return {"compatibility": "broker_adapter", "result": result}
         except (ValueError, RuntimeError, PermissionError, OllamaUnavailableError, ModelOutputError, ModelTimeoutError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
@@ -908,26 +981,62 @@ def create_app(
         require_terminal_header(x_json_codr)
         cwd = Path(request.cwd).resolve() if request.cwd else Path(__file__).resolve().parent.parent
         try:
-            return terminals.create(request.shell, cwd)
+            core_service, _, _ = get_core_runtime()
+            call = CapabilityCall(
+                capability_id="terminal.session",
+                operation="session",
+                project_root=str(cwd),
+                arguments={"shell": request.shell},
+            )
+            task_id = str(uuid7())
+            record = await core_service.submit(TaskCommand(
+                command_id=str(uuid7()),
+                task_id=task_id,
+                thread_id=f"terminal:{task_id}",
+                project_id="legacy",
+                command_type="terminal.session",
+                payload=call.model_dump(mode="json"),
+            ))
+            if record.status is not TaskStatus.completed:
+                raise ValueError(record.events[-1].payload.get("reason", "Terminal creation failed"))
+            started = next(event for event in reversed(record.events) if event.event_type == "terminal.session_started")
+            return started.payload["record"]
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+
+    async def submit_terminal_mutation(operation: str, terminal_id: str) -> None:
+        core_service, _, _ = get_core_runtime()
+        call = CapabilityCall(
+            capability_id=f"terminal.{operation}",
+            operation=operation,
+            project_root=str(Path(__file__).resolve().parent.parent),
+            arguments={"terminal_id": terminal_id},
+        )
+        task_id = str(uuid7())
+        record = await core_service.submit(TaskCommand(
+            command_id=str(uuid7()),
+            task_id=task_id,
+            thread_id=f"terminal:{terminal_id}",
+            project_id="legacy",
+            command_type=f"terminal.{operation}",
+            payload=call.model_dump(mode="json"),
+        ))
+        if record.status is not TaskStatus.completed:
+            reason = record.events[-1].payload.get("reason", "Terminal operation failed")
+            if reason == "capability target not found":
+                raise HTTPException(status_code=404, detail="Terminal not found")
+            raise HTTPException(status_code=409, detail=reason)
 
     @application.post("/api/terminals/{terminal_id}/interrupt", status_code=204)
     async def interrupt_terminal(terminal_id: str, x_json_codr: str | None = Header(None)):
         require_terminal_header(x_json_codr)
-        try:
-            terminals.interrupt(terminal_id)
-        except KeyError as error:
-            raise HTTPException(status_code=404, detail="Terminal not found") from error
+        await submit_terminal_mutation("interrupt", terminal_id)
         return Response(status_code=204)
 
     @application.delete("/api/terminals/{terminal_id}", status_code=204)
     async def close_terminal(terminal_id: str, x_json_codr: str | None = Header(None)):
         require_terminal_header(x_json_codr)
-        try:
-            terminals.close(terminal_id)
-        except KeyError as error:
-            raise HTTPException(status_code=404, detail="Terminal not found") from error
+        await submit_terminal_mutation("close", terminal_id)
         return Response(status_code=204)
 
     def validate_action_terminal(proposal, terminal_id: str):

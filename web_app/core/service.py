@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Mapping
 
 from web_app.core.adapters import AdapterEvent, CapabilityAdapter, CapabilityCall, ExecutionContext
 from web_app.core.contracts import JsonValue, TaskCommand, TaskEvent, TaskEventDraft, TaskRecord, TaskStatus
 from web_app.core.policy import PolicyEffect, PolicyService
 from web_app.core.store import TaskStore
+
+
+logger = logging.getLogger(__name__)
 
 
 class CoreService:
@@ -27,7 +31,7 @@ class CoreService:
             if record.status is not TaskStatus.pending or len(record.events) > 1:
                 return record
             try:
-                call = CapabilityCall.model_validate(dict(command.payload))
+                call = CapabilityCall.model_validate(command.model_dump(mode="json")["payload"])
                 decision = self._policy.evaluate(principal, command.project_id, call)
                 if decision.effect is PolicyEffect.deny:
                     self._tasks.append(
@@ -60,7 +64,14 @@ class CoreService:
                         TaskEventDraft(event_type=event.event_type, payload=_redact(event.payload)),
                     )
                 self._tasks.append(command.task_id, TaskEventDraft(event_type="task.completed"))
+            except KeyError:
+                logger.info("Capability target not found", extra={"task_id": str(command.task_id)})
+                self._tasks.append(
+                    command.task_id,
+                    TaskEventDraft(event_type="task.failed", payload={"reason": "capability target not found"}),
+                )
             except Exception:
+                logger.exception("Capability execution failed", extra={"task_id": str(command.task_id)})
                 self._tasks.append(
                     command.task_id,
                     TaskEventDraft(event_type="task.failed", payload={"reason": "capability execution failed"}),

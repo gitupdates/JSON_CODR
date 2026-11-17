@@ -23,7 +23,40 @@ class TerminalAdapter:
         self._history: dict[str, list[str]] = defaultdict(list)
 
     async def execute(self, call: CapabilityCall, context: ExecutionContext):
+        if call.capability_id in {"terminal.interrupt", "terminal.close"}:
+            terminal_id = call.arguments.get("terminal_id")
+            if not isinstance(terminal_id, str) or not terminal_id:
+                raise ValueError("terminal mutation requires a terminal identity")
+            if call.capability_id == "terminal.interrupt":
+                self._terminal.interrupt(terminal_id)
+                yield AdapterEvent(event_type="terminal.interrupted", payload={"terminal_id": terminal_id})
+            else:
+                self._terminal.close(terminal_id)
+                yield AdapterEvent(event_type="terminal.closed", payload={"terminal_id": terminal_id})
+            return
         shell = str(call.arguments.get("shell", "powershell"))
+        if call.capability_id == "terminal.session":
+            record = self._terminal.create(shell, Path(call.project_root))
+            session = TerminalSessionRecord(
+                terminal_id=record.id,
+                task_id=context.task_id,
+                pid=record.pid,
+                shell=record.shell,
+                cwd=record.cwd,
+            )
+            self._sessions[record.id] = session
+            payload = {
+                "id": record.id,
+                "pid": record.pid,
+                "shell": record.shell,
+                "cwd": record.cwd,
+                "status": record.status,
+            }
+            for optional in ("external", "backend"):
+                if hasattr(record, optional):
+                    payload[optional] = getattr(record, optional)
+            yield AdapterEvent(event_type="terminal.session_started", payload={"record": payload, "task_id": context.task_id})
+            return
         command = call.arguments.get("command")
         if not isinstance(command, str) or not command:
             raise ValueError("terminal execution requires a command")

@@ -1,11 +1,13 @@
 import asyncio
 import json
+import sqlite3
 import unittest
 import tempfile
 import io
 import os
 import zipfile
 import subprocess
+from contextlib import closing
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -192,6 +194,11 @@ class WebApiTests(unittest.TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.workspace = WorkspaceService(Path(self.temporary_directory.name))
         self.client = TestClient(create_app(self.service, self.workspace))
+        self._core_clients = [self.client]
+
+    def track_core_client(self, client):
+        self._core_clients.append(client)
+        return client
 
     def test_coding_agent_grant_launch_and_failure_leave_direct_chat_available(self):
         class FakeTerminals:
@@ -258,7 +265,9 @@ class WebApiTests(unittest.TestCase):
         subprocess.run(["git", "commit", "-m", "initial"], cwd=project, check=True, capture_output=True)
         agents = CodingAgentService(self.workspace.data_root, executable_finder=lambda name: None)
         broker = GitBrokerService(self.workspace.data_root)
-        client = TestClient(create_app(self.service, self.workspace, coding_agents=agents, git_broker=broker))
+        client = self.track_core_client(
+            TestClient(create_app(self.service, self.workspace, coding_agents=agents, git_broker=broker))
+        )
         headers = {"X-JSON-CODR": "1"}
 
         denied = client.post("/api/git-broker/grants", json={"project_root": str(project), "profile": "broker"})
@@ -277,6 +286,11 @@ class WebApiTests(unittest.TestCase):
         })
         self.assertEqual(executed.status_code, 201)
         self.assertEqual(executed.json()["status"], "completed")
+        with closing(sqlite3.connect(self.workspace.data_root / "core" / "tasks.sqlite")) as database:
+            durable_tasks = database.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+            durable_events = database.execute("SELECT COUNT(*) FROM task_events").fetchone()[0]
+        self.assertEqual(durable_tasks, 1)
+        self.assertGreaterEqual(durable_events, 3)
         revoked = client.delete(f"/api/git-broker/grants/{grant['id']}", headers=headers)
         self.assertEqual(revoked.status_code, 200)
         rejected = client.post("/api/git-broker/tasks", headers=headers, json={
@@ -285,6 +299,75 @@ class WebApiTests(unittest.TestCase):
                         "baseline_fingerprint": baseline, "actions": [{"kind": "status"}]},
         })
         self.assertEqual(rejected.status_code, 403)
+
+    def test_terminal_creation_is_recorded_by_core_service(self):
+        class FakeTerminals:
+            def create(self, shell, cwd):
+                return type("Record", (), {
+                    "id": "terminal-1", "pid": 123, "shell": shell, "cwd": str(cwd),
+                    "status": "running", "external": False, "backend": "pipe",
+                })()
+
+            def close_all(self):
+                pass
+
+        project = Path(self.temporary_directory.name) / "terminal-project"
+        project.mkdir()
+        client = self.track_core_client(TestClient(create_app(self.service, self.workspace, terminals=FakeTerminals())))
+
+        response = client.post(
+            "/api/terminals",
+            headers={"X-JSON-CODR": "1"},
+            json={"shell": "powershell", "cwd": str(project)},
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["id"], "terminal-1")
+        with closing(sqlite3.connect(self.workspace.data_root / "core" / "tasks.sqlite")) as database:
+            command = database.execute("SELECT command_json FROM tasks").fetchone()[0]
+        self.assertIn('"command_type":"terminal.session"', command)
+
+    def test_terminal_interrupt_and_close_are_recorded_by_core_service(self):
+        class FakeTerminals:
+            def __init__(self):
+                self.interrupted = []
+                self.closed = []
+
+            def create(self, shell, cwd):
+                return type("Record", (), {
+                    "id": "terminal-1", "pid": 123, "shell": shell, "cwd": str(cwd),
+                    "status": "running", "external": False, "backend": "pipe",
+                })()
+
+            def interrupt(self, terminal_id):
+                self.interrupted.append(terminal_id)
+
+            def close(self, terminal_id):
+                self.closed.append(terminal_id)
+
+            def close_all(self):
+                pass
+
+        project = Path(self.temporary_directory.name) / "terminal-lifecycle-project"
+        project.mkdir()
+        terminals = FakeTerminals()
+        client = self.track_core_client(TestClient(create_app(self.service, self.workspace, terminals=terminals)))
+        headers = {"X-JSON-CODR": "1"}
+        created = client.post("/api/terminals", headers=headers, json={"cwd": str(project)})
+
+        interrupted = client.post("/api/terminals/terminal-1/interrupt", headers=headers)
+        closed = client.delete("/api/terminals/terminal-1", headers=headers)
+
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(interrupted.status_code, 204)
+        self.assertEqual(closed.status_code, 204)
+        self.assertEqual(terminals.interrupted, ["terminal-1"])
+        self.assertEqual(terminals.closed, ["terminal-1"])
+        with closing(sqlite3.connect(self.workspace.data_root / "core" / "tasks.sqlite")) as database:
+            commands = [row[0] for row in database.execute("SELECT command_json FROM tasks ORDER BY rowid")]
+        self.assertEqual(len(commands), 3)
+        self.assertIn('"command_type":"terminal.interrupt"', commands[1])
+        self.assertIn('"command_type":"terminal.close"', commands[2])
 
     def test_broker_adapter_runs_non_tool_model_without_native_tool_schema(self):
         class BrokerModelService(FakeService):
@@ -306,7 +389,7 @@ class WebApiTests(unittest.TestCase):
         subprocess.run(["git", "add", "README.md"], cwd=project, check=True)
         subprocess.run(["git", "commit", "-m", "initial"], cwd=project, check=True, capture_output=True)
         agents = CodingAgentService(self.workspace.data_root, executable_finder=lambda name: None)
-        client = TestClient(create_app(BrokerModelService(), self.workspace, coding_agents=agents))
+        client = self.track_core_client(TestClient(create_app(BrokerModelService(), self.workspace, coding_agents=agents)))
         headers = {"X-JSON-CODR": "1"}
         grant = client.post("/api/git-broker/grants", headers=headers, json={
             "project_root": str(project), "profile": "broker"
@@ -321,6 +404,10 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(response.json()["compatibility"], "broker_adapter")
         self.assertEqual(response.json()["result"]["status"], "completed")
         self.assertNotIn("does not support tools", response.text)
+        with closing(sqlite3.connect(self.workspace.data_root / "core" / "tasks.sqlite")) as database:
+            commands = [row[0] for row in database.execute("SELECT command_json FROM tasks")]
+        self.assertEqual(len(commands), 1)
+        self.assertIn('"command_type":"git.execute"', commands[0])
 
     def test_optimized_connector_catalog_and_install_plans_are_additive(self):
         client = TestClient(create_app(self.service, self.workspace, optimized=True))
@@ -389,6 +476,13 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(response.json()[0]["model_compatibility_error"], "Ollama is unavailable")
 
     def tearDown(self):
+        for client in self._core_clients:
+            policy = getattr(client.app.state, "core_policy", None)
+            task_store = getattr(client.app.state, "core_task_store", None)
+            if policy is not None:
+                policy.close()
+            if task_store is not None:
+                task_store.close()
         self.temporary_directory.cleanup()
 
     def test_sessions_create_reopen_and_delete(self):

@@ -170,31 +170,31 @@ git commit -m "feat(core): add policy-controlled execution boundary"
 - Produces capabilities `project.read`, `project.search`, `project.patch`, `project.watch`, `checkpoint.create`, `checkpoint.restore`, `worktree.create`, `worktree.merge`, `terminal.session`, `terminal.execute`, `git.inspect`, `git.commit`, `git.sync`, and `git.push`.
 - Produces `ProjectSnapshot`, `CheckpointRecord`, `ExternalChangeEvent`, and `TerminalSessionRecord`.
 
-- [ ] **Step 1: Write failing parity and conflict tests**
+- [x] **Step 1: Write failing parity and conflict tests**
 
 Extend existing workspace, Git, and terminal cases with pre-edit checkpoints, immediate foreground edits, background worktree isolation, merge evidence, external file/Git changes pausing a conflicting task, interactive terminal input/output attached to one task, command history, cancellation, path escape rejection, and exact rollback.
 
-- [ ] **Step 2: Run focused old and new tests and verify the new cases fail**
+- [x] **Step 2: Run focused old and new tests and verify the new cases fail**
 
 Run: `C:\Python315\python.exe -m unittest test_workspace test_git_broker test_terminal test_core_project_runtime -v`
 
 Expected: existing tests pass and new unified-runtime cases fail.
 
-- [ ] **Step 3: Wrap existing implementations behind capability adapters**
+- [x] **Step 3: Wrap existing implementations behind capability adapters**
 
 Keep subprocess and Git mechanics in their owning services, but expose mutation only through registered adapters. Use native Git worktrees and captured process identities.
 
-- [ ] **Step 4: Migrate project, Git, and terminal transport handlers to `CoreService`**
+- [x] **Step 4: Migrate project, Git, and terminal transport handlers to `CoreService`**
 
 Remove direct mutation calls from migrated handlers after parity passes; an external shell remains explicitly outside tracking guarantees.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 Run: `C:\Python315\python.exe -m unittest test_workspace test_git_adapter test_git_broker test_terminal test_core_project_runtime -v`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add web_app test_workspace.py test_git_adapter.py test_git_broker.py test_terminal.py test_core_project_runtime.py
