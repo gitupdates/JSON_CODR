@@ -5,6 +5,7 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from web_app.core.mcp_stdio_backend import (
     LeasedReaBackend,
@@ -17,6 +18,55 @@ from web_app.core.rea_provider_state import ReaProviderStore
 
 
 class StdioMcpBackendTests(unittest.IsolatedAsyncioTestCase):
+    async def test_managed_rea_keeps_one_process_for_stateful_tool_workflow(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root / "stateful_mcp_server.py"
+            script.write_text(textwrap.dedent("""
+                import json
+                import sys
+
+                target_open = False
+                for line in sys.stdin:
+                    request = json.loads(line)
+                    method = request.get("method")
+                    if method == "initialize":
+                        result = {"serverInfo": {"name": "rea", "version": "6.9.0"}}
+                    elif method == "tools/call":
+                        name = request["params"]["name"]
+                        if name == "open_binary":
+                            target_open = True
+                            result = {"structuredContent": {"result": {"open": True}}}
+                        else:
+                            result = {"structuredContent": {"result": {"open": target_open}}}
+                    else:
+                        continue
+                    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+            """), encoding="utf-8")
+            provider = root / "provider"
+            store = ReaProviderStore(provider / "state.sqlite")
+            candidate = store.discover("6.9.0", integrity="sha512-x", source="https://registry.npmjs.org")
+            for state in ("acquiring", "staged", "verifying", "ready"):
+                candidate = store.transition(candidate.version, state, expected_revision=candidate.revision)
+            store.activate("6.9.0", expected_generation=0)
+            store.close()
+            config = McpServerConfig(
+                name="rea",
+                command=sys.executable,
+                args=(str(script),),
+                allowed_tools=frozenset({"*"}),
+            )
+            backend = LeasedReaBackend(provider, config)
+
+            with patch("web_app.core.mcp_stdio_backend._versioned_rea_config", return_value=config):
+                try:
+                    await backend.invoke("open_binary", {"path": "D:/target.exe"})
+                    status = await backend.invoke("binary_session", {})
+                finally:
+                    await backend.close()
+
+            self.assertTrue(status["structuredContent"]["result"]["open"])
+
     async def test_reads_large_real_world_tool_catalog_frame(self):
         with tempfile.TemporaryDirectory() as directory:
             script = Path(directory) / "large_mcp_server.py"

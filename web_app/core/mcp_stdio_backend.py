@@ -303,35 +303,60 @@ class LeasedReaBackend:
     def __init__(self, provider_root: Path, fallback: McpServerConfig) -> None:
         self.provider_root = provider_root.resolve()
         self.fallback = fallback
+        self._backend: StdioMcpBackend | None = None
+        self._store = None
+        self._lease = None
+        self._lifecycle_lock = asyncio.Lock()
 
     async def discover(self) -> dict[str, Any]:
-        return await self._with_backend("discover")
+        backend = await self._ensure_backend()
+        return await backend.discover()
 
     async def invoke(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        return await self._with_backend("invoke", name, arguments)
+        backend = await self._ensure_backend()
+        return await backend.invoke(name, arguments)
 
     async def close(self) -> None:
-        return None
-
-    async def _with_backend(self, operation: str, *arguments):
-        from web_app.core.rea_provider_state import ReaProviderStore
-
-        store = ReaProviderStore(self.provider_root / "state.sqlite")
-        lease = store.acquire_lease(f"mcp:{id(asyncio.current_task())}")
-        backend = None
-        try:
-            active = store.active()
-            if active is None or active.generation != lease.generation or active.version != lease.version:
-                raise RuntimeError("REA activation changed while acquiring a runtime lease")
-            config = _versioned_rea_config(self.fallback, self.provider_root, lease.version)
-            backend = StdioMcpBackend(config)
-            method = getattr(backend, operation)
-            return await method(*arguments)
-        finally:
+        async with self._lifecycle_lock:
+            backend, store, lease = self._backend, self._store, self._lease
+            self._backend = None
+            self._store = None
+            self._lease = None
             if backend is not None:
                 await backend.close()
-            store.release_lease(lease.lease_id)
-            store.close()
+            if store is not None:
+                try:
+                    if lease is not None:
+                        store.release_lease(lease.lease_id)
+                finally:
+                    store.close()
+
+    async def _ensure_backend(self) -> StdioMcpBackend:
+        from web_app.core.rea_provider_state import ReaProviderStore
+
+        if self._backend is not None:
+            return self._backend
+        async with self._lifecycle_lock:
+            if self._backend is not None:
+                return self._backend
+            store = ReaProviderStore(self.provider_root / "state.sqlite")
+            lease = store.acquire_lease(f"mcp:{id(self)}")
+            active = store.active()
+            if active is None or active.generation != lease.generation or active.version != lease.version:
+                store.release_lease(lease.lease_id)
+                store.close()
+                raise RuntimeError("REA activation changed while acquiring a runtime lease")
+            try:
+                config = _versioned_rea_config(self.fallback, self.provider_root, lease.version)
+                backend = StdioMcpBackend(config)
+            except BaseException:
+                store.release_lease(lease.lease_id)
+                store.close()
+                raise
+            self._store = store
+            self._lease = lease
+            self._backend = backend
+            return backend
 
 
 def _versioned_rea_config(fallback: McpServerConfig, provider_root: Path, version: str) -> McpServerConfig:
