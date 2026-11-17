@@ -11,6 +11,16 @@ from web_app.core.assimilation import (
 )
 from web_app.core.browser_adapter import BrowserAdapter
 from web_app.core.capabilities import CapabilityRegistry
+from web_app.core.component_registry import (
+    ComponentActivation,
+    ComponentGeneration,
+    ComponentLease,
+    ComponentPlan,
+    ComponentRegistry,
+    ComponentRequest,
+    ComponentScope,
+    ComponentSource,
+)
 from web_app.core.contracts import (
     CapabilityManifest,
     CapabilityResult,
@@ -73,6 +83,14 @@ __all__ = [
     "AssimilationService",
     "BrowserAdapter",
     "ComponentManifest",
+    "ComponentActivation",
+    "ComponentGeneration",
+    "ComponentLease",
+    "ComponentPlan",
+    "ComponentRegistry",
+    "ComponentRequest",
+    "ComponentScope",
+    "ComponentSource",
     "ExecutionCandidate",
     "ExecutionMode",
     "ExecutionContext",
