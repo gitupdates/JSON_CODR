@@ -111,8 +111,14 @@
           </div>
           <div id="empty-state" class="empty-state">
             <div class="empty-glyph">_</div>
-            <p>Your validated response will appear here.</p>
+            <p>Your persistent conversation will appear here.</p>
           </div>
+          <div id="conversation-timeline" class="conversation-timeline" aria-live="polite" aria-label="Conversation messages"></div>
+          <nav class="conversation-exports" aria-label="Export conversation">
+            <a id="conversation-export-markdown" href="#" download>Export Markdown</a>
+            <a id="conversation-export-json" href="#" download>Export JSON</a>
+            <a id="conversation-export-zip" href="#" download>Export ZIP</a>
+          </nav>
           <div id="result-state" hidden>
             <section id="attached-skills" class="attached-skills" aria-label="Skills attached to this response" hidden></section>
             <article>
@@ -457,6 +463,7 @@
     <script src="/static/terminal_keyboard.js?v=1.0.18-alpha.4" defer></script>
     <script src="/static/core_client.js?v=1.0.18-alpha.4" defer></script>
     <script src="/static/task_view.js?v=1.0.18-alpha.4" defer></script>
+    <script src="/static/conversation_view.js?v=1.0.18-alpha.4" defer></script>
     <script src="/static/vendor/xterm.js" defer></script>
     <script src="/static/vendor/xterm-addon-fit.js" defer></script>
     <script src="/static/app.js?v=1.0.18-alpha.4" defer></script>

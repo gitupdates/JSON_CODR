@@ -81,6 +81,10 @@ class WebStaticTests(unittest.TestCase):
                 "content-output",
                 "artifact-output",
                 "error-output",
+                "conversation-timeline",
+                "conversation-export-markdown",
+                "conversation-export-json",
+                "conversation-export-zip",
             }.issubset(parser.ids)
         )
 

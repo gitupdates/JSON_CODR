@@ -173,6 +173,19 @@ button:disabled { cursor: not-allowed; opacity: .4; }
 #response-model { color: var(--cyan); text-align: right; }
 .empty-state { margin: auto; text-align: center; color: var(--muted); }
 .empty-glyph { margin: 0 auto 13px; width: 54px; height: 54px; display: grid; place-items: center; border: 1px solid var(--line); color: var(--lime); font: 24px ui-monospace, monospace; }
+.conversation-timeline { display: grid; gap: 14px; max-height: 620px; overflow: auto; padding: 18px 2px 4px; }
+.conversation-message { border: 1px solid var(--line); background: var(--surface-input); padding: 16px; min-width: 0; }
+.conversation-message.user { margin-left: clamp(16px, 8%, 64px); border-color: var(--line-strong); }
+.conversation-message.assistant { margin-right: clamp(16px, 8%, 64px); }
+.conversation-message header { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font: 700 10px ui-monospace, monospace; text-transform: uppercase; letter-spacing: .08em; }
+.conversation-message pre { margin: 13px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-soft); font: 13px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.reasoning-trace { margin-top: 14px; padding: 12px; border: 1px solid var(--line); color: var(--text-soft); font-size: 12px; }
+.reasoning-trace summary { color: var(--cyan); cursor: pointer; font-weight: 700; }
+.reasoning-trace p { margin: 9px 0 0; line-height: 1.55; }
+.reasoning-warning, .message-error { color: var(--error-text); }
+.message-references, .message-exports, .conversation-exports { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 13px; }
+.message-references a, .message-exports a, .conversation-exports a { color: var(--cyan); font-size: 11px; }
+.conversation-exports { padding-top: 14px; border-top: 1px solid var(--line); }
 #result-state article { padding: 24px 0; border-bottom: 1px solid var(--line); }
 #summary-output { margin: 9px 0 0; font-size: 22px; line-height: 1.35; }
 #content-output { margin: 9px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-soft); font: 13px/1.75 ui-monospace, SFMono-Regular, Consolas, monospace; }

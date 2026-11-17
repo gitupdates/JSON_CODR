@@ -17,6 +17,7 @@ class CoreWebContractTests(unittest.TestCase):
         ):
             self.assertIn(f'id="{identifier}"', self.html)
         self.assertIn("/api/tasks", self.client)
+        self.assertIn("/api/tasks/live", self.client)
         self.assertIn("/ws/tasks", self.client)
         self.assertIn("after_sequence", self.client)
         self.assertIn("/steer", self.client)
@@ -54,6 +55,14 @@ class CoreWebContractTests(unittest.TestCase):
         self.assertIn(".task-activity", self.css)
         self.assertIn("@media", self.css)
         self.assertNotIn("requestAnimationFrame", self.client + self.view)
+
+    def test_conversation_stream_is_persistent_and_auditable(self):
+        conversation = Path("web/conversation_view.js").read_text(encoding="utf-8")
+        self.assertIn("inference.content.delta", conversation)
+        self.assertIn("inference.reasoning.delta", conversation)
+        self.assertIn("public reasoning", conversation.lower())
+        self.assertIn("/conversation", conversation)
+        self.assertIn("conversationView.apply", self.app)
 
 
 if __name__ == "__main__":

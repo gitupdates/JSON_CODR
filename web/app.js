@@ -15,6 +15,10 @@ const elements = {
   content: document.querySelector("#content-output"),
   artifactOutput: document.querySelector("#artifact-output"),
   error: document.querySelector("#error-output"),
+  conversationTimeline: document.querySelector("#conversation-timeline"),
+  conversationExportMarkdown: document.querySelector("#conversation-export-markdown"),
+  conversationExportJson: document.querySelector("#conversation-export-json"),
+  conversationExportZip: document.querySelector("#conversation-export-zip"),
   appSidebar: document.querySelector("#app-sidebar"),
   sidebarCollapse: document.querySelector("#sidebar-collapse"),
   sidebarResizeHandle: document.querySelector("#sidebar-resize-handle"),
@@ -200,9 +204,33 @@ const taskView = window.JSONCodrTaskView({
   effective: elements.taskEffectiveModel,
 });
 let activeCoreTaskId = null;
-coreClient.subscribe((record) => {
-  if (record.task_id === activeCoreTaskId) taskView.render(record);
-});
+const conversationView = new window.JSONCodrConversationView({ timeline: elements.conversationTimeline });
+let restoredConversationSessionId = null;
+function handleCoreRecord(record) {
+  if (record.task_id !== activeCoreTaskId) return;
+  taskView.render(record);
+  const message = conversationView.apply(record);
+  const completion = [...(record.events || [])].reverse().find((item) => item.event_type === "inference.completed");
+  if (completion) {
+    const payload = completion.payload.result;
+    markOllamaReady();
+    elements.responseModel.textContent = completion.payload.effective_model_id || payload.model;
+    renderAttachedSkills(payload.attached_skills || []);
+    renderRecommendations(payload.skill_recommendations || []);
+    renderActions(payload.action_proposals || []);
+    elements.artifactOutput.hidden = !payload.artifact;
+    if (payload.artifact) {
+      elements.artifactOutput.href = payload.artifact.url;
+      elements.artifactOutput.textContent = `Download ${payload.artifact.filename}`;
+    }
+  }
+  if (["completed", "failed", "cancelled", "interrupted"].includes(record.status)) {
+    conversationView.persistCompleted(record.task_id).catch((error) => showError(error.message));
+    setPending(false);
+    if (!completion && message?.error) elements.requestStatus.textContent = message.error;
+  }
+}
+coreClient.subscribe(handleCoreRecord);
 let selectedLeaderboardSessionId = null;
 let selectedLeaderboardRowId = null;
 let leaderboardSort = { key: "rank", direction: "asc" };
@@ -678,10 +706,20 @@ async function runTerminalCommand(command = null) {
 }
 
 async function ensureSession() {
-  if (sessionId && (await fetch(`/api/sessions/${sessionId}`)).ok) return sessionId;
-  const session = await fetch("/api/sessions", { method: "POST" }).then((response) => response.json());
-  sessionId = session.id;
-  localStorage.setItem("json_codr_session", sessionId);
+  if (!sessionId || !(await fetch(`/api/sessions/${sessionId}`)).ok) {
+    const session = await fetch("/api/sessions", { method: "POST" }).then((response) => response.json());
+    sessionId = session.id;
+    localStorage.setItem("json_codr_session", sessionId);
+  }
+  if (restoredConversationSessionId !== sessionId) {
+    await conversationView.restore(sessionId);
+    restoredConversationSessionId = sessionId;
+    elements.empty.hidden = conversationView.messages.length > 0;
+  }
+  const base = `/api/sessions/${encodeURIComponent(sessionId)}/conversation/export`;
+  elements.conversationExportMarkdown.href = `${base}?format=markdown`;
+  elements.conversationExportJson.href = `${base}?format=json`;
+  elements.conversationExportZip.href = `${base}?format=zip&include_binaries=true`;
   return sessionId;
 }
 
@@ -2030,6 +2068,10 @@ async function submitPrompt(event) {
   setPending(true);
   elements.error.hidden = true;
   try {
+    const attachmentIds = [...elements.attachmentList.querySelectorAll("[data-attachment-id]")].map((item) => item.dataset.attachmentId);
+    const userMessage = await conversationView.appendUser(prompt, attachmentIds);
+    elements.empty.hidden = true;
+    elements.prompt.value = "";
     const record = await coreClient.submit({
       projectId: `project-${sessionId}`,
       threadId: `thread-${sessionId}`,
@@ -2037,35 +2079,16 @@ async function submitPrompt(event) {
       model: elements.model.value,
       prompt,
       projectRoot: ".",
-      attachments: [...elements.attachmentList.querySelectorAll("[data-attachment-id]")].map((item) => item.dataset.attachmentId),
+      attachments: attachmentIds,
     });
     activeCoreTaskId = record.task_id;
-    taskView.render(record);
-    const completion = [...record.events].reverse().find((item) => item.event_type === "inference.completed");
-    if (!completion) {
-      const permission = record.events.find((item) => item.event_type === "task.permission_required");
-      if (permission) throw new Error("This task is waiting for permission.");
-      throw new Error(record.events.at(-1)?.payload?.reason || "The model request failed");
-    }
-    const payload = completion.payload.result;
-    markOllamaReady();
-    elements.empty.hidden = true;
-    elements.error.hidden = true;
-    elements.result.hidden = false;
-    elements.responseModel.textContent = payload.model;
-    elements.summary.textContent = payload.summary;
-    elements.content.textContent = payload.content;
-    renderAttachedSkills(payload.attached_skills || []);
-    renderRecommendations(payload.skill_recommendations || []);
-    renderActions(payload.action_proposals || []);
-    elements.artifactOutput.hidden = !payload.artifact;
-    if (payload.artifact) {
-      elements.artifactOutput.href = payload.artifact.url;
-      elements.artifactOutput.textContent = `Download ${payload.artifact.filename}`;
-    }
+    conversationView.beginTask(record.task_id, {
+      requestedModel: elements.model.value,
+      parentMessageId: userMessage.id,
+    });
+    handleCoreRecord(coreClient.tasks.get(record.task_id)?.record || record);
   } catch (error) {
     showError(error.message);
-  } finally {
     setPending(false);
   }
 }

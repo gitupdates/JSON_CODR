@@ -27,14 +27,14 @@
           operation: "generate",
           project_root: projectRoot,
           mode: "native",
-          arguments: { model, prompt, session_id: sessionId, attachments },
+          arguments: { model, prompt, session_id: sessionId, attachments, public_reasoning: true },
         },
       };
       return this.submitCommand(command);
     }
 
     async submitCommand(command) {
-      const record = await this.request("/api/tasks", { method: "POST", body: command });
+      const record = await this.request("/api/tasks/live", { method: "POST", body: command });
       this.tasks.set(record.task_id, { command, record });
       this.emit(record);
       this.observe(record.task_id, record.events.at(-1)?.sequence ?? -1);
@@ -107,7 +107,13 @@
       if (!state) return;
       const bySequence = new Map(state.record.events.map((event) => [event.sequence, event]));
       events.forEach((event) => bySequence.set(event.sequence, event));
-      state.record = { ...state.record, events: [...bySequence.values()].sort((a, b) => a.sequence - b.sequence) };
+      const mergedEvents = [...bySequence.values()].sort((a, b) => a.sequence - b.sequence);
+      const terminal = [...mergedEvents].reverse().find((event) => [
+        "task.completed", "task.failed", "task.cancelled", "task.interrupted",
+      ].includes(event.event_type));
+      const status = terminal ? terminal.event_type.slice("task.".length) :
+        (mergedEvents.some((event) => event.event_type === "task.started") ? "running" : state.record.status);
+      state.record = { ...state.record, status, events: mergedEvents };
       this.emit(state.record);
     }
 

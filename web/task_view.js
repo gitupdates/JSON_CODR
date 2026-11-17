@@ -26,6 +26,11 @@
       if (event.event_type === "inference.completed") {
         return event.payload.result?.summary || "Model response completed";
       }
+      if (event.event_type === "inference.content.delta") return "Response streaming";
+      if (event.event_type === "inference.reasoning.delta") {
+        return `Public reasoning · ${event.payload.provenance || "provider"}`;
+      }
+      if (event.event_type === "inference.warning") return event.payload.message || "Inference warning";
       return event.event_type.replaceAll(".", " ");
     }
     return { render };
