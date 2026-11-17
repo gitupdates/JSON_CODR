@@ -13,7 +13,7 @@
       return () => this.listeners.delete(listener);
     }
 
-    async submit({ projectId, threadId, model, prompt, projectRoot = ".", attachments = [] }) {
+    async submit({ projectId, threadId, sessionId, model, prompt, projectRoot = ".", attachments = [] }) {
       const nonce = global.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
       const command = {
         schema_version: "1",
@@ -27,7 +27,7 @@
           operation: "generate",
           project_root: projectRoot,
           mode: "native",
-          arguments: { model, prompt, attachments },
+          arguments: { model, prompt, session_id: sessionId, attachments },
         },
       };
       return this.submitCommand(command);

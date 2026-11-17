@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from web_app.core.adapters import AdapterEvent, CapabilityAdapter, CapabilityCall, CapabilityExecutionError, ExecutionContext
 from web_app.core.contracts import JsonValue, TaskCommand, TaskEvent, TaskEventDraft, TaskRecord, TaskStatus
@@ -19,10 +19,13 @@ class CoreService:
         task_store: TaskStore,
         policy: PolicyService,
         adapters: Mapping[str, CapabilityAdapter],
+        *,
+        restore_checkpoint: Callable[[str], object] | None = None,
     ) -> None:
         self._tasks = task_store
         self._policy = policy
         self._adapters = dict(adapters)
+        self._restore_checkpoint = restore_checkpoint
         self._submission_lock = asyncio.Lock()
 
     async def submit(self, command: TaskCommand, *, principal: str = "user") -> TaskRecord:
@@ -100,7 +103,9 @@ class CoreService:
         return await self.submit(command, principal=principal)
 
     def restore(self, checkpoint_id: str) -> None:
-        raise NotImplementedError("checkpoint restore is provided by the project adapter")
+        if self._restore_checkpoint is None:
+            raise LookupError("checkpoint restore is unavailable")
+        self._restore_checkpoint(checkpoint_id)
 
 
 def _redact(value: Mapping[str, JsonValue]) -> dict[str, JsonValue]:

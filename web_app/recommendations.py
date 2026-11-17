@@ -60,6 +60,23 @@ class SkillRecommendationService:
             return SkillRecommendationResult(recommendations=manual)
 
         prompt_tokens = _tokens(prompt)
+        if "skill" in {_stem(token) for token in prompt_tokens} and prompt_tokens.intersection(
+            {"list", "enabled", "available", "catalog", "capabilities", "capability"}
+        ):
+            excluded = set(session.excluded_skill_ids)
+            manual_refs = {item.reference for item in manual}
+            catalog = [
+                SkillRecommendation(
+                    reference=reference,
+                    name=skill.name,
+                    score=100,
+                    reasons=["explicit skill catalog query"],
+                )
+                for reference, skill in sorted(skills.items())
+                if reference not in excluded and reference not in manual_refs
+            ]
+            remaining = max(0, routing.max_skills - len(manual))
+            return SkillRecommendationResult(recommendations=manual + catalog[:remaining])
         if not prompt_tokens or prompt_tokens.issubset(GENERIC_TERMS):
             return SkillRecommendationResult(recommendations=manual)
         expanded = prompt_tokens | {ROUTING_SYNONYMS[token] for token in prompt_tokens if token in ROUTING_SYNONYMS}

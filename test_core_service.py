@@ -132,6 +132,19 @@ class CoreServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record.events[-1].event_type, "task.failed")
         self.assertNotIn("private adapter failure", record.events[-1].model_dump_json())
 
+    async def test_restore_calls_the_configured_checkpoint_store(self):
+        restored = []
+        service = CoreService(
+            self.store,
+            self.policy,
+            {"project.read": RecordingAdapter()},
+            restore_checkpoint=restored.append,
+        )
+
+        service.restore("checkpoint-1")
+
+        self.assertEqual(restored, ["checkpoint-1"])
+
 
 if __name__ == "__main__":
     unittest.main()

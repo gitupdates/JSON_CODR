@@ -76,6 +76,18 @@ class RecommendationTests(unittest.TestCase):
         self.session.auto_attach_skills = False
         self.assertEqual(self.service.recommend(self.session, "python").recommendations, [])
 
+    def test_skill_catalog_question_uses_real_enabled_skill_records(self):
+        result = self.service.recommend(
+            self.session,
+            "List the enabled skills available to this task and their required capabilities.",
+        )
+
+        self.assertEqual(
+            [item.reference for item in result.recommendations],
+            ["tools:cloud-release", "tools:generic", "tools:python-review", "tools:react-ui"],
+        )
+        self.assertTrue(all(item.reasons == ["explicit skill catalog query"] for item in result.recommendations))
+
     def test_api_previews_reasons_updates_session_controls_and_rejects_unknown_exclusions(self):
         client = TestClient(create_app(FakeService(), self.workspace))
 

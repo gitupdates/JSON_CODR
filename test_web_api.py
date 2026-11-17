@@ -385,6 +385,39 @@ class WebApiTests(unittest.TestCase):
         self.assertIn('"command_type":"inference.generate"', command)
         self.assertIn("inference.completed", event_types)
 
+    def test_unified_task_submission_uses_real_session_skill_context(self):
+        session_id = self.client.post("/api/sessions").json()["id"]
+        task_id = "task-skill-context"
+        response = self.client.post("/api/tasks", json={
+            "schema_version": "1",
+            "command_id": "command-skill-context",
+            "task_id": task_id,
+            "thread_id": f"thread-{session_id}",
+            "project_id": f"project-{session_id}",
+            "command_type": "capability.execute",
+            "payload": {
+                "capability_id": "inference.generate",
+                "operation": "generate",
+                "project_root": str(self.workspace.data_root),
+                "mode": "native",
+                "arguments": {
+                    "model": "qwen2.5-coder:7b-instruct-q4_K_M",
+                    "prompt": "Plan an evidence-driven reverse-engineering workflow for an existing application.",
+                    "session_id": session_id,
+                    "attachments": [],
+                },
+            },
+        })
+
+        self.assertEqual(response.status_code, 200)
+        completed = next(
+            event for event in response.json()["events"] if event["event_type"] == "inference.completed"
+        )
+        result = completed["payload"]["result"]
+        self.assertIn("ATTACHED SKILL rea-agents:reverse-engineer-anything", self.service.last_prompt)
+        self.assertEqual(result["attached_skillsets"], ["planning"])
+        self.assertEqual(result["attached_skills"][0]["reference"], "rea-agents:reverse-engineer-anything")
+
     def test_broker_adapter_runs_non_tool_model_without_native_tool_schema(self):
         class BrokerModelService(FakeService):
             async def chat(self, model, prompt, images=None):

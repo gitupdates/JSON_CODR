@@ -2033,6 +2033,7 @@ async function submitPrompt(event) {
     const record = await coreClient.submit({
       projectId: `project-${sessionId}`,
       threadId: `thread-${sessionId}`,
+      sessionId: sessionId,
       model: elements.model.value,
       prompt,
       projectRoot: ".",

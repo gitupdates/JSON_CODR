@@ -37,6 +37,11 @@ class CoreWebContractTests(unittest.TestCase):
         self.assertIn("coreClient.steer", self.app)
         self.assertNotIn("Apply changes", self.html)
 
+    def test_unified_submission_carries_the_session_for_skill_context(self):
+        self.assertIn("sessionId: sessionId", self.app)
+        self.assertIn("sessionId", self.client)
+        self.assertIn("session_id: sessionId", self.client)
+
     def test_ui_has_no_executor_specific_product_controls_or_paths(self):
         for forbidden in (
             "Continue CLI", "Aider", "BETA CODING AGENTS", "coding-agent-tool",

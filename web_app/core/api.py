@@ -89,8 +89,8 @@ def create_core_router(
     def restore_task(task_id: str, request: RestoreRequest):
         try:
             runtime()[0].restore(request.checkpoint_id)
-        except NotImplementedError as error:
-            raise HTTPException(status_code=501, detail=str(error)) from error
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail="checkpoint not found") from error
         return {"task_id": task_id, "checkpoint_id": request.checkpoint_id, "status": "restored"}
 
     @router.get("/api/projects/{project_id}/threads")

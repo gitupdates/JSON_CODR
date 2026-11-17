@@ -39,6 +39,7 @@ from web_app.core.contracts import TaskCommand, TaskStatus
 from web_app.core.git_adapter import GitExecutionAdapter
 from web_app.core.inference_adapter import InferenceAdapter
 from web_app.core.policy import PolicyService
+from web_app.core.project_adapter import ProjectAdapter
 from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
 from web_app.core.terminal_adapter import TerminalAdapter
@@ -183,7 +184,26 @@ def create_app(
             core_tasks = TaskStore(core_root / "tasks.sqlite")
             core_policy = PolicyService(core_root / "policy.sqlite")
             core_terminal_adapter = TerminalAdapter(terminals)
-            core_inference_adapter = InferenceAdapter(inference_router or service)
+            core_project_adapter = ProjectAdapter(core_root / "project-state")
+            def prepare_inference_prompt(call, prompt):
+                session_id = call.arguments.get("session_id")
+                if not isinstance(session_id, str):
+                    return prompt, {}
+                session = workspace.get_session(session_id)
+                recommendation_result = recommendations.recommend(session, prompt)
+                context_result = context_assembler.build(session, prompt, recommendation_result)
+                return context_result.prompt, {
+                    "attached_skills": [item.model_dump(mode="json") for item in context_result.attached_skills],
+                    "attached_skillsets": context_result.skillsets,
+                    "skill_recommendations": [
+                        item.model_dump(mode="json") for item in recommendation_result.recommendations
+                    ],
+                }
+
+            core_inference_adapter = InferenceAdapter(
+                inference_router or service,
+                prepare_prompt=prepare_inference_prompt,
+            )
             core_git_adapter = GitExecutionAdapter(
                 git_broker,
                 lambda grant_id, project_root: coding_agents.authorized_grant(grant_id, project_root, "broker"),
@@ -197,6 +217,11 @@ def create_app(
             adapters = {
                 "git.execute": core_git_adapter,
                 "inference.generate": core_inference_adapter,
+                "project.read": core_project_adapter,
+                "project.search": core_project_adapter,
+                "project.patch": core_project_adapter,
+                "checkpoint.create": core_project_adapter,
+                "checkpoint.restore": core_project_adapter,
                 "terminal.session": core_terminal_adapter,
                 "terminal.execute": core_terminal_adapter,
                 "terminal.interrupt": core_terminal_adapter,
@@ -207,6 +232,7 @@ def create_app(
                 core_tasks,
                 core_policy,
                 adapters,
+                restore_checkpoint=core_project_adapter.restore,
             )
             core_capabilities = tuple({"capability_id": capability_id} for capability_id in sorted(adapters))
             core_runtime = (core_service, core_tasks, core_policy)
