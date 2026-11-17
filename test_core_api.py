@@ -116,6 +116,14 @@ class CoreApiTests(unittest.TestCase):
         denied = self.client.get(f"/api/tasks/task-other/artifacts/{record.artifact_id}")
         self.assertEqual(denied.status_code, 403)
 
+    def test_live_submission_uses_the_non_blocking_task_contract(self):
+        response = self.client.post("/api/tasks/live", json=self.command())
+
+        self.assertEqual(response.status_code, 202)
+        self.assertIn(response.json()["status"], {"running", "completed"})
+        task = self.client.get("/api/tasks/task-1")
+        self.assertEqual(task.status_code, 200)
+
 
 if __name__ == "__main__":
     unittest.main()

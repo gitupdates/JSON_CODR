@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import asyncio
 from pathlib import Path
 
 from web_app.core.adapters import AdapterEvent, CapabilityCall, ExecutionContext
@@ -19,6 +20,18 @@ class RecordingAdapter:
         if self.fail:
             raise RuntimeError("private adapter failure")
         yield AdapterEvent(event_type="adapter.output", payload={"text": "ok"})
+
+
+class BlockingAdapter:
+    def __init__(self) -> None:
+        self.first_consumed = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def execute(self, call: CapabilityCall, context: ExecutionContext):
+        yield AdapterEvent(event_type="adapter.delta", payload={"text": "first"})
+        self.first_consumed.set()
+        await self.release.wait()
+        yield AdapterEvent(event_type="adapter.delta", payload={"text": "second"})
 
 
 class PolicyServiceTests(unittest.TestCase):
@@ -144,6 +157,44 @@ class CoreServiceTests(unittest.IsolatedAsyncioTestCase):
         service.restore("checkpoint-1")
 
         self.assertEqual(restored, ["checkpoint-1"])
+
+    async def test_start_returns_before_adapter_completion_and_persists_live_events(self):
+        adapter = BlockingAdapter()
+        service = CoreService(self.store, self.policy, {"project.read": adapter})
+
+        started = await service.start(self.command())
+        await adapter.first_consumed.wait()
+
+        self.assertEqual(started.status, TaskStatus.running)
+        self.assertEqual(
+            [event.payload.get("text") for event in service.subscribe("task-1") if event.event_type == "adapter.delta"],
+            ["first"],
+        )
+
+        adapter.release.set()
+        completed = await service.wait("task-1")
+
+        self.assertEqual(completed.status, TaskStatus.completed)
+        self.assertEqual(
+            [event.payload.get("text") for event in completed.events if event.event_type == "adapter.delta"],
+            ["first", "second"],
+        )
+
+    async def test_wait_for_events_returns_only_sequences_after_the_cursor(self):
+        adapter = BlockingAdapter()
+        service = CoreService(self.store, self.policy, {"project.read": adapter})
+        started = await service.start(self.command())
+        await adapter.first_consumed.wait()
+        cursor = next(event.sequence for event in service.subscribe("task-1") if event.event_type == "adapter.delta")
+
+        waiting = asyncio.create_task(service.wait_for_events("task-1", cursor))
+        adapter.release.set()
+        events = await waiting
+        await service.wait("task-1")
+
+        self.assertTrue(events)
+        self.assertTrue(all(event.sequence > cursor for event in events))
+        self.assertEqual(len({event.sequence for event in events}), len(events))
 
 
 if __name__ == "__main__":

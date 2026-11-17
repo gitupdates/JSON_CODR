@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from typing import Annotated, Any
 
@@ -89,6 +90,13 @@ def create_core_router(
             response.status_code = 202
         return record
 
+    @router.post("/api/tasks/live", status_code=202)
+    async def start_task(
+        command: TaskCommand,
+        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+    ):
+        return await runtime()[0].start(command, principal=principal)
+
     @router.get("/api/tasks/{task_id}")
     def get_task(task_id: str):
         try:
@@ -173,6 +181,26 @@ def create_core_router(
     @router.websocket("/ws/tasks")
     async def task_events(websocket: WebSocket):
         await websocket.accept()
+        subscriptions: dict[str, asyncio.Task[None]] = {}
+        send_lock = asyncio.Lock()
+
+        async def stream(task_id: str, after_sequence: int) -> None:
+            while True:
+                events = await runtime()[0].wait_for_events(task_id, after_sequence)
+                if events:
+                    async with send_lock:
+                        await websocket.send_json(
+                            {"task_id": task_id, "events": [event.model_dump(mode="json") for event in events]}
+                        )
+                    after_sequence = events[-1].sequence
+                record = runtime()[1].get(task_id)
+                if record.status in {
+                    TaskStatus.completed,
+                    TaskStatus.failed,
+                    TaskStatus.cancelled,
+                    TaskStatus.interrupted,
+                }:
+                    return
         try:
             while True:
                 request = await websocket.receive_json()
@@ -182,14 +210,20 @@ def create_core_router(
                     await websocket.send_json({"error": "invalid event subscription"})
                     continue
                 try:
-                    events = runtime()[0].subscribe(task_id, after_sequence)
+                    runtime()[1].get(task_id)
                 except KeyError:
                     await websocket.send_json({"error": "task not found", "task_id": task_id})
                     continue
-                await websocket.send_json(
-                    {"task_id": task_id, "events": [event.model_dump(mode="json") for event in events]}
-                )
+                previous = subscriptions.pop(task_id, None)
+                if previous is not None:
+                    previous.cancel()
+                subscriptions[task_id] = asyncio.create_task(stream(task_id, after_sequence))
         except WebSocketDisconnect:
-            return
+            pass
+        finally:
+            for subscription in subscriptions.values():
+                subscription.cancel()
+            if subscriptions:
+                await asyncio.gather(*subscriptions.values(), return_exceptions=True)
 
     return router
