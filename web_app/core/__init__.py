@@ -19,7 +19,10 @@ from web_app.core.contracts import (
     ThreadId,
 )
 from web_app.core.policy import PolicyDecision, PolicyEffect, PolicyService
+from web_app.core.project_adapter import CheckpointRecord, ProjectAdapter, ProjectSnapshot
+from web_app.core.project_watch import ExternalChangeEvent, ProjectWatcher
 from web_app.core.service import CoreService
+from web_app.core.terminal_adapter import TerminalAdapter, TerminalSessionRecord
 
 __all__ = [
     "AdapterEvent",
@@ -29,9 +32,11 @@ __all__ = [
     "CapabilityRegistry",
     "CapabilityResult",
     "CapabilityStatus",
+    "CheckpointRecord",
     "CoreService",
     "ExecutionMode",
     "ExecutionContext",
+    "ExternalChangeEvent",
     "ManifestAuthority",
     "ModelScope",
     "ProbeObservation",
@@ -39,6 +44,9 @@ __all__ = [
     "PolicyEffect",
     "PolicyService",
     "ProjectId",
+    "ProjectAdapter",
+    "ProjectSnapshot",
+    "ProjectWatcher",
     "RuntimeIdentity",
     "TaskCommand",
     "TaskEvent",
@@ -46,5 +54,7 @@ __all__ = [
     "TaskId",
     "TaskRecord",
     "TaskStatus",
+    "TerminalAdapter",
+    "TerminalSessionRecord",
     "ThreadId",
 ]
