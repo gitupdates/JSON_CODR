@@ -533,31 +533,31 @@ git commit -m "refactor(core): complete unified runtime migration"
 - Consumes: all prior tasks.
 - Produces: documented JSON_CODR unified workflow and `V1.0.18-alpha.1` release metadata.
 
-- [ ] **Step 1: Run all tracked Python tests**
+- [x] **Step 1: Run all tracked Python tests**
 
 Run: `C:\Python315\python.exe -m unittest discover -v`
 
 Expected: PASS with no skipped unified-runtime acceptance tests.
 
-- [ ] **Step 2: Run JavaScript and patch validation**
+- [x] **Step 2: Run JavaScript and patch validation**
 
 Run syntax checks for every tracked `.js` file changed by the branch and `git diff --check`.
 
 Expected: no output indicating errors.
 
-- [ ] **Step 3: Run the complete local acceptance matrix**
+- [x] **Step 3: Run the complete local acceptance matrix**
 
 Verify direct chat, terminal-backed work, brokered non-tool model work, native-tool model work, child-agent isolation, browser verification, MCP, skill assimilation, REA/Ghidra applicability, CPU fallback, one available accelerator, restart/reconnect, cancellation, rollback, schedule permissions, migration, export, and removal. Record only real evidence returned by adapters.
 
-- [ ] **Step 4: Update user documentation and version**
+- [x] **Step 4: Update user documentation and version**
 
 Describe the project/thread/task workflow, ordinary controls, permissions, undo, execution details, assimilation, schedules, and migration without narrating internal modules. Set version to `V1.0.18-alpha.1` consistently.
 
-- [ ] **Step 5: Restart the local alpha system and rerun the primary Playwright workflow**
+- [x] **Step 5: Restart the local alpha system and rerun the primary Playwright workflow**
 
 Expected: the URL reports `V1.0.18-alpha.1`; a user completes a coding task without selecting an internal executor; live events, diff, verification, checkpoint, and undo all work.
 
-- [ ] **Step 6: Commit the release checkpoint**
+- [x] **Step 6: Commit the release checkpoint**
 
 ```powershell
 git add README.md web_app/version.py
