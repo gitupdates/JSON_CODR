@@ -2,6 +2,8 @@ from web_app.core.adapters import AdapterEvent, CapabilityAdapter, CapabilityCal
 from web_app.core.agent_runtime import AgentRuntime
 from web_app.core.analysis_adapter import AnalysisAdapter
 from web_app.core.api import create_core_router
+from web_app.core.component_manager import ComponentManager
+from web_app.core.component_registry import ComponentPlan, ComponentRegistry, ComponentRequest, ComponentScope, ComponentSource
 from web_app.core.assimilation import (
     AssimilationService,
     ComponentManifest,
@@ -79,6 +81,12 @@ __all__ = [
     "AgentRuntime",
     "AnalysisAdapter",
     "create_core_router",
+    "ComponentManager",
+    "ComponentPlan",
+    "ComponentRegistry",
+    "ComponentRequest",
+    "ComponentScope",
+    "ComponentSource",
     "ApschedulerTriggerBackend",
     "AssimilationService",
     "BrowserAdapter",

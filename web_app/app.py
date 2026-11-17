@@ -43,6 +43,7 @@ from web_app.core.policy import PolicyService
 from web_app.core.project_adapter import ProjectAdapter
 from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
+from web_app.core.component_manager import ComponentManager
 from web_app.core.terminal_adapter import TerminalAdapter
 from web_app.dependencies import DependencyService
 from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
@@ -90,6 +91,15 @@ def create_app(
 ) -> FastAPI:
     application = FastAPI(title="JSON_CODR", version=APP_VERSION)
     workspace = workspace or WorkspaceService(default_data_root())
+    component_manager = None
+    component_root = workspace.data_root / "core" / "component-registry"
+
+    def get_component_manager() -> ComponentManager:
+        nonlocal component_manager
+        if component_manager is None:
+            component_manager = ComponentManager(component_root)
+            application.state.component_manager = component_manager
+        return component_manager
     configure_local_analysis_tools(workspace.data_root)
     attachments = attachments or AttachmentService(workspace)
     skill_library = SkillLibraryService(workspace.data_root)
@@ -138,10 +148,15 @@ def create_app(
     context_assembler = ContextAssembler(attachments, skills=skill_library)
     dependency_service = DependencyService(attachments)
     artifact_service = ArtifactService(workspace)
-    terminals = terminals or TerminalService()
+    terminals = terminals or TerminalService(shim_root=component_root / "shims")
     close_terminals = getattr(terminals, "close_all", None)
     if close_terminals is not None:
         application.router.add_event_handler("shutdown", close_terminals)
+    def close_component_manager() -> None:
+        if component_manager is not None:
+            component_manager.close()
+
+    application.router.add_event_handler("shutdown", close_component_manager)
     coding_agents = coding_agents or CodingAgentService(workspace.data_root)
     git_broker = git_broker or GitBrokerService(workspace.data_root, verification_checks={
         "python-compile": [sys.executable, "-m", "compileall", "-q", "."],
@@ -272,6 +287,7 @@ def create_app(
             get_core_runtime,
             artifact_store=get_core_artifacts,
             capabilities=lambda: core_capabilities if get_core_runtime() else (),
+            components=get_component_manager,
         )
     )
     action_proposals = ActionProposalService()

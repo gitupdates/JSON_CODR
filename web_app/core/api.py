@@ -12,6 +12,8 @@ from web_app.core.contracts import TaskCommand, TaskStatus
 from web_app.core.policy import PolicyService
 from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
+from web_app.core.component_manager import ComponentManager
+from web_app.core.component_registry import ComponentRequest, ComponentScope
 
 
 Runtime = tuple[CoreService, TaskStore, PolicyService]
@@ -33,8 +35,41 @@ def create_core_router(
     *,
     artifact_store: Callable[[], ArtifactStore] | None = None,
     capabilities: Callable[[], Sequence[Mapping[str, Any]]] = tuple,
+    components: Callable[[], ComponentManager] | None = None,
 ) -> APIRouter:
     router = APIRouter()
+
+    @router.post("/api/components/plan")
+    def plan_component(request: ComponentRequest):
+        if components is None:
+            raise HTTPException(status_code=503, detail="component registry unavailable")
+        return components().plan(request)
+
+    @router.post("/api/components/install/{plan_id}")
+    def install_component(plan_id: str):
+        if components is None:
+            raise HTTPException(status_code=503, detail="component registry unavailable")
+        try:
+            return components().install(plan_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="component plan not found") from error
+
+    @router.get("/api/components")
+    def list_components(project_id: str = ""):
+        return () if components is None else components().list(project_id)
+
+    @router.post("/api/components/{component_id}/disable")
+    def disable_component(component_id: str, scope: ComponentScope = ComponentScope.global_, project_id: str | None = None):
+        if components is None:
+            raise HTTPException(status_code=503, detail="component registry unavailable")
+        components().disable(component_id, scope, project_id)
+        return {"status": "disabled", "component_id": component_id}
+
+    @router.post("/api/components/{component_id}/rollback")
+    def rollback_component(component_id: str, scope: ComponentScope = ComponentScope.global_, project_id: str | None = None):
+        if components is None:
+            raise HTTPException(status_code=503, detail="component registry unavailable")
+        return components().rollback(component_id, scope, project_id)
 
     @router.post("/api/tasks")
     async def submit_task(
