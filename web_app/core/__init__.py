@@ -20,8 +20,11 @@ from web_app.core.contracts import (
     ThreadId,
 )
 from web_app.core.context_service import CompactionRecord, ContextBundle, ContextService, ContextSource
+from web_app.core.credentials import CredentialBroker
 from web_app.core.inference_adapter import InferenceAdapter
 from web_app.core.memory import MemoryRecord, MemoryStore
+from web_app.core.provider_manager import ProviderManager
+from web_app.core.provider_protocol import ProviderEvent, ProviderLock, ProviderManifest, ProviderProcess, ProviderRequest
 from web_app.core.policy import PolicyDecision, PolicyEffect, PolicyService
 from web_app.core.project_adapter import CheckpointRecord, ProjectAdapter, ProjectSnapshot
 from web_app.core.project_watch import ExternalChangeEvent, ProjectWatcher
@@ -44,6 +47,7 @@ __all__ = [
     "ContextService",
     "ContextSource",
     "CoreService",
+    "CredentialBroker",
     "AgentRuntime",
     "ExecutionCandidate",
     "ExecutionMode",
@@ -59,6 +63,12 @@ __all__ = [
     "PolicyDecision",
     "PolicyEffect",
     "PolicyService",
+    "ProviderEvent",
+    "ProviderLock",
+    "ProviderManager",
+    "ProviderManifest",
+    "ProviderProcess",
+    "ProviderRequest",
     "ProjectId",
     "ProjectAdapter",
     "ProjectSnapshot",

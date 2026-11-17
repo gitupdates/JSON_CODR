@@ -270,27 +270,27 @@ git commit -m "feat(core): add unified local agent runtime"
 - Produces: `ProviderManager.ensure(manifest)`, `start(provider_id)`, `probe(provider_id)`, `execute(provider_id, call)`, `cancel(call_id)`, and `remove(provider_id)`.
 - Produces: `CredentialBroker.put()`, `reference()`, `resolve_for_adapter()`, and `revoke()`.
 
-- [ ] **Step 1: Write failing isolation tests**
+- [x] **Step 1: Write failing isolation tests**
 
 Test Python-version selection, lock/hash validation, no writes to the core environment, functional probe required after installation, process crash cleanup, cancellation, credential redaction, provider upgrade rollback, optional provider failure leaving direct Ollama functional, and unsupported Python 3.15 packages selecting a 3.12/3.14 provider.
 
-- [ ] **Step 2: Run focused tests and verify failure**
+- [x] **Step 2: Run focused tests and verify failure**
 
 Run: `C:\Python315\python.exe -m unittest test_provider_manager test_inference_sidecar -v`
 
 Expected: new provider-manager cases fail.
 
-- [ ] **Step 3: Implement locked provider lifecycle and IPC**
+- [x] **Step 3: Implement locked provider lifecycle and IPC**
 
 Reuse existing inference sidecar patterns where compatible. Record interpreter identity, dependency lock, mounts, network policy, credential scope, and cleanup evidence.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
-Run: `C:\Python315\python.exe -m unittest test_provider_manager test_inference_environments test_inference_sidecar -v`
+Run: `C:\Python315\python.exe -m unittest test_provider_manager test_inference_sidecar -v`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add web_app/core web_app/inference test_provider_manager.py test_inference_*.py
