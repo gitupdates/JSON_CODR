@@ -81,8 +81,8 @@ def create_core_router(
         command: TaskCommand,
         principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
     ):
-        if task_id != command.task_id:
-            raise HTTPException(status_code=409, detail="task identity does not match route")
+        if command.parent_task_id != task_id:
+            raise HTTPException(status_code=409, detail="retry must reference the original task")
         return await runtime()[0].retry(command, principal=principal)
 
     @router.post("/api/tasks/{task_id}/restore")

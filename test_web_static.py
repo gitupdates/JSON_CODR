@@ -30,41 +30,29 @@ class IdCollector(HTMLParser):
 
 
 class WebStaticTests(unittest.TestCase):
-    def test_coding_agent_profiles_default_to_broker_and_explain_shell_risk(self):
+    def test_unified_runtime_replaces_executor_specific_profiles(self):
         html = Path("web/index.html").read_text(encoding="utf-8")
         script = Path("web/app.js").read_text(encoding="utf-8")
 
-        self.assertIn('<option value="broker" selected>Coding sandbox', html)
-        self.assertIn('<option value="shell">Unrestricted shell', html)
-        self.assertIn("non-sandboxed", html)
-        self.assertIn('/api/git-broker/grants', script)
-        self.assertIn('/api/git-broker/status', script)
-        self.assertIn('/api/git-broker/adapter', script)
-        self.assertIn("broker adapter", script.casefold())
-        self.assertIn("Revoke", script)
+        self.assertNotIn('id="coding-agent-tool"', html)
+        self.assertNotIn('/api/git-broker/adapter', script)
+        self.assertIn("JSONCodrCoreClient", script)
         self.assertIn("normalizeTerminalOutput", script)
-        self.assertIn("uses the JSON_CODR broker adapter", script)
-    def test_coding_agent_launcher_is_additive_to_live_cli(self):
+    def test_unified_task_view_is_additive_to_live_cli(self):
         html = self.client.get("/").text
-        self.assertIn('id="coding-agent-tool"', html)
-        self.assertIn('id="coding-agent-model"', html)
-        self.assertIn('id="coding-agent-project"', html)
-        self.assertIn('id="coding-agent-persistent"', html)
-        self.assertIn('id="coding-agent-launch"', html)
+        self.assertIn('id="task-activity"', html)
         self.assertIn('id="terminal-input"', html)
         script = self.client.get("/static/app.js").text
         self.assertIn("closeActiveTerminal", script)
         self.assertIn('method: "DELETE"', script)
         self.assertIn("terminal.external", script)
-        self.assertIn("renderCodingAgentTasks", script)
+        self.assertIn("JSONCodrTaskView", script)
 
     def test_plain_text_api_failures_are_rendered_without_json_parse_errors(self):
         script = self.client.get("/static/app.js").text
 
         self.assertIn("async function responseErrorMessage", script)
         self.assertIn('responseErrorMessage(response, "Hardware detection failed")', script)
-        self.assertIn('responseErrorMessage(response, "The model request failed")', script)
-        self.assertIn('responseErrorMessage(response, "Unable to launch coding agent")', script)
 
     def test_new_terminal_process_resets_the_replay_cursor(self):
         script = self.client.get("/static/app.js").text
@@ -220,8 +208,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('/static/vendor/xterm-addon-fit.js', html)
         self.assertIn('id="terminal-tabs"', html)
         self.assertIn('data-terminal-profile="powershell"', html)
-        self.assertIn('data-terminal-profile="continue"', html)
-        self.assertIn('data-terminal-profile="aider"', html)
+        self.assertEqual(html.count('data-terminal-profile="powershell"'), 1)
         self.assertIn('id="terminal-xterm"', html)
         self.assertIn('type: "resize"', javascript)
         self.assertIn('type: "attach"', javascript)

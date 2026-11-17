@@ -133,14 +133,14 @@ const elements = {
   terminalRun: document.querySelector("#terminal-run"),
   terminalStop: document.querySelector("#terminal-stop"),
   terminalStatus: document.querySelector("#terminal-status"),
-  codingAgentLauncher: document.querySelector("#coding-agent-launcher"),
-  codingAgentTool: document.querySelector("#coding-agent-tool"),
-  codingAgentModel: document.querySelector("#coding-agent-model"),
-  codingAgentProject: document.querySelector("#coding-agent-project"),
-  codingAgentMode: document.querySelector("#coding-agent-mode"),
-  codingAgentPersistent: document.querySelector("#coding-agent-persistent"),
-  codingAgentStatus: document.querySelector("#coding-agent-status"),
-  codingAgentGrants: document.querySelector("#coding-agent-grants"),
+  taskActivity: document.querySelector("#task-activity"),
+  taskSteer: document.querySelector("#task-steer"),
+  taskStop: document.querySelector("#task-stop"),
+  taskRetry: document.querySelector("#task-retry"),
+  taskUndo: document.querySelector("#task-undo"),
+  taskExecutionDetails: document.querySelector("#task-execution-details"),
+  taskRequestedModel: document.querySelector("#task-requested-model"),
+  taskEffectiveModel: document.querySelector("#task-effective-model"),
 };
 
 const VALID_THEME_MODES = new Set(["light", "dark", "system"]);
@@ -188,6 +188,21 @@ let hardwareDetectionPromise = null;
 let leaderboardHistoryCache = [];
 let integrityHistoryCache = [];
 let leaderboardCandidateCache = [];
+const coreClient = new window.JSONCodrCoreClient();
+const taskView = window.JSONCodrTaskView({
+  activity: elements.taskActivity,
+  steer: elements.taskSteer,
+  stop: elements.taskStop,
+  retry: elements.taskRetry,
+  undo: elements.taskUndo,
+  details: elements.taskExecutionDetails,
+  requested: elements.taskRequestedModel,
+  effective: elements.taskEffectiveModel,
+});
+let activeCoreTaskId = null;
+coreClient.subscribe((record) => {
+  if (record.task_id === activeCoreTaskId) taskView.render(record);
+});
 let selectedLeaderboardSessionId = null;
 let selectedLeaderboardRowId = null;
 let leaderboardSort = { key: "rank", direction: "asc" };
@@ -294,7 +309,7 @@ function selectDestination(destination, { persist = true, focus = false } = {}) 
   if (destination === "hardware") selectHardwareSection(activeHardwareSection, { persist: false });
   if (destination === "terminal") {
     initializeXterm();
-    if (!terminalId) elements.terminalStatus.textContent = "Choose PowerShell, Continue, or Aider";
+    if (!terminalId) elements.terminalStatus.textContent = "PowerShell is ready to start";
   }
   if (focus) elements.destinationViews.find((view) => view.dataset.view === destination)?.querySelector("h1, h2, h3")?.focus({ preventScroll: true });
   if (narrowNavigationQuery.matches) closeNavigationDrawer();
@@ -543,108 +558,6 @@ async function connectTerminalRecord(terminal, profile = activeTerminalProfile) 
     terminalSocket.addEventListener("error", onFailure, { once: true });
     terminalSocket.addEventListener("close", onFailure, { once: true });
   });
-}
-
-async function launchCodingAgent(event) {
-  event.preventDefault();
-  const payload = {
-    tool: elements.codingAgentTool.value,
-    model: elements.codingAgentModel.value,
-    project_root: elements.codingAgentProject.value,
-    mode: elements.codingAgentMode.value,
-    prompt: elements.codingAgentMode.value === "delegated" ? elements.prompt.value.trim() : null,
-  };
-  elements.codingAgentStatus.textContent = "Validating authorization…";
-  if (payload.tool === "broker" || payload.tool === "shell") {
-    const grantResponse = await fetch("/api/git-broker/grants", {
-      method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
-      body: JSON.stringify({ profile: payload.tool, project_root: payload.project_root }),
-    });
-    if (!grantResponse.ok) throw new Error(await responseErrorMessage(grantResponse, "Unable to save execution authorization"));
-    const grant = await grantResponse.json();
-    await renderExecutionGrant(grant, payload);
-    if (payload.tool === "broker") {
-      const statusResponse = await fetch(`/api/git-broker/status?project_root=${encodeURIComponent(payload.project_root)}`);
-      if (!statusResponse.ok) throw new Error(await responseErrorMessage(statusResponse, "Unable to inspect project"));
-      const status = await statusResponse.json();
-      const repository = status.repository;
-      if (payload.mode === "delegated") {
-        elements.codingAgentStatus.textContent = `Broker adapter running ${payload.model}…`;
-        const executionResponse = await fetch("/api/git-broker/adapter", {
-          method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
-          body: JSON.stringify({ model: payload.model, grant_id: grant.id, project_root: payload.project_root, prompt: payload.prompt }),
-        });
-        if (!executionResponse.ok) throw new Error(await responseErrorMessage(executionResponse, "Broker adapter task failed"));
-        const execution = await executionResponse.json();
-        const result = execution.result;
-        elements.codingAgentStatus.textContent = `Broker adapter ${result.status} · ${result.branch || repository.branch || "detached HEAD"}${result.commit ? ` · ${result.commit.slice(0, 10)}` : ""}`;
-        return;
-      }
-      elements.codingAgentStatus.textContent = `Broker adapter ready · ${repository.branch || "detached HEAD"} · ${repository.clean ? "in sync" : "local changes detected"}`;
-      return;
-    }
-    const terminalResponse = await fetch("/api/terminals", {
-      method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
-      body: JSON.stringify({ shell: "powershell", cwd: payload.project_root }),
-    });
-    if (!terminalResponse.ok) throw new Error(await responseErrorMessage(terminalResponse, "Unable to launch non-sandboxed shell"));
-    await connectTerminalRecord(await terminalResponse.json(), "powershell");
-    elements.codingAgentStatus.textContent = "Unrestricted non-sandboxed shell launched for the authorized project.";
-    return;
-  }
-  if (elements.codingAgentPersistent.checked) {
-    const grant = await fetch("/api/coding-agents/grants", {
-      method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
-      body: JSON.stringify({ tool: payload.tool, project_root: payload.project_root }),
-    });
-    if (!grant.ok) throw new Error(await responseErrorMessage(grant, "Unable to save coding-agent authorization"));
-  }
-  const response = await fetch("/api/coding-agents/launch", {
-    method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" }, body: JSON.stringify(payload),
-  });
-  if (!response.ok) throw new Error(await responseErrorMessage(response, "Unable to launch coding agent"));
-  const terminal = await response.json();
-  const effectiveModel = terminal.effective_model || payload.model;
-  const compatibility = terminal.tool_compatibility;
-  const modelStatus = compatibility?.route === "delegated_verified"
-    ? `${effectiveModel} · delegated verified tools for ${payload.model} · native tools not verified`
-    : compatibility?.route === "native_verified"
-      ? `${effectiveModel} · native tools verified`
-      : terminal.tool_fallback_used
-        ? `${effectiveModel} (verified tool fallback for ${payload.model})`
-        : effectiveModel;
-  activeTerminalProfile = payload.tool;
-  elements.terminalTabs.forEach((tab) => tab.setAttribute("aria-selected", String(tab.dataset.terminalProfile === activeTerminalProfile)));
-  elements.terminalOutput.textContent = "";
-  if (terminal.external) {
-    await closeActiveTerminal();
-    elements.terminalStatus.textContent = `${terminal.shell} launched`;
-    elements.codingAgentStatus.textContent = `${payload.tool} opened in Windows Terminal with ${modelStatus}`;
-    return;
-  }
-  await connectTerminalRecord(terminal, payload.tool);
-  elements.codingAgentStatus.textContent = `${payload.tool} launched with ${modelStatus}`;
-}
-
-async function renderExecutionGrant(grant, payload) {
-  elements.codingAgentGrants.replaceChildren();
-  const label = document.createElement("span");
-  label.className = "meta";
-  const support = payload.tool === "broker" ? "broker adapter" : "non-sandboxed shell";
-  label.textContent = `${payload.model} · ${support} · ${payload.project_root}`;
-  const revoke = document.createElement("button");
-  revoke.type = "button";
-  revoke.className = "secondary";
-  revoke.textContent = "Revoke";
-  revoke.addEventListener("click", async () => {
-    const response = await fetch(`/api/git-broker/grants/${encodeURIComponent(grant.id)}`, {
-      method: "DELETE", headers: { "X-JSON-CODR": "1" },
-    });
-    if (!response.ok) throw new Error(await responseErrorMessage(response, "Unable to revoke authorization"));
-    elements.codingAgentGrants.replaceChildren();
-    elements.codingAgentStatus.textContent = `${payload.tool} authorization revoked.`;
-  });
-  elements.codingAgentGrants.append(label, revoke);
 }
 
 async function sendApprovedAction(proposal, token, approveButton) {
@@ -984,10 +897,10 @@ async function runHardwareDetection() {
             ? `delegated tool route verified via ${agents.effective_tool_model}`
             : "agent tools unavailable or unverified";
         const sessionState = agents?.continue_verified && agents?.aider_verified
-          ? "Continue verified · Aider verified"
+          ? "Coding workflow verified"
           : agents?.tool_route_verified
-            ? "Continue/Aider not verified on this profile"
-            : "Continue/Aider unavailable";
+            ? "Coding workflow not verified on this profile"
+            : "Coding workflow unavailable";
         const agentState = `${routeState} · ${sessionState}`;
         line.textContent = `${model.model} · ${state} · ${agentState}${model.reason ? ` · ${model.reason}` : ""}`;
         label.append(line);
@@ -1038,8 +951,8 @@ async function runHardwareDetection() {
               ? `delegated tool route via ${agents.effective_tool_model}`
               : "agent tools unverified";
           const agentState = agents?.continue_verified && agents?.aider_verified
-            ? `${routeState} · Continue/Aider verified`
-            : `${routeState} · Continue/Aider not verified on this profile`;
+            ? `${routeState} · coding workflow verified`
+            : `${routeState} · coding workflow not verified on this profile`;
           line.textContent = `${model.model} · ${state} · ${agentState}${model.reason ? ` · ${model.reason}` : ""}`;
           modelDetails.append(line);
         }
@@ -1131,31 +1044,6 @@ async function runHardwareDetection() {
     if (activeHardwareSection === "leaderboard" && leaderboardHistoryCache.length) renderBenchmarkLeaderboard();
     return candidates;
   } finally { elements.hardwareDetect.disabled = false; }
-}
-
-function renderCodingAgentTasks(tasks) {
-  if (!tasks.length) return;
-  elements.actionReview.hidden = false;
-  for (const task of tasks) {
-    const card = document.createElement("article"); card.className = "action-card";
-    const title = document.createElement("strong"); title.textContent = `Proposed ${task.tool} coding task`;
-    const prompt = document.createElement("p"); prompt.textContent = task.prompt;
-    const cwd = document.createElement("small"); cwd.textContent = `Project boundary: ${task.project_root}`;
-    const controls = document.createElement("div"); controls.className = "action-controls";
-    const review = document.createElement("button"); review.type = "button"; review.className = "primary"; review.textContent = "Review delegated task";
-    review.addEventListener("click", () => {
-      elements.codingAgentTool.value = task.tool;
-      elements.codingAgentProject.value = task.project_root;
-      elements.codingAgentMode.value = "delegated";
-      elements.prompt.value = task.prompt;
-      selectDestination("terminal");
-      elements.codingAgentLauncher.scrollIntoView({ behavior: "smooth", block: "center" });
-      elements.codingAgentStatus.textContent = "Review authorization, model, project, and task before launch.";
-    });
-    controls.append(review);
-    card.append(title, prompt, cwd, controls);
-    elements.actionList.append(card);
-  }
 }
 
 async function restoreCpuBackend() {
@@ -2085,7 +1973,6 @@ async function loadApplication() {
       if (model.installed) {
         elements.hardwareBenchmarkModel.append(option.cloneNode(true));
         elements.integrityBenchmarkModel.append(option.cloneNode(true));
-        elements.codingAgentModel.append(option.cloneNode(true));
       }
     }
     const installed = models.filter((model) => model.installed).length;
@@ -2139,18 +2026,27 @@ async function submitPrompt(event) {
     elements.prompt.focus();
     return;
   }
-  activeRequest = new AbortController();
+  await ensureSession();
   setPending(true);
   elements.error.hidden = true;
   try {
-    const response = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: elements.model.value, prompt, session_id: sessionId }),
-      signal: activeRequest.signal,
+    const record = await coreClient.submit({
+      projectId: `project-${sessionId}`,
+      threadId: `thread-${sessionId}`,
+      model: elements.model.value,
+      prompt,
+      projectRoot: ".",
+      attachments: [...elements.attachmentList.querySelectorAll("[data-attachment-id]")].map((item) => item.dataset.attachmentId),
     });
-    if (!response.ok) throw new Error(await responseErrorMessage(response, "The model request failed"));
-    const payload = await response.json();
+    activeCoreTaskId = record.task_id;
+    taskView.render(record);
+    const completion = [...record.events].reverse().find((item) => item.event_type === "inference.completed");
+    if (!completion) {
+      const permission = record.events.find((item) => item.event_type === "task.permission_required");
+      if (permission) throw new Error("This task is waiting for permission.");
+      throw new Error(record.events.at(-1)?.payload?.reason || "The model request failed");
+    }
+    const payload = completion.payload.result;
     markOllamaReady();
     elements.empty.hidden = true;
     elements.error.hidden = true;
@@ -2161,25 +2057,55 @@ async function submitPrompt(event) {
     renderAttachedSkills(payload.attached_skills || []);
     renderRecommendations(payload.skill_recommendations || []);
     renderActions(payload.action_proposals || []);
-    renderCodingAgentTasks(payload.coding_agent_tasks || []);
     elements.artifactOutput.hidden = !payload.artifact;
     if (payload.artifact) {
       elements.artifactOutput.href = payload.artifact.url;
       elements.artifactOutput.textContent = `Download ${payload.artifact.filename}`;
     }
   } catch (error) {
-    showError(error.name === "AbortError" ? "Request cancelled." : error.message);
+    showError(error.message);
   } finally {
-    activeRequest = null;
     setPending(false);
   }
 }
 
 elements.form.addEventListener("submit", submitPrompt);
-elements.cancel.addEventListener("click", () => activeRequest?.abort());
+elements.cancel.addEventListener("click", () => {
+  if (activeCoreTaskId) coreClient.cancel(activeCoreTaskId).catch((error) => showError(error.message));
+});
 elements.model.addEventListener("change", updateModelDetail);
 elements.prompt.addEventListener("keydown", (event) => {
   if (event.ctrlKey && event.key === "Enter") elements.form.requestSubmit();
+});
+elements.form.addEventListener("dragover", (event) => event.preventDefault());
+elements.form.addEventListener("drop", (event) => {
+  event.preventDefault();
+  if (event.dataTransfer?.files?.length) uploadFiles(event.dataTransfer.files).catch((error) => showError(error.message));
+});
+elements.taskSteer.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || !activeCoreTaskId || !elements.taskSteer.value.trim()) return;
+  event.preventDefault();
+  const input = elements.taskSteer.value.trim();
+  elements.taskSteer.value = "";
+  coreClient.steer(activeCoreTaskId, input).catch((error) => showError(error.message));
+});
+elements.taskStop.addEventListener("click", () => {
+  if (activeCoreTaskId) coreClient.cancel(activeCoreTaskId).catch((error) => showError(error.message));
+});
+elements.taskRetry.addEventListener("click", async () => {
+  if (!activeCoreTaskId) return;
+  try {
+    const record = await coreClient.retry(activeCoreTaskId);
+    activeCoreTaskId = record.task_id;
+    taskView.render(record);
+  } catch (error) { showError(error.message); }
+});
+elements.taskUndo.addEventListener("click", () => {
+  if (!activeCoreTaskId) return;
+  const record = coreClient.tasks.get(activeCoreTaskId)?.record;
+  const checkpoint = [...(record?.events || [])].reverse().find((event) => event.payload?.checkpoint_id)?.payload.checkpoint_id;
+  if (!checkpoint) return showError("No checkpoint is available for this task.");
+  coreClient.restore(activeCoreTaskId, checkpoint).catch((error) => showError(error.message));
 });
 let recommendationTimer = null;
 elements.prompt.addEventListener("input", () => {
@@ -2481,13 +2407,7 @@ elements.terminalTabs.forEach((tab) => tab.addEventListener("click", async () =>
     await connectTerminalRecord(session.terminal);
     return;
   }
-  if (activeTerminalProfile === "powershell") {
-    await ensureTerminal();
-    return;
-  }
-  elements.codingAgentTool.value = activeTerminalProfile;
-  elements.codingAgentStatus.textContent = `Choose a model and project, then launch ${activeTerminalProfile}.`;
-  elements.codingAgentModel.focus();
+  await ensureTerminal();
 }));
 document.addEventListener("keydown", (event) => {
   if (event.ctrlKey && !event.altKey && event.key.toLowerCase() === "j") {
@@ -2502,17 +2422,6 @@ document.addEventListener("keydown", (event) => {
     closeNavigationDrawer({ restoreFocus: true });
   }
 });
-elements.codingAgentLauncher.addEventListener("submit", (event) => {
-  if (elements.codingAgentMode.value === "delegated") {
-    const prompt = elements.prompt.value.trim();
-    if (!prompt) { event.preventDefault(); return showError("Enter the delegated task in the main prompt first"); }
-  }
-  launchCodingAgent(event).catch((error) => {
-    elements.codingAgentStatus.textContent = error.message;
-    showError(error.message);
-  });
-});
-
 initializeXterm();
 window.addEventListener("beforeunload", persistTerminalSessions);
 restoreTerminalSessions().catch(() => localStorage.removeItem(TERMINAL_SESSIONS_KEY));

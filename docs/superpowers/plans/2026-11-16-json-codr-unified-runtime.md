@@ -441,25 +441,25 @@ git commit -m "feat(api): expose unified task runtime"
 - Consumes: Task 9 API and event stream.
 - Produces: one client connection and store shared by conversation, resources, terminal, activity, results, diffs, artifacts, permissions, and execution details.
 
-- [ ] **Step 1: Write failing static and browser-contract tests**
+- [x] **Step 1: Write failing static and browser-contract tests**
 
 Test one visible conversation flow, attachment/drop submission, shared task IDs, live event replay, steering, stop/retry/undo, immediate edits without an Apply button, progressive execution details, requested/effective model disclosure, responsive layout, keyboard copy/paste and quit sequence, and absence of Continue/Aider/BORG product controls or API paths.
 
-- [ ] **Step 2: Run focused tests and verify failure**
+- [x] **Step 2: Run focused tests and verify failure**
 
 Run: `C:\Python315\python.exe -m unittest test_core_web test_web_static test_terminal_keyboard -v`
 
 Expected: new unified-UI cases fail.
 
-- [ ] **Step 3: Implement the shared client store and task view**
+- [x] **Step 3: Implement the shared client store and task view**
 
 Use meaningful state changes rather than continuous repainting. Advanced implementation detail remains collapsed unless needed.
 
-- [ ] **Step 4: Replace migrated direct fetches and tool-specific launch controls**
+- [x] **Step 4: Replace migrated direct fetches and tool-specific launch controls**
 
 The terminal remains a view of the same runtime; skills, MCP, hardware, and capability management remain settings for that runtime.
 
-- [ ] **Step 5: Run static and JavaScript syntax verification**
+- [x] **Step 5: Run static and JavaScript syntax verification**
 
 Run: `C:\Python315\python.exe -m unittest test_core_web test_web_static test_terminal_keyboard -v`
 
@@ -467,11 +467,11 @@ Run: `node --check web/core_client.js; node --check web/task_view.js; node --che
 
 Expected: all PASS with no syntax output.
 
-- [ ] **Step 6: Run the live Playwright acceptance flow**
+- [x] **Step 6: Run the live Playwright acceptance flow**
 
 Verify open project → request inspect/edit/test → observe live activity → steer → review diff/evidence → undo. Verify an optional-adapter failure falls back without losing the task and that no internal executor selection is required.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add web test_core_web.py test_web_static.py test_terminal_keyboard.py
