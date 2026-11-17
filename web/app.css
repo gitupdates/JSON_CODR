@@ -376,3 +376,15 @@ footer { padding: 22px 0 34px; color: var(--text-subtle); font: 600 10px ui-mono
 @media (prefers-reduced-motion: reduce) {
   .app-sidebar { transition: none; }
 }
+.all-model-panel { margin-top: 28px; padding: 22px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface-panel); }
+.all-model-heading, .all-model-result-head, .all-model-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.all-model-heading h2 { margin: 4px 0 0; }
+.all-model-form { display: grid; gap: 10px; margin-top: 18px; }
+.all-model-form textarea, .all-model-form select, .all-model-toolbar input { min-width: 0; padding: 10px 12px; color: var(--text); background: var(--surface-input); border: 1px solid var(--line); }
+.all-model-toolbar { margin: 18px 0; justify-content: flex-start; }
+.all-model-toolbar input { flex: 1 1 220px; }
+.all-model-results { display: grid; gap: 12px; }
+.all-model-result { padding: 16px; border: 1px solid var(--line); background: var(--surface-raised); }
+.all-model-result h3 { margin: 12px 0 8px; font-size: 16px; }
+.all-model-result pre { max-height: 320px; overflow: auto; white-space: pre-wrap; }
+.all-model-consensus { margin-bottom: 14px; padding: 14px; border: 1px solid var(--lime); }

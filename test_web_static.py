@@ -30,6 +30,25 @@ class IdCollector(HTMLParser):
 
 
 class WebStaticTests(unittest.TestCase):
+    def test_all_model_search_is_additive_and_exposes_jury_controls(self):
+        html = Path("web/index.html").read_text(encoding="utf-8")
+        runtime = Path("web/model_runs.js").read_text(encoding="utf-8") if Path("web/model_runs.js").exists() else ""
+        for identifier in (
+            "chat-form", "model-select", "all-model-form", "all-model-prompt", "all-model-profile",
+            "all-model-start", "all-model-cancel", "all-model-status", "all-model-filter",
+            "all-model-results", "all-model-consensus", "all-model-export-json",
+            "all-model-export-markdown", "all-model-export-csv",
+        ):
+            self.assertIn(f'id="{identifier}"', html)
+        self.assertIn("General search", html)
+        self.assertIn("Code jury", html)
+        self.assertIn("/api/model-runs", runtime)
+        self.assertIn("original", runtime)
+        self.assertIn("setTimeout", runtime)
+        self.assertIn("pollInFlight", runtime)
+        self.assertIn("data-result-id", runtime)
+        self.assertIn("terminalStatuses", runtime)
+
     def test_unified_runtime_replaces_executor_specific_profiles(self):
         html = Path("web/index.html").read_text(encoding="utf-8")
         script = Path("web/app.js").read_text(encoding="utf-8")

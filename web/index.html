@@ -151,6 +151,25 @@
           </section>
         </section>
       </section>
+
+      <section class="all-model-panel" aria-labelledby="all-model-heading">
+        <div class="all-model-heading"><div><p class="eyebrow">MULTI-MODEL / SHARED CONTEXT</p><h2 id="all-model-heading">Ask all available models</h2></div><span id="all-model-status" class="meta" role="status" aria-live="polite">Ready</span></div>
+        <form id="all-model-form" class="all-model-form">
+          <label for="all-model-profile">Profile</label>
+          <select id="all-model-profile"><option value="general">General search</option><option value="code_jury">Code jury</option></select>
+          <label for="all-model-prompt">One prompt for every installed model</label>
+          <textarea id="all-model-prompt" rows="6" placeholder="Ask every available model using the current files, pasted content, and images." required></textarea>
+          <div class="actions"><button id="all-model-start" class="primary" type="submit">Run all models</button><button id="all-model-cancel" class="secondary" type="button" disabled>Cancel</button></div>
+        </form>
+        <div class="all-model-toolbar">
+          <label for="all-model-filter">Filter results</label><input id="all-model-filter" type="search" placeholder="Model, status, or response" />
+          <a id="all-model-export-json" class="secondary file-button" href="#" download>Export JSON</a>
+          <a id="all-model-export-markdown" class="secondary file-button" href="#" download>Export Markdown</a>
+          <a id="all-model-export-csv" class="secondary file-button" href="#" download>Export CSV</a>
+        </div>
+        <section id="all-model-consensus" class="all-model-consensus" aria-label="Code jury consensus" hidden></section>
+        <div id="all-model-results" class="all-model-results" aria-live="polite"><p class="meta">No all-model run has started.</p></div>
+      </section>
       </section>
 
       <aside id="context-panel" class="context-panel app-view" data-view="context" aria-label="Attachment context" hidden>
@@ -466,6 +485,7 @@
     <script src="/static/conversation_view.js?v=1.0.18-alpha.4" defer></script>
     <script src="/static/vendor/xterm.js" defer></script>
     <script src="/static/vendor/xterm-addon-fit.js" defer></script>
+    <script src="/static/model_runs.js?v=1.0.18-alpha.4" defer></script>
     <script src="/static/app.js?v=1.0.18-alpha.4" defer></script>
   </body>
 </html>
