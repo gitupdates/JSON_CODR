@@ -142,6 +142,7 @@ class ChatResult(BaseModel):
     action_proposals: List[ActionProposal] = Field(default_factory=list)
     reasoning: Optional["ReasoningTrace"] = None
     references: List["ObjectReference"] = Field(default_factory=list)
+    run_id: Optional[str] = Field(default=None, max_length=128)
 
 
 class GeneratedFile(BaseModel):

@@ -6,7 +6,7 @@ import re
 import sys
 from uuid import uuid7
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -48,7 +48,9 @@ from web_app.core.component_manager import ComponentManager
 from web_app.core.component_adapter import LazyComponentExecutionAdapter
 from web_app.core.terminal_adapter import TerminalAdapter
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
+from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
+from web_app.model_run_store import ModelRunStore, RequestKeyConflict
+from web_app.model_runs import ModelRunService
 from web_app.ollama_service import (
     ModelOutputError,
     ModelTimeoutError,
@@ -148,6 +150,9 @@ def create_app(
     skill_discovery = SkillDiscoveryService(skill_library, skill_converter, workspace.data_root)
     github_skills = github_skills or GithubSkillService(skill_library, skill_converter, workspace.data_root)
     context_assembler = ContextAssembler(attachments, skills=skill_library)
+    model_run_store = ModelRunStore(workspace.data_root)
+    model_runs = ModelRunService(model_run_store, service, workspace, context_assembler)
+    application.state.model_runs = model_runs
     dependency_service = DependencyService(attachments)
     artifact_service = ArtifactService(workspace)
     conversation_service = ConversationService(
@@ -339,6 +344,58 @@ def create_app(
             return {"models": await (inference_router.list_models() if inference_router else service.list_models())}
         except OllamaUnavailableError as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
+
+    @application.post("/api/model-runs", status_code=201)
+    async def create_model_run(request: ModelRunCreateRequest, background_tasks: BackgroundTasks):
+        try:
+            workspace.get_session(request.session_id)
+            run = await model_runs.create(request)
+            background_tasks.add_task(model_runs.run, run.run_id)
+            return run
+        except RequestKeyConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Session not found") from error
+
+    @application.get("/api/model-runs/{run_id}")
+    async def get_model_run(run_id: str):
+        try:
+            return model_runs.get(run_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Run not found") from error
+
+    @application.get("/api/model-runs/{run_id}/results/{result_id}/original")
+    async def get_model_run_original(run_id: str, result_id: str, x_json_codr: str | None = Header(None)):
+        if x_json_codr != "1":
+            raise HTTPException(status_code=403, detail="Local authorization required")
+        try:
+            return model_run_store.get_original(run_id, result_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Original output not found") from error
+
+    @application.post("/api/model-runs/{run_id}/cancel")
+    async def cancel_model_run(run_id: str):
+        try:
+            return model_runs.cancel(run_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Run not found") from error
+
+    @application.get("/api/model-runs/{run_id}/export")
+    async def export_model_run(run_id: str, format: str = "json"):
+        try:
+            media_type, content = model_runs.export(run_id, format)
+            return Response(content=content, media_type=media_type)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Run not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @application.get("/api/model-runs/{run_id}/search")
+    async def search_model_run(run_id: str, q: str):
+        try:
+            return model_runs.search(run_id, q)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Run not found") from error
 
     @application.get("/api/models/{model:path}/tool-compatibility")
     async def model_tool_compatibility(model: str):
@@ -719,6 +776,7 @@ def create_app(
     async def delete_session(session_id: str):
         try:
             workspace.delete_session(session_id)
+            model_run_store.delete_session(session_id)
         except InvalidSessionId as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         except KeyError as error:
@@ -1509,10 +1567,24 @@ def create_app(
                     str(Path(__file__).resolve().parent.parent),
                 )
             if request.session_id:
-                workspace.append_message(request.session_id, ChatMessage(role="user", content=original_prompt))
+                canonical_run = model_runs.record_single(
+                    session_id=request.session_id,
+                    prompt=original_prompt,
+                    requested_model=request.model,
+                    result=result,
+                )
+                result.run_id = canonical_run.run_id
                 workspace.append_message(
                     request.session_id,
-                    ChatMessage(role="assistant", content=f"{result.summary}\n\n{result.content}"),
+                    ChatMessage(role="user", content=original_prompt, task_id=canonical_run.run_id),
+                )
+                workspace.append_message(
+                    request.session_id,
+                    ChatMessage(
+                        role="assistant",
+                        content=f"{result.summary}\n\n{result.content}",
+                        task_id=canonical_run.run_id,
+                    ),
                 )
             return result
         except InvalidSessionId as error:

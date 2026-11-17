@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -138,3 +140,56 @@ class ModelRunService:
                     "error_message": "The server restarted before this model completed",
                 })
                 self.store.update_result(run.run_id, failed)
+
+    def record_single(self, *, session_id: str, prompt: str, requested_model: str, result: Any) -> CanonicalModelRun:
+        request = ModelRunCreateRequest(session_id=session_id, prompt=prompt, profile="general")
+        run = self.store.create(request, [requested_model])
+        original = capture_original_output(
+            output_id=uuid.uuid4().hex,
+            model=requested_model,
+            content=result.content,
+            reasoning_entries=result.reasoning.entries if result.reasoning else [],
+            provider_events=[],
+        )
+        result_id = run.results[0].result_id
+        self.store.append_original(run.run_id, result_id, original)
+        now = datetime.now(timezone.utc)
+        normalized = normalize_model_result(
+            original, result, warnings=[],
+            timing=ModelTiming(started_at=now, completed_at=now, duration_ms=0),
+        ).model_copy(update={"result_id": result_id, "requested_model": requested_model})
+        return self.store.update_result(run.run_id, normalized)
+
+    def export(self, run_id: str, format_name: str) -> tuple[str, str]:
+        run = self.get(run_id)
+        if format_name == "json":
+            return "application/json", run.model_dump_json(indent=2)
+        if format_name == "markdown":
+            lines = [f"# Model run {run.run_id}", "", f"Status: {run.status}", ""]
+            for result in run.results:
+                lines.extend([f"## {result.requested_model}", f"Status: {result.status}",
+                              f"Original: {result.original_output_id or 'unavailable'}", "", result.answer, ""])
+            return "text/markdown", "\n".join(lines)
+        if format_name == "csv":
+            output = io.StringIO(newline="")
+            writer = csv.writer(output)
+            writer.writerow(["model", "status", "duration_ms", "summary", "answer", "original_output_id"])
+            for result in run.results:
+                writer.writerow([result.requested_model, result.status, result.timing.duration_ms,
+                                 result.summary, result.answer, result.original_output_id or ""])
+            return "text/csv", output.getvalue()
+        raise ValueError("format must be json, markdown, or csv")
+
+    def search(self, run_id: str, query: str) -> list[dict[str, str]]:
+        needle = query.casefold()
+        matches = []
+        for result in self.get(run_id).results:
+            try:
+                original = self.store.get_original(run_id, result.result_id)
+            except KeyError:
+                original = None
+            if original is not None and needle in original.content.casefold():
+                matches.append({"result_id": result.result_id, "model": result.requested_model, "source": "original"})
+            if needle in f"{result.summary}\n{result.answer}".casefold():
+                matches.append({"result_id": result.result_id, "model": result.requested_model, "source": "normalized"})
+        return matches

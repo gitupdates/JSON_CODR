@@ -176,6 +176,65 @@ class FakeIntegrityBenchmark:
 
 
 class WebApiTests(unittest.TestCase):
+    def test_all_model_run_routes_create_poll_cancel_export_search_and_protect_originals(self):
+        session = self.workspace.create_session()
+        created = self.client.post("/api/model-runs", json={
+            "session_id": session.id,
+            "prompt": "Compare implementations",
+            "profile": "general",
+            "request_key": "api-run-1",
+        })
+        self.assertEqual(created.status_code, 201)
+        run_id = created.json()["run_id"]
+        self.assertEqual(created.json()["roster"], ["qwen2.5-coder:7b-instruct-q4_K_M"])
+        self.assertEqual(created.json()["unavailable_models"], ["opencoder:8b"])
+
+        polled = self.client.get(f"/api/model-runs/{run_id}")
+        self.assertEqual(polled.status_code, 200)
+        result_id = polled.json()["results"][0]["result_id"]
+        denied = self.client.get(f"/api/model-runs/{run_id}/results/{result_id}/original")
+        self.assertEqual(denied.status_code, 403)
+        allowed = self.client.get(
+            f"/api/model-runs/{run_id}/results/{result_id}/original",
+            headers={"X-JSON-CODR": "1"},
+        )
+        self.assertEqual(allowed.status_code, 200)
+        self.assertIn("Answered: Compare implementations", allowed.json()["content"])
+        for format_name, content_type in (("json", "application/json"), ("markdown", "text/markdown"), ("csv", "text/csv")):
+            exported = self.client.get(f"/api/model-runs/{run_id}/export", params={"format": format_name})
+            self.assertEqual(exported.status_code, 200)
+            self.assertIn(content_type, exported.headers["content-type"])
+        searched = self.client.get(f"/api/model-runs/{run_id}/search", params={"q": "Compare"})
+        self.assertEqual(searched.status_code, 200)
+        self.assertEqual(searched.json()[0]["source"], "original")
+        cancelled = self.client.post(f"/api/model-runs/{run_id}/cancel")
+        self.assertEqual(cancelled.status_code, 200)
+
+    def test_model_run_idempotency_conflict_and_code_jury_profile(self):
+        session = self.workspace.create_session()
+        payload = {"session_id": session.id, "prompt": "Review", "profile": "code_jury", "request_key": "same"}
+        first = self.client.post("/api/model-runs", json=payload)
+        replay = self.client.post("/api/model-runs", json=payload)
+        conflict = self.client.post("/api/model-runs", json={**payload, "prompt": "Changed"})
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(replay.json()["run_id"], first.json()["run_id"])
+        self.assertEqual(first.json()["profile"], "code_jury")
+        self.assertEqual(conflict.status_code, 409)
+
+    def test_existing_chat_shape_adds_canonical_run_link(self):
+        session = self.workspace.create_session()
+        response = self.client.post("/api/chat", json={
+            "model": "qwen",
+            "prompt": "hello",
+            "session_id": session.id,
+        })
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["content"], "Answered: hello")
+        self.assertEqual(body["summary"], "Ready")
+        self.assertRegex(body["run_id"], r"^[0-9a-f]{32}$")
+        self.assertEqual(self.client.get(f"/api/model-runs/{body['run_id']}").status_code, 200)
+
     def test_manual_mcp_registration_is_exposed_through_core_capabilities(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = WorkspaceService(Path(directory))
