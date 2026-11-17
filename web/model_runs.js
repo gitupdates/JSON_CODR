@@ -25,12 +25,10 @@
     event.preventDefault();
     const response = await fetch(event.currentTarget.href, { headers: { "X-JSON-CODR": "1" } });
     if (!response.ok) { elements["all-model-status"].textContent = `Original output failed (${response.status})`; return; }
-    const blob = await response.blob();
-    const download = document.createElement("a");
-    download.href = URL.createObjectURL(blob);
-    download.download = `${event.currentTarget.dataset.model || "model"}-original.json`;
-    download.click();
-    URL.revokeObjectURL(download.href);
+    const raw = event.currentTarget.closest(".all-model-result").querySelector(".original-output-raw");
+    raw.textContent = JSON.stringify(await response.json(), null, 2);
+    raw.hidden = false;
+    event.currentTarget.textContent = "Preserved original shown below";
   }
 
   function renderResult(result) {
@@ -39,7 +37,7 @@
       row = document.createElement("article");
       row.className = "all-model-result";
       row.dataset.resultId = result.result_id;
-      row.innerHTML = '<div class="all-model-result-head"><strong></strong><span class="meta"></span></div><h3></h3><pre></pre><a class="original-output-link">View preserved original</a>';
+      row.innerHTML = '<div class="all-model-result-head"><strong></strong><span class="meta"></span></div><h3></h3><pre></pre><a class="original-output-link">View preserved original</a><pre class="original-output-raw" hidden></pre>';
       row.querySelector(".original-output-link").addEventListener("click", openOriginal);
       elements["all-model-results"].append(row);
     }
