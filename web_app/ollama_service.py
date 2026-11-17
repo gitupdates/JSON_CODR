@@ -14,7 +14,9 @@ class OllamaUnavailableError(RuntimeError):
 
 
 class ModelOutputError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, provider_events: Optional[List[dict[str, object]]] = None) -> None:
+        super().__init__(message)
+        self.provider_events = list(provider_events or [])
 
 
 class ModelTimeoutError(RuntimeError):
@@ -186,7 +188,13 @@ class OllamaService:
             raise ValueError("Unknown or ambiguous model")
         return matches[0]
 
-    async def chat(self, model: str, prompt: str, images: Optional[List[Any]] = None) -> ChatResult:
+    async def chat(
+        self,
+        model: str,
+        prompt: str,
+        images: Optional[List[Any]] = None,
+        allow_repair: bool = True,
+    ) -> ChatResult:
         resolved = self._resolve(model)
         live = await self._live_models()
         if resolved not in live:
@@ -205,9 +213,83 @@ class OllamaService:
         try:
             raw = response.message.content if hasattr(response, "message") else response["message"]["content"]
             parsed = parse_response_content(raw)
-        except (ValidationError, KeyError, TypeError, AttributeError) as error:
-            raise ModelOutputError("Malformed structured output") from error
-        return ChatResult(model=resolved, **parsed.model_dump())
+            if not parsed.content.strip():
+                raise ValueError("Structured response content is empty")
+        except (ValidationError, KeyError, TypeError, AttributeError, ValueError) as error:
+            initial_raw = str(raw) if "raw" in locals() else ""
+            plain = initial_raw.strip()
+            if not allow_repair:
+                summary = next((line.strip() for line in plain.splitlines() if line.strip()), plain)[:240]
+                return ChatResult(
+                    model=resolved,
+                    status="success",
+                    summary=summary,
+                    content=plain,
+                    error="structured_output_fallback",
+                    provider_events=[{
+                        "type": "structured_output_fallback",
+                        "initial_raw": initial_raw,
+                    }],
+                )
+            repair_event: dict[str, object] = {
+                "type": "schema_repair",
+                "initial_raw": initial_raw,
+                "repaired_raw": None,
+            }
+            repair_request = {
+                "model": resolved,
+                "messages": [
+                    *request["messages"],
+                    {"role": "assistant", "content": plain},
+                    {
+                        "role": "user",
+                        "content": (
+                            "Reformat your previous answer into the required JSON response schema. "
+                            "Preserve its meaning, add no new claims, and return JSON only."
+                        ),
+                    },
+                ],
+                "format": StructuredCLIResponse.model_json_schema(),
+            }
+            try:
+                repaired_response = await self._chat_with_optimization(resolved, repair_request)
+                repaired_raw = (
+                    repaired_response.message.content
+                    if hasattr(repaired_response, "message")
+                    else repaired_response["message"]["content"]
+                )
+                repaired = parse_response_content(repaired_raw)
+                if not repaired.content.strip():
+                    raise ValueError("Repaired structured response content is empty")
+                repair_event["repaired_raw"] = str(repaired_raw)
+                return ChatResult(
+                    model=resolved,
+                    **repaired.model_dump(),
+                    provider_events=[repair_event],
+                )
+            except Exception as repair_error:
+                if "repaired_raw" in locals():
+                    repair_event["repaired_raw"] = str(repaired_raw)
+                repair_event["error"] = f"{type(repair_error).__name__}: {repair_error}"
+                if not plain:
+                    raise ModelOutputError(
+                        "Malformed structured output",
+                        provider_events=[repair_event],
+                    ) from repair_error
+            summary = next((line.strip() for line in plain.splitlines() if line.strip()), plain)[:240]
+            return ChatResult(
+                model=resolved,
+                status="success",
+                summary=summary,
+                content=plain,
+                error="structured_output_fallback",
+                provider_events=[repair_event],
+            )
+        return ChatResult(
+            model=resolved,
+            **parsed.model_dump(),
+            provider_events=[{"type": "structured_response", "raw": str(raw)}],
+        )
 
     async def stream_chat(
         self,

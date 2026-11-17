@@ -108,6 +108,7 @@ def create_app(
     attachments = attachments or AttachmentService(workspace)
     skill_library = SkillLibraryService(workspace.data_root)
     skill_library.ensure_builtin_rea()
+    skill_library.ensure_builtin_multi_model_jury()
     skill_library.ensure_envelopes()
     skill_converter = SkillConverterService()
     settings = SettingsService(workspace.data_root)
@@ -151,8 +152,30 @@ def create_app(
     github_skills = github_skills or GithubSkillService(skill_library, skill_converter, workspace.data_root)
     context_assembler = ContextAssembler(attachments, skills=skill_library)
     model_run_store = ModelRunStore(workspace.data_root)
-    model_runs = ModelRunService(model_run_store, service, workspace, context_assembler)
+    model_runs = ModelRunService(
+        model_run_store,
+        inference_router or service,
+        workspace,
+        context_assembler,
+        concurrency=4,
+    )
     application.state.model_runs = model_runs
+    model_run_tasks: set[asyncio.Task] = set()
+    application.state.model_run_tasks = model_run_tasks
+
+    def finish_model_run(task: asyncio.Task) -> None:
+        model_run_tasks.discard(task)
+        if not task.cancelled():
+            task.exception()
+
+    async def close_model_runs() -> None:
+        for task in model_run_tasks:
+            task.cancel()
+        if model_run_tasks:
+            await asyncio.gather(*model_run_tasks, return_exceptions=True)
+
+    application.router.add_event_handler("startup", model_runs.recover_incomplete_runs)
+    application.router.add_event_handler("shutdown", close_model_runs)
     dependency_service = DependencyService(attachments)
     artifact_service = ArtifactService(workspace)
     conversation_service = ConversationService(
@@ -346,11 +369,13 @@ def create_app(
             raise HTTPException(status_code=502, detail=str(error)) from error
 
     @application.post("/api/model-runs", status_code=201)
-    async def create_model_run(request: ModelRunCreateRequest, background_tasks: BackgroundTasks):
+    async def create_model_run(request: ModelRunCreateRequest):
         try:
             workspace.get_session(request.session_id)
             run = await model_runs.create(request)
-            background_tasks.add_task(model_runs.run, run.run_id)
+            task = asyncio.create_task(model_runs.run(run.run_id))
+            model_run_tasks.add(task)
+            task.add_done_callback(finish_model_run)
             return run
         except RequestKeyConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error

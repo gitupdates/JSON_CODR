@@ -250,6 +250,56 @@ class SkillLibraryService:
             skills=[skill],
         ))
 
+    def ensure_builtin_multi_model_jury(self) -> SkillPack:
+        existing = next((pack for pack in self.list() if pack.id == "multi-model-jury"), None)
+        if existing is not None:
+            return existing
+        instructions = (
+            "capabilities: Multi-model batch inference, active context, preserved original outputs\n\n"
+            "Use this skill when the user requests a jury, panel, or review of one topic by all available "
+            "local models. Direct the user request through Ask all available models so every installed model "
+            "receives the same proposal, numbered hard constraints, success evidence, and decision question. "
+            "Keep first-round evaluations independent: do not include another model's identity or answer. "
+            "Each evaluator must return exactly this format:\n"
+            "VOTE: <GO, NO GO, or ABSTAIN>\n"
+            "CONFIDENCE: <Low, Medium, or High with one-sentence basis>\n"
+            "RATIONALE: <two to four concise evidence-based points>\n"
+            "EVIDENCE: <provided facts, separated from inference and unknowns>\n"
+            "RISKS: <costs, failure modes, and edge cases>\n"
+            "BLOCKERS: <numbered hard-constraint violations, or None>\n"
+            "CONDITIONS: <tests or mitigations required for approval, or None>\n\n"
+            "Preserve each model's original response for audit. Reject reviews that contain no substantive "
+            "reasoning or invent unstated constraints. After all real responses finish, report the raw tally "
+            "and eligible count. Require at least three eligible non-abstaining reviews. Recommend GO only "
+            "with a two-thirds supermajority, NO GO only with more than half voting NO GO, and TABLED "
+            "otherwise. An unresolved evidence-backed hard-constraint blocker forces TABLED unless the vote "
+            "already produces NO GO. The recommendation is decision support only: the named human "
+            "decision-maker retains final authority. Do not execute changes as part of the jury review."
+        )
+        skill = SkillRecord(
+            id="review-with-multi-model-jury",
+            name="All-model jury",
+            description=(
+                "Convene all available local models as an independent blind jury and produce an auditable "
+                "advisory disposition."
+            ),
+            content=_wrap_skill_content(
+                "All-model jury",
+                "Collect independent local-model votes and deterministic advisory decision support",
+                instructions,
+            ),
+            original_content=instructions,
+            enabled=True,
+        )
+        return self.install(SkillPack(
+            id="multi-model-jury",
+            name="Open-source multi-model jury",
+            source_format="generic",
+            source_name="JSON_CODR built-in multi-model jury",
+            source_digest="json-codr-multi-model-jury-v1",
+            skills=[skill],
+        ))
+
     def _save(self, packs: list[SkillPack]) -> None:
         temporary = self.root / f".catalog-{uuid.uuid4().hex}.tmp"
         temporary.write_text(json.dumps([pack.model_dump(mode="json") for pack in packs], indent=2), encoding="utf-8")

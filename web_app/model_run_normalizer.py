@@ -57,6 +57,9 @@ def normalize_model_result(
     if not summary:
         summary = next((line.strip() for line in answer.splitlines() if line.strip()), "")[:240]
     references = list(result.references) if result is not None else []
+    normalized_warnings = list(warnings)
+    if result is not None and result.error == "structured_output_fallback":
+        normalized_warnings.append("Model returned plain text; JSON_CODR normalized the response.")
     return CanonicalModelResult(
         result_id=original.output_id,
         requested_model=original.model,
@@ -70,7 +73,7 @@ def normalize_model_result(
         answer=answer,
         reasoning=result.reasoning if result is not None else None,
         evidence=references,
-        warnings=list(warnings),
+        warnings=normalized_warnings,
         references=references,
         actions=list(result.actions) if result is not None else [],
     )

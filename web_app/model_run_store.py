@@ -44,6 +44,7 @@ class ModelRunStore:
             session_id=request.session_id,
             mode="batch" if len(stable_roster) != 1 else "single",
             profile=request.profile,
+            parallelism=request.parallelism,
             status="queued",
             prompt=request.prompt,
             roster=stable_roster,
@@ -190,7 +191,9 @@ class ModelRunStore:
     @classmethod
     def _aggregate_status(cls, results: list[CanonicalModelResult]) -> str:
         statuses = [item.status for item in results]
-        if not statuses or all(status == "queued" for status in statuses):
+        if not statuses:
+            return "failed"
+        if all(status == "queued" for status in statuses):
             return "queued"
         if any(status in {"queued", "running"} for status in statuses):
             return "running"

@@ -8,7 +8,7 @@
   let latestRun = null;
 
   function bindElements() {
-    for (const id of ["all-model-form", "all-model-prompt", "all-model-profile", "all-model-start", "all-model-cancel", "all-model-status", "all-model-filter", "all-model-results", "all-model-consensus", "all-model-export-json", "all-model-export-markdown", "all-model-export-csv"]) {
+    for (const id of ["all-model-form", "all-model-prompt", "all-model-profile", "all-model-parallelism", "all-model-start", "all-model-cancel", "all-model-status", "all-model-filter", "all-model-results", "all-model-consensus", "all-model-export-json", "all-model-export-markdown", "all-model-export-csv"]) {
       elements[id] = document.getElementById(id);
     }
   }
@@ -88,7 +88,7 @@
     clearTimeout(pollTimer);
     elements["all-model-start"].disabled = true;
     elements["all-model-results"].innerHTML = '<p class="meta">Creating durable run…</p>';
-    const response = await fetch("/api/model-runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: currentSession, prompt: elements["all-model-prompt"].value, profile: elements["all-model-profile"].value, request_key: crypto.randomUUID() }) });
+    const response = await fetch("/api/model-runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: currentSession, prompt: elements["all-model-prompt"].value, profile: elements["all-model-profile"].value, parallelism: Number(elements["all-model-parallelism"].value), request_key: crypto.randomUUID() }) });
     if (!response.ok) { elements["all-model-status"].textContent = `Run failed (${response.status})`; elements["all-model-start"].disabled = false; return; }
     const run = await response.json();
     activeRunId = run.run_id;

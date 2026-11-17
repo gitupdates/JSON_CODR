@@ -24,6 +24,13 @@ class InferenceRouter:
             })
         return result
 
+    async def supports_vision(self, model_id: str) -> bool:
+        try:
+            self.catalog.get(model_id)
+        except KeyError:
+            return await self.ollama.supports_vision(model_id)
+        return False
+
     async def probe(self, model_id: str):
         model = self.catalog.get(model_id)
         result = await self.registry.get(model.provider).probe(model)
@@ -34,11 +41,11 @@ class InferenceRouter:
             self.quarantined[model_id] = result.error or "Probe failed"
         return result
 
-    async def chat(self, model_id: str, prompt: str, images=None):
+    async def chat(self, model_id: str, prompt: str, images=None, allow_repair: bool = True):
         try:
             model = self.catalog.get(model_id)
         except KeyError:
-            return await self.ollama.chat(model_id, prompt, images=images)
+            return await self.ollama.chat(model_id, prompt, images=images, allow_repair=allow_repair)
         if model_id not in self.verified_models or model_id in self.quarantined:
             raise ValueError("Optimized model is not verified")
         try:
@@ -49,8 +56,15 @@ class InferenceRouter:
             fallback = model.ollama_fallback if model.ollama_fallback in installed else (installed[0] if installed else None)
             if not fallback:
                 raise
-            result = await self.ollama.chat(fallback, prompt, images=images)
+            result = await self.ollama.chat(fallback, prompt, images=images, allow_repair=allow_repair)
             result.summary = f"Fallback to {fallback} after {model.provider.value} failure: {result.summary}"
+            result.provider_events.insert(0, {
+                "type": "provider_fallback",
+                "requested_model": model_id,
+                "failed_provider": model.provider.value,
+                "error": f"{type(error).__name__}: {error}",
+                "effective_model": fallback,
+            })
             return result
 
     async def stream_chat(self, model_id: str, prompt: str, images=None, public_reasoning: bool = False):

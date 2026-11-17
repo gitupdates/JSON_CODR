@@ -148,6 +148,33 @@ class ModelRunNormalizerTests(unittest.TestCase):
         self.assertEqual(normalized.references, [reference])
         self.assertEqual(normalized.evidence, [reference])
 
+    def test_structured_output_fallback_is_disclosed_as_a_warning(self):
+        module = self.normalizer()
+        result = models.ChatResult(
+            model="qwen3.5:9b",
+            status="success",
+            summary="Plain response",
+            content="Plain response",
+            error="structured_output_fallback",
+        )
+        original = module.capture_original_output(
+            output_id="original-4",
+            model="qwen3.5:9b",
+            content="Plain response",
+            reasoning_entries=[],
+            provider_events=[],
+        )
+        timing = models.ModelTiming(
+            started_at=datetime(2026, 11, 17, tzinfo=timezone.utc),
+            completed_at=datetime(2026, 11, 17, tzinfo=timezone.utc),
+            duration_ms=0,
+        )
+
+        normalized = module.normalize_model_result(original, result, warnings=[], timing=timing)
+
+        self.assertEqual(normalized.status, "completed")
+        self.assertEqual(normalized.warnings, ["Model returned plain text; JSON_CODR normalized the response."])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -29,7 +29,7 @@ class FakeContext:
     def build_for_model(self, session, prompt, supports_vision):
         self.calls.append((prompt, supports_vision))
         suffix = "image-original" if supports_vision else "ocr-text"
-        return f"{prompt}\n{suffix}", ([Path("image.png")] if supports_vision else []), {
+        return f"ACTIVE SKILL:\n{suffix}\n\nUSER REQUEST:\n{prompt}", ([Path("image.png")] if supports_vision else []), {
             "image_sources": ["image.png"] if supports_vision else [],
             "text_sources": [] if supports_vision else ["image.png:ocr"],
             "omitted_modalities": [],
@@ -43,18 +43,19 @@ class FakeInference:
         self.maximum = 0
         self.calls = []
         self.fail = set()
+        self.outlier_once = set()
+        self.missing_labels_once = set()
+        self.inline_labels_once = set()
+        self.installed_models = ["model-b", "model-a"]
 
     async def list_models(self):
-        return [
-            {"name": "model-b", "installed": True},
-            {"name": "missing", "installed": False},
-            {"name": "model-a", "installed": True},
-        ]
+        return ([{"name": model, "installed": True} for model in self.installed_models]
+                + [{"name": "missing", "installed": False}])
 
     async def supports_vision(self, model):
         return model == "model-b"
 
-    async def chat(self, model, prompt, images=None):
+    async def chat(self, model, prompt, images=None, allow_repair=True):
         self.active += 1
         self.maximum = max(self.maximum, self.active)
         self.calls.append((model, prompt, list(images or [])))
@@ -63,6 +64,17 @@ class FakeInference:
         if model in self.fail:
             raise RuntimeError("provider failed")
         content = f"answer {model}"
+        if model in self.outlier_once:
+            self.outlier_once.remove(model)
+            content = ""
+        if model in self.missing_labels_once:
+            self.missing_labels_once.remove(model)
+            content = "A useful answer without the requested labels."
+        if model in self.inline_labels_once:
+            self.inline_labels_once.remove(model)
+            content = "PURPOSE: Adds values; RISKS: No validation; IMPROVEMENT: Validate inputs."
+        if "RESPONSE FORMAT CORRECTION" in prompt:
+            content = "PURPOSE: Adds two values.\nRISKS: Inputs are not validated.\nIMPROVEMENT: Validate numeric inputs."
         if prompt.startswith("CODE JURY CRITERIA:"):
             content = '{"score": 8, "critical_issues": [], "rationale": "Verified by the juror."}'
         return ChatResult(model=model, status="success", summary=f"summary {model}", content=content)
@@ -80,7 +92,7 @@ class ModelRunServiceTests(unittest.IsolatedAsyncioTestCase):
             self.inference,
             FakeWorkspace(),
             self.context,
-            concurrency=2,
+            concurrency=4,
         )
 
     async def asyncTearDown(self):
@@ -104,6 +116,20 @@ class ModelRunServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([call[0] for call in self.inference.calls], ["model-b", "model-a"])
         self.assertLessEqual(self.inference.maximum, 2)
 
+    async def test_requested_parallelism_is_persisted_and_limits_only_that_run(self):
+        self.inference.installed_models = ["model-a", "model-b", "model-c", "model-d"]
+        run = await self.service.create(ModelRunCreateRequest(
+            session_id="a" * 32,
+            prompt="Review concurrently",
+            parallelism=3,
+        ))
+
+        await self.service.run(run.run_id)
+
+        finished = self.service.get(run.run_id)
+        self.assertEqual(finished.parallelism, 3)
+        self.assertEqual(self.inference.maximum, 3)
+
     async def test_multimodal_input_is_adapted_per_model_and_prompt_is_shared(self):
         run = await self.create()
         await self.service.run(run.run_id)
@@ -115,6 +141,212 @@ class ModelRunServiceTests(unittest.IsolatedAsyncioTestCase):
         results = {item.requested_model: item for item in self.service.get(run.run_id).results}
         self.assertEqual(results["model-b"].input_manifest.image_sources, ["image.png"])
         self.assertEqual(results["model-a"].input_manifest.text_sources, ["image.png:ocr"])
+
+    async def test_each_model_receives_the_same_delimited_contract_with_its_exact_identifier(self):
+        run = await self.create()
+
+        await self.service.run(run.run_id)
+
+        calls = {model: prompt for model, prompt, _ in self.inference.calls}
+        for model, prompt in calls.items():
+            self.assertIn("CANONICAL MULTI-MODEL REQUEST", prompt)
+            self.assertIn(f"REQUESTED MODEL IDENTIFIER: {model}", prompt)
+            self.assertIn("USER TASK (authoritative):\nReview once", prompt)
+            self.assertIn("ACTIVE SKILLS AND REFERENCE CONTEXT:", prompt)
+            self.assertIn("ACTIVE SKILL:\n", prompt)
+            self.assertEqual(prompt.count("USER TASK (authoritative):\nReview once"), 1)
+            self.assertNotIn("USER REQUEST:\nReview once", prompt)
+            self.assertIn("JSON_CODR normalizes comparable fields", prompt)
+            self.assertNotIn("use the requested model identifier", prompt)
+
+    async def test_outlier_gets_one_targeted_format_repair_and_both_outputs_are_auditable(self):
+        self.inference.outlier_once.add("model-a")
+        run = await self.create()
+
+        await self.service.run(run.run_id)
+
+        calls = [call for call in self.inference.calls if call[0] == "model-a"]
+        self.assertEqual(len(calls), 2)
+        self.assertIn("EMPTY RESPONSE CORRECTION", calls[1][1])
+        result = next(item for item in self.service.get(run.run_id).results if item.requested_model == "model-a")
+        self.assertEqual(result.status, "completed")
+        original = self.service.store.get_original(run.run_id, result.result_id)
+        self.assertEqual(original.content, "answer model-a")
+        self.assertEqual(original.provider_events[0]["initial_content"], "")
+
+    async def test_missing_explicit_labels_gets_one_auditable_alignment_retry(self):
+        self.inference.missing_labels_once.add("model-a")
+        run = await self.service.create(ModelRunCreateRequest(
+            session_id="a" * 32,
+            prompt=(
+                "Review the function. Return exactly these labeled sections: "
+                "PURPOSE: <one sentence>; RISKS: <one sentence>; IMPROVEMENT: <one sentence>."
+            ),
+        ))
+
+        await self.service.run(run.run_id)
+
+        calls = [call for call in self.inference.calls if call[0] == "model-a"]
+        self.assertEqual(len(calls), 2)
+        self.assertIn("RESPONSE FORMAT CORRECTION", calls[1][1])
+        self.assertIn("MISSING LABELS: PURPOSE, RISKS, IMPROVEMENT", calls[1][1])
+        result = next(item for item in self.service.get(run.run_id).results if item.requested_model == "model-a")
+        self.assertEqual(result.status, "completed")
+        self.assertIn("PURPOSE:", result.answer)
+        original = self.service.store.get_original(run.run_id, result.result_id)
+        alignment = next(event for event in original.provider_events if event["type"] == "format_alignment")
+        self.assertEqual(alignment["initial_content"], "A useful answer without the requested labels.")
+        self.assertIn("PURPOSE:", alignment["repaired_content"])
+
+    async def test_inline_explicit_labels_are_compliant_without_retry(self):
+        self.inference.inline_labels_once.add("model-a")
+        run = await self.service.create(ModelRunCreateRequest(
+            session_id="a" * 32,
+            prompt=(
+                "Return exactly these labeled sections: PURPOSE: <text>; RISKS: <text>; "
+                "IMPROVEMENT: <text>."
+            ),
+        ))
+
+        await self.service.run(run.run_id)
+
+        calls = [call for call in self.inference.calls if call[0] == "model-a"]
+        self.assertEqual(len(calls), 1)
+
+    async def test_uppercase_colon_in_ordinary_content_is_not_a_format_contract(self):
+        self.inference.missing_labels_once.add("model-a")
+        run = await self.service.create(ModelRunCreateRequest(
+            session_id="a" * 32,
+            prompt="Review this log: ERROR: connection failed.",
+        ))
+
+        await self.service.run(run.run_id)
+
+        calls = [call for call in self.inference.calls if call[0] == "model-a"]
+        self.assertEqual(len(calls), 1)
+
+    async def test_source_after_explicit_contract_does_not_add_labels(self):
+        self.inference.inline_labels_once.add("model-a")
+        run = await self.service.create(ModelRunCreateRequest(
+            session_id="a" * 32,
+            prompt=(
+                "Return exactly these labeled sections: PURPOSE: <text>; RISKS: <text>; "
+                "IMPROVEMENT: <text>. Now review this log:\nERROR: connection failed."
+            ),
+        ))
+
+        await self.service.run(run.run_id)
+
+        calls = [call for call in self.inference.calls if call[0] == "model-a"]
+        self.assertEqual(len(calls), 1)
+
+    async def test_multiline_explicit_contract_is_detected_without_absorbing_log_labels(self):
+        self.inference.missing_labels_once.add("model-a")
+        run = await self.service.create(ModelRunCreateRequest(
+            session_id="a" * 32,
+            prompt=(
+                "Return exactly this format:\nPURPOSE: <one sentence>\nRISKS: <one sentence>\n"
+                "IMPROVEMENT: <one sentence>\nConsider this log:\nERROR: connection failed."
+            ),
+        ))
+
+        await self.service.run(run.run_id)
+
+        calls = [call for call in self.inference.calls if call[0] == "model-a"]
+        self.assertEqual(len(calls), 2)
+        self.assertIn("MISSING LABELS: PURPOSE, RISKS, IMPROVEMENT", calls[1][1])
+        self.assertNotIn("MISSING LABELS: PURPOSE, RISKS, IMPROVEMENT, ERROR", calls[1][1])
+
+    async def test_schema_repair_consumes_the_single_repair_budget(self):
+        original_chat = self.inference.chat
+
+        async def schema_repaired(model, prompt, images=None, allow_repair=True):
+            result = await original_chat(model, prompt, images=images, allow_repair=allow_repair)
+            if model == "model-a":
+                return result.model_copy(update={
+                    "content": "",
+                    "provider_events": [{"type": "schema_repair", "initial_raw": "broken", "repaired_raw": "fixed"}],
+                })
+            return result
+
+        self.inference.chat = schema_repaired
+        run = await self.create()
+
+        await self.service.run(run.run_id)
+
+        calls = [call for call in self.inference.calls if call[0] == "model-a"]
+        self.assertEqual(len(calls), 1)
+        result = next(item for item in self.service.get(run.run_id).results if item.requested_model == "model-a")
+        self.assertIn("after one repair attempt", result.warnings[0])
+
+    async def test_consumed_repair_budget_still_discloses_missing_required_labels(self):
+        original_chat = self.inference.chat
+
+        async def schema_repaired(model, prompt, images=None, allow_repair=True):
+            result = await original_chat(model, prompt, images=images, allow_repair=allow_repair)
+            if model == "model-a":
+                return result.model_copy(update={
+                    "content": "Useful but unlabeled answer.",
+                    "provider_events": [{"type": "schema_repair", "initial_raw": "broken", "repaired_raw": "fixed"}],
+                })
+            return result
+
+        self.inference.chat = schema_repaired
+        run = await self.service.create(ModelRunCreateRequest(
+            session_id="a" * 32,
+            prompt="Return exactly these labeled sections: PURPOSE: <text>; RISKS: <text>.",
+        ))
+
+        await self.service.run(run.run_id)
+
+        calls = [call for call in self.inference.calls if call[0] == "model-a"]
+        self.assertEqual(len(calls), 1)
+        result = next(item for item in self.service.get(run.run_id).results if item.requested_model == "model-a")
+        self.assertIn("Model omitted required response labels", result.warnings[0])
+
+    async def test_failed_format_repair_preserves_the_initial_provider_response(self):
+        self.inference.outlier_once.add("model-a")
+        original_chat = self.inference.chat
+
+        async def fail_repair(model, prompt, images=None, allow_repair=True):
+            if model == "model-a" and "EMPTY RESPONSE CORRECTION" in prompt:
+                raise RuntimeError("repair unavailable")
+            return await original_chat(model, prompt, images=images, allow_repair=allow_repair)
+
+        self.inference.chat = fail_repair
+        run = await self.create()
+
+        await self.service.run(run.run_id)
+
+        result = next(item for item in self.service.get(run.run_id).results if item.requested_model == "model-a")
+        original = self.service.store.get_original(run.run_id, result.result_id)
+        self.assertEqual(original.content, "")
+        self.assertEqual(original.provider_events[-1]["error"], "RuntimeError: repair unavailable")
+        self.assertIn("initial provider response was preserved", result.warnings[0])
+
+    async def test_code_jury_prompt_does_not_request_the_general_response_prefix(self):
+        run = await self.service.create(ModelRunCreateRequest(
+            session_id="a" * 32,
+            prompt="Review the change",
+            profile="code_jury",
+        ))
+
+        await self.service.run(run.run_id)
+
+        for _, prompt, _ in self.inference.calls:
+            self.assertIn("Return only JSON", prompt)
+            self.assertNotIn("Put the direct answer in content beginning exactly", prompt)
+
+    async def test_empty_installed_roster_is_terminal(self):
+        self.inference.installed_models = []
+
+        run = await self.service.create(ModelRunCreateRequest(
+            session_id="a" * 32,
+            prompt="Review once",
+        ))
+        await self.service.run(run.run_id)
+
+        self.assertEqual(self.service.get(run.run_id).status, "failed")
 
     async def test_partial_failure_is_persisted_without_losing_other_results(self):
         self.inference.fail.add("model-b")

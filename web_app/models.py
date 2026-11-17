@@ -143,6 +143,7 @@ class ChatResult(BaseModel):
     reasoning: Optional["ReasoningTrace"] = None
     references: List["ObjectReference"] = Field(default_factory=list)
     run_id: Optional[str] = Field(default=None, max_length=128)
+    provider_events: List[Dict[str, object]] = Field(default_factory=list, exclude=True)
 
 
 class GeneratedFile(BaseModel):
@@ -213,6 +214,7 @@ class ModelRunCreateRequest(CanonicalContract):
     prompt: str = Field(min_length=1, max_length=200_000)
     attachment_ids: List[str] = Field(default_factory=list, max_length=1000)
     profile: Literal["general", "code_jury"] = "general"
+    parallelism: int = Field(default=2, ge=1, le=4)
     public_reasoning: bool = False
     request_key: Optional[str] = Field(default=None, min_length=1, max_length=128)
 
@@ -289,6 +291,7 @@ class CanonicalModelRun(CanonicalContract):
     session_id: str = Field(min_length=1, max_length=128)
     mode: Literal["batch", "single"]
     profile: Literal["general", "code_jury"] = "general"
+    parallelism: int = Field(default=2, ge=1, le=4)
     status: Literal["queued", "running", "completed", "partial", "failed", "cancelled"]
     prompt: str = Field(min_length=1, max_length=200_000)
     roster: List[str] = Field(default_factory=list, max_length=1000)

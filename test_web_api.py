@@ -199,7 +199,8 @@ class WebApiTests(unittest.TestCase):
             headers={"X-JSON-CODR": "1"},
         )
         self.assertEqual(allowed.status_code, 200)
-        self.assertIn("Answered: Compare implementations", allowed.json()["content"])
+        self.assertIn("USER TASK (authoritative):\nCompare implementations", allowed.json()["content"])
+        self.assertEqual(allowed.json()["provider_events"], [])
         for format_name, content_type in (("json", "application/json"), ("markdown", "text/markdown"), ("csv", "text/csv")):
             exported = self.client.get(f"/api/model-runs/{run_id}/export", params={"format": format_name})
             self.assertEqual(exported.status_code, 200)
@@ -539,6 +540,8 @@ class WebApiTests(unittest.TestCase):
     def test_optimized_connector_catalog_and_install_plans_are_additive(self):
         client = TestClient(create_app(self.service, self.workspace, optimized=True))
 
+        self.assertEqual(type(client.app.state.model_runs.inference).__name__, "InferenceRouter")
+
         models = client.get("/api/models").json()["models"]
         self.assertTrue(any(item["name"].startswith("openvino/") and not item["installed"] for item in models))
         catalog = client.get("/api/inference/catalog")
@@ -632,9 +635,9 @@ class WebApiTests(unittest.TestCase):
     def test_health_reports_ollama_readiness(self):
         self.assertEqual(
             self.client.get("/api/health").json(),
-                {"status": "ready", "ollama": True, "app_version": "V1.0.18-alpha.4"},
+                {"status": "ready", "ollama": True, "app_version": "V1.0.18-alpha.6"},
         )
-        self.assertEqual(self.client.app.version, "V1.0.18-alpha.4")
+        self.assertEqual(self.client.app.version, "V1.0.18-alpha.6")
         self.service.available = False
         self.assertEqual(self.client.get("/api/health").json()["status"], "degraded")
 

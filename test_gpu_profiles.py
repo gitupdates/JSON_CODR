@@ -3,7 +3,7 @@ import json
 import unittest
 
 from web_app.models import GpuProfileSettings
-from web_app.ollama_service import OllamaService
+from web_app.ollama_service import ModelOutputError, OllamaService
 
 
 class Response:
@@ -64,6 +64,114 @@ class GpuProfileTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertIn("options", calls[0])
         self.assertNotIn("options", calls[1])
+
+    def test_plain_text_is_preserved_when_model_ignores_structured_schema(self):
+        class PlainResponse:
+            class Message:
+                content = "Qwen 3.5 received the shared request."
+
+            message = Message()
+
+        class PlainClient(ProfileClient):
+            async def chat(self, **kwargs):
+                self.calls.append(kwargs)
+                return PlainResponse()
+
+        service = OllamaService(client=PlainClient())
+
+        result = asyncio.run(service.chat("qwen2.5-coder:0.5b", "Hello"))
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.summary, "Qwen 3.5 received the shared request.")
+        self.assertEqual(result.content, "Qwen 3.5 received the shared request.")
+        self.assertEqual(result.error, "structured_output_fallback")
+        self.assertEqual(result.provider_events[0]["initial_raw"], "Qwen 3.5 received the shared request.")
+
+    def test_malformed_response_gets_one_schema_repair_attempt(self):
+        class RepairClient(ProfileClient):
+            async def chat(self, **kwargs):
+                self.calls.append(kwargs)
+                if len(self.calls) == 1:
+                    class PlainResponse:
+                        class Message:
+                            content = "I received the request."
+                        message = Message()
+                    return PlainResponse()
+                return Response()
+
+        client = RepairClient()
+        service = OllamaService(client=client)
+
+        result = asyncio.run(service.chat("qwen2.5-coder:0.5b", "Hello"))
+
+        self.assertEqual(result.status, "ready")
+        self.assertEqual(result.summary, "Ready")
+        self.assertIsNone(result.error)
+        self.assertEqual(len(client.calls), 2)
+        self.assertEqual(result.provider_events[0]["initial_raw"], "I received the request.")
+        self.assertIn('"content": "Done"', result.provider_events[0]["repaired_raw"])
+
+    def test_structured_response_with_empty_content_gets_one_repair_attempt(self):
+        class EmptyThenReadyClient(ProfileClient):
+            async def chat(self, **kwargs):
+                self.calls.append(kwargs)
+                if len(self.calls) == 1:
+                    class EmptyResponse:
+                        class Message:
+                            content = json.dumps({"status": "failed", "summary": "partial", "content": ""})
+                        message = Message()
+                    return EmptyResponse()
+                return Response()
+
+        client = EmptyThenReadyClient()
+        service = OllamaService(client=client)
+
+        result = asyncio.run(service.chat("qwen2.5-coder:0.5b", "Hello"))
+
+        self.assertEqual(result.content, "Done")
+        self.assertEqual(len(client.calls), 2)
+        self.assertIn("Reformat your previous answer", client.calls[1]["messages"][-1]["content"])
+
+    def test_empty_provider_message_gets_one_schema_retry(self):
+        class EmptyThenReadyClient(ProfileClient):
+            async def chat(self, **kwargs):
+                self.calls.append(kwargs)
+                if len(self.calls) == 1:
+                    class EmptyResponse:
+                        class Message:
+                            content = ""
+                        message = Message()
+                    return EmptyResponse()
+                return Response()
+
+        client = EmptyThenReadyClient()
+        service = OllamaService(client=client)
+
+        result = asyncio.run(service.chat("qwen2.5-coder:0.5b", "Hello"))
+
+        self.assertEqual(result.content, "Done")
+        self.assertEqual(len(client.calls), 2)
+        self.assertEqual(result.provider_events[0]["initial_raw"], "")
+
+    def test_two_empty_provider_messages_remain_a_hard_failure(self):
+        class EmptyClient(ProfileClient):
+            async def chat(self, **kwargs):
+                self.calls.append(kwargs)
+                class EmptyResponse:
+                    class Message:
+                        content = ""
+                    message = Message()
+                return EmptyResponse()
+
+        client = EmptyClient()
+        service = OllamaService(client=client)
+
+        with self.assertRaisesRegex(ModelOutputError, "Malformed structured output") as caught:
+            asyncio.run(service.chat("qwen2.5-coder:0.5b", "Hello"))
+        self.assertEqual(len(client.calls), 2)
+        self.assertEqual(caught.exception.provider_events[0]["type"], "schema_repair")
+        self.assertEqual(caught.exception.provider_events[0]["initial_raw"], "")
+        self.assertEqual(caught.exception.provider_events[0]["repaired_raw"], "")
 
     def test_archive_conversion_uses_the_selected_profile(self):
         class ConversionClient(ProfileClient):
