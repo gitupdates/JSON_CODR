@@ -2430,3 +2430,43 @@ loadApplication().then(() => queueSettingsLoad()).catch((error) => showError(err
 loadHardwareStatus().catch((error) => showError(error.message));
 loadAttachments().catch((error) => showError(error.message));
 loadSkillsets().catch((error) => showError(error.message));
+
+let pendingComponentPlan = null;
+async function loadComponents() {
+  const container = document.querySelector("#component-list");
+  if (!container) return;
+  const components = await coreClient.listComponents("");
+  container.replaceChildren();
+  if (!components.length) {
+    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "No verified components loaded."; container.append(empty); return;
+  }
+  components.forEach((component) => {
+    const row = document.createElement("article"); row.className = "dependency-item";
+    const title = document.createElement("strong"); title.textContent = component.component_id;
+    const detail = document.createElement("p"); detail.className = "meta"; detail.textContent = `${component.runtime_kind} · generation ${component.generation} · verified brokered capability`;
+    row.append(title, detail); container.append(row);
+  });
+}
+const componentPlanButton = document.querySelector("#component-plan");
+const componentInstallButton = document.querySelector("#component-install");
+componentPlanButton?.addEventListener("click", async () => {
+  const source = document.querySelector("#component-source").value.trim();
+  const scope = document.querySelector("#component-scope").value;
+  if (!source) return showError("Enter a component source first");
+  pendingComponentPlan = await coreClient.planComponent({
+    source_kind: document.querySelector("#component-source-kind").value, source, scope,
+    project_id: scope === "project" ? `project-${sessionId}` : null, activation: true,
+  });
+  const details = document.querySelector("#component-plan-details"); details.hidden = false;
+  details.textContent = JSON.stringify({ component_id: pendingComponentPlan.component_id, runtime: pendingComponentPlan.runtime_kind, executable: pendingComponentPlan.executable, entry_points: pendingComponentPlan.entry_points, effects: pendingComponentPlan.effects }, null, 2);
+  componentInstallButton.disabled = false;
+});
+componentInstallButton?.addEventListener("click", async () => {
+  if (!pendingComponentPlan) return;
+  componentInstallButton.disabled = true;
+  const result = await coreClient.installComponent(pendingComponentPlan.plan_id);
+  document.querySelector("#component-plan-details").textContent = JSON.stringify(result, null, 2);
+  pendingComponentPlan = null;
+  await loadComponents();
+});
+loadComponents().catch((error) => showError(error.message));

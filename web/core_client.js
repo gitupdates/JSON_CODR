@@ -74,6 +74,18 @@
       });
     }
 
+    async planComponent(request) {
+      return this.request("/api/components/plan", { method: "POST", body: request });
+    }
+
+    async installComponent(planId) {
+      return this.request(`/api/components/install/${encodeURIComponent(planId)}`, { method: "POST" });
+    }
+
+    async listComponents(projectId = "") {
+      return this.request(`/api/components?project_id=${encodeURIComponent(projectId)}`);
+    }
+
     observe(taskId, afterSequence = -1) {
       if (!this.WebSocket) return;
       if (!this.socket || this.socket.readyState > 1) {
