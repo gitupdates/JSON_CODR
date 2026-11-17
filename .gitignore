@@ -10,3 +10,6 @@ relocation_journal.json
 model_validation_results.json
 models/
 .aider*
+.playwright-cli/
+.tmp-*/
+output/
