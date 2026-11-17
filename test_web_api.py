@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sqlite3
+import sys
 import unittest
 import tempfile
 import io
@@ -175,6 +176,24 @@ class FakeIntegrityBenchmark:
 
 
 class WebApiTests(unittest.TestCase):
+    def test_manual_mcp_registration_is_exposed_through_core_capabilities(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = WorkspaceService(Path(directory))
+            (workspace.data_root / "mcp_servers.json").write_text(json.dumps({
+                "mcpServers": {
+                    "rea": {
+                        "transport": "stdio",
+                        "command": sys.executable,
+                        "args": ["D:/tools/rea.mjs", "mcp"],
+                        "allowedTools": ["*"],
+                    }
+                }
+            }), encoding="utf-8")
+            with TestClient(create_app(FakeService(), workspace)) as client:
+                capabilities = client.get("/api/capabilities").json()
+
+            self.assertIn({"capability_id": "mcp.rea"}, capabilities)
+
     def test_local_analysis_tools_are_loaded_for_sandbox_sessions(self):
         tools = self.workspace.data_root / "tools"
         ghidra = tools / "ghidra_12.1.4_PUBLIC"
@@ -554,9 +573,9 @@ class WebApiTests(unittest.TestCase):
     def test_health_reports_ollama_readiness(self):
         self.assertEqual(
             self.client.get("/api/health").json(),
-            {"status": "ready", "ollama": True, "app_version": "V1.0.18-alpha.1"},
+            {"status": "ready", "ollama": True, "app_version": "V1.0.18-alpha.2"},
         )
-        self.assertEqual(self.client.app.version, "V1.0.18-alpha.1")
+        self.assertEqual(self.client.app.version, "V1.0.18-alpha.2")
         self.service.available = False
         self.assertEqual(self.client.get("/api/health").json()["status"], "degraded")
 

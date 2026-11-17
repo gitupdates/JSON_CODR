@@ -128,6 +128,23 @@ class ExtendedCapabilityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(record.state, "verified")
             self.assertEqual(probes, [manifest.component_id, manifest.component_id])
 
+    async def test_mcp_adapter_accepts_explicit_wildcard_registration(self):
+        class McpBackend:
+            async def discover(self):
+                return {"tools": [{"name": "inspect"}]}
+
+            async def invoke(self, name, arguments):
+                return {"tool": name, "evidence": arguments["evidence"]}
+
+        events = await collect(McpAdapter(McpBackend(), allowed_tools={"*"}), CapabilityCall(
+            capability_id="mcp.rea",
+            operation="invoke",
+            project_root=str(Path.cwd()),
+            arguments={"tool": "inspect", "arguments": {"evidence": "real"}},
+        ))
+
+        self.assertEqual(events[0].payload, {"tool": "inspect", "evidence": "real"})
+
 
 if __name__ == "__main__":
     unittest.main()

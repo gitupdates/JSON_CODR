@@ -17,7 +17,7 @@ class McpAdapter:
         else:
             tool = call.arguments.get("tool")
             arguments = call.arguments.get("arguments", {})
-            if not isinstance(tool, str) or tool not in self._allowed_tools:
+            if not isinstance(tool, str) or ("*" not in self._allowed_tools and tool not in self._allowed_tools):
                 raise PermissionError("MCP tool is not approved")
             if not isinstance(arguments, Mapping):
                 raise ValueError("MCP tool arguments must be an object")

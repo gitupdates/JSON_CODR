@@ -38,6 +38,7 @@ from web_app.core.assimilation import AssimilationService, FunctionalProbeResult
 from web_app.core.contracts import TaskCommand, TaskStatus
 from web_app.core.git_adapter import GitExecutionAdapter
 from web_app.core.inference_adapter import InferenceAdapter
+from web_app.core.mcp_stdio_backend import build_mcp_adapters
 from web_app.core.policy import PolicyService
 from web_app.core.project_adapter import ProjectAdapter
 from web_app.core.service import CoreService
@@ -155,6 +156,7 @@ def create_app(
     core_runtime = None
     core_artifacts = None
     core_capabilities = ()
+    core_mcp_backends = []
 
     async def probe_component(manifest, staged):
         if manifest.kind != "skill-pack":
@@ -228,6 +230,12 @@ def create_app(
                 "terminal.close": core_terminal_adapter,
                 "component.install": component_adapter,
             }
+            mcp_adapters, mcp_backends = build_mcp_adapters(
+                workspace.data_root / "mcp_servers.json",
+                rea_provider_root=workspace.data_root / "providers" / "rea",
+            )
+            adapters.update(mcp_adapters)
+            core_mcp_backends.extend(mcp_backends)
             core_service = CoreService(
                 core_tasks,
                 core_policy,
@@ -249,7 +257,8 @@ def create_app(
             application.state.core_artifact_store = core_artifacts
         return core_artifacts
 
-    def close_core_runtime() -> None:
+    async def close_core_runtime() -> None:
+        await asyncio.gather(*(backend.close() for backend in core_mcp_backends), return_exceptions=True)
         if core_runtime is not None:
             _, core_tasks, core_policy = core_runtime
             if core_artifacts is not None:
