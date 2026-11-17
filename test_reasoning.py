@@ -1,5 +1,6 @@
 import unittest
 
+from web_app.ollama_service import OllamaService
 from web_app.reasoning import ReasoningNormalizer
 
 
@@ -41,6 +42,48 @@ class ReasoningNormalizerTests(unittest.TestCase):
 
         self.assertEqual(deltas[0].channel, "reasoning")
         self.assertEqual(deltas[0].provenance, "public_rationale")
+
+
+class OllamaPublicReasoningTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stream_requests_native_thinking_when_public_reasoning_is_enabled(self):
+        class FakeStream:
+            def __init__(self):
+                self.chunks = iter([
+                    {"message": {"thinking": "Verify inputs.", "content": ""}},
+                    {"message": {"thinking": "", "content": "The answer."}},
+                ])
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self.chunks)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+
+            async def list(self):
+                return {"models": [{"model": "qwen3:4b"}]}
+
+            async def chat(self, **request):
+                self.calls.append(request)
+                return FakeStream()
+
+        client = FakeClient()
+        service = OllamaService(client=client)
+
+        events = [event async for event in service.stream_chat(
+            "qwen3:4b", "Review", public_reasoning=True
+        )]
+
+        self.assertIs(client.calls[0]["think"], True)
+        self.assertNotIn("<think>", client.calls[0]["messages"][0]["content"])
+        self.assertEqual(events[0]["type"], "reasoning")
+        self.assertEqual(events[-1]["result"].reasoning.entries[0].text, "Verify inputs.")
 
 
 if __name__ == "__main__":

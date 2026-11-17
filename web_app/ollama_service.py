@@ -42,11 +42,17 @@ class OllamaService:
             request["options"] = options
         try:
             return await asyncio.wait_for(self.client.chat(**request), timeout=self.timeout_seconds)
-        except Exception:
-            if not options:
-                raise
-            request.pop("options", None)
-            return await asyncio.wait_for(self.client.chat(**request), timeout=self.timeout_seconds)
+        except Exception as initial_error:
+            if options:
+                request.pop("options", None)
+                try:
+                    return await asyncio.wait_for(self.client.chat(**request), timeout=self.timeout_seconds)
+                except Exception:
+                    pass
+            if request.get("think") is True:
+                request.pop("think", None)
+                return await asyncio.wait_for(self.client.chat(**request), timeout=self.timeout_seconds)
+            raise initial_error
 
     async def health(self) -> Dict[str, bool]:
         try:
@@ -219,12 +225,15 @@ class OllamaService:
             messages.append({
                 "role": "system",
                 "content": (
-                    "Provide an auditable public rationale inside <think> and </think> tags before the final answer. "
-                    "State assumptions, evidence, uncertainty, and verification. Do not claim tools or files were used unless supplied."
+                    "Use the runtime's separate reasoning channel for a concise, auditable public rationale, "
+                    "then provide a clean final answer. State assumptions, evidence, uncertainty, and verification. "
+                    "Do not claim tools or files were used unless they were supplied."
                 ),
             })
         messages.append({"role": "user", "content": prompt, "images": images or None})
         request = {"model": resolved, "messages": messages, "stream": True}
+        if public_reasoning:
+            request["think"] = True
         normalizer = ReasoningNormalizer()
         content_parts: list[str] = []
         reasoning_entries: list[ReasoningEntry] = []

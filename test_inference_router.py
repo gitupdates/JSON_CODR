@@ -18,6 +18,14 @@ class FakeOllama:
         self.calls.append(model)
         return ChatResult(model=model, status="ok", summary="ollama", content="done")
 
+    async def stream_chat(self, model, prompt, images=None, public_reasoning=False):
+        self.calls.append((model, public_reasoning))
+        yield {"type": "content", "text": "live"}
+        yield {
+            "type": "completed",
+            "result": ChatResult(model=model, status="ok", summary="live", content="live"),
+        }
+
 
 class FakeProvider:
     def __init__(self, error=None):
@@ -40,6 +48,21 @@ class FakeRegistry:
 
 
 class InferenceRouterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unqualified_models_stream_directly_from_ollama(self):
+        ollama = FakeOllama()
+        router = InferenceRouter(ollama, OptimizedModelCatalog(), FakeRegistry(FakeProvider()), verified_models=set())
+
+        events = [
+            event async for event in router.stream_chat(
+                "qwen2.5-coder:0.5b",
+                "hello",
+                public_reasoning=True,
+            )
+        ]
+
+        self.assertEqual([event["type"] for event in events], ["content", "completed"])
+        self.assertEqual(ollama.calls, [("qwen2.5-coder:0.5b", True)])
+
     async def test_unqualified_models_use_only_ollama(self):
         ollama = FakeOllama()
         provider = FakeProvider()

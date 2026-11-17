@@ -52,3 +52,49 @@ class InferenceRouter:
             result = await self.ollama.chat(fallback, prompt, images=images)
             result.summary = f"Fallback to {fallback} after {model.provider.value} failure: {result.summary}"
             return result
+
+    async def stream_chat(self, model_id: str, prompt: str, images=None, public_reasoning: bool = False):
+        try:
+            model = self.catalog.get(model_id)
+        except KeyError:
+            async for event in self.ollama.stream_chat(
+                model_id,
+                prompt,
+                images=images,
+                public_reasoning=public_reasoning,
+            ):
+                yield event
+            return
+        if model_id not in self.verified_models or model_id in self.quarantined:
+            raise ValueError("Optimized model is not verified")
+        provider = self.registry.get(model.provider)
+        try:
+            stream_chat = getattr(provider, "stream_chat", None)
+            if callable(stream_chat):
+                async for event in stream_chat(
+                    model,
+                    prompt,
+                    images=images,
+                    public_reasoning=public_reasoning,
+                ):
+                    yield event
+                return
+            result = await provider.chat(model, prompt, images=images)
+            yield {"type": "completed", "result": result}
+        except Exception as error:
+            self.quarantined[model_id] = str(error)
+            installed = [item["name"] for item in await self.ollama.list_models() if item.get("installed")]
+            fallback = model.ollama_fallback if model.ollama_fallback in installed else (installed[0] if installed else None)
+            if not fallback:
+                raise
+            async for event in self.ollama.stream_chat(
+                fallback,
+                prompt,
+                images=images,
+                public_reasoning=public_reasoning,
+            ):
+                if event.get("type") == "completed":
+                    result = event.get("result")
+                    if result is not None:
+                        result.summary = f"Fallback to {fallback} after {model.provider.value} failure: {result.summary}"
+                yield event
