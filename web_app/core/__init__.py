@@ -30,12 +30,16 @@ from web_app.core.contracts import (
 )
 from web_app.core.context_service import CompactionRecord, ContextBundle, ContextService, ContextSource
 from web_app.core.credentials import CredentialBroker
+from web_app.core.delegation import DelegationService
+from web_app.core.hooks import HookRegistry
 from web_app.core.inference_adapter import InferenceAdapter
 from web_app.core.language_adapter import LanguageAdapter
 from web_app.core.memory import MemoryRecord, MemoryStore
 from web_app.core.mcp_adapter import McpAdapter
 from web_app.core.provider_manager import ProviderManager
 from web_app.core.provider_protocol import ProviderEvent, ProviderLock, ProviderManifest, ProviderProcess, ProviderRequest
+from web_app.core.resources import ResourceBudget, ResourceDecision, ResourceSample
+from web_app.core.scheduler import ApschedulerTriggerBackend, ScheduleService
 from web_app.core.policy import PolicyDecision, PolicyEffect, PolicyService
 from web_app.core.project_adapter import CheckpointRecord, ProjectAdapter, ProjectSnapshot
 from web_app.core.project_watch import ExternalChangeEvent, ProjectWatcher
@@ -59,8 +63,10 @@ __all__ = [
     "ContextSource",
     "CoreService",
     "CredentialBroker",
+    "DelegationService",
     "AgentRuntime",
     "AnalysisAdapter",
+    "ApschedulerTriggerBackend",
     "AssimilationService",
     "BrowserAdapter",
     "ComponentManifest",
@@ -70,6 +76,7 @@ __all__ = [
     "ExecutionRoute",
     "ExecutionRouter",
     "FunctionalProbeResult",
+    "HookRegistry",
     "ExternalChangeEvent",
     "ManifestAuthority",
     "MemoryRecord",
@@ -93,7 +100,11 @@ __all__ = [
     "ProvenanceRecord",
     "QuarantineRecord",
     "RuntimeIdentity",
+    "ResourceBudget",
+    "ResourceDecision",
+    "ResourceSample",
     "RouteConsentRequired",
+    "ScheduleService",
     "TaskCommand",
     "TaskEvent",
     "TaskEventDraft",

@@ -358,27 +358,27 @@ git commit -m "feat(core): add verified extended capabilities"
 - Produces: `ScheduleService.create()`, `enable()`, `disable()`, `trigger()`, and `history()`.
 - Produces: `HookRegistry.subscribe(event_type, capability_call)` and `ResourceBudget.evaluate(sample)`.
 
-- [ ] **Step 1: Write failing automation tests**
+- [x] **Step 1: Write failing automation tests**
 
 Test autonomous delegation within configured local concurrency/VRAM limits, child context/tool scoping, editing children receiving separate worktrees, deterministic result attribution, no double execution, resource-limit permission requests, inspection-only schedules under default policy, explicit grants for scheduled writes/commits/pushes, missed-run recovery, hook recursion prevention, and all automation submitting through `CoreService`.
 
-- [ ] **Step 2: Run focused tests and verify failure**
+- [x] **Step 2: Run focused tests and verify failure**
 
 Run: `C:\Python315\python.exe -m unittest test_core_automation -v`
 
 Expected: FAIL because automation modules do not exist.
 
-- [ ] **Step 3: Implement bounded delegation, APScheduler-backed triggers, hooks, and local resource accounting**
+- [x] **Step 3: Implement bounded delegation, APScheduler-backed triggers, hooks, and local resource accounting**
 
 Schedulers and hooks submit commands; they never execute capabilities themselves. External agent frameworks remain optional provider implementations.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run: `C:\Python315\python.exe -m unittest test_core_automation test_core_service test_core_project_runtime -v`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add web_app/core test_core_automation.py
