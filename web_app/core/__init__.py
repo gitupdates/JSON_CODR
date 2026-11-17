@@ -36,6 +36,7 @@ from web_app.core.hooks import HookRegistry
 from web_app.core.inference_adapter import InferenceAdapter
 from web_app.core.language_adapter import LanguageAdapter
 from web_app.core.memory import MemoryRecord, MemoryStore
+from web_app.core.migration import MigrationInspection, MigrationReport, MigrationService
 from web_app.core.mcp_adapter import McpAdapter
 from web_app.core.provider_manager import ProviderManager
 from web_app.core.provider_protocol import ProviderEvent, ProviderLock, ProviderManifest, ProviderProcess, ProviderRequest
@@ -83,6 +84,9 @@ __all__ = [
     "ManifestAuthority",
     "MemoryRecord",
     "MemoryStore",
+    "MigrationInspection",
+    "MigrationReport",
+    "MigrationService",
     "McpAdapter",
     "ModelScope",
     "ProbeObservation",

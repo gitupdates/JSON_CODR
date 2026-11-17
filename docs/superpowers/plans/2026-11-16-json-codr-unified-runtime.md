@@ -490,31 +490,31 @@ git commit -m "refactor(web): present one JSON_CODR agent workflow"
 - Produces: `MigrationService.inspect(source)`, `migrate(source, destination)`, `verify(report)`, and `rollback(report)`.
 - Produces an architecture test that rejects direct mutation and execution outside registered adapters.
 
-- [ ] **Step 1: Write failing copy-on-write migration tests**
+- [x] **Step 1: Write failing copy-on-write migration tests**
 
 Test preservation of projects, JSON_CODR skills, general settings, compatible permissions, benchmarks, imported resources, and useful conversations; secrets are excluded, Continue/Aider runtime configuration is archived but not activated, malformed records are reported, the beta source remains byte-for-byte unchanged, and migration can be rolled back.
 
-- [ ] **Step 2: Write the failing architecture boundary test**
+- [x] **Step 2: Write the failing architecture boundary test**
 
 Reject direct subprocess, filesystem mutation, Git mutation, installer, inference, REA, and Ghidra calls from UI, transport, scheduler, hook, and agent modules. Permit them only in registered adapters and provider-process entry points.
 
-- [ ] **Step 3: Run focused tests and record failures**
+- [x] **Step 3: Run focused tests and record failures**
 
 Run: `C:\Python315\python.exe -m unittest test_core_migration test_core_architecture -v`
 
 Expected: FAIL with missing migration and remaining beta direct paths.
 
-- [ ] **Step 4: Implement copy-on-write migration and remove every reported direct path**
+- [x] **Step 4: Implement copy-on-write migration and remove every reported direct path**
 
 Do not add architecture-test exemptions for product behavior. Move behavior behind a capability or remove obsolete beta code.
 
-- [ ] **Step 5: Run migration, architecture, and affected beta parity tests**
+- [x] **Step 5: Run migration, architecture, and affected beta parity tests**
 
 Run: `C:\Python315\python.exe -m unittest test_core_migration test_core_architecture test_settings test_skills test_localperf test_coding_agents -v`
 
 Expected: PASS; coding-agent compatibility data may migrate, but no Continue/Aider runtime dependency remains.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add web_app test_core_migration.py test_core_architecture.py
