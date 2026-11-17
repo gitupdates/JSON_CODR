@@ -201,6 +201,104 @@ class ObjectReference(BaseModel):
     available: bool = True
 
 
+class CanonicalContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
+
+
+class ModelRunCreateRequest(CanonicalContract):
+    session_id: str = Field(min_length=1, max_length=128)
+    prompt: str = Field(min_length=1, max_length=200_000)
+    attachment_ids: List[str] = Field(default_factory=list, max_length=1000)
+    profile: Literal["general", "code_jury"] = "general"
+    public_reasoning: bool = False
+    request_key: Optional[str] = Field(default=None, min_length=1, max_length=128)
+
+
+class ModelTiming(CanonicalContract):
+    started_at: datetime
+    completed_at: Optional[datetime] = None
+    duration_ms: int = Field(ge=0)
+
+
+class ModelInputManifest(CanonicalContract):
+    prompt_included: bool = True
+    attachment_ids: List[str] = Field(default_factory=list, max_length=1000)
+    text_sources: List[str] = Field(default_factory=list, max_length=1000)
+    image_sources: List[str] = Field(default_factory=list, max_length=1000)
+    omitted_modalities: List[str] = Field(default_factory=list, max_length=100)
+    adaptations: List[str] = Field(default_factory=list, max_length=100)
+
+
+class OriginalModelOutput(CanonicalContract):
+    output_id: str = Field(min_length=1, max_length=128)
+    model: str = Field(min_length=1, max_length=500)
+    content: str = Field(max_length=10_000_000)
+    reasoning_entries: List[ReasoningEntry] = Field(default_factory=list, max_length=10_000)
+    provider_events: List[Dict[str, object]] = Field(default_factory=list, max_length=100_000)
+    digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    captured_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class CanonicalModelResult(CanonicalContract):
+    result_id: str = Field(min_length=1, max_length=128)
+    requested_model: str = Field(min_length=1, max_length=500)
+    effective_model: str = Field(min_length=1, max_length=500)
+    status: Literal["queued", "running", "completed", "timeout", "failed", "cancelled", "unsupported"]
+    timing: ModelTiming
+    input_manifest: ModelInputManifest = Field(default_factory=ModelInputManifest)
+    original_output_id: str = Field(min_length=1, max_length=128)
+    original_output_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    summary: str = Field(default="", max_length=1000)
+    answer: str = Field(default="", max_length=10_000_000)
+    reasoning: Optional[ReasoningTrace] = None
+    evidence: List[ObjectReference] = Field(default_factory=list, max_length=1000)
+    warnings: List[str] = Field(default_factory=list, max_length=1000)
+    references: List[ObjectReference] = Field(default_factory=list, max_length=1000)
+    actions: List[ActionSuggestion] = Field(default_factory=list, max_length=1000)
+    normalizer_version: Literal[1] = 1
+    error_code: Optional[str] = Field(default=None, max_length=128)
+    error_message: Optional[str] = Field(default=None, max_length=2000)
+
+
+class JurorVerdict(CanonicalContract):
+    model: str = Field(min_length=1, max_length=500)
+    score: int = Field(ge=1, le=10)
+    critical_issues: List[str] = Field(default_factory=list, max_length=1000)
+    rationale: str = Field(min_length=1, max_length=100_000)
+    original_output_id: str = Field(min_length=1, max_length=128)
+
+
+class ConsensusVerdict(CanonicalContract):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    consensus_score: float = Field(ge=1.0, le=10.0)
+    verdict: Literal["PASS", "CONDITIONAL_PASS", "FAIL"]
+    agreed_issues: List[str] = Field(default_factory=list, max_length=1000)
+    dissenting_notes: List[str] = Field(default_factory=list, max_length=1000)
+    synthesis_rationale: str = Field(min_length=1, max_length=100_000)
+    synthesizer_model: str = Field(min_length=1, max_length=500)
+    included_jurors: tuple[str, ...] = ()
+    excluded_jurors: tuple[str, ...] = ()
+
+
+class CanonicalModelRun(CanonicalContract):
+    run_id: str = Field(min_length=1, max_length=128)
+    session_id: str = Field(min_length=1, max_length=128)
+    mode: Literal["batch", "single"]
+    profile: Literal["general", "code_jury"] = "general"
+    status: Literal["queued", "running", "completed", "partial", "failed", "cancelled"]
+    prompt: str = Field(min_length=1, max_length=200_000)
+    roster: List[str] = Field(default_factory=list, max_length=1000)
+    unavailable_models: List[str] = Field(default_factory=list, max_length=1000)
+    results: List[CanonicalModelResult] = Field(default_factory=list, max_length=1000)
+    consensus: Optional[ConsensusVerdict] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+
 class MessageArtifact(BaseModel):
     id: str = Field(min_length=1, max_length=256)
     filename: str = Field(min_length=1, max_length=500)
