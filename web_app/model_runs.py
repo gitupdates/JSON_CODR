@@ -10,12 +10,15 @@ from typing import Any
 
 from .model_run_normalizer import capture_original_output, normalize_model_result
 from .model_run_store import ModelRunStore
+from .model_jury import JuryValidationError, build_consensus, validate_juror_result
 from .models import CanonicalModelResult, CanonicalModelRun, ModelInputManifest, ModelRunCreateRequest, ModelTiming
 
 
 JURY_CRITERIA = (
     "Score the submitted code from 1 to 10. Identify concrete correctness, security, maintainability, "
-    "and testability issues. Return evidence from the supplied content and do not assume unavailable tools."
+    "and testability issues. Return evidence from the supplied content and do not assume unavailable tools. "
+    "Return only JSON matching: "
+    '{"score": 1, "critical_issues": ["concrete issue"], "rationale": "evidence-based explanation"}.'
 )
 
 
@@ -48,6 +51,24 @@ class ModelRunService:
     async def run(self, run_id: str) -> None:
         run = self.store.get(run_id)
         await asyncio.gather(*(self._run_model(run, result) for result in run.results))
+        if run.profile == "code_jury":
+            self._finalize_jury(run_id)
+
+    def _finalize_jury(self, run_id: str) -> None:
+        run = self.store.get(run_id)
+        verdicts = []
+        failures = []
+        for result in run.results:
+            if result.status != "completed":
+                failures.append(f"{result.requested_model}: {result.error_message or result.status}")
+                continue
+            try:
+                verdicts.append(validate_juror_result(result))
+            except JuryValidationError as error:
+                failures.append(f"{result.requested_model}: invalid juror output ({error})")
+        if verdicts:
+            consensus = build_consensus(verdicts, failures, ())
+            self.store.update_run(run.model_copy(update={"consensus": consensus}))
 
     async def _run_model(self, run: CanonicalModelRun, queued: CanonicalModelResult) -> None:
         async with self.semaphore:

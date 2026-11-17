@@ -48,6 +48,9 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("pollInFlight", runtime)
         self.assertIn("data-result-id", runtime)
         self.assertIn("terminalStatuses", runtime)
+        self.assertIn('"X-JSON-CODR": "1"', runtime)
+        self.assertIn("preventDefault", runtime)
+        self.assertIn("json_codr_active_model_run", runtime)
 
     def test_unified_runtime_replaces_executor_specific_profiles(self):
         html = Path("web/index.html").read_text(encoding="utf-8")

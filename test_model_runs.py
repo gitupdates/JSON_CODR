@@ -62,7 +62,10 @@ class FakeInference:
         self.active -= 1
         if model in self.fail:
             raise RuntimeError("provider failed")
-        return ChatResult(model=model, status="success", summary=f"summary {model}", content=f"answer {model}")
+        content = f"answer {model}"
+        if prompt.startswith("CODE JURY CRITERIA:"):
+            content = '{"score": 8, "critical_issues": [], "rationale": "Verified by the juror."}'
+        return ChatResult(model=model, status="success", summary=f"summary {model}", content=content)
 
 
 class ModelRunServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -129,6 +132,17 @@ class ModelRunServiceTests(unittest.IsolatedAsyncioTestCase):
         prompts = [prompt for _, prompt, _ in self.inference.calls]
         criteria = [prompt.split("CODE JURY CRITERIA:\n", 1)[1].split("\n\n", 1)[0] for prompt in prompts]
         self.assertEqual(len(set(criteria)), 1)
+
+    async def test_code_jury_persists_validated_consensus_after_jurors_finish(self):
+        run = await self.create("code_jury")
+
+        await self.service.run(run.run_id)
+
+        finished = self.service.get(run.run_id)
+        self.assertEqual(finished.consensus.verdict, "PASS")
+        self.assertEqual(finished.consensus.consensus_score, 8)
+        self.assertEqual(finished.consensus.included_jurors, ("model-b", "model-a"))
+        self.assertEqual(finished.consensus.synthesizer_model, "unavailable")
 
     async def test_recovery_marks_abandoned_work_failed(self):
         run = await self.create()

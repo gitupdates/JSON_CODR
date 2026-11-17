@@ -1,5 +1,6 @@
 (() => {
   const terminalStatuses = new Set(["completed", "partial", "failed", "cancelled"]);
+  const activeRunStorageKey = "json_codr_active_model_run";
   const elements = {};
   let activeRunId = null;
   let pollInFlight = false;
@@ -20,6 +21,18 @@
     }
   }
 
+  async function openOriginal(event) {
+    event.preventDefault();
+    const response = await fetch(event.currentTarget.href, { headers: { "X-JSON-CODR": "1" } });
+    if (!response.ok) { elements["all-model-status"].textContent = `Original output failed (${response.status})`; return; }
+    const blob = await response.blob();
+    const download = document.createElement("a");
+    download.href = URL.createObjectURL(blob);
+    download.download = `${event.currentTarget.dataset.model || "model"}-original.json`;
+    download.click();
+    URL.revokeObjectURL(download.href);
+  }
+
   function renderResult(result) {
     let row = elements["all-model-results"].querySelector(`[data-result-id="${CSS.escape(result.result_id)}"]`);
     if (!row) {
@@ -27,6 +40,7 @@
       row.className = "all-model-result";
       row.dataset.resultId = result.result_id;
       row.innerHTML = '<div class="all-model-result-head"><strong></strong><span class="meta"></span></div><h3></h3><pre></pre><a class="original-output-link">View preserved original</a>';
+      row.querySelector(".original-output-link").addEventListener("click", openOriginal);
       elements["all-model-results"].append(row);
     }
     row.dataset.search = `${result.requested_model} ${result.status} ${result.summary} ${result.answer}`.toLowerCase();
@@ -36,6 +50,7 @@
     row.querySelector("pre").textContent = result.answer || result.error_message || "";
     const original = row.querySelector(".original-output-link");
     original.href = `/api/model-runs/${encodeURIComponent(activeRunId)}/results/${encodeURIComponent(result.result_id)}/original`;
+    original.dataset.model = result.requested_model;
     original.hidden = !result.original_output_id;
   }
 
@@ -79,6 +94,7 @@
     if (!response.ok) { elements["all-model-status"].textContent = `Run failed (${response.status})`; elements["all-model-start"].disabled = false; return; }
     const run = await response.json();
     activeRunId = run.run_id;
+    localStorage.setItem(activeRunStorageKey, activeRunId);
     setExports(activeRunId);
     render(run);
   }
@@ -99,5 +115,7 @@
     elements["all-model-form"].addEventListener("submit", start);
     elements["all-model-cancel"].addEventListener("click", cancel);
     elements["all-model-filter"].addEventListener("input", filter);
+    activeRunId = localStorage.getItem(activeRunStorageKey);
+    if (activeRunId) { setExports(activeRunId); poll(); }
   });
 })();
