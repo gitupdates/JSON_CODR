@@ -7,6 +7,7 @@ from web_app.models import (
     SessionRecord,
     SkillRecommendation,
     SkillRecommendationResult,
+    ModelInputManifest,
 )
 from web_app.skills import SkillLibraryService
 
@@ -192,3 +193,30 @@ class ContextAssembler:
                 if path.is_file():
                     paths.append(path)
         return paths
+
+    def build_for_model(
+        self,
+        session: SessionRecord,
+        prompt: str,
+        supports_vision: bool,
+    ) -> tuple[str, list, ModelInputManifest]:
+        built = self.build(session, prompt)
+        images = self.image_paths(session)
+        image_names = [path.name for path in images]
+        ready_text = [
+            item.display_name
+            for item in session.attachments
+            if item.included and item.extraction_state.value == "ready"
+        ]
+        warnings = []
+        selected_images = images if supports_vision else []
+        if images and not supports_vision and not ready_text:
+            warnings.append("image originals omitted because this model has no vision capability")
+        manifest = ModelInputManifest(
+            attachment_ids=[item.id for item in session.attachments if item.included],
+            text_sources=ready_text,
+            image_sources=image_names if supports_vision else [],
+            omitted_modalities=warnings,
+            adaptations=["original images supplied"] if selected_images else (["extracted text/OCR supplied"] if ready_text else []),
+        )
+        return built.prompt, selected_images, manifest

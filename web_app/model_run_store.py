@@ -75,6 +75,20 @@ class ModelRunStore:
             raise KeyError(run_id)
         return CanonicalModelRun.model_validate_json(path.read_text(encoding="utf-8"))
 
+    def list_runs(self) -> list[CanonicalModelRun]:
+        runs = []
+        for manifest in self.root.glob("*/manifest.json"):
+            try:
+                runs.append(CanonicalModelRun.model_validate_json(manifest.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                continue
+        return sorted(runs, key=lambda run: run.created_at)
+
+    def update_run(self, run: CanonicalModelRun) -> CanonicalModelRun:
+        self.get(run.run_id)
+        self._write_run(run)
+        return run
+
     def find_by_request_key(self, session_id: str, request_key: str, fingerprint: str) -> CanonicalModelRun | None:
         entry = self._read_index().get(self._index_key(session_id, request_key))
         if entry is None:
