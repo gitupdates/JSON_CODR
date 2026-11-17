@@ -248,8 +248,8 @@ class CanonicalModelResult(CanonicalContract):
     status: Literal["queued", "running", "completed", "timeout", "failed", "cancelled", "unsupported"]
     timing: ModelTiming
     input_manifest: ModelInputManifest = Field(default_factory=ModelInputManifest)
-    original_output_id: str = Field(min_length=1, max_length=128)
-    original_output_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    original_output_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    original_output_digest: Optional[str] = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
     summary: str = Field(default="", max_length=1000)
     answer: str = Field(default="", max_length=10_000_000)
     reasoning: Optional[ReasoningTrace] = None
