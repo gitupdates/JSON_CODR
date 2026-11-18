@@ -648,12 +648,12 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('sidebar_width: width', javascript)
         self.assertIn("let persistedThemeMode = null", javascript)
         self.assertIn("persistedThemeMode = normalizeThemeMode(settingsState.ui.theme)", javascript)
-        self.assertIn("applyThemeMode(persistedThemeMode", javascript)
+        self.assertIn("uiCustomizationController.seedLegacyMode(persistedThemeMode)", javascript)
         self.assertIn("themeRevisionAtStart === themeSaveRevision", javascript)
         self.assertIn("skillsRevisionAtStart === skillsChangeRevision", javascript)
         self.assertIn("navigationRevisionAtStart === navigationChangeRevision", javascript)
         self.assertIn("loadApplication().then(() => queueSettingsLoad())", javascript)
-        self.assertIn('id="setting-theme" class="setting-select" aria-describedby="setting-theme-help" disabled', html)
+        self.assertIn('id="ui-mode"', html)
         self.assertIn('id="setting-skills-open" type="checkbox" disabled', html)
 
 
@@ -661,14 +661,15 @@ class WebStaticTests(unittest.TestCase):
         response = self.client.get("/")
         parser = IdCollector()
         parser.feed(response.text)
-        self.assertIn("setting-theme", parser.ids)
-        self.assertIn("json_codr_theme", response.text)
+        self.assertIn("ui-mode", parser.ids)
+        self.assertIn("/static/ui_catalog.js", response.text)
 
         javascript = self.client.get("/static/app.js").text
         self.assertIn("const VALID_THEME_MODES", javascript)
         self.assertIn('matchMedia("(prefers-color-scheme: dark)")', javascript)
         self.assertIn('addEventListener("change"', javascript)
-        self.assertIn("applyThemeMode", javascript)
+        self.assertIn("uiCustomizationController", javascript)
+        self.assertIn("seedLegacyMode", javascript)
         self.assertIn("persistedThemeMode", javascript)
 
         css = self.client.get("/static/app.css").text

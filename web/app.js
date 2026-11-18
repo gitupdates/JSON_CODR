@@ -184,6 +184,20 @@ const elements = {
   taskExecutionDetails: document.querySelector("#task-execution-details"),
   taskRequestedModel: document.querySelector("#task-requested-model"),
   taskEffectiveModel: document.querySelector("#task-effective-model"),
+  taskTabs: [...document.querySelectorAll("[data-task-tab]")],
+  taskPanels: [...document.querySelectorAll("[data-task-panel]")],
+  taskPhases: [...document.querySelectorAll("[data-task-phase]")],
+  taskPlanSummary: document.querySelector("#task-plan-summary"),
+  taskPlanPolicy: document.querySelector("#task-plan-policy"),
+  taskPlanSteps: document.querySelector("#task-plan-steps"),
+  taskPlanApprove: document.querySelector("#task-plan-approve"),
+  taskPlanReject: document.querySelector("#task-plan-reject"),
+  taskPlanRevise: document.querySelector("#task-plan-revise"),
+  taskRevisionHistory: document.querySelector("#task-revision-history"),
+  taskChangeList: document.querySelector("#task-change-list"),
+  taskVerificationSummary: document.querySelector("#task-verification-summary"),
+  taskArtifacts: document.querySelector("#task-artifacts"),
+  taskReviewAnnouncer: document.querySelector("#task-review-announcer"),
 };
 
 const VALID_THEME_MODES = new Set(["light", "dark", "system"]);
@@ -241,7 +255,21 @@ const taskView = window.JSONCodrTaskView({
   details: elements.taskExecutionDetails,
   requested: elements.taskRequestedModel,
   effective: elements.taskEffectiveModel,
-});
+  tabs: elements.taskTabs,
+  panels: elements.taskPanels,
+  phases: elements.taskPhases,
+  planSummary: elements.taskPlanSummary,
+  planPolicy: elements.taskPlanPolicy,
+  planSteps: elements.taskPlanSteps,
+  planApprove: elements.taskPlanApprove,
+  planReject: elements.taskPlanReject,
+  planRevise: elements.taskPlanRevise,
+  revisionHistory: elements.taskRevisionHistory,
+  changeList: elements.taskChangeList,
+  verificationSummary: elements.taskVerificationSummary,
+  artifacts: elements.taskArtifacts,
+  announcer: elements.taskReviewAnnouncer,
+}, coreClient);
 let activeCoreTaskId = null;
 let activeWorkspaceRoute = null;
 const conversationView = new window.JSONCodrConversationView({ timeline: elements.conversationTimeline });

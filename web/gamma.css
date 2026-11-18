@@ -235,6 +235,27 @@
 .ui-component-row button { min-height: var(--control-height, 34px); }
 .ui-component-row .setting-select { width: 100%; margin: 0; text-transform: capitalize; }
 
+/* Guided Describe → Plan → Execute → Deliver workflow */
+.guided-task-flow { display: grid; gap: 12px; margin: 12px 0; }
+.task-phase-stepper { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); background: var(--line); }
+.task-phase-stepper li { display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 10px 12px; color: var(--text-subtle); background: var(--surface-panel); }
+.task-phase-stepper li span { display: grid; place-items: center; width: 24px; height: 24px; border: 1px solid currentColor; border-radius: 50%; font: 700 .75rem/1 var(--font-code); }
+.task-phase-stepper li[aria-current="step"] { color: var(--accent); box-shadow: inset 0 -3px 0 var(--accent); }
+.task-phase-stepper li.is-complete { color: var(--text); background: var(--surface-raised); }
+.task-guided-panel { padding: 16px; border: 1px solid var(--line); background: var(--surface-panel); }
+.task-guided-panel > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.task-guided-panel h2, .task-plan-step h3 { margin: 0; }
+.task-plan-summary { color: var(--text-soft); }
+.task-plan-steps { display: grid; gap: 10px; }
+.task-plan-step { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; padding: 14px; border: 1px solid var(--line); background: var(--surface-input); }
+.task-plan-step p { grid-column: 1; margin: 0; color: var(--text-soft); }
+.task-effect-badge { align-self: start; padding: 4px 8px; border: 1px solid var(--accent-line); color: var(--accent); font: 700 .72rem/1.2 var(--font-code); text-transform: uppercase; }
+.task-review-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.task-artifacts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 12px; }
+.task-artifact-card { display: block; padding: 14px; border: 1px solid var(--line); color: var(--text); background: var(--surface-input); text-decoration: none; }
+.task-artifact-card:hover { border-color: var(--accent); }
+#task-revision-history { margin-top: 12px; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
@@ -247,4 +268,7 @@
 @media (max-width: 760px) {
   :root { --sidebar-width: min(88vw, 320px); }
   .shell { width: min(100% - 20px, var(--shell-max, 1440px)); }
+  .task-phase-stepper { grid-template-columns: 1fr 1fr; }
+  .task-plan-step { grid-template-columns: 1fr; }
+  .task-effect-badge { justify-self: start; }
 }

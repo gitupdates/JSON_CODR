@@ -90,11 +90,40 @@
         <div class="workspace-separator workspace-separator-left" role="separator" aria-label="Resize project tools" aria-orientation="vertical" aria-valuemin="180" aria-valuemax="420" aria-valuenow="260" tabindex="0" hidden></div>
         <section id="workspace-task-canvas" class="workspace-task-canvas" aria-label="Active task">
           <nav class="workspace-task-tabs" role="tablist" aria-label="Task views">
-            <button type="button" role="tab" aria-selected="true">Chat</button>
-            <button type="button" role="tab" aria-selected="false" hidden>Plan</button>
-            <button type="button" role="tab" aria-selected="false" hidden>Changes</button>
-            <button type="button" role="tab" aria-selected="false" hidden>Results</button>
+            <button type="button" role="tab" aria-selected="true" data-task-tab="chat">Chat</button>
+            <button type="button" role="tab" aria-selected="false" data-task-tab="plan">Plan</button>
+            <button type="button" role="tab" aria-selected="false" data-task-tab="changes">Changes</button>
+            <button type="button" role="tab" aria-selected="false" data-task-tab="results">Results</button>
           </nav>
+          <section id="guided-task-flow" class="guided-task-flow" aria-label="Guided task workflow">
+            <ol id="task-phase-stepper" class="task-phase-stepper" aria-label="Task phases">
+              <li id="task-phase-describe" data-task-phase="describe" aria-current="step"><span>1</span><strong>Describe</strong></li>
+              <li id="task-phase-plan" data-task-phase="plan_review"><span>2</span><strong>Plan</strong></li>
+              <li id="task-phase-execute" data-task-phase="executing"><span>3</span><strong>Execute</strong></li>
+              <li id="task-phase-deliver" data-task-phase="delivering"><span>4</span><strong>Deliver</strong></li>
+            </ol>
+            <section id="task-plan-panel" class="task-guided-panel" data-task-panel="plan" aria-labelledby="task-plan-heading" hidden>
+              <header><div><p class="eyebrow">REVIEW BEFORE EXECUTION</p><h2 id="task-plan-heading">Plan</h2></div><span id="task-plan-policy" class="task-effect-badge">Policy pending</span></header>
+              <p id="task-plan-summary" class="task-plan-summary">No plan revision is available yet.</p>
+              <div id="task-plan-steps" class="task-plan-steps"></div>
+              <div class="task-review-actions">
+                <button id="task-plan-approve" class="primary" type="button">Approve plan</button>
+                <button id="task-plan-revise" class="secondary" type="button">Revise plan</button>
+                <button id="task-plan-reject" class="secondary" type="button">Reject plan</button>
+              </div>
+              <details id="task-revision-history"><summary>Revision history</summary><ol></ol></details>
+            </section>
+            <section id="task-changes-panel" class="task-guided-panel" data-task-panel="changes" aria-labelledby="task-changes-heading" hidden>
+              <header><div><p class="eyebrow">LIVE EXECUTION</p><h2 id="task-changes-heading">Changes</h2></div></header>
+              <ol id="task-change-list" aria-live="polite"><li>No approved steps have executed.</li></ol>
+            </section>
+            <section id="task-results-panel" class="task-guided-panel" data-task-panel="results" aria-labelledby="task-results-heading" hidden>
+              <header><div><p class="eyebrow">VERIFIED DELIVERY</p><h2 id="task-results-heading">Results</h2></div></header>
+              <div id="task-verification-summary">Verification has not completed.</div>
+              <div id="task-artifacts" class="task-artifacts"></div>
+            </section>
+            <div id="task-review-announcer" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+          </section>
       <section class="hero">
         <p class="eyebrow">STRUCTURED INFERENCE / LOCAL ONLY</p>
         <h1 id="chat-heading">One prompt.<br /><span>One precise model.</span></h1>

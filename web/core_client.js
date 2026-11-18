@@ -86,6 +86,66 @@
       return this.request(`/api/components?project_id=${encodeURIComponent(projectId)}`);
     }
 
+    async listPlans(taskId) {
+      return this.request(`/api/tasks/${encodeURIComponent(taskId)}/plans`);
+    }
+
+    async approvePlan(taskId, plan) {
+      return this.planDecision(taskId, plan, "approve");
+    }
+
+    async rejectPlan(taskId, plan, reason) {
+      return this.planDecision(taskId, plan, "reject", reason);
+    }
+
+    async planDecision(taskId, plan, decision, reason = null) {
+      return this.request(`/api/tasks/${encodeURIComponent(taskId)}/plans/${encodeURIComponent(plan.plan_id)}/${plan.revision}/${decision}`, {
+        method: "POST", body: { expected_plan_digest: plan.canonical_digest, reason },
+      });
+    }
+
+    async approveStep(taskId, plan, stepId) {
+      return this.stepDecision(taskId, plan, stepId, "approve");
+    }
+
+    async rejectStep(taskId, plan, stepId, reason) {
+      return this.stepDecision(taskId, plan, stepId, "reject", reason);
+    }
+
+    async stepDecision(taskId, plan, stepId, decision, reason = null) {
+      return this.request(`/api/tasks/${encodeURIComponent(taskId)}/plans/${encodeURIComponent(plan.plan_id)}/${plan.revision}/steps/${encodeURIComponent(stepId)}/${decision}`, {
+        method: "POST", body: { expected_plan_digest: plan.canonical_digest, reason },
+      });
+    }
+
+    async editStep(taskId, plan, stepId, changes) {
+      return this.request(`/api/tasks/${encodeURIComponent(taskId)}/plans/${encodeURIComponent(plan.plan_id)}/${plan.revision}/steps/${encodeURIComponent(stepId)}`, {
+        method: "PATCH", body: { expected_plan_digest: plan.canonical_digest, changes },
+      });
+    }
+
+    async revisePlan(taskId, plan, summary, reason) {
+      return this.request(`/api/tasks/${encodeURIComponent(taskId)}/plans/${encodeURIComponent(plan.plan_id)}/${plan.revision}/revise`, {
+        method: "POST", body: { expected_plan_digest: plan.canonical_digest, summary, reason },
+      });
+    }
+
+    async applyPolicy(taskId, plan, policyDigest) {
+      return this.request(`/api/tasks/${encodeURIComponent(taskId)}/plans/${encodeURIComponent(plan.plan_id)}/${plan.revision}/policy`, {
+        method: "POST", body: { expected_plan_digest: plan.canonical_digest, policy_digest: policyDigest },
+      });
+    }
+
+    async refreshBaseline(taskId, plan, projectRoot) {
+      return this.request(`/api/tasks/${encodeURIComponent(taskId)}/plans/${encodeURIComponent(plan.plan_id)}/${plan.revision}/baseline`, {
+        method: "POST", body: { expected_plan_digest: plan.canonical_digest, project_root: projectRoot },
+      });
+    }
+
+    async taskDelivery(taskId) {
+      return this.request(`/api/tasks/${encodeURIComponent(taskId)}/delivery`);
+    }
+
     observe(taskId, afterSequence = -1) {
       if (!this.WebSocket) return;
       if (!this.socket || this.socket.readyState > 1) {
@@ -126,7 +186,12 @@
         body: body ? JSON.stringify(body) : undefined,
       });
       const payload = await response.json();
-      if (!response.ok && response.status !== 202) throw new Error(payload.detail || "JSON_CODR request failed");
+      if (!response.ok && response.status !== 202) {
+        const detail = typeof payload.detail === "object" ? payload.detail : { detail: payload.detail };
+        const error = new Error(detail.detail || detail.title || "JSON_CODR request failed");
+        Object.assign(error, detail, { status: response.status, current_digest: detail.current_digest });
+        throw error;
+      }
       return payload;
     }
   }
