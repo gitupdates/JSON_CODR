@@ -8,6 +8,7 @@ from uuid import uuid7
 from pydantic import Field
 
 from web_app.core.adapters import AdapterEvent, CapabilityCall, ExecutionContext
+from web_app.core.canonical import canonical_digest
 from web_app.core.contracts import FrozenContract
 from web_app.core.project_intelligence import ProjectReader
 
@@ -79,11 +80,11 @@ class ProjectAdapter:
     def snapshot(self, project_root: str | Path) -> ProjectSnapshot:
         root = self._project_root(project_root)
         files = tuple(str(path.relative_to(root)).replace("\\", "/") for path in self._files(root))
-        digest = hashlib.sha256()
-        for relative in files:
-            digest.update(relative.encode())
-            digest.update((root / relative).read_bytes())
-        return ProjectSnapshot(project_root=str(root), fingerprint=f"sha256:{digest.hexdigest()}", files=files)
+        material = [
+            {"path": relative, "digest": f"sha256:{hashlib.sha256((root / relative).read_bytes()).hexdigest()}"}
+            for relative in files
+        ]
+        return ProjectSnapshot(project_root=str(root), fingerprint=canonical_digest(material), files=files)
 
     def checkpoint(self, root: Path, target: Path) -> CheckpointRecord:
         checkpoint_id = str(uuid7())

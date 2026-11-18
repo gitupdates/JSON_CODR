@@ -11,6 +11,8 @@ from web_app.core.contracts import (
     PlannedStep,
     RevisionAuthor,
     StepReviewStatus,
+    TaskEventDraft,
+    TaskPhase,
 )
 from web_app.core.store import ConcurrencyConflict, TaskStore
 
@@ -139,6 +141,56 @@ class PlanService:
             task_id, current, principal, expected_digest, steps, summary=summary, reason=reason,
         )
 
+    def apply_policy(
+        self, task_id: str, plan_id: str, revision: int, expected_digest: str,
+        *, policy_digest: str,
+    ) -> PlanRevision:
+        current = self._exact_current(task_id, plan_id, revision, expected_digest)
+        binding = self._recovery_binding(task_id, current)
+        steps = tuple(self._copy_step(step, revision + 1) for step in current.steps)
+        revised = self._append_revision(
+            task_id, current, "system", expected_digest, steps,
+            summary=current.summary, reason="Applied updated execution policy",
+            author=RevisionAuthor.system,
+        )
+        self.store.append(task_id, TaskEventDraft(
+            event_type="agent.policy_applied",
+            payload={
+                "plan_id": plan_id, "plan_revision": revised.revision,
+                "previous_policy_digest": binding.payload.get("policy_digest"),
+                "policy_digest": policy_digest,
+            },
+        ))
+        self._bind_recovery_context(
+            task_id, revised, binding.payload.get("project_fingerprint"), policy_digest,
+        )
+        return revised
+
+    def refresh_baseline(
+        self, task_id: str, plan_id: str, revision: int, expected_digest: str,
+        *, project_adapter, project_root,
+    ) -> PlanRevision:
+        current = self._exact_current(task_id, plan_id, revision, expected_digest)
+        binding = self._recovery_binding(task_id, current)
+        snapshot = project_adapter.snapshot(project_root)
+        steps = tuple(self._copy_step(step, revision + 1) for step in current.steps)
+        revised = self._append_revision(
+            task_id, current, "system", expected_digest, steps,
+            summary=current.summary, reason="Refreshed project baseline",
+            author=RevisionAuthor.system,
+        )
+        self.store.append(task_id, TaskEventDraft(
+            event_type="agent.baseline_refreshed",
+            payload={
+                "plan_id": plan_id, "plan_revision": revised.revision,
+                "project_fingerprint": snapshot.fingerprint,
+            },
+        ))
+        self._bind_recovery_context(
+            task_id, revised, snapshot.fingerprint, binding.payload.get("policy_digest"),
+        )
+        return revised
+
     def _decision(
         self, task_id: str, plan_id: str, revision: int, principal: str,
         expected_digest: str, decision: str, *, step_id: str | None = None,
@@ -166,6 +218,7 @@ class PlanService:
     def _append_revision(
         self, task_id: str, current: PlanRevision, principal: str, expected_digest: str,
         steps: tuple[PlannedStep, ...], *, summary: str, reason: str,
+        author: RevisionAuthor = RevisionAuthor.user,
     ) -> PlanRevision:
         self._validate_steps(steps)
         payload = current.model_dump(mode="python", exclude={"canonical_digest", "steps"})
@@ -173,7 +226,7 @@ class PlanService:
             "revision": current.revision + 1,
             "parent_revision": current.revision,
             "summary": summary,
-            "author": RevisionAuthor.user,
+            "author": author,
             "revision_reason": reason,
             "review_status": PlanReviewStatus.in_review,
             "steps": steps,
@@ -185,6 +238,37 @@ class PlanService:
             )
         except ConcurrencyConflict as error:
             raise PlanConflict(str(error), self.store.plan(task_id, current.plan_id)) from error
+
+    def _recovery_binding(self, task_id: str, current: PlanRevision):
+        if self.store.phase(task_id) not in {TaskPhase.plan_review, TaskPhase.blocked}:
+            raise PlanConflict("recovery is only allowed while the task is paused", current)
+        binding = next((
+            event for event in reversed(self.store.events(task_id))
+            if event.event_type == "agent.plan_context_bound"
+            and event.payload.get("plan_id") == current.plan_id
+            and event.payload.get("plan_revision") == current.revision
+        ), None)
+        if binding is None:
+            raise PlanConflict("plan ancestry cannot be proven", current)
+        return binding
+
+    def _bind_recovery_context(
+        self, task_id: str, revised: PlanRevision, project_fingerprint: object, policy_digest: object,
+    ) -> None:
+        if not isinstance(project_fingerprint, str):
+            raise PlanConflict("project baseline ancestry cannot be proven", revised)
+        self.store.append(task_id, TaskEventDraft(
+            event_type="agent.plan_context_bound",
+            payload={
+                "plan_id": revised.plan_id, "plan_revision": revised.revision,
+                "plan_digest": revised.canonical_digest,
+                "project_fingerprint": project_fingerprint,
+                "policy_digest": policy_digest,
+            },
+        ))
+        self.store.append(task_id, TaskEventDraft(
+            event_type="agent.phase_changed", payload={"phase": TaskPhase.plan_review.value},
+        ))
 
     def _validate_steps(self, steps: tuple[PlannedStep, ...]) -> None:
         for step in steps:
