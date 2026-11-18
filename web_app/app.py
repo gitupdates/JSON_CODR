@@ -48,7 +48,7 @@ from web_app.core.component_manager import ComponentManager
 from web_app.core.component_adapter import LazyComponentExecutionAdapter
 from web_app.core.terminal_adapter import TerminalAdapter
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
+from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
 from web_app.model_run_store import ModelRunStore, RequestKeyConflict
 from web_app.model_runs import ModelRunService, canonical_model_prompt
 from web_app.ollama_service import (
@@ -1244,27 +1244,83 @@ def create_app(
         except (ValueError, RuntimeError, PermissionError, OllamaUnavailableError, ModelOutputError, ModelTimeoutError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
+    async def execute_project_workspace(project_root: str, model: str, outcome: str) -> dict:
+        grant = coding_agents.grant(project_root, "broker")
+        snapshot = await asyncio.to_thread(git_broker.inspect, project_root)
+        contract = git_adapter.prompt_contract(snapshot.root, snapshot.dirty_fingerprint)
+        generated = await service.chat(model, f"{outcome}\n\n{contract}")
+        action_request = git_adapter.parse(generated.content)
+        if Path(action_request.project_root).resolve() != Path(snapshot.root):
+            raise ValueError("Model response changed the authorized project root")
+        if action_request.baseline_fingerprint != snapshot.dirty_fingerprint:
+            raise ValueError("Model response changed the authorized baseline")
+        result = await execute_git_through_core(action_request, generated.model, grant.id)
+        return {
+            "route": "broker_adapter", "effective_model": generated.model,
+            "project_root": snapshot.root, "result": result,
+        }
+
     @application.post("/api/project-workspace/run", status_code=201)
     async def run_project_workspace(request: ProjectWorkspaceRunRequest, x_json_codr: str | None = Header(None)):
         require_terminal_header(x_json_codr)
         try:
-            grant = coding_agents.grant(request.project_root, "broker")
-            snapshot = await asyncio.to_thread(git_broker.inspect, request.project_root)
-            contract = git_adapter.prompt_contract(snapshot.root, snapshot.dirty_fingerprint)
-            response = await service.chat(request.model, f"{request.outcome}\n\n{contract}")
-            action_request = git_adapter.parse(response.content)
-            if Path(action_request.project_root).resolve() != Path(snapshot.root):
-                raise ValueError("Model response changed the authorized project root")
-            if action_request.baseline_fingerprint != snapshot.dirty_fingerprint:
-                raise ValueError("Model response changed the authorized baseline")
-            result = await execute_git_through_core(action_request, response.model, grant.id)
-            return {
-                "route": "broker_adapter",
-                "requested_model": request.model,
-                "effective_model": response.model,
-                "project_root": snapshot.root,
-                "result": result,
-            }
+            executed = await execute_project_workspace(request.project_root, request.model, request.outcome)
+            return {**executed, "requested_model": request.model}
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except (RuntimeError, PermissionError, OllamaUnavailableError, ModelOutputError, ModelTimeoutError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @application.post("/api/workspace/tasks", response_model=WorkspaceTaskResponse, status_code=201)
+    async def submit_workspace_task(request: WorkspaceTaskRequest, response: Response):
+        if request.engine_id != "borg":
+            raise HTTPException(status_code=409, detail="Requested engine is not a verified Workspace engine")
+        try:
+            session = workspace.get_session(request.session_id)
+            installed = [
+                item for item in await (inference_router.list_models() if inference_router else service.list_models())
+                if item.get("installed")
+            ]
+            installed_names = [item["name"] for item in installed]
+            if request.model_selection == "multi-model":
+                run = await model_runs.create(ModelRunCreateRequest(
+                    session_id=session.id, prompt=request.prompt, profile="general", parallelism=2,
+                ))
+                task = asyncio.create_task(model_runs.run(run.run_id))
+                model_run_tasks.add(task)
+                task.add_done_callback(finish_model_run)
+                response.status_code = 202
+                return WorkspaceTaskResponse(
+                    task_id=run.run_id, requested_engine=request.engine_id, effective_engine="borg",
+                    requested_model="multi-model", effective_model=None, route="multi-model",
+                    status="running", warnings=[], result={"run_id": run.run_id},
+                )
+            if not installed_names:
+                raise HTTPException(status_code=409, detail="No installed local model is available")
+            warnings = []
+            requested_model = request.model_selection
+            selected_model = installed_names[0] if requested_model == "auto" else requested_model
+            if selected_model not in installed_names:
+                raise HTTPException(status_code=409, detail="Requested model is not installed")
+            if requested_model == "auto":
+                warnings.append(f"Auto selected {selected_model} from the installed model roster")
+            compatibility = await service.tool_compatibility(selected_model)
+            if not compatibility["available"]:
+                raise HTTPException(status_code=409, detail="Requested engine and model do not have a verified tool route")
+            effective_model = compatibility["effective_tool_model"] or selected_model
+            if effective_model != selected_model:
+                warnings.append(f"Verified tool execution uses {effective_model}; requested model remains {selected_model}")
+            recommendation = recommendations.recommend(session, request.prompt)
+            assembled = context_assembler.build(session, request.prompt, recommendation)
+            executed = await execute_project_workspace(request.project_root, effective_model, assembled.prompt)
+            return WorkspaceTaskResponse(
+                task_id=str(uuid7()), requested_engine=request.engine_id, effective_engine="borg",
+                requested_model=requested_model, effective_model=executed["effective_model"],
+                route=executed["route"], status="completed", warnings=warnings,
+                result=executed["result"], artifact_references=[],
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Session not found") from error
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         except (RuntimeError, PermissionError, OllamaUnavailableError, ModelOutputError, ModelTimeoutError) as error:

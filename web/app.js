@@ -2,6 +2,7 @@ const elements = {
   form: document.querySelector("#chat-form"),
   health: document.querySelector("#health-status"),
   model: document.querySelector("#model-select"),
+  workspaceAgentSelect: document.querySelector("#workspace-agent-select"),
   modelCount: document.querySelector("#model-count"),
   modelDetail: document.querySelector("#model-detail"),
   prompt: document.querySelector("#prompt-input"),
@@ -230,6 +231,7 @@ const taskView = window.JSONCodrTaskView({
   effective: elements.taskEffectiveModel,
 });
 let activeCoreTaskId = null;
+let activeWorkspaceRoute = null;
 const conversationView = new window.JSONCodrConversationView({ timeline: elements.conversationTimeline });
 let restoredConversationSessionId = null;
 function handleCoreRecord(record) {
@@ -952,14 +954,18 @@ async function runWorkspaceAgent() {
   elements.workspaceAgentResult.textContent = "Task running…";
   localStorage.setItem("json_codr_workspace_project_root", projectRoot);
   try {
-    const response = await fetch("/api/project-workspace/run", {
+    await ensureSession();
+    const response = await fetch("/api/workspace/tasks", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
-      body: JSON.stringify({ project_root: projectRoot, model, outcome }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project_root: projectRoot, session_id: sessionId, engine_id: "borg",
+        model_selection: model, prompt: outcome,
+      }),
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || "Project task failed");
-    elements.workspaceAgentStatus.textContent = `${payload.route} · requested ${payload.requested_model} · effective ${payload.effective_model}`;
+    elements.workspaceAgentStatus.textContent = `${payload.route} · requested ${payload.requested_model} · effective ${payload.effective_model || "all installed models"}`;
     elements.workspaceAgentResult.textContent = JSON.stringify(payload.result, null, 2);
   } catch (error) {
     elements.workspaceAgentStatus.textContent = "Agent task failed";
@@ -2233,7 +2239,12 @@ function selectedModel() {
 
 function updateModelDetail() {
   const model = selectedModel();
-  if (!model) return;
+  if (!model) {
+    elements.modelDetail.textContent = elements.model.value === "multi-model"
+      ? "Runs one durable, normalized result for every installed model."
+      : "Automatically selects a compatible installed local model.";
+    return;
+  }
   const size = model.size ? `${(model.size / 1e9).toFixed(1)} GB` : "size unavailable";
   const context = model.context_length ? `${model.context_length.toLocaleString()} ctx` : "context unavailable";
   const capabilities = model.capabilities.length ? model.capabilities.join(" · ") : "completion";
@@ -2249,7 +2260,7 @@ async function loadApplication() {
     models = payload.models;
     elements.health.className = `health ${health.ollama ? "ready" : "error"}`;
     elements.health.lastElementChild.textContent = health.ollama ? "Ollama ready" : "Ollama offline";
-    elements.model.innerHTML = "";
+    elements.model.innerHTML = '<option value="auto">Auto</option><option value="multi-model">Multi-model</option>';
     elements.workspaceModel.innerHTML = "";
     for (const model of models) {
       const option = document.createElement("option");
@@ -2322,21 +2333,41 @@ async function submitPrompt(event) {
     const userMessage = await conversationView.appendUser(prompt, attachmentIds);
     elements.empty.hidden = true;
     elements.prompt.value = "";
-    const record = await coreClient.submit({
-      projectId: `project-${sessionId}`,
-      threadId: `thread-${sessionId}`,
-      sessionId: sessionId,
-      model: elements.model.value,
-      prompt,
-      projectRoot: ".",
-      attachments: attachmentIds,
+    const response = await fetch("/api/workspace/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project_root: elements.workspaceProjectRoot.value || ".",
+        session_id: sessionId,
+        engine_id: elements.workspaceAgentSelect.value,
+        model_selection: elements.model.value,
+        prompt,
+        context_references: attachmentIds,
+      }),
     });
-    activeCoreTaskId = record.task_id;
-    conversationView.beginTask(record.task_id, {
-      requestedModel: elements.model.value,
-      parentMessageId: userMessage.id,
-    });
-    handleCoreRecord(coreClient.tasks.get(record.task_id)?.record || record);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || "Workspace task failed");
+    activeCoreTaskId = payload.task_id;
+    activeWorkspaceRoute = payload.route;
+    elements.taskRequestedModel.textContent = payload.requested_model;
+    elements.taskEffectiveModel.textContent = payload.effective_model || "All installed models";
+    elements.responseModel.textContent = payload.effective_model || payload.route;
+    elements.summary.textContent = payload.status === "running" ? "Multi-model run started" : "Workspace task completed";
+    elements.content.textContent = JSON.stringify({
+      requested_engine: payload.requested_engine,
+      effective_engine: payload.effective_engine,
+      requested_model: payload.requested_model,
+      effective_model: payload.effective_model,
+      route: payload.route,
+      warnings: payload.warnings,
+      result: payload.result,
+    }, null, 2);
+    elements.result.hidden = false;
+    renderWorkspaceActivityNotice(`${payload.route} · ${payload.status}`, payload.status);
+    if (payload.route === "multi-model") localStorage.setItem("json_codr_active_model_run", payload.task_id);
+    void userMessage;
+    setPending(false);
+    elements.cancel.hidden = payload.route !== "multi-model";
   } catch (error) {
     showError(error.message);
     setPending(false);
@@ -2345,7 +2376,14 @@ async function submitPrompt(event) {
 
 elements.form.addEventListener("submit", submitPrompt);
 elements.cancel.addEventListener("click", () => {
-  if (activeCoreTaskId) coreClient.cancel(activeCoreTaskId).catch((error) => showError(error.message));
+  if (!activeCoreTaskId) return;
+  if (activeWorkspaceRoute === "multi-model") {
+    fetch(`/api/model-runs/${encodeURIComponent(activeCoreTaskId)}/cancel`, { method: "POST" })
+      .then((response) => { if (!response.ok) throw new Error("Unable to cancel multi-model run"); elements.cancel.hidden = true; })
+      .catch((error) => showError(error.message));
+    return;
+  }
+  coreClient.cancel(activeCoreTaskId).catch((error) => showError(error.message));
 });
 elements.model.addEventListener("change", updateModelDetail);
 elements.prompt.addEventListener("keydown", (event) => {

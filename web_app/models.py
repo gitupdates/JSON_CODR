@@ -411,6 +411,32 @@ class ProjectWorkspaceRunRequest(BaseModel):
     outcome: str = Field(min_length=1, max_length=20_000)
 
 
+class WorkspaceTaskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_root: str = Field(min_length=1, max_length=1000)
+    session_id: str = Field(min_length=1, max_length=128)
+    engine_id: str = Field(min_length=1, max_length=200)
+    model_selection: str = Field(min_length=1, max_length=500)
+    prompt: str = Field(min_length=1, max_length=200_000)
+    context_references: List[str] = Field(default_factory=list, max_length=1000)
+
+
+class WorkspaceTaskResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=128)
+    requested_engine: str
+    effective_engine: str
+    requested_model: str
+    effective_model: Optional[str] = None
+    route: str
+    status: str
+    warnings: List[str] = Field(default_factory=list)
+    result: Optional[Dict[str, object]] = None
+    artifact_references: List[ObjectReference] = Field(default_factory=list)
+
+
 class CodingAgentLaunchRequest(CodingAgentGrantRequest):
     model: str = Field(min_length=1, max_length=200)
     mode: Literal["interactive", "delegated"] = "interactive"

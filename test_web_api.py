@@ -599,6 +599,76 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("existing directory", response.json()["detail"])
 
+    def test_workspace_task_routes_explicit_auto_and_multi_model_selections(self):
+        class WorkspaceModelService(FakeService):
+            async def list_models(self):
+                return [*await super().list_models(), {
+                    "name": "deepseek-coder:6.7b-instruct", "installed": True, "size": 1,
+                    "quantization": "Q4", "context_length": 4096, "capabilities": ["completion"],
+                }]
+
+            async def supports_tools(self, model):
+                return model == "qwen2.5-coder:7b-instruct-q4_K_M"
+
+            async def chat(self, model, prompt, images=None):
+                self.last_prompt = prompt
+                baseline = prompt.split("baseline_fingerprint='", 1)[1].split("'", 1)[0]
+                project_root = prompt.split("project_root='", 1)[1].split("';", 1)[0]
+                return ChatResult(model=model, status="ready", summary="Ready", content=json.dumps({
+                    "schema_version": 1,
+                    "project_root": project_root,
+                    "baseline_fingerprint": baseline,
+                    "actions": [{"kind": "status"}],
+                }))
+
+        project = Path(self.temporary_directory.name) / "canonical-workspace"
+        project.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=project, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=project, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project, check=True)
+        (project / "README.md").write_text("test\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=project, check=True)
+        subprocess.run(["git", "commit", "-m", "initial"], cwd=project, check=True, capture_output=True)
+        model_service = WorkspaceModelService()
+        client = self.track_core_client(TestClient(create_app(model_service, self.workspace)))
+        session = self.workspace.create_session()
+        from web_app.attachments import AttachmentService
+        AttachmentService(self.workspace).import_text(session.id, "workspace context evidence")
+        base = {
+            "project_root": str(project), "session_id": session.id,
+            "engine_id": "borg", "prompt": "Inspect the repository",
+        }
+
+        explicit = client.post("/api/workspace/tasks", json={**base, "model_selection": "qwen2.5-coder:7b-instruct-q4_K_M"})
+        automatic = client.post("/api/workspace/tasks", json={**base, "model_selection": "auto"})
+        multiple = client.post("/api/workspace/tasks", json={**base, "model_selection": "multi-model"})
+        bad_engine = client.post("/api/workspace/tasks", json={**base, "engine_id": "missing", "model_selection": "auto"})
+        bad_model = client.post("/api/workspace/tasks", json={**base, "model_selection": "opencoder:8b"})
+        fallback = client.post("/api/workspace/tasks", json={**base, "model_selection": "deepseek-coder:6.7b-instruct"})
+        missing_project = client.post("/api/workspace/tasks", json={
+            **base, "project_root": str(project / "missing"), "model_selection": "auto",
+        })
+
+        self.assertEqual(explicit.status_code, 201)
+        self.assertEqual(explicit.json()["requested_model"], "qwen2.5-coder:7b-instruct-q4_K_M")
+        self.assertEqual(explicit.json()["effective_model"], "qwen2.5-coder:7b-instruct-q4_K_M")
+        self.assertEqual(explicit.json()["requested_engine"], "borg")
+        self.assertEqual(explicit.json()["effective_engine"], "borg")
+        self.assertEqual(automatic.status_code, 201)
+        self.assertEqual(automatic.json()["requested_model"], "auto")
+        self.assertTrue(automatic.json()["warnings"])
+        self.assertEqual(multiple.status_code, 202)
+        self.assertEqual(multiple.json()["requested_model"], "multi-model")
+        self.assertEqual(multiple.json()["route"], "multi-model")
+        self.assertEqual(bad_engine.status_code, 409)
+        self.assertEqual(bad_model.status_code, 409)
+        self.assertEqual(fallback.status_code, 201)
+        self.assertEqual(fallback.json()["requested_model"], "deepseek-coder:6.7b-instruct")
+        self.assertEqual(fallback.json()["effective_model"], "qwen3:4b")
+        self.assertTrue(fallback.json()["warnings"])
+        self.assertIn("workspace context evidence", model_service.last_prompt)
+        self.assertEqual(missing_project.status_code, 400)
+
     def test_optimized_connector_catalog_and_install_plans_are_additive(self):
         client = TestClient(create_app(self.service, self.workspace, optimized=True))
 

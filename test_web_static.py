@@ -86,7 +86,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('data-workspace-mode="agent"', html)
         self.assertNotIn('data-workspace-mode="codex"', html)
         self.assertIn("function selectWorkspaceMode", script)
-        self.assertIn('fetch("/api/project-workspace/run"', script)
+        self.assertIn('fetch("/api/workspace/tasks"', script)
         self.assertIn('"X-JSON-CODR": "1"', script)
         self.assertIn("requested_model", script)
         self.assertIn("effective_model", script)
@@ -169,6 +169,23 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("statusSource", script)
         self.assertIn("Enable or configure", script)
         self.assertIn("getActiveWorkspacePanels(components)", script)
+
+    def test_workspace_header_submits_canonical_engine_and_model_selection(self):
+        html = self.client.get("/").text
+        script = self.client.get("/static/app.js").text
+
+        self.assertIn('id="workspace-agent-select"', html)
+        self.assertNotIn('id="workspace-agent-select" disabled', html)
+        self.assertIn('value="borg"', html)
+        self.assertIn('value="auto"', html)
+        self.assertIn('value="multi-model"', html)
+        self.assertIn('fetch("/api/workspace/tasks"', script)
+        self.assertIn("requested_engine", script)
+        self.assertIn("effective_engine", script)
+        self.assertIn("requested_model", script)
+        self.assertIn("effective_model", script)
+        self.assertIn('`/api/model-runs/${encodeURIComponent(activeCoreTaskId)}/cancel`', script)
+        self.assertNotIn('fetch("/api/project-workspace/run"', script)
 
     def test_plain_text_api_failures_are_rendered_without_json_parse_errors(self):
         script = self.client.get("/static/app.js").text

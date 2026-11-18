@@ -76,10 +76,12 @@
         <div class="workspace-project"><span class="eyebrow">ACTIVE PROJECT</span><strong>JSON_CODR</strong></div>
         <div class="workspace-execution-controls">
           <label for="workspace-agent-select">Agent
-            <select id="workspace-agent-select" disabled><option>BORG local agent</option></select>
+            <select id="workspace-agent-select"><option value="borg">BORG local agent</option></select>
           </label>
           <label for="model-select">Model
-            <select id="model-select" name="model" aria-describedby="model-detail" disabled></select>
+            <select id="model-select" name="model" aria-describedby="model-detail" disabled>
+              <option value="auto">Auto</option><option value="multi-model">Multi-model</option>
+            </select>
           </label>
           <button id="workspace-layout-menu" class="secondary" type="button" aria-haspopup="menu" aria-expanded="false">Layout</button>
           <div id="workspace-layout-popover" class="workspace-layout-popover" role="menu" hidden>
