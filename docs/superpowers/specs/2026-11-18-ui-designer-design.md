@@ -16,6 +16,7 @@ JSON_CODR will provide one visual designer for two related jobs: safely customiz
 - Save named projects locally through the existing Python service and maintain versioned revisions.
 - Export a project as a self-contained standards-based HTML/CSS/JavaScript bundle plus its portable JSON design document.
 - Preserve the current theme presets and developer-editable component mappings as reusable design tokens and component defaults.
+- Capture or import another interface as a sanitized visual and structural reference without importing its executable behavior.
 
 ## Non-goals for the first release
 
@@ -96,6 +97,20 @@ Imported images, SVGs, and fonts are copied into the project's managed asset dir
 
 The first release includes system font stacks and the existing open-source OpenDyslexic asset. Additional font files may be imported only in supported web formats. IBM Plex is not reintroduced. Export emits local relative asset paths and font declarations.
 
+## Reference capture and import
+
+The Designer includes a **Reference** panel with three user-initiated import paths:
+
+1. Import PNG, JPEG, or sanitized SVG screenshots as locked reference layers that can be positioned beside or behind the canvas with adjustable opacity.
+2. Import a `ui-extract.json` structural summary produced by the supplied browser-console capture workflow. It may provide viewport size, page names, headings, labels, control types, class-frequency hints, grid columns, and element bounds, but never table-cell content, input values, query strings, credentials, or hostnames.
+3. Import a sanitized UI archive ZIP produced by the supplied `make_ui_archive.py` workflow. The importer verifies `MANIFEST.sha256`, reads `REPORT.md` and `DIFF.md`, rejects traversal and oversized entries, and refuses archives containing `REVIEW.txt` unless the user explicitly acknowledges that the archive has unresolved sanitization findings.
+
+The existing `C:/UI/extract_ui.js` and `C:/UI/make_ui_archive.py` define the initial compatible capture formats. Maintained copies, format schemas, and instructions will ship with JSON_CODR so captures do not depend on those machine-specific paths.
+
+Imported references are inert: scripts, event handlers, forms, remote requests, cookies, storage, and application data never execute. HTML/CSS source from an archive is rendered only through a sanitizer in a script-disabled sandbox. The user may inspect colors, typography, spacing, assets, and structure, then choose **Create draft from reference** to generate editable registered components. Generated nodes are a reviewable draft and retain provenance back to the reference; they are not treated as a pixel-perfect or behavior-preserving clone.
+
+Reference files are copied into the project's managed reference directory with content hashes and source/license notes. Deleting a reference does not delete components already created from it. Reference capture is always an explicit user action and does not crawl authenticated sites or bypass access controls.
+
 ## Persistence and history
 
 Python owns project persistence beneath the configured JSON_CODR data root. Writes are atomic. Each save creates an immutable revision with parent revision, timestamp, schema version, and content digest. Autosave maintains a recoverable draft without replacing the last explicit save. Users can restore a previous revision, duplicate a project, import a JSON design, or reset only the JSON_CODR customization overlay.
@@ -145,6 +160,7 @@ The UI remains dependency-light and works with the current Python/FastAPI servic
 
 - Contract tests validate normalization, migration, unknown components, constraints, actions, and revision digests.
 - Service tests validate atomic persistence, traversal protection, asset validation, revisions, import, and export.
+- Reference tests validate screenshot layers, extract-schema bounds, archive manifests, ZIP traversal protection, sanitization warnings, inert previews, and provenance on generated drafts.
 - Browser/unit tests validate command history, drag/resize math, breakpoint inheritance, locked nodes, and inspector changes.
 - Integration tests create a project, add and style elements, save, reload, preview, export, and inspect the bundle.
 - JSON_CODR-mode tests prove essential controls remain reachable and safe mode restores the uncustomized interface.
