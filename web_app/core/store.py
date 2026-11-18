@@ -4,7 +4,7 @@ import json
 import sqlite3
 import threading
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid7
 
@@ -58,7 +58,7 @@ _EVENT_STATUSES = {
 
 _EFFECT_TRANSITIONS = {
     EffectState.pending: {EffectState.leased, EffectState.cancel_requested, EffectState.failed},
-    EffectState.leased: {EffectState.running, EffectState.pending, EffectState.cancel_requested, EffectState.unknown_requires_reconciliation},
+    EffectState.leased: {EffectState.running, EffectState.pending, EffectState.failed, EffectState.cancel_requested, EffectState.unknown_requires_reconciliation},
     EffectState.running: {EffectState.succeeded, EffectState.failed, EffectState.cancel_requested, EffectState.unknown_requires_reconciliation},
     EffectState.cancel_requested: {EffectState.cancelled, EffectState.unknown_requires_reconciliation},
     EffectState.unknown_requires_reconciliation: {EffectState.succeeded, EffectState.failed},
@@ -269,27 +269,73 @@ class TaskStore:
         *,
         expected_state: EffectState,
         lease_owner: str | None = None,
+        lease_expires_at: datetime | None = None,
     ) -> EffectIntent:
         with self._transaction():
-            current = self.effect(task_id, effect_id)
-            if current.state is not expected_state:
-                raise ConcurrencyConflict(f"expected effect state {expected_state.value}, found {current.state.value}")
-            if state not in _EFFECT_TRANSITIONS.get(current.state, set()):
-                raise InvalidEffectTransition(f"cannot transition effect from {current.state.value} to {state.value}")
-            updated = current.model_copy(
-                update={
-                    "state": state,
-                    "attempt_count": current.attempt_count + (1 if state is EffectState.leased else 0),
-                    "lease_owner": lease_owner if state is EffectState.leased else None,
-                    "lease_expires_at": None,
-                    "updated_at": datetime.now(UTC),
-                }
+            return self._transition_effect_unlocked(
+                task_id,
+                effect_id,
+                state,
+                expected_state=expected_state,
+                lease_owner=lease_owner,
+                lease_expires_at=lease_expires_at,
             )
-            self._connection.execute(
-                "UPDATE effects SET effect_json = ? WHERE task_id = ? AND effect_id = ?",
-                (updated.model_dump_json(), task_id, effect_id),
+
+    def lease_pending_effects(
+        self,
+        *,
+        owner: str,
+        limit: int,
+        lease_duration: timedelta,
+        now: datetime | None = None,
+    ) -> tuple[EffectIntent, ...]:
+        if limit < 1:
+            raise ValueError("effect lease limit must be positive")
+        if lease_duration <= timedelta(0):
+            raise ValueError("effect lease duration must be positive")
+        leased_at = now or datetime.now(UTC)
+        with self._transaction():
+            rows = self._connection.execute(
+                """SELECT task_id, effect_id FROM effects
+                   WHERE json_extract(effect_json, '$.state') = ?
+                   ORDER BY rowid LIMIT ?""",
+                (EffectState.pending.value, limit),
+            ).fetchall()
+            return tuple(
+                self._transition_effect_unlocked(
+                    row["task_id"],
+                    row["effect_id"],
+                    EffectState.leased,
+                    expected_state=EffectState.pending,
+                    lease_owner=owner,
+                    lease_expires_at=leased_at + lease_duration,
+                    updated_at=leased_at,
+                )
+                for row in rows
             )
-            return updated
+
+    def recover_expired_effect_leases(self, *, now: datetime | None = None) -> tuple[EffectIntent, ...]:
+        observed_at = now or datetime.now(UTC)
+        with self._transaction():
+            rows = self._connection.execute(
+                """SELECT task_id, effect_id, effect_json FROM effects
+                   WHERE json_extract(effect_json, '$.state') IN (?, ?)
+                   ORDER BY rowid""",
+                (EffectState.leased.value, EffectState.running.value),
+            ).fetchall()
+            recovered = []
+            for row in rows:
+                intent = EffectIntent.model_validate_json(row["effect_json"])
+                if intent.lease_expires_at is None or intent.lease_expires_at > observed_at:
+                    continue
+                recovered.append(self._transition_effect_unlocked(
+                    row["task_id"],
+                    row["effect_id"],
+                    EffectState.unknown_requires_reconciliation,
+                    expected_state=intent.state,
+                    updated_at=observed_at,
+                ))
+            return tuple(recovered)
 
     def reconcile_effect(self, task_id: str, effect_id: str, outcome: str) -> EffectIntent:
         if outcome == "still_unknown":
@@ -303,6 +349,42 @@ class TaskStore:
             target,
             expected_state=EffectState.unknown_requires_reconciliation,
         )
+
+    def _transition_effect_unlocked(
+        self,
+        task_id: str,
+        effect_id: str,
+        state: EffectState,
+        *,
+        expected_state: EffectState,
+        lease_owner: str | None = None,
+        lease_expires_at: datetime | None = None,
+        updated_at: datetime | None = None,
+    ) -> EffectIntent:
+        row = self._connection.execute(
+            "SELECT effect_json FROM effects WHERE task_id = ? AND effect_id = ?", (task_id, effect_id)
+        ).fetchone()
+        if row is None:
+            raise KeyError((task_id, effect_id))
+        current = EffectIntent.model_validate_json(row["effect_json"])
+        if current.state is not expected_state:
+            raise ConcurrencyConflict(f"expected effect state {expected_state.value}, found {current.state.value}")
+        if state not in _EFFECT_TRANSITIONS.get(current.state, set()):
+            raise InvalidEffectTransition(f"cannot transition effect from {current.state.value} to {state.value}")
+        updated = current.model_copy(
+            update={
+                "state": state,
+                "attempt_count": current.attempt_count + (1 if state is EffectState.leased else 0),
+                "lease_owner": lease_owner if state is EffectState.leased else current.lease_owner,
+                "lease_expires_at": lease_expires_at if state is EffectState.leased else current.lease_expires_at,
+                "updated_at": updated_at or datetime.now(UTC),
+            }
+        )
+        self._connection.execute(
+            "UPDATE effects SET effect_json = ? WHERE task_id = ? AND effect_id = ?",
+            (updated.model_dump_json(), task_id, effect_id),
+        )
+        return updated
 
     def get(self, task_id: str) -> TaskRecord:
         with self._lock:
