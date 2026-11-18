@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from web_app.app import create_app
-from web_app.models import SettingsUpdate, SkillRoutingSettings, SkillScanSettings, UiSettingsUpdate
+from web_app.models import DesignerSettings, SettingsUpdate, SkillRoutingSettings, SkillScanSettings, UiSettingsUpdate
 from web_app.settings import SettingsService
 from web_app.workspace import WorkspaceService
 
@@ -25,7 +25,7 @@ class SettingsTests(unittest.TestCase):
 
     def test_defaults_and_persistence_preserve_unknown_configuration(self):
         service = SettingsService(self.root)
-        self.assertEqual(service.get().version, 2)
+        self.assertEqual(service.get().version, 3)
         self.assertEqual(service.get().app_version, "V1.0.18-alpha.16")
         self.assertTrue(service.get().skill_routing.auto_attach)
         self.assertTrue(service.get().ui.skill_catalog_open)
@@ -48,7 +48,46 @@ class SettingsTests(unittest.TestCase):
         raw = json.loads(service.path.read_text(encoding="utf-8"))
         self.assertEqual(raw["ui"]["future_ui"], "kept")
         self.assertEqual(raw["skill_scan"]["future_scan"], 42)
-        self.assertEqual(raw["version"], 2)
+        self.assertEqual(raw["version"], 3)
+
+    def test_designer_defaults_disabled_and_persists_independently(self):
+        service = SettingsService(self.root)
+
+        defaults = service.get().designer
+        self.assertEqual(defaults, DesignerSettings(
+            enabled=False,
+            default_mode="project",
+            snap=True,
+            grid_size=8,
+            autosave=True,
+        ))
+
+        updated = service.update(SettingsUpdate(designer=DesignerSettings(
+            enabled=True,
+            default_mode="json_codr",
+            snap=False,
+            grid_size=12,
+            autosave=False,
+        )))
+
+        self.assertTrue(updated.designer.enabled)
+        self.assertEqual(updated.designer.grid_size, 12)
+        self.assertEqual(SettingsService(self.root).get().designer, updated.designer)
+
+    def test_reading_or_updating_unrelated_settings_does_not_create_an_appearance_overlay(self):
+        service = SettingsService(self.root)
+        service.path.write_text(json.dumps({
+            "version": 3,
+            "ui": {"theme": "light"},
+            "legacy_appearance": {"schema": 1, "preset": "noc-light"},
+        }), encoding="utf-8")
+
+        self.assertFalse(service.get().designer.enabled)
+        service.update(SettingsUpdate(skill_routing=SkillRoutingSettings(auto_attach=False)))
+
+        raw = json.loads(service.path.read_text(encoding="utf-8"))
+        self.assertEqual(raw["legacy_appearance"], {"schema": 1, "preset": "noc-light"})
+        self.assertNotIn("appearance_overlay", raw.get("designer", {}))
 
     def test_api_gets_and_updates_settings(self):
         workspace = WorkspaceService(self.root)

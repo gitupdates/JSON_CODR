@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 
 from cli import load_config
-from web_app.models import GpuOptimizationSettings, GpuProfileSettings, SettingsUpdate, SkillRoutingSettings, SystemSettings, UiSettings
+from web_app.models import DesignerSettings, GpuOptimizationSettings, GpuProfileSettings, SettingsUpdate, SkillRoutingSettings, SystemSettings, UiSettings
 from web_app.version import APP_VERSION
 
 
@@ -22,7 +22,7 @@ class SettingsService:
         ui = raw.get("ui")
         if isinstance(ui, dict) and "primary_destination" not in ui and ui.get("skill_catalog_open") is True:
             ui["primary_destination"] = "skills"
-        raw["version"] = 2
+        raw["version"] = 3
         raw["app_version"] = APP_VERSION
         return SystemSettings.model_validate(raw)
 
@@ -50,6 +50,8 @@ class SettingsService:
             if unknown:
                 raise ValueError(f"Unknown model profile: {sorted(unknown)[0]}")
             current.gpu_optimization = GpuOptimizationSettings.model_validate(update.gpu_optimization)
+        if update.designer is not None:
+            current.designer = DesignerSettings.model_validate(update.designer)
         raw["version"] = current.version
         raw["app_version"] = APP_VERSION
         saved_ui = raw.setdefault("ui", {})
@@ -58,6 +60,7 @@ class SettingsService:
         raw.setdefault("skill_scan", {})["approved_directories"] = current.skill_scan.approved_directories
         raw["skill_routing"] = current.skill_routing.model_dump()
         raw["gpu_optimization"] = current.gpu_optimization.model_dump()
+        raw["designer"] = current.designer.model_dump()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.parent / f".settings-{uuid.uuid4().hex}.tmp"
         temporary.write_text(json.dumps(raw, indent=2), encoding="utf-8")
