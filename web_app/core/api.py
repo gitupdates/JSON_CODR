@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from web_app.core.artifact_store import ArtifactStore
+from web_app.core.agent_verification import build_task_delivery
 from web_app.core.contracts import TaskCommand, TaskStatus
 from web_app.core.policy import PolicyService
 from web_app.core.plan_service import PlanConflict, PlanService
@@ -331,6 +332,15 @@ def create_core_router(
                     yield chunk
 
         return StreamingResponse(content(), media_type=str(record["media_type"]))
+
+    @router.get("/api/tasks/{task_id}/delivery")
+    def task_delivery(task_id: str):
+        if artifact_store is None:
+            raise HTTPException(status_code=503, detail="artifact store unavailable")
+        try:
+            return build_task_delivery(task_id, runtime()[1], artifact_store())
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="task not found") from error
 
     @router.websocket("/ws/tasks")
     async def task_events(websocket: WebSocket):

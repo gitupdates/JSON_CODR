@@ -437,6 +437,22 @@ class WorkspaceTaskResponse(BaseModel):
     artifact_references: List[ObjectReference] = Field(default_factory=list)
 
 
+class TaskDelivery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    executed_plan_id: Optional[str] = None
+    executed_plan_revision: Optional[int] = None
+    executed_plan_digest: Optional[str] = None
+    route_disclosure: Dict[str, object] = Field(default_factory=dict)
+    changed_paths: tuple[str, ...] = ()
+    child_results: tuple[Dict[str, object], ...] = ()
+    verification: Dict[str, object] = Field(default_factory=dict)
+    warnings: tuple[str, ...] = ()
+    recovery_controls: Dict[str, bool] = Field(default_factory=dict)
+    artifacts: tuple[Dict[str, object], ...] = ()
+
+
 class CodingAgentLaunchRequest(CodingAgentGrantRequest):
     model: str = Field(min_length=1, max_length=200)
     mode: Literal["interactive", "delegated"] = "interactive"

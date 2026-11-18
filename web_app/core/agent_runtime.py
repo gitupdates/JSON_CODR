@@ -363,6 +363,16 @@ class AgentRuntime:
         self._tasks.append(task_id, TaskEventDraft(
             event_type="agent.verified", payload={"report_id": report.report_id, "goal_revision": goal.revision},
         ))
+        self._tasks.append(
+            task_id, TaskEventDraft(event_type="agent.phase_changed", payload={"phase": "delivering"}),
+        )
+        self._tasks.append(task_id, TaskEventDraft(
+            event_type="agent.delivery_ready",
+            payload={
+                "plan_id": current.plan_id, "plan_revision": current.revision,
+                "plan_digest": current.canonical_digest, "report_id": report.report_id,
+            },
+        ))
         self._tasks.append(task_id, TaskEventDraft(event_type="task.completed"))
         return self._tasks.get(task_id)
 
