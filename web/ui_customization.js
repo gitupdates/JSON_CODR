@@ -206,15 +206,21 @@
       return render();
     }
 
-    function choosePreset(presetId) {
+    function focusPresetCard(presetId) {
+      elements.presetDetails.querySelector?.(`[data-preset-choice="${presetId}"]`)?.focus?.();
+    }
+
+    function choosePreset(presetId, restoreCardFocus = false) {
       const draft = controller.getDraft();
       const replacingOverrides = presetId !== draft.preset && Object.keys(draft.components).length > 0;
       if (replacingOverrides && !confirmReplacement("Changing preset will replace component overrides. Continue?")) {
         elements.status.textContent = "Preset change canceled";
         render();
+        if (restoreCardFocus) focusPresetCard(draft.preset);
         return false;
       }
       preview(() => controller.selectPreset(presetId));
+      if (restoreCardFocus) focusPresetCard(presetId);
       return true;
     }
 
@@ -222,7 +228,7 @@
     elements.presetDetails.addEventListener("click", (event) => {
       const choice = event.target?.closest?.("[data-preset-choice]") || event.target;
       const presetId = choice?.dataset?.presetChoice;
-      if (presetId) choosePreset(presetId);
+      if (presetId) choosePreset(presetId, true);
     });
     elements.mode.addEventListener("change", () => preview(() => controller.setMode(elements.mode.value)));
     elements.density.addEventListener("change", () => preview(() => controller.setDensity(elements.density.value)));

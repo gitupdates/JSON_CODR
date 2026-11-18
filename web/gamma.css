@@ -221,7 +221,12 @@
 .ui-preset-card-copy { display: grid; gap: 4px; }
 .ui-preset-card small { color: var(--text-subtle); }
 .ui-preset-meta { color: var(--muted); font-size: .72rem; line-height: 1.4; }
-.preset-swatch { width: 32px; height: 32px; flex: 0 0 32px; border: 1px solid var(--line-strong); background: linear-gradient(135deg, var(--accent) 0 35%, var(--surface-panel) 35% 68%, var(--bg) 68%); }
+.preset-swatch { width: 32px; height: 32px; flex: 0 0 32px; border: 1px solid var(--line-strong); }
+[data-preset-swatch="gamma-operations"] { background: linear-gradient(135deg, #ff8a3d 0 35%, #12151a 35% 68%, #080a0d 68%); }
+[data-preset-swatch="json-codr-classic"] { background: linear-gradient(135deg, #c7ff4a 0 35%, #101319 35% 68%, #080a0d 68%); }
+[data-preset-swatch="noc-light"] { background: linear-gradient(135deg, #1769aa 0 35%, #ffffff 35% 68%, #eef2f5 68%); }
+[data-preset-swatch="terminal-focus"] { background: linear-gradient(135deg, #6fe7b1 0 35%, #090d12 35% 68%, #030506 68%); }
+[data-preset-swatch="accessible-read"] { background: linear-gradient(135deg, #005fcc 0 35%, #ffffff 35% 68%, #152532 68%); }
 .ui-component-editor { margin-top: 8px; padding: 10px; border: 1px solid var(--line); background: var(--surface-input); }
 .ui-component-editor > summary { cursor: pointer; font-weight: 700; }
 #ui-component-overrides { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin-top: 12px; }

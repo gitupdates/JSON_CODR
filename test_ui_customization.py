@@ -298,6 +298,8 @@ console.log(JSON.stringify({presets: Object.keys(catalog.PRESETS), components: c
         for preset in ("gamma-operations", "json-codr-classic", "accessible-read"):
             self.assertIn(f'[data-ui-preset="{preset}"][data-theme="dark"]', css)
             self.assertIn(f'[data-ui-preset="{preset}"][data-theme="light"]', css)
+        for preset in inventory["presets"]:
+            self.assertIn(f'[data-preset-swatch="{preset}"]', css)
 
     def test_gamma_fonts_are_approved_licensed_and_loaded_after_application_css(self):
         fonts = ROOT / "web" / "fonts"
@@ -355,9 +357,10 @@ const apply = effective => {
 };
 const controller = createController({catalog, load: () => null, save: (key, value) => writes.push([key, value]), apply});
 class Fake {
-  constructor() { this.value = ""; this.disabled = false; this.textContent = ""; this.innerHTML = ""; this.listeners = {}; }
+  constructor() { this.value = ""; this.disabled = false; this.textContent = ""; this.innerHTML = ""; this.listeners = {}; this.focusedSelector = null; }
   addEventListener(type, callback) { this.listeners[type] = callback; }
   fire(type, target = this) { this.listeners[type]?.({target, preventDefault() {}}); }
+  querySelector(selector) { return {focus: () => { this.focusedSelector = selector; }}; }
 }
 const elements = Object.fromEntries([
   "preset", "mode", "density", "typography", "components", "summary", "status",
@@ -391,6 +394,7 @@ assert.strictEqual(writes.length, 0);
 editor.begin();
 elements.presetDetails.fire("click", {dataset: {presetChoice: "json-codr-classic"}});
 assert.strictEqual(controller.getDraft().preset, "json-codr-classic");
+assert.strictEqual(elements.presetDetails.focusedSelector, '[data-preset-choice="json-codr-classic"]');
 elements.preset.value = "gamma-operations"; elements.preset.fire("change");
 elements.save.fire("click");
 assert.strictEqual(writes.length, 1);
