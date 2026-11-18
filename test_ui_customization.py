@@ -365,6 +365,24 @@ assert.deepStrictEqual(controller.getDraft(), catalog.DEFAULT_STATE);
         self.assertIn('id="ui-preview-status" class="meta" role="status" aria-live="polite"', html)
         self.assertNotIn('id="setting-theme"', html)
 
+    def test_noc_navigation_collapse_preserves_destination_and_accessibility_contracts(self):
+        app = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+        css = (ROOT / "web" / "gamma.css").read_text(encoding="utf-8")
+        html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+        start = app.index("function setSidebarCollapsed")
+        end = app.index("function selectHardwareSection", start)
+        collapse_function = app[start:end]
+        self.assertIn('classList.toggle("sidebar-collapsed", collapsed)', collapse_function)
+        self.assertIn('aria-expanded', collapse_function)
+        self.assertIn('aria-label', collapse_function)
+        self.assertIn('saveSettings({ ui: { sidebar_collapsed: collapsed } })', collapse_function)
+        self.assertNotIn("activeDestination =", collapse_function)
+        self.assertIn(':root[data-ui-preset="noc-light"] body.sidebar-collapsed', css)
+        self.assertIn('.sidebar-collapsed .sidebar-destination', css)
+        self.assertIn('id="sidebar-collapse"', html)
+        self.assertIn('aria-label="Collapse navigation"', html)
+        self.assertIn('aria-expanded="true"', html)
+
 
 if __name__ == "__main__":
     unittest.main()

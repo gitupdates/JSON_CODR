@@ -66,6 +66,9 @@
 :root[data-ui-navigation="rail"] .sidebar-destination span,
 :root[data-ui-navigation="rail"] .hardware-subnavigation { display: none; }
 :root[data-ui-navigation="high-contrast"] .app-sidebar { border-right: 2px solid var(--text); }
+:root[data-ui-preset="noc-light"] body.sidebar-collapsed .app-sidebar { border-right: 1px solid var(--line-strong); }
+:root[data-ui-preset="noc-light"] body.sidebar-collapsed .sidebar-destination { min-width: 44px; border-radius: 3px; }
+:root[data-ui-preset="noc-light"] body.sidebar-collapsed .sidebar-destination.is-active { box-shadow: inset 3px 0 0 var(--signal-orange); }
 
 /* Top bar variants */
 :root[data-ui-topbar="classic"] .topbar { border-bottom-color: var(--line); }
