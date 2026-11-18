@@ -113,6 +113,9 @@ class CapabilityRegistry:
             )
         )
 
+    def has_capability(self, capability_id: str) -> bool:
+        return any(manifest.capability_id == capability_id for manifest, _, _ in self._entries.values())
+
     def _entries_for_capability(self, capability_id: str) -> tuple[RegistryEntry, ...]:
         return tuple(
             entry
