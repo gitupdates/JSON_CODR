@@ -106,6 +106,22 @@ assert.strictEqual(migrationWrites.length, 0);
 '''
         self.run_node(source, CATALOG_MODULE, [CONTROLLER_MODULE])
 
+    def test_server_legacy_mode_seeds_without_writing_or_breaking_fixed_preset(self):
+        source = r'''
+const assert = require("assert");
+const catalog = require(process.argv[1]);
+const createController = require(process.argv[2]);
+const writes = [];
+const controller = createController({catalog, load: () => null, save: (...args) => writes.push(args)});
+controller.seedLegacyMode("dark");
+assert.strictEqual(controller.getState().mode, "dark");
+assert.strictEqual(controller.getEffectiveState().effectiveMode, "light");
+assert.strictEqual(writes.length, 0);
+controller.selectPreset("json-codr-classic");
+assert.strictEqual(controller.getEffectiveState().effectiveMode, "dark");
+'''
+        self.run_node(source, CATALOG_MODULE, [CONTROLLER_MODULE])
+
     def test_controller_cancel_restores_snapshot_without_writing(self):
         source = r'''
 const assert = require("assert");
@@ -269,6 +285,85 @@ console.log(JSON.stringify({presets: Object.keys(catalog.PRESETS), components: c
         gamma_css = '/static/gamma.css?v=1.0.18-alpha.10'
         self.assertLess(html.index(app_css), html.index(fonts_css))
         self.assertLess(html.index(fonts_css), html.index(gamma_css))
+
+    def test_gamma_has_no_ibm_plex_dependency_or_catalog_option(self):
+        for relative in (
+            "web/ui_catalog.js", "web/fonts/fonts.css", "web/fonts/THIRD_PARTY_NOTICES.md",
+        ):
+            content = (ROOT / relative).read_text(encoding="utf-8").lower()
+            self.assertNotIn("ibm plex", content, relative)
+            self.assertNotIn("ibm-plex", content, relative)
+        source = r'''
+const assert = require("assert");
+const catalog = require(process.argv[1]);
+assert.strictEqual(catalog.DEFAULT_STATE.typography, "system");
+assert.ok(!Object.hasOwn(catalog.TYPOGRAPHIES, "ibm-plex"));
+'''
+        self.run_node(source)
+
+    def test_appearance_editor_previews_catalog_values_and_controls_draft_lifecycle(self):
+        source = r'''
+const assert = require("assert");
+const catalog = require(process.argv[1]);
+const createController = require(process.argv[2]);
+assert.strictEqual(typeof createController.bindUICustomizationEditor, "function");
+const writes = [];
+const root = {dataset: {}, style: {}};
+const apply = effective => {
+  root.dataset.theme = effective.effectiveMode;
+  root.dataset.uiPreset = effective.preset;
+  root.dataset.uiDensity = effective.density;
+  root.dataset.uiTypography = effective.typography;
+  for (const [family, variant] of Object.entries(effective.components)) {
+    root.dataset[`ui${family[0].toUpperCase()}${family.slice(1)}`] = variant;
+  }
+};
+const controller = createController({catalog, load: () => null, save: (key, value) => writes.push([key, value]), apply});
+class Fake {
+  constructor() { this.value = ""; this.disabled = false; this.textContent = ""; this.innerHTML = ""; this.listeners = {}; }
+  addEventListener(type, callback) { this.listeners[type] = callback; }
+  fire(type, target = this) { this.listeners[type]?.({target, preventDefault() {}}); }
+}
+const elements = Object.fromEntries([
+  "preset", "mode", "density", "typography", "components", "summary", "status",
+  "save", "cancel", "resetPreset", "restoreDefaults", "modeHelp",
+].map(key => [key, new Fake()]));
+const editor = createController.bindUICustomizationEditor({controller, catalog, elements});
+assert.ok(elements.preset.innerHTML.includes("NOC Light"));
+assert.ok(elements.components.innerHTML.includes("data-family=\"navigation\""));
+elements.preset.value = "terminal-focus"; elements.preset.fire("change");
+assert.strictEqual(root.dataset.theme, "dark");
+assert.strictEqual(elements.mode.disabled, true);
+elements.components.fire("change", {dataset: {family: "navigation"}, value: "operations"});
+assert.strictEqual(root.dataset.uiNavigation, "operations");
+assert.ok(elements.summary.textContent.includes("1 override"));
+elements.preset.value = "gamma-operations"; elements.preset.fire("change");
+elements.typography.value = "opendyslexic"; elements.typography.fire("change");
+assert.strictEqual(controller.getDraft().density, "comfortable");
+elements.cancel.fire("click");
+assert.strictEqual(controller.getDraft().preset, "noc-light");
+assert.strictEqual(writes.length, 0);
+editor.begin();
+elements.preset.value = "gamma-operations"; elements.preset.fire("change");
+elements.save.fire("click");
+assert.strictEqual(writes.length, 1);
+elements.restoreDefaults.fire("click");
+assert.deepStrictEqual(controller.getDraft(), catalog.DEFAULT_STATE);
+'''
+        self.run_node(source, CATALOG_MODULE, [CONTROLLER_MODULE])
+
+    def test_appearance_editor_markup_is_accessible_and_complete(self):
+        html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+        for element_id in (
+            "ui-preset", "ui-mode", "ui-density", "ui-typography", "ui-component-overrides",
+            "ui-override-summary", "ui-preview-status", "ui-save", "ui-cancel",
+            "ui-reset-preset", "ui-restore-defaults",
+        ):
+            self.assertIn(f'id="{element_id}"', html)
+        for control_id in ("ui-preset", "ui-mode", "ui-density", "ui-typography"):
+            self.assertIn(f'for="{control_id}"', html)
+        self.assertIn('id="ui-preview-status" class="meta" role="status" aria-live="polite"', html)
+        self.assertNotIn('id="setting-theme"', html)
 
 
 if __name__ == "__main__":

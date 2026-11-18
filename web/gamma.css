@@ -127,6 +127,15 @@
 
 :focus-visible { outline: 3px solid var(--focus-outline); outline-offset: 3px; }
 
+.appearance-editor { display: grid; gap: 8px; }
+.appearance-editor h3 { margin: 0; }
+.appearance-editor .setting-select { width: min(100%, 420px); max-width: 420px; }
+.ui-component-editor { margin-top: 8px; padding: 10px; border: 1px solid var(--line); background: var(--surface-input); }
+.ui-component-editor > summary { cursor: pointer; font-weight: 700; }
+#ui-component-overrides { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin-top: 12px; }
+.ui-component-row { display: grid; gap: 4px; color: var(--text-soft); font-size: .85rem; }
+.ui-component-row .setting-select { width: 100%; margin: 0; text-transform: capitalize; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }

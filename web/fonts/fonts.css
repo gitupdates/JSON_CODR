@@ -14,7 +14,7 @@
   font-display: swap;
 }
 
-:root { --font-ui: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif; --font-code: "IBM Plex Mono", "Cascadia Code", Consolas, monospace; }
+:root { --font-ui: "Segoe UI", system-ui, sans-serif; --font-code: "Cascadia Code", Consolas, monospace; }
 :root[data-ui-typography="system"] { --font-ui: system-ui, -apple-system, "Segoe UI", sans-serif; }
 :root[data-ui-typography="mono-forward"] { --font-ui: "Cascadia Code", Consolas, ui-monospace, monospace; }
 :root[data-ui-typography="opendyslexic"] { --font-ui: "OpenDyslexic", system-ui, sans-serif; }

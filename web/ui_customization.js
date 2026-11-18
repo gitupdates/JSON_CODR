@@ -1,7 +1,10 @@
 (function (root, factory) {
   const createUICustomizationController = factory();
   if (typeof module === "object" && module.exports) module.exports = createUICustomizationController;
-  if (root) root.createUICustomizationController = createUICustomizationController;
+  if (root) {
+    root.createUICustomizationController = createUICustomizationController;
+    root.bindUICustomizationEditor = createUICustomizationController.bindUICustomizationEditor;
+  }
 })(typeof window !== "undefined" ? window : globalThis, function () {
   "use strict";
 
@@ -14,7 +17,7 @@
     try { return JSON.parse(value); } catch (_error) { return null; }
   }
 
-  return function createUICustomizationController(options = {}) {
+  function createUICustomizationController(options = {}) {
     const catalog = options.catalog || globalThis.JSONCodrUICatalog;
     if (!catalog) throw new Error("JSONCodrUICatalog is required");
     const load = options.load || ((key) => {
@@ -34,6 +37,7 @@
     }
 
     const stored = parseStored(safeLoad(catalog.STORAGE_KEY));
+    const hasVersionedState = Boolean(stored && typeof stored === "object" && stored.schema === 1);
     const legacyMode = safeLoad(catalog.LEGACY_THEME_KEY);
     let savedState = catalog.normalizeState(stored, legacyMode);
     let draftState = clone(savedState);
@@ -100,6 +104,18 @@
       return selectPreset(draftState.preset);
     }
 
+    function restoreDefaults() {
+      return replaceDraft(catalog.DEFAULT_STATE);
+    }
+
+    function seedLegacyMode(mode) {
+      if (hasVersionedState || !catalog.MODES.includes(mode)) return clone(savedState);
+      savedState = catalog.normalizeState({ ...savedState, mode });
+      draftState = clone(savedState);
+      snapshot = clone(savedState);
+      return applyDraft();
+    }
+
     function save() {
       savedState = catalog.normalizeState(draftState);
       draftState = clone(savedState);
@@ -130,8 +146,82 @@
       setComponent,
       resetComponent,
       resetPreset,
+      restoreDefaults,
+      seedLegacyMode,
       save,
       cancel,
     });
-  };
+  }
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (character) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    })[character]);
+  }
+
+  function optionsHtml(entries, selected) {
+    return entries.map(([value, label]) =>
+      `<option value="${escapeHtml(value)}"${value === selected ? " selected" : ""}>${escapeHtml(label)}</option>`,
+    ).join("");
+  }
+
+  function bindUICustomizationEditor({ controller, catalog, elements }) {
+    if (!controller || !catalog || !elements) throw new Error("Appearance editor requires controller, catalog, and elements");
+
+    function render() {
+      const draft = controller.getDraft();
+      const preset = catalog.PRESETS[draft.preset];
+      elements.preset.innerHTML = optionsHtml(Object.entries(catalog.PRESETS).map(([id, value]) => [id, value.label]), draft.preset);
+      elements.preset.value = draft.preset;
+      elements.mode.innerHTML = optionsHtml(catalog.MODES.map((mode) => [mode, mode[0].toUpperCase() + mode.slice(1)]), draft.mode);
+      elements.mode.value = draft.mode;
+      elements.mode.disabled = preset.colorCapability === "fixed";
+      elements.modeHelp.textContent = preset.colorCapability === "fixed"
+        ? `${preset.label} uses fixed ${preset.fixedMode} colors.`
+        : "System follows your Windows appearance.";
+      elements.density.innerHTML = optionsHtml(preset.densities.map((value) => [value, value[0].toUpperCase() + value.slice(1)]), draft.density);
+      elements.density.value = draft.density;
+      elements.typography.innerHTML = optionsHtml(preset.typographies.map((value) => [value, catalog.TYPOGRAPHIES[value].label]), draft.typography);
+      elements.typography.value = draft.typography;
+      elements.components.innerHTML = Object.entries(catalog.COMPONENTS).map(([family, definition]) => {
+        const selected = draft.components[family] || preset.components[family];
+        const choices = definition.variants.map((variant) => [variant, variant.replaceAll("-", " ")]);
+        return `<label class="ui-component-row">${escapeHtml(definition.label)}<select class="setting-select" data-family="${escapeHtml(family)}">${optionsHtml(choices, selected)}</select></label>`;
+      }).join("");
+      const count = Object.keys(draft.components).length;
+      elements.summary.textContent = count === 1 ? "1 override" : `${count} overrides`;
+      return draft;
+    }
+
+    function preview(mutator) {
+      mutator();
+      elements.status.textContent = "Previewing unsaved appearance";
+      return render();
+    }
+
+    elements.preset.addEventListener("change", () => preview(() => controller.selectPreset(elements.preset.value)));
+    elements.mode.addEventListener("change", () => preview(() => controller.setMode(elements.mode.value)));
+    elements.density.addEventListener("change", () => preview(() => controller.setDensity(elements.density.value)));
+    elements.typography.addEventListener("change", () => preview(() => controller.setTypography(elements.typography.value)));
+    elements.components.addEventListener("change", (event) => {
+      const family = event.target?.dataset?.family;
+      if (family) preview(() => controller.setComponent(family, event.target.value));
+    });
+    elements.save.addEventListener("click", () => { controller.save(); elements.status.textContent = "Appearance saved"; render(); });
+    elements.cancel.addEventListener("click", () => { controller.cancel(); elements.status.textContent = "Appearance preview canceled"; render(); });
+    elements.resetPreset.addEventListener("click", () => preview(() => controller.resetPreset()));
+    elements.restoreDefaults.addEventListener("click", () => preview(() => controller.restoreDefaults()));
+
+    function begin() {
+      controller.begin();
+      elements.status.textContent = "Appearance controls ready";
+      return render();
+    }
+
+    begin();
+    return Object.freeze({ begin, render });
+  }
+
+  createUICustomizationController.bindUICustomizationEditor = bindUICustomizationEditor;
+  return createUICustomizationController;
 });

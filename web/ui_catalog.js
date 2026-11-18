@@ -10,8 +10,7 @@
   const MODES = Object.freeze(["light", "dark", "system"]);
   const DENSITIES = Object.freeze(["compact", "comfortable"]);
   const TYPOGRAPHIES = Object.freeze({
-    "ibm-plex": { label: "IBM Plex" },
-    system: { label: "System" },
+    system: { label: "System sans" },
     "mono-forward": { label: "Mono forward" },
     opendyslexic: { label: "OpenDyslexic" },
   });
@@ -36,8 +35,8 @@
       defaultMode: "dark",
       densities: ["compact", "comfortable"],
       defaultDensity: "compact",
-      typographies: ["ibm-plex", "system", "opendyslexic"],
-      defaultTypography: "ibm-plex",
+      typographies: ["system", "opendyslexic"],
+      defaultTypography: "system",
       components: {
         shell: "operations", navigation: "operations", topbar: "operations", panels: "outlined",
         controls: "compact", tabs: "underline", composer: "operations", status: "signal", terminal: "integrated",
@@ -50,7 +49,7 @@
       defaultMode: "dark",
       densities: ["comfortable", "compact"],
       defaultDensity: "comfortable",
-      typographies: ["system", "ibm-plex", "opendyslexic"],
+      typographies: ["system", "opendyslexic"],
       defaultTypography: "system",
       components: {
         shell: "classic", navigation: "classic", topbar: "classic", panels: "glass",
@@ -65,8 +64,8 @@
       defaultMode: "light",
       densities: ["compact", "comfortable"],
       defaultDensity: "compact",
-      typographies: ["ibm-plex", "system", "opendyslexic"],
-      defaultTypography: "ibm-plex",
+      typographies: ["system", "opendyslexic"],
+      defaultTypography: "system",
       components: {
         shell: "operations-light", navigation: "operations", topbar: "operations", panels: "flat",
         controls: "compact", tabs: "segmented", composer: "operations", status: "signal", terminal: "integrated-light",
@@ -80,7 +79,7 @@
       defaultMode: "dark",
       densities: ["compact", "comfortable"],
       defaultDensity: "compact",
-      typographies: ["mono-forward", "ibm-plex", "system"],
+      typographies: ["mono-forward", "system"],
       defaultTypography: "mono-forward",
       components: {
         shell: "focus", navigation: "rail", topbar: "minimal", panels: "flat",
@@ -94,7 +93,7 @@
       defaultMode: "system",
       densities: ["comfortable"],
       defaultDensity: "comfortable",
-      typographies: ["opendyslexic", "system", "ibm-plex"],
+      typographies: ["opendyslexic", "system"],
       defaultTypography: "opendyslexic",
       components: {
         shell: "accessible", navigation: "high-contrast", topbar: "high-contrast", panels: "high-contrast",
@@ -108,7 +107,7 @@
     preset: "noc-light",
     mode: "light",
     density: "compact",
-    typography: "ibm-plex",
+    typography: "system",
     components: {},
   });
 

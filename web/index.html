@@ -288,13 +288,30 @@
         <div class="context-head"><div><span class="eyebrow">SETTINGS</span><h2>System configuration</h2></div></div>
         <section class="dependency-review">
           <strong>Interface</strong>
-          <label class="setting-row" for="setting-theme">Appearance</label>
-          <select id="setting-theme" class="setting-select" aria-describedby="setting-theme-help" disabled>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-            <option value="system">System</option>
-          </select>
-          <p id="setting-theme-help" class="meta setting-help">System follows your Windows appearance.</p>
+          <div class="appearance-editor" aria-labelledby="appearance-heading">
+            <h3 id="appearance-heading">Appearance</h3>
+            <p class="meta">Preview a preset, then customize individual component families. Changes remain local to this browser until saved.</p>
+            <label class="setting-row" for="ui-preset">Preset</label>
+            <select id="ui-preset" class="setting-select"></select>
+            <label class="setting-row" for="ui-mode">Color mode</label>
+            <select id="ui-mode" class="setting-select" aria-describedby="ui-mode-help"></select>
+            <p id="ui-mode-help" class="meta setting-help">System follows your Windows appearance.</p>
+            <label class="setting-row" for="ui-density">Density</label>
+            <select id="ui-density" class="setting-select"></select>
+            <label class="setting-row" for="ui-typography">Typography</label>
+            <select id="ui-typography" class="setting-select"></select>
+            <details class="ui-component-editor">
+              <summary>Component mappings · <span id="ui-override-summary">0 overrides</span></summary>
+              <div id="ui-component-overrides"></div>
+            </details>
+            <p id="ui-preview-status" class="meta" role="status" aria-live="polite">Appearance controls loading</p>
+            <div class="actions">
+              <button id="ui-save" class="primary" type="button">Save appearance</button>
+              <button id="ui-cancel" class="secondary" type="button">Cancel preview</button>
+              <button id="ui-reset-preset" class="secondary" type="button">Reset preset mappings</button>
+              <button id="ui-restore-defaults" class="secondary" type="button">Restore NOC Light</button>
+            </div>
+          </div>
           <label class="setting-row"><input id="setting-skills-open" type="checkbox" disabled /> Reopen Skills panel on startup</label>
         </section>
         <section class="dependency-review">

@@ -75,7 +75,18 @@ const elements = {
   destructiveInput: document.querySelector("#destructive-confirmation-input"),
   destructiveSubmit: document.querySelector("#destructive-confirmation-submit"),
   settingSkillsOpen: document.querySelector("#setting-skills-open"),
-  settingTheme: document.querySelector("#setting-theme"),
+  uiPreset: document.querySelector("#ui-preset"),
+  uiMode: document.querySelector("#ui-mode"),
+  uiModeHelp: document.querySelector("#ui-mode-help"),
+  uiDensity: document.querySelector("#ui-density"),
+  uiTypography: document.querySelector("#ui-typography"),
+  uiComponentOverrides: document.querySelector("#ui-component-overrides"),
+  uiOverrideSummary: document.querySelector("#ui-override-summary"),
+  uiPreviewStatus: document.querySelector("#ui-preview-status"),
+  uiSave: document.querySelector("#ui-save"),
+  uiCancel: document.querySelector("#ui-cancel"),
+  uiResetPreset: document.querySelector("#ui-reset-preset"),
+  uiRestoreDefaults: document.querySelector("#ui-restore-defaults"),
   approvedSkillDirectories: document.querySelector("#approved-skill-directories"),
   hardwareStatus: document.querySelector("#hardware-status"),
   hardwareDetect: document.querySelector("#hardware-detect"),
@@ -211,7 +222,6 @@ let navigationChangeRevision = 0;
 let activeDestination = "workspace";
 let activeHardwareSection = "overview";
 let sidebarWidth = 260;
-let currentThemeMode = normalizeThemeMode(localStorage.getItem("json_codr_theme"));
 let persistedThemeMode = null;
 let excludedSkillIds = [];
 let pendingDestructiveAction = null;
@@ -463,21 +473,39 @@ function normalizeThemeMode(mode) {
   return VALID_THEME_MODES.has(mode) ? mode : "dark";
 }
 
-function applyThemeMode(mode, { cache = true } = {}) {
-  const normalized = normalizeThemeMode(mode);
-  const effective = normalized === "system" ? (systemThemeQuery.matches ? "dark" : "light") : normalized;
-  currentThemeMode = normalized;
-  document.documentElement.dataset.theme = effective;
-  document.documentElement.style.colorScheme = effective;
-  if (cache) localStorage.setItem("json_codr_theme", normalized);
-  if (elements.settingTheme) elements.settingTheme.value = normalized;
-  return effective;
+function applyAppearanceState(effective) {
+  document.documentElement.dataset.theme = effective.effectiveMode;
+  document.documentElement.style.colorScheme = effective.effectiveMode;
+  document.documentElement.dataset.uiPreset = effective.preset;
+  document.documentElement.dataset.uiDensity = effective.density;
+  document.documentElement.dataset.uiTypography = effective.typography;
+  for (const [family, variant] of Object.entries(effective.components)) {
+    document.documentElement.dataset[`ui${family[0].toUpperCase()}${family.slice(1)}`] = variant;
+  }
 }
 
-systemThemeQuery.addEventListener("change", () => {
-  if (currentThemeMode === "system") applyThemeMode("system", { cache: false });
+const uiCustomizationController = window.createUICustomizationController({
+  catalog: window.JSONCodrUICatalog,
+  apply: applyAppearanceState,
+  announce: (message) => { if (elements.uiPreviewStatus) elements.uiPreviewStatus.textContent = message; },
 });
-applyThemeMode(currentThemeMode);
+const uiCustomizationEditor = window.bindUICustomizationEditor({
+  controller: uiCustomizationController,
+  catalog: window.JSONCodrUICatalog,
+  elements: {
+    preset: elements.uiPreset, mode: elements.uiMode, modeHelp: elements.uiModeHelp,
+    density: elements.uiDensity, typography: elements.uiTypography,
+    components: elements.uiComponentOverrides, summary: elements.uiOverrideSummary,
+    status: elements.uiPreviewStatus, save: elements.uiSave, cancel: elements.uiCancel,
+    resetPreset: elements.uiResetPreset, restoreDefaults: elements.uiRestoreDefaults,
+  },
+});
+
+systemThemeQuery.addEventListener("change", () => {
+  if (uiCustomizationController.getDraft().mode === "system") {
+    applyAppearanceState(uiCustomizationController.getEffectiveState());
+  }
+});
 
 function boundedSidebarWidth(value) {
   return Math.max(220, Math.min(380, Math.round(Number(value) || 260)));
@@ -550,6 +578,7 @@ function selectDestination(destination, { persist = true, focus = false } = {}) 
   for (const view of elements.destinationViews) view.hidden = view.dataset.view !== destination;
   elements.hardwareSubnavigation.hidden = destination !== "hardware";
   if (destination === "hardware") selectHardwareSection(activeHardwareSection, { persist: false });
+  if (destination === "settings") uiCustomizationEditor.begin();
   if (destination === "terminal") {
     initializeXterm();
     if (!terminalId) elements.terminalStatus.textContent = "PowerShell is ready to start";
@@ -1121,8 +1150,9 @@ async function loadSettings() {
   if (!response.ok) throw new Error("Unable to load settings");
   settingsState = await response.json();
   persistedThemeMode = normalizeThemeMode(settingsState.ui.theme);
-  if (themeRevisionAtStart === themeSaveRevision) {
-    applyThemeMode(persistedThemeMode);
+  if (themeRevisionAtStart === themeSaveRevision && !localStorage.getItem(window.JSONCodrUICatalog.STORAGE_KEY)) {
+    uiCustomizationController.seedLegacyMode(persistedThemeMode);
+    uiCustomizationEditor.render();
   }
   if (navigationRevisionAtStart === navigationChangeRevision) {
     applySidebarWidth(settingsState.ui.sidebar_width);
@@ -1133,7 +1163,6 @@ async function loadSettings() {
   if (skillsRevisionAtStart === skillsChangeRevision) {
     elements.settingSkillsOpen.checked = settingsState.ui.primary_destination === "skills";
   }
-  elements.settingTheme.disabled = false;
   elements.settingSkillsOpen.disabled = false;
   renderApprovedDirectories();
   renderGpuProfileControls();
@@ -2604,15 +2633,14 @@ elements.settingSkillsOpen.addEventListener("change", () => {
   const open = elements.settingSkillsOpen.checked;
   selectDestination(open ? "skills" : "chat");
 });
-elements.settingTheme.addEventListener("change", async () => {
+elements.uiSave.addEventListener("click", async () => {
   const revision = ++themeSaveRevision;
-  const nextThemeMode = normalizeThemeMode(elements.settingTheme.value);
-  applyThemeMode(nextThemeMode);
+  const nextThemeMode = uiCustomizationController.getState().mode;
   try {
     await saveSettings({ ui: { theme: nextThemeMode } });
   } catch (error) {
     if (revision === themeSaveRevision) {
-      applyThemeMode(persistedThemeMode || "dark");
+      elements.uiPreviewStatus.textContent = "Appearance saved locally; server preference could not be updated.";
     }
     showError(error.message);
   }
