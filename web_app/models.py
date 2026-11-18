@@ -394,6 +394,14 @@ class BrokerAdapterRunRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=20_000)
 
 
+class ProjectWorkspaceRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_root: str = Field(min_length=1, max_length=1000)
+    model: str = Field(min_length=1, max_length=200)
+    outcome: str = Field(min_length=1, max_length=20_000)
+
+
 class CodingAgentLaunchRequest(CodingAgentGrantRequest):
     model: str = Field(min_length=1, max_length=200)
     mode: Literal["interactive", "delegated"] = "interactive"

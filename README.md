@@ -1,12 +1,14 @@
 # JSON_CODR
 
-JSON_CODR V1.0.18-alpha.6 is a localhost-only, unified project agent for local Ollama models.
+JSON_CODR V1.0.18-alpha.7 is a localhost-only, unified project agent for local Ollama models.
 
 ## Unified project workflow
 
 Choose a model, describe the outcome in **Chat**, and run it. JSON_CODR creates one durable task for the conversation and routes all model, project, terminal, Git, browser, skill, and optional-provider work through that task. Users do not select an internal executor.
 
 The response panel shows live activity and the requested and effective model identities. Use **Steer** by entering more direction while a task is active, **Stop** to request cancellation, **Retry** to create a linked retry, and **Undo** when the task produced a checkpoint. Execution details stay collapsed until needed. The **Live CLI** is the terminal view of the same local system, with command history, clipboard support, resize/reconnect, and the Ctrl+X then Ctrl+C interrupt chord.
+
+V1.0.18-alpha.7 turns Live CLI into a provider-neutral **Project Workspace**. **Shell** retains the interactive ConPTY PowerShell session. **Agent** accepts a project root, installed local model, and coding outcome, then runs the schema-constrained Git broker through CoreService and displays the requested model, effective model, route, and verified action result. It does not require or impersonate Codex, Continue, or Aider.
 
 Local reads, searches, tests, bounded edits, and inference can run automatically inside the selected project boundary. Network access, installation, Git publication, destructive changes, and budget overrides require policy approval. Persistent grants remain project-scoped and can be revoked. A model without native tool calling may use a verified brokered route; JSON_CODR always displays the requested and effective model and never labels that route as native.
 

@@ -538,6 +538,67 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(len(commands), 1)
         self.assertIn('"command_type":"git.execute"', commands[0])
 
+    def test_project_workspace_reuses_project_grant_and_returns_verified_result(self):
+        class WorkspaceModelService(FakeService):
+            async def chat(self, model, prompt, images=None):
+                baseline = prompt.split("baseline_fingerprint='", 1)[1].split("'", 1)[0]
+                project_root = prompt.split("project_root='", 1)[1].split("';", 1)[0]
+                return ChatResult(
+                    model=model,
+                    status="ready",
+                    summary="Workspace action ready",
+                    content=json.dumps({
+                        "schema_version": 1,
+                        "project_root": project_root,
+                        "baseline_fingerprint": baseline,
+                        "actions": [{"kind": "status"}],
+                    }),
+                )
+
+        project = Path(self.temporary_directory.name) / "workspace-project"
+        project.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=project, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=project, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project, check=True)
+        (project / "README.md").write_text("test\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=project, check=True)
+        subprocess.run(["git", "commit", "-m", "initial"], cwd=project, check=True, capture_output=True)
+        agents = CodingAgentService(self.workspace.data_root, executable_finder=lambda name: None)
+        client = self.track_core_client(TestClient(create_app(
+            WorkspaceModelService(), self.workspace, coding_agents=agents,
+        )))
+        request = {
+            "project_root": str(project),
+            "model": "yi-coder:9b-chat",
+            "outcome": "Inspect the repository and report its current status",
+        }
+
+        first = client.post("/api/project-workspace/run", headers={"X-JSON-CODR": "1"}, json=request)
+        second = client.post("/api/project-workspace/run", headers={"X-JSON-CODR": "1"}, json=request)
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(first.json()["route"], "broker_adapter")
+        self.assertEqual(first.json()["requested_model"], "yi-coder:9b-chat")
+        self.assertEqual(first.json()["effective_model"], "yi-coder:9b-chat")
+        self.assertEqual(first.json()["result"]["status"], "completed")
+        self.assertEqual(second.status_code, 201)
+        grants = [item for item in agents.status()["grants"] if item["profile"] == "broker"]
+        self.assertEqual(len(grants), 1)
+
+    def test_project_workspace_rejects_missing_project_before_model_execution(self):
+        response = self.client.post(
+            "/api/project-workspace/run",
+            headers={"X-JSON-CODR": "1"},
+            json={
+                "project_root": str(Path(self.temporary_directory.name) / "missing"),
+                "model": "qwen3:4b",
+                "outcome": "Inspect the project",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("existing directory", response.json()["detail"])
+
     def test_optimized_connector_catalog_and_install_plans_are_additive(self):
         client = TestClient(create_app(self.service, self.workspace, optimized=True))
 
@@ -636,9 +697,9 @@ class WebApiTests(unittest.TestCase):
     def test_health_reports_ollama_readiness(self):
         self.assertEqual(
             self.client.get("/api/health").json(),
-                {"status": "ready", "ollama": True, "app_version": "V1.0.18-alpha.6"},
+                {"status": "ready", "ollama": True, "app_version": "V1.0.18-alpha.7"},
         )
-        self.assertEqual(self.client.app.version, "V1.0.18-alpha.6")
+        self.assertEqual(self.client.app.version, "V1.0.18-alpha.7")
         self.service.available = False
         self.assertEqual(self.client.get("/api/health").json()["status"], "degraded")
 

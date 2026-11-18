@@ -327,6 +327,17 @@ footer { padding: 22px 0 34px; color: var(--text-subtle); font: 600 10px ui-mono
 .terminal-tabs { display: flex; gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 .terminal-tabs button { min-width: 104px; min-height: 36px; padding: 7px 12px; border: 1px solid transparent; background: transparent; color: var(--muted); font-weight: 700; }
 .terminal-tabs button[aria-selected="true"] { border-color: var(--info-line); background: var(--surface-raised); color: var(--text); }
+.workspace-agent { padding: 16px; background: var(--terminal-bg); }
+.workspace-agent-form { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(180px, 0.65fr); gap: 14px; }
+.workspace-agent-form label { display: grid; gap: 7px; color: var(--muted); font-size: 0.82rem; font-weight: 700; }
+.workspace-agent-form input, .workspace-agent-form select, .workspace-agent-form textarea { width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); background: var(--surface-input); color: var(--text); font: inherit; }
+.workspace-agent-form textarea { resize: vertical; line-height: 1.5; }
+.workspace-outcome { grid-column: 1 / -1; }
+.workspace-agent-form button { justify-self: start; }
+.workspace-agent-report { margin-top: 16px; border: 1px solid var(--line); background: var(--terminal-panel); }
+.workspace-agent-report .meta { margin: 0; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.workspace-agent-report pre { min-height: 150px; max-height: 360px; margin: 0; padding: 14px; overflow: auto; white-space: pre-wrap; color: var(--terminal-text); font: 13px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
+@media (max-width: 700px) { .workspace-agent-form { grid-template-columns: 1fr; } .workspace-outcome { grid-column: 1; } }
 .terminal-xterm { height: 300px; padding: 10px 12px; background: var(--terminal-bg); }
 .terminal-xterm .xterm { height: 100%; }
 .terminal-output { height: 260px; margin: 0; padding: 16px; overflow: auto; white-space: pre-wrap; color: var(--terminal-text); background: var(--terminal-bg); font: 13px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
@@ -386,5 +397,6 @@ footer { padding: 22px 0 34px; color: var(--text-subtle); font: 600 10px ui-mono
 .all-model-results { display: grid; gap: 12px; }
 .all-model-result { padding: 16px; border: 1px solid var(--line); background: var(--surface-raised); }
 .all-model-result h3 { margin: 12px 0 8px; font-size: 16px; }
+.all-model-consistency { margin-top: 8px; }
 .all-model-result pre { max-height: 320px; overflow: auto; white-space: pre-wrap; }
 .all-model-consensus { margin-bottom: 14px; padding: 14px; border: 1px solid var(--lime); }

@@ -19,7 +19,7 @@
     <title>JSON_CODR · Local model console</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/static/vendor/xterm.css" />
-    <link rel="stylesheet" href="/static/app.css?v=1.0.18-alpha.6" />
+    <link rel="stylesheet" href="/static/app.css?v=1.0.18-alpha.7" />
   </head>
   <body>
     <div class="ambient ambient-one"></div>
@@ -64,7 +64,7 @@
       <header class="topbar">
         <a class="brand" href="/" aria-label="JSON CODR home">
           <span class="brand-mark">{ }</span>
-          <span><strong>JSON_CODR</strong><small>V1.0.18-alpha.6 · unified local agent</small></span>
+          <span><strong>JSON_CODR</strong><small>V1.0.18-alpha.7 · unified local agent</small></span>
         </a>
         <div id="health-status" class="health" role="status" aria-live="polite">
           <span class="health-dot"></span><span>Connecting</span>
@@ -444,19 +444,34 @@
 
       <section id="terminal-panel" class="terminal-panel app-view" data-view="terminal" aria-label="Live command line" hidden>
         <div class="terminal-head">
-          <div><span class="eyebrow">LOCAL POWERSHELL</span><strong>Live CLI passthrough</strong></div>
+          <div><span class="eyebrow">PROJECT WORKSPACE</span><strong>Shell and local coding agent</strong></div>
           <span id="terminal-status" class="meta">Not started</span>
         </div>
-        <div id="terminal-tabs" class="terminal-tabs" role="tablist" aria-label="Terminal session">
-          <button type="button" role="tab" data-terminal-profile="powershell" aria-selected="true">PowerShell</button>
+        <div id="terminal-tabs" class="terminal-tabs" role="tablist" aria-label="Project workspace mode">
+          <button type="button" role="tab" data-workspace-mode="shell" data-terminal-profile="powershell" aria-controls="workspace-shell" aria-selected="true">Shell</button>
+          <button type="button" role="tab" data-workspace-mode="agent" aria-controls="workspace-agent" aria-selected="false">Agent</button>
         </div>
-        <div id="terminal-xterm" class="terminal-xterm" aria-label="Interactive terminal"></div>
-        <pre id="terminal-output" class="terminal-output terminal-output-fallback" aria-live="polite"></pre>
-        <div class="terminal-command">
-          <span aria-hidden="true">PS&gt;</span>
-          <input id="terminal-input" type="text" autocomplete="off" spellcheck="false" aria-label="PowerShell command" placeholder="Enter a command" />
-          <button id="terminal-run" class="primary" type="button">Run</button>
-          <button id="terminal-stop" class="secondary" type="button">Stop</button>
+        <div id="workspace-shell" data-workspace-view="shell">
+          <div id="terminal-xterm" class="terminal-xterm" aria-label="Interactive terminal"></div>
+          <pre id="terminal-output" class="terminal-output terminal-output-fallback" aria-live="polite"></pre>
+          <div class="terminal-command">
+            <span aria-hidden="true">PS&gt;</span>
+            <input id="terminal-input" type="text" autocomplete="off" spellcheck="false" aria-label="PowerShell command" placeholder="Enter a command" />
+            <button id="terminal-run" class="primary" type="button">Run</button>
+            <button id="terminal-stop" class="secondary" type="button">Stop</button>
+          </div>
+        </div>
+        <div id="workspace-agent" class="workspace-agent" data-workspace-view="agent" hidden>
+          <form id="workspace-agent-form" class="workspace-agent-form">
+            <label>Project root<input id="workspace-project-root" type="text" value="." required autocomplete="off" spellcheck="false" /></label>
+            <label>Local model<select id="workspace-model" required></select></label>
+            <label class="workspace-outcome">Coding outcome<textarea id="workspace-outcome" rows="7" required placeholder="Describe the outcome. JSON_CODR will inspect the repository, propose bounded actions, execute them through BORG, and report verified results."></textarea></label>
+            <button id="workspace-agent-run" class="primary" type="submit">Run agent task</button>
+          </form>
+          <div class="workspace-agent-report" aria-live="polite">
+            <p id="workspace-agent-status" class="meta">Ready for a project task.</p>
+            <pre id="workspace-agent-result">No agent task has run.</pre>
+          </div>
         </div>
       </section>
 
@@ -480,15 +495,15 @@
       <footer><span>Runs entirely on this machine</span><span>127.0.0.1 · Ollama</span></footer>
       </main>
     </div>
-    <script src="/static/dependency_install_queue.js?v=1.0.18-alpha.6" defer></script>
-    <script src="/static/benchmark_leaderboard.js?v=1.0.18-alpha.6" defer></script>
-    <script src="/static/terminal_keyboard.js?v=1.0.18-alpha.6" defer></script>
-    <script src="/static/core_client.js?v=1.0.18-alpha.6" defer></script>
-    <script src="/static/task_view.js?v=1.0.18-alpha.6" defer></script>
-    <script src="/static/conversation_view.js?v=1.0.18-alpha.6" defer></script>
+    <script src="/static/dependency_install_queue.js?v=1.0.18-alpha.7" defer></script>
+    <script src="/static/benchmark_leaderboard.js?v=1.0.18-alpha.7" defer></script>
+    <script src="/static/terminal_keyboard.js?v=1.0.18-alpha.7" defer></script>
+    <script src="/static/core_client.js?v=1.0.18-alpha.7" defer></script>
+    <script src="/static/task_view.js?v=1.0.18-alpha.7" defer></script>
+    <script src="/static/conversation_view.js?v=1.0.18-alpha.7" defer></script>
     <script src="/static/vendor/xterm.js" defer></script>
     <script src="/static/vendor/xterm-addon-fit.js" defer></script>
-    <script src="/static/model_runs.js?v=1.0.18-alpha.6" defer></script>
-    <script src="/static/app.js?v=1.0.18-alpha.6" defer></script>
+    <script src="/static/model_runs.js?v=1.0.18-alpha.7" defer></script>
+    <script src="/static/app.js?v=1.0.18-alpha.7" defer></script>
   </body>
 </html>

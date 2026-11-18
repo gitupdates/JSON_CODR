@@ -130,8 +130,16 @@ const elements = {
   optimizedModelSearchRun: document.querySelector("#optimized-model-search-run"),
   optimizedModelSearchResults: document.querySelector("#optimized-model-search-results"),
   terminalPanel: document.querySelector("#terminal-panel"),
+  workspaceTabs: [...document.querySelectorAll("[data-workspace-mode]")],
+  workspaceViews: [...document.querySelectorAll("[data-workspace-view]")],
+  workspaceAgentForm: document.querySelector("#workspace-agent-form"),
+  workspaceProjectRoot: document.querySelector("#workspace-project-root"),
+  workspaceModel: document.querySelector("#workspace-model"),
+  workspaceOutcome: document.querySelector("#workspace-outcome"),
+  workspaceAgentRun: document.querySelector("#workspace-agent-run"),
+  workspaceAgentStatus: document.querySelector("#workspace-agent-status"),
+  workspaceAgentResult: document.querySelector("#workspace-agent-result"),
   terminalXterm: document.querySelector("#terminal-xterm"),
-  terminalTabs: [...document.querySelectorAll("[data-terminal-profile]")],
   terminalOutput: document.querySelector("#terminal-output"),
   terminalInput: document.querySelector("#terminal-input"),
   terminalRun: document.querySelector("#terminal-run"),
@@ -168,6 +176,7 @@ let terminalFitAddon = null;
 let terminalKeyboardController = null;
 let lastTerminalSequence = 0;
 let activeTerminalProfile = "powershell";
+let activeWorkspaceMode = "shell";
 const terminalSessions = new Map();
 let terminalPersistenceTimer = null;
 let skillAttachmentId = null;
@@ -721,6 +730,45 @@ async function ensureSession() {
   elements.conversationExportJson.href = `${base}?format=json`;
   elements.conversationExportZip.href = `${base}?format=zip&include_binaries=true`;
   return sessionId;
+}
+
+function selectWorkspaceMode(mode) {
+  activeWorkspaceMode = mode === "agent" ? "agent" : "shell";
+  for (const tab of elements.workspaceTabs) {
+    tab.setAttribute("aria-selected", String(tab.dataset.workspaceMode === activeWorkspaceMode));
+  }
+  for (const view of elements.workspaceViews) view.hidden = view.dataset.workspaceView !== activeWorkspaceMode;
+  if (activeWorkspaceMode === "shell") {
+    initializeXterm();
+    terminalFitAddon?.fit();
+  }
+}
+
+async function runWorkspaceAgent() {
+  const projectRoot = elements.workspaceProjectRoot.value.trim();
+  const model = elements.workspaceModel.value;
+  const outcome = elements.workspaceOutcome.value.trim();
+  if (!projectRoot || !model || !outcome) return;
+  elements.workspaceAgentRun.disabled = true;
+  elements.workspaceAgentStatus.textContent = "BORG is inspecting the project and executing the verified action plan…";
+  elements.workspaceAgentResult.textContent = "Task running…";
+  localStorage.setItem("json_codr_workspace_project_root", projectRoot);
+  try {
+    const response = await fetch("/api/project-workspace/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
+      body: JSON.stringify({ project_root: projectRoot, model, outcome }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || "Project task failed");
+    elements.workspaceAgentStatus.textContent = `${payload.route} · requested ${payload.requested_model} · effective ${payload.effective_model}`;
+    elements.workspaceAgentResult.textContent = JSON.stringify(payload.result, null, 2);
+  } catch (error) {
+    elements.workspaceAgentStatus.textContent = "Agent task failed";
+    elements.workspaceAgentResult.textContent = error.message;
+  } finally {
+    elements.workspaceAgentRun.disabled = false;
+  }
 }
 
 async function persistSettings(update) {
@@ -2002,6 +2050,7 @@ async function loadApplication() {
     elements.health.className = `health ${health.ollama ? "ready" : "error"}`;
     elements.health.lastElementChild.textContent = health.ollama ? "Ollama ready" : "Ollama offline";
     elements.model.innerHTML = "";
+    elements.workspaceModel.innerHTML = "";
     for (const model of models) {
       const option = document.createElement("option");
       option.value = model.name;
@@ -2009,6 +2058,7 @@ async function loadApplication() {
       option.disabled = !model.installed;
       elements.model.append(option);
       if (model.installed) {
+        elements.workspaceModel.append(option.cloneNode(true));
         elements.hardwareBenchmarkModel.append(option.cloneNode(true));
         elements.integrityBenchmarkModel.append(option.cloneNode(true));
       }
@@ -2421,18 +2471,17 @@ elements.terminalInput.addEventListener("keydown", (event) => {
 elements.terminalStop.addEventListener("click", () => {
   if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type: "interrupt" }));
 });
-elements.terminalTabs.forEach((tab) => tab.addEventListener("click", async () => {
-  activeTerminalProfile = tab.dataset.terminalProfile;
-  elements.terminalTabs.forEach((candidate) => candidate.setAttribute(
-    "aria-selected", String(candidate === tab),
-  ));
+elements.workspaceTabs.forEach((tab) => tab.addEventListener("click", async () => {
+  selectWorkspaceMode(tab.dataset.workspaceMode);
+  if (activeWorkspaceMode !== "shell") return;
   const session = terminalSessions.get(activeTerminalProfile);
-  if (session?.terminal) {
-    await connectTerminalRecord(session.terminal);
-    return;
-  }
-  await ensureTerminal();
+  if (session?.terminal) await connectTerminalRecord(session.terminal);
+  else await ensureTerminal();
 }));
+elements.workspaceAgentForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  runWorkspaceAgent();
+});
 document.addEventListener("keydown", (event) => {
   if (event.ctrlKey && !event.altKey && event.key.toLowerCase() === "j") {
     event.preventDefault();
@@ -2447,6 +2496,7 @@ document.addEventListener("keydown", (event) => {
   }
 });
 initializeXterm();
+elements.workspaceProjectRoot.value = localStorage.getItem("json_codr_workspace_project_root") || ".";
 window.addEventListener("beforeunload", persistTerminalSessions);
 restoreTerminalSessions().catch(() => localStorage.removeItem(TERMINAL_SESSIONS_KEY));
 loadApplication().then(() => queueSettingsLoad()).catch((error) => showError(error.message));

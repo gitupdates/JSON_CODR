@@ -71,6 +71,26 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("terminal.external", script)
         self.assertIn("JSONCodrTaskView", script)
 
+    def test_project_workspace_exposes_shell_and_agent_without_provider_tabs(self):
+        html = self.client.get("/").text
+        script = self.client.get("/static/app.js").text
+        parser = IdCollector()
+        parser.feed(html)
+
+        self.assertTrue({
+            "workspace-shell", "workspace-agent", "workspace-project-root",
+            "workspace-model", "workspace-outcome", "workspace-agent-run",
+            "workspace-agent-status", "workspace-agent-result",
+        }.issubset(parser.ids))
+        self.assertIn('data-workspace-mode="shell"', html)
+        self.assertIn('data-workspace-mode="agent"', html)
+        self.assertNotIn('data-workspace-mode="codex"', html)
+        self.assertIn("function selectWorkspaceMode", script)
+        self.assertIn('fetch("/api/project-workspace/run"', script)
+        self.assertIn('"X-JSON-CODR": "1"', script)
+        self.assertIn("requested_model", script)
+        self.assertIn("effective_model", script)
+
     def test_plain_text_api_failures_are_rendered_without_json_parse_errors(self):
         script = self.client.get("/static/app.js").text
 
@@ -90,7 +110,7 @@ class WebStaticTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.0.18-alpha.6", response.text)
+        self.assertIn("V1.0.18-alpha.7", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -115,7 +135,7 @@ class WebStaticTests(unittest.TestCase):
         html = self.client.get("/").text
         css = self.client.get("/static/app.css")
         javascript = self.client.get("/static/app.js")
-        self.assertIn('/static/app.css?v=1.0.18-alpha.6', html)
+        self.assertIn('/static/app.css?v=1.0.18-alpha.7', html)
         self.assertEqual(css.status_code, 200)
         self.assertIn("text/css", css.headers["content-type"])
         self.assertEqual(javascript.status_code, 200)
@@ -247,8 +267,8 @@ class WebStaticTests(unittest.TestCase):
         html = self.client.get("/").text
         javascript = self.client.get("/static/app.js").text
 
-        self.assertIn('/static/terminal_keyboard.js?v=1.0.18-alpha.6', html)
-        self.assertIn('/static/app.js?v=1.0.18-alpha.6', html)
+        self.assertIn('/static/terminal_keyboard.js?v=1.0.18-alpha.7', html)
+        self.assertIn('/static/app.js?v=1.0.18-alpha.7', html)
         self.assertLess(html.index("terminal_keyboard.js"), html.index("app.js"))
         self.assertIn("createTerminalKeyboardController", javascript)
         self.assertIn("attachCustomKeyEventHandler", javascript)

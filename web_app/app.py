@@ -48,7 +48,7 @@ from web_app.core.component_manager import ComponentManager
 from web_app.core.component_adapter import LazyComponentExecutionAdapter
 from web_app.core.terminal_adapter import TerminalAdapter
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
+from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
 from web_app.model_run_store import ModelRunStore, RequestKeyConflict
 from web_app.model_runs import ModelRunService
 from web_app.ollama_service import (
@@ -1234,6 +1234,32 @@ def create_app(
             result = await execute_git_through_core(action_request, request.model, request.grant_id)
             return {"compatibility": "broker_adapter", "result": result}
         except (ValueError, RuntimeError, PermissionError, OllamaUnavailableError, ModelOutputError, ModelTimeoutError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @application.post("/api/project-workspace/run", status_code=201)
+    async def run_project_workspace(request: ProjectWorkspaceRunRequest, x_json_codr: str | None = Header(None)):
+        require_terminal_header(x_json_codr)
+        try:
+            grant = coding_agents.grant(request.project_root, "broker")
+            snapshot = await asyncio.to_thread(git_broker.inspect, request.project_root)
+            contract = git_adapter.prompt_contract(snapshot.root, snapshot.dirty_fingerprint)
+            response = await service.chat(request.model, f"{request.outcome}\n\n{contract}")
+            action_request = git_adapter.parse(response.content)
+            if Path(action_request.project_root).resolve() != Path(snapshot.root):
+                raise ValueError("Model response changed the authorized project root")
+            if action_request.baseline_fingerprint != snapshot.dirty_fingerprint:
+                raise ValueError("Model response changed the authorized baseline")
+            result = await execute_git_through_core(action_request, response.model, grant.id)
+            return {
+                "route": "broker_adapter",
+                "requested_model": request.model,
+                "effective_model": response.model,
+                "project_root": snapshot.root,
+                "result": result,
+            }
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except (RuntimeError, PermissionError, OllamaUnavailableError, ModelOutputError, ModelTimeoutError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.post("/api/coding-agents/grants", status_code=201)
