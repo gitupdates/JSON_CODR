@@ -502,7 +502,7 @@ class UiSettings(BaseModel):
     theme: Literal["light", "dark", "system"] = "dark"
     sidebar_collapsed: bool = False
     sidebar_width: int = 260
-    primary_destination: Literal["chat", "terminal", "context", "skills", "hardware", "settings"] = "chat"
+    primary_destination: Literal["workspace", "chat", "terminal", "context", "skills", "hardware", "settings"] = "workspace"
     hardware_section: Literal[
         "overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "leaderboard", "history", "localperf"
     ] = "overview"
@@ -519,7 +519,7 @@ class UiSettingsUpdate(BaseModel):
     theme: Optional[Literal["light", "dark", "system"]] = None
     sidebar_collapsed: Optional[bool] = None
     sidebar_width: Optional[int] = None
-    primary_destination: Optional[Literal["chat", "terminal", "context", "skills", "hardware", "settings"]] = None
+    primary_destination: Optional[Literal["workspace", "chat", "terminal", "context", "skills", "hardware", "settings"]] = None
     hardware_section: Optional[Literal[
         "overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "leaderboard", "history", "localperf"
     ]] = None

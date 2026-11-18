@@ -91,6 +91,25 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("requested_model", script)
         self.assertIn("effective_model", script)
 
+    def test_unified_workspace_exposes_semantic_regions_and_primary_controls(self):
+        html = self.client.get("/").text
+        parser = IdCollector()
+        parser.feed(html)
+
+        self.assertTrue({
+            "workspace-header", "workspace-left-dock", "workspace-task-canvas",
+            "workspace-right-dock", "workspace-bottom-dock", "workspace-statusbar",
+            "workspace-agent-select", "model-select", "workspace-layout-menu",
+            "workspace-attach", "submit-button",
+        }.issubset(parser.ids))
+        self.assertIn('role="tablist" aria-label="Task views"', html)
+        self.assertGreaterEqual(html.count('role="separator"'), 3)
+        self.assertIn('aria-orientation="vertical"', html)
+        self.assertIn('aria-orientation="horizontal"', html)
+        self.assertIn('aria-label="Attach files"', html)
+        self.assertIn('<span>Run</span>', html)
+        self.assertNotIn('Agent Activity', html)
+
     def test_plain_text_api_failures_are_rendered_without_json_parse_errors(self):
         script = self.client.get("/static/app.js").text
 
@@ -160,8 +179,10 @@ class WebStaticTests(unittest.TestCase):
             "view-chat", "terminal-panel", "context-panel", "skills-panel",
             "hardware-panel", "settings-panel",
         }.issubset(parser.ids))
-        for destination in ("chat", "terminal", "context", "skills", "hardware", "settings"):
+        for destination in ("workspace", "context", "skills", "hardware", "settings"):
             self.assertIn(f'data-destination="{destination}"', html)
+        self.assertNotIn('data-destination="chat"', html)
+        self.assertNotIn('data-destination="terminal"', html)
         for section in (
             "overview", "profiles", "runtimes", "compatibility", "model-search",
             "benchmarks", "history", "localperf",

@@ -40,8 +40,7 @@
           <button id="sidebar-collapse" class="sidebar-icon-button" type="button" aria-label="Collapse navigation" aria-expanded="true">‹</button>
         </div>
         <div class="sidebar-destinations">
-          <button class="sidebar-destination is-active" type="button" data-destination="chat" aria-current="page" title="Chat"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-chat"/></svg><span>Chat</span></button>
-          <button class="sidebar-destination" type="button" data-destination="terminal" title="Live CLI"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-terminal"/></svg><span>Live CLI</span></button>
+          <button class="sidebar-destination is-active" type="button" data-destination="workspace" aria-current="page" title="Workspace"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-chat"/></svg><span>Workspace</span></button>
           <button class="sidebar-destination" type="button" data-destination="context" title="Context &amp; files"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-context"/></svg><span>Context &amp; files</span></button>
           <button class="sidebar-destination" type="button" data-destination="skills" title="Skills"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-skills"/></svg><span>Skills</span></button>
           <button class="sidebar-destination" type="button" data-destination="hardware" title="Hardware"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-hardware"/></svg><span>Hardware</span></button>
@@ -72,7 +71,30 @@
         <button id="mobile-navigation-toggle" class="panel-toggle mobile-navigation-toggle" type="button" aria-controls="app-sidebar" aria-expanded="false">Menu</button>
       </header>
 
-      <section id="view-chat" class="app-view" data-view="chat" aria-labelledby="chat-heading">
+      <section id="view-chat" class="app-view workspace-shell" data-view="workspace" aria-labelledby="chat-heading">
+      <header id="workspace-header" class="workspace-header" aria-label="Workspace controls">
+        <div class="workspace-project"><span class="eyebrow">ACTIVE PROJECT</span><strong>JSON_CODR</strong></div>
+        <div class="workspace-execution-controls">
+          <label for="workspace-agent-select">Agent
+            <select id="workspace-agent-select" disabled><option>BORG local agent</option></select>
+          </label>
+          <label for="model-select">Model
+            <select id="model-select" name="model" aria-describedby="model-detail" disabled></select>
+          </label>
+          <button id="workspace-layout-menu" class="secondary" type="button" aria-haspopup="menu" aria-expanded="false">Layout</button>
+        </div>
+        <div id="model-detail" class="model-detail">Waiting for Ollama model metadata.</div>
+      </header>
+      <div class="workspace-regions">
+        <aside id="workspace-left-dock" class="workspace-dock workspace-left-dock" aria-label="Project tools" hidden></aside>
+        <div class="workspace-separator workspace-separator-left" role="separator" aria-label="Resize project tools" aria-orientation="vertical" aria-valuemin="180" aria-valuemax="420" aria-valuenow="260" tabindex="0" hidden></div>
+        <section id="workspace-task-canvas" class="workspace-task-canvas" aria-label="Active task">
+          <nav class="workspace-task-tabs" role="tablist" aria-label="Task views">
+            <button type="button" role="tab" aria-selected="true">Chat</button>
+            <button type="button" role="tab" aria-selected="false" hidden>Plan</button>
+            <button type="button" role="tab" aria-selected="false" hidden>Changes</button>
+            <button type="button" role="tab" aria-selected="false" hidden>Results</button>
+          </nav>
       <section class="hero">
         <p class="eyebrow">STRUCTURED INFERENCE / LOCAL ONLY</p>
         <h1 id="chat-heading">One prompt.<br /><span>One precise model.</span></h1>
@@ -81,25 +103,17 @@
 
       <section class="workspace" aria-label="Model chat workspace">
         <form id="chat-form" class="composer">
-          <div class="field-row">
-            <label for="model-select">Active model</label>
-            <span id="model-count" class="meta">Loading roster…</span>
-          </div>
-          <div class="select-wrap">
-            <select id="model-select" name="model" aria-describedby="model-detail" disabled></select>
-          </div>
-          <div id="model-detail" class="model-detail">Waiting for Ollama model metadata.</div>
-
           <div class="field-row prompt-label">
             <label for="prompt-input">Prompt</label>
-            <span class="meta"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> to run</span>
+            <span id="model-count" class="meta">Loading roster…</span>
           </div>
           <textarea id="prompt-input" name="prompt" rows="9" placeholder="Describe the code, review, or explanation you need…" required></textarea>
 
           <div class="actions">
             <button id="submit-button" class="primary" type="submit" disabled>
-              <span>Run model</span><span aria-hidden="true">↗</span>
+              <span>Run</span><span aria-hidden="true">↗</span>
             </button>
+            <button id="workspace-attach" class="secondary workspace-attach" type="button" aria-label="Attach files">📎</button>
             <button id="cancel-button" class="secondary" type="button" hidden>Cancel</button>
             <span id="request-status" class="request-status" role="status" aria-live="polite"></span>
           </div>
@@ -173,6 +187,13 @@
         <section id="all-model-consensus" class="all-model-consensus" aria-label="Code jury consensus" hidden></section>
         <div id="all-model-results" class="all-model-results" aria-live="polite"><p class="meta">No all-model run has started.</p></div>
       </section>
+        </section>
+        <div class="workspace-separator workspace-separator-right" role="separator" aria-label="Resize task inspector" aria-orientation="vertical" aria-valuemin="200" aria-valuemax="480" aria-valuenow="300" tabindex="0" hidden></div>
+        <aside id="workspace-right-dock" class="workspace-dock workspace-right-dock" aria-label="Task inspector" hidden></aside>
+      </div>
+      <div class="workspace-separator workspace-separator-bottom" role="separator" aria-label="Resize execution tools" aria-orientation="horizontal" aria-valuemin="140" aria-valuemax="600" aria-valuenow="260" tabindex="0" hidden></div>
+      <section id="workspace-bottom-dock" class="workspace-dock workspace-bottom-dock" aria-label="Execution tools" hidden></section>
+      <div id="workspace-statusbar" class="workspace-statusbar" role="status" aria-live="polite"><span>Ready</span><span>Local workspace</span></div>
       </section>
 
       <aside id="context-panel" class="context-panel app-view" data-view="context" aria-label="Attachment context" hidden>

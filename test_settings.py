@@ -78,7 +78,7 @@ class SettingsTests(unittest.TestCase):
             "theme": "dark",
             "sidebar_collapsed": False,
             "sidebar_width": 260,
-            "primary_destination": "chat",
+            "primary_destination": "workspace",
             "hardware_section": "overview",
         })
 
@@ -89,7 +89,7 @@ class SettingsTests(unittest.TestCase):
             "theme": "light",
             "sidebar_collapsed": False,
             "sidebar_width": 260,
-            "primary_destination": "chat",
+            "primary_destination": "workspace",
             "hardware_section": "overview",
         })
 
@@ -102,7 +102,7 @@ class SettingsTests(unittest.TestCase):
             "theme": "dark",
             "sidebar_collapsed": False,
             "sidebar_width": 260,
-            "primary_destination": "chat",
+            "primary_destination": "workspace",
             "hardware_section": "overview",
         })
 
@@ -152,6 +152,15 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(invalid_destination.status_code, 422)
         self.assertEqual(invalid_section.status_code, 422)
 
+    def test_workspace_is_a_persisted_primary_destination(self):
+        client = TestClient(create_app(FakeService(), WorkspaceService(self.root)))
+
+        response = client.patch("/api/settings", json={"ui": {"primary_destination": "workspace"}})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["ui"]["primary_destination"], "workspace")
+        self.assertEqual(client.get("/api/settings").json()["ui"]["primary_destination"], "workspace")
+
 
     def test_api_round_trips_supported_themes(self):
         workspace = WorkspaceService(self.root)
@@ -196,7 +205,7 @@ class SettingsTests(unittest.TestCase):
             "theme": "dark",
             "sidebar_collapsed": False,
             "sidebar_width": 260,
-            "primary_destination": "chat",
+            "primary_destination": "workspace",
             "hardware_section": "overview",
         })
 

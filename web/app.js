@@ -158,7 +158,7 @@ const elements = {
 const VALID_THEME_MODES = new Set(["light", "dark", "system"]);
 const TERMINAL_SESSIONS_KEY = "json_codr_terminal_sessions";
 const TERMINAL_COMMAND_HISTORY_KEY = "json_codr_terminal_command_history";
-const NAVIGATION_DESTINATIONS = new Set(["chat", "terminal", "context", "skills", "hardware", "settings"]);
+const NAVIGATION_DESTINATIONS = new Set(["workspace", "terminal", "context", "skills", "hardware", "settings"]);
 const HARDWARE_SECTIONS = new Set(["overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "leaderboard", "history", "localperf"]);
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 const narrowNavigationQuery = window.matchMedia("(max-width: 700px)");
@@ -189,7 +189,7 @@ let settingsSaveQueue = Promise.resolve();
 let themeSaveRevision = 0;
 let skillsChangeRevision = 0;
 let navigationChangeRevision = 0;
-let activeDestination = "chat";
+let activeDestination = "workspace";
 let activeHardwareSection = "overview";
 let sidebarWidth = 260;
 let currentThemeMode = normalizeThemeMode(localStorage.getItem("json_codr_theme"));
@@ -333,7 +333,7 @@ function selectHardwareSection(section, { persist = true, focus = false } = {}) 
 }
 
 function selectDestination(destination, { persist = true, focus = false } = {}) {
-  if (!NAVIGATION_DESTINATIONS.has(destination)) destination = "chat";
+  if (!NAVIGATION_DESTINATIONS.has(destination)) destination = "workspace";
   activeDestination = destination;
   for (const button of elements.navigationButtons) {
     const selected = button.dataset.destination === destination;
