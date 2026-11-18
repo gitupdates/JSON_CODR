@@ -111,6 +111,21 @@ Imported references are inert: scripts, event handlers, forms, remote requests, 
 
 Reference files are copied into the project's managed reference directory with content hashes and source/license notes. Deleting a reference does not delete components already created from it. Reference capture is always an explicit user action and does not crawl authenticated sites or bypass access controls.
 
+### Extraction adapter policy
+
+The built-in extractor remains the dependency-free, privacy-minimizing default. Optional adapters share one capture-envelope schema and must pass through the same sanitizer and inert-reference importer:
+
+- **Playwright** is the preferred browser automation adapter because it can capture rendered screenshots, DOM/trace snapshots, accessibility structure, frames, and computed bounds across Chromium, Firefox, and WebKit. It is an optional Apache-2.0 component installed only with approval; browsers are not downloaded silently.
+- **Puppeteer** is an Apache-2.0 Chromium/Firefox fallback. A project selects Playwright or Puppeteer rather than installing both for the same capture job.
+- **Storybook** catalogs may be imported as component-reference inventories. **Open UI** informs semantic component definitions, but neither source becomes executable project code automatically.
+- **Screenshot-to-Code** may be connected as an optional MIT-licensed draft generator when the user configures its required model provider. Its output is untrusted generated input, normalized into registered components, and reviewed before save.
+- **React DevTools** metadata may enrich an explicitly authorized React capture, but the Designer does not depend on React or internal framework state.
+- **FlaUInspect** and **PyQtInspect-Open** are future Windows/Qt desktop capture adapters. Attaching to a process, inspecting automation/widget trees, or injecting inspection support is an external effect that requires explicit approval and produces metadata-only references.
+- **Applitools Eyes** may be supported later as a user-configured connector, not a bundled dependency, because current workflows can require cloud service credentials and separate SDK licensing.
+- **Builder.io Visual Copilot** is not pinned because the cited repository is unavailable. HTML-to-React and framework dashboard templates are reference/export options, not foundations for the vanilla-JavaScript editor.
+
+Every capture records adapter name/version, source type, capture time, authorization attestation, original license when known, sanitizer version, excluded-field counts, and content digests. Capture is limited to interfaces the user owns, is authorized to inspect, or may reuse under an applicable open-source license. The product does not describe a capture as permission to copy trademarks, proprietary assets, or copyrighted implementation code.
+
 ## Persistence and history
 
 Python owns project persistence beneath the configured JSON_CODR data root. Writes are atomic. Each save creates an immutable revision with parent revision, timestamp, schema version, and content digest. Autosave maintains a recoverable draft without replacing the last explicit save. Users can restore a previous revision, duplicate a project, import a JSON design, or reset only the JSON_CODR customization overlay.
