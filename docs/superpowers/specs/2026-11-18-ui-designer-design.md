@@ -116,7 +116,7 @@ Reference files are copied into the project's managed reference directory with c
 The built-in extractor remains the dependency-free, privacy-minimizing default. Optional adapters share one capture-envelope schema and must pass through the same sanitizer and inert-reference importer:
 
 - **Playwright** is the preferred browser automation adapter because it can capture rendered screenshots, DOM/trace snapshots, accessibility structure, frames, and computed bounds across Chromium, Firefox, and WebKit. It is an optional Apache-2.0 component installed only with approval; browsers are not downloaded silently.
-- **Puppeteer** is an Apache-2.0 Chromium/Firefox fallback. A project selects Playwright or Puppeteer rather than installing both for the same capture job.
+- **Puppeteer** is recorded only as a future compatibility adapter for older Chromium automation scripts. The first release installs, configures, and supports Playwright alone so there is no duplicate browser automation stack.
 - **Storybook** catalogs may be imported as component-reference inventories. **Open UI** informs semantic component definitions, but neither source becomes executable project code automatically.
 - **Screenshot-to-Code** may be connected as an optional MIT-licensed draft generator when the user configures its required model provider. Its output is untrusted generated input, normalized into registered components, and reviewed before save.
 - **React DevTools** metadata may enrich an explicitly authorized React capture, but the Designer does not depend on React or internal framework state.
@@ -125,6 +125,21 @@ The built-in extractor remains the dependency-free, privacy-minimizing default. 
 - **Builder.io Visual Copilot** is not pinned because the cited repository is unavailable. HTML-to-React and framework dashboard templates are reference/export options, not foundations for the vanilla-JavaScript editor.
 
 Every capture records adapter name/version, source type, capture time, authorization attestation, original license when known, sanitizer version, excluded-field counts, and content digests. Capture is limited to interfaces the user owns, is authorized to inspect, or may reuse under an applicable open-source license. The product does not describe a capture as permission to copy trademarks, proprietary assets, or copyrighted implementation code.
+
+The Playwright capture envelope contains, within configured size and count bounds:
+
+- sanitized rendered DOM structure and accessibility hierarchy;
+- external stylesheet response bodies and inline style blocks after URL and data scanning;
+- a per-element mapping of applicable classes, bounds, display/layout roles, and a safe allow-list of computed visual properties;
+- root custom properties and normalized design-token candidates for color, spacing, typography, radius, border, and shadow;
+- image sources, CSS background-image references, sanitized inline SVG, and loaded font descriptors;
+- optionally copied same-origin or explicitly allow-listed image, SVG, and open-licensed web-font response bodies;
+- route and breakpoint screenshots used to compare the generated draft with the reference;
+- a sanitized resource inventory containing resource type, relative path or redacted origin, media type, size, and digest.
+
+Cross-origin stylesheets or assets that cannot be read safely are recorded as unresolved references, never bypassed. JavaScript bundles, source maps, XHR/fetch payloads, request/response headers, cookies, browser storage, form values, and authentication state are excluded from the portable capture. Network events may help classify resource types during the live authorized session, but their URLs and bodies pass through the same redaction rules before persistence.
+
+Selector usage is derived from captured routes, states, and breakpoints and reported as evidence, not used to destructively purge CSS by default; dynamic selectors that were not observed may still be required. Framework signals such as React, Next.js, Angular, Vue, Svelte, Tailwind, Bootstrap, and Material UI are advisory metadata only. Wget, HTTrack, SingleFile, Webrecorder, monolith, and similar mirroring tools are not bundled into the first release because their broad capture behavior conflicts with the bounded, reviewable reference format.
 
 ## Persistence and history
 

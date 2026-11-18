@@ -171,7 +171,7 @@
 
 - [ ] **Step 1: Write failing hostile-input and compatibility tests**
 
-  Cover PNG/JPEG/sanitized SVG/font imports, hashes and provenance, maximum sizes, MIME/content mismatch, active SVG content, malformed extracts, forbidden private data fields, ZIP traversal/symlinks/bombs, manifest mismatch, `REVIEW.txt` acknowledgement, unsupported archive versions, inert HTML/CSS preview, authorization/license provenance, adapter versioning, and draft provenance. Include fixtures emitted by both supplied scripts and the Playwright adapter.
+  Cover PNG/JPEG/sanitized SVG/font imports, hashes and provenance, maximum sizes, MIME/content mismatch, active SVG content, malformed extracts, forbidden private data fields, ZIP traversal/symlinks/bombs, manifest mismatch, `REVIEW.txt` acknowledgement, unsupported archive versions, inert HTML/CSS preview, authorization/license provenance, adapter versioning, and draft provenance. Playwright fixtures must include DOM/accessibility trees, CSS response bodies, inline styles, safe computed properties, CSS variables/token candidates, image/background/SVG/font inventories, bounded same-origin assets, resource metadata, route/breakpoint screenshots, unresolved cross-origin resources, selector-usage evidence, and framework hints. Assert that scripts, source maps, API payloads, headers, cookies, storage, form values, and authentication state are absent.
 
 - [ ] **Step 2: Run tests and verify importers are missing**
 
@@ -179,7 +179,7 @@
 
 - [ ] **Step 3: Implement managed copies and maintained capture tools**
 
-  Preserve the supplied extractor's exclusions for table cells, input values, query strings, and hostnames. Preserve the archive tool's leak-check/report/manifest behavior while making UI paths and replacement rules configuration inputs. Add Playwright as an optional approved component with no silent browser download; implement Puppeteer, Storybook, Screenshot-to-Code, React DevTools, FlaUInspect, PyQtInspect, and Applitools only as capability descriptors for later adapters. Never execute imported scripts or silently accept unresolved review findings.
+  Preserve the supplied extractor's exclusions for table cells, input values, query strings, and hostnames. Preserve the archive tool's leak-check/report/manifest behavior while making UI paths and replacement rules configuration inputs. Add Playwright as the only first-release browser automation component with no silent browser download. Capture network resources through bounded response handling rather than wget/HTTrack-style mirroring; record selector usage without destructive CSS purging; treat framework detection as advisory. Implement Puppeteer, Storybook, Screenshot-to-Code, React DevTools, FlaUInspect, PyQtInspect, and Applitools only as capability descriptors for later adapters. Never execute imported scripts or silently accept unresolved review findings.
 
 - [ ] **Step 4: Run focused tests and commit**
 
@@ -232,7 +232,7 @@
 
 - [ ] **Step 1: Write failing renderer/export tests**
 
-  Assert semantic elements, responsive stack/grid/freeform CSS, multi-page paths, relative assets, CSP allow-list generation, no inline/evaluated code, no imported scripts, accessibility blocking errors, warning-only contrast issues, disabled connector/file actions with inert metadata, HTTPS form handling, and deterministic ZIP contents.
+  Assert semantic elements, responsive stack/grid/freeform CSS, multi-page paths, relative assets, CSP allow-list generation, no inline/evaluated code, no imported scripts, accessibility blocking errors, warning-only contrast issues, disabled connector/file actions with inert metadata, HTTPS form handling, deterministic ZIP contents, and screenshot-comparison reports across captured routes and breakpoints without claiming pixel identity.
 
 - [ ] **Step 2: Run tests and verify renderer is absent**
 
