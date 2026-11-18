@@ -76,6 +76,7 @@ const elements = {
   destructiveSubmit: document.querySelector("#destructive-confirmation-submit"),
   settingSkillsOpen: document.querySelector("#setting-skills-open"),
   uiPreset: document.querySelector("#ui-preset"),
+  uiPresetDetails: document.querySelector("#ui-preset-details"),
   uiMode: document.querySelector("#ui-mode"),
   uiModeHelp: document.querySelector("#ui-mode-help"),
   uiDensity: document.querySelector("#ui-density"),
@@ -493,7 +494,7 @@ const uiCustomizationEditor = window.bindUICustomizationEditor({
   controller: uiCustomizationController,
   catalog: window.JSONCodrUICatalog,
   elements: {
-    preset: elements.uiPreset, mode: elements.uiMode, modeHelp: elements.uiModeHelp,
+    preset: elements.uiPreset, presetDetails: elements.uiPresetDetails, mode: elements.uiMode, modeHelp: elements.uiModeHelp,
     density: elements.uiDensity, typography: elements.uiTypography,
     components: elements.uiComponentOverrides, summary: elements.uiOverrideSummary,
     status: elements.uiPreviewStatus, save: elements.uiSave, cancel: elements.uiCancel,

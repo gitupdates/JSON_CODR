@@ -3,8 +3,8 @@
   if (typeof module === "object" && module.exports) {
     module.exports = bootstrapUI;
   } else {
-    root.JSONCODRBootstrapUI = bootstrapUI;
-    if (root.JSONCODRUICatalog && root.document) bootstrapUI();
+    root.JSONCodrBootstrapUI = bootstrapUI;
+    if (root.JSONCodrUICatalog && root.document) bootstrapUI();
   }
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
@@ -19,7 +19,7 @@
 
   function bootstrapUI(options) {
     options = options || {};
-    const catalog = options.catalog || globalThis.JSONCODRUICatalog;
+    const catalog = options.catalog || globalThis.JSONCodrUICatalog;
     const storage = options.storage || globalThis.localStorage;
     const root = options.root || globalThis.document.documentElement;
     if (!catalog || !root) return null;

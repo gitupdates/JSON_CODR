@@ -87,6 +87,7 @@
     function setComponent(family, variant) {
       const definition = catalog.COMPONENTS[family];
       if (!definition || !definition.variants.includes(variant)) return clone(draftState);
+      if (catalog.PRESETS[draftState.preset].components[family] === variant) return resetComponent(family);
       return replaceDraft({
         ...draftState,
         components: { ...draftState.components, [family]: variant },
@@ -165,14 +166,16 @@
     ).join("");
   }
 
-  function bindUICustomizationEditor({ controller, catalog, elements }) {
+  function bindUICustomizationEditor({ controller, catalog, elements, confirmPresetChange }) {
     if (!controller || !catalog || !elements) throw new Error("Appearance editor requires controller, catalog, and elements");
+    const confirmReplacement = confirmPresetChange || ((message) => globalThis.confirm ? globalThis.confirm(message) : true);
 
     function render() {
       const draft = controller.getDraft();
       const preset = catalog.PRESETS[draft.preset];
       elements.preset.innerHTML = optionsHtml(Object.entries(catalog.PRESETS).map(([id, value]) => [id, value.label]), draft.preset);
       elements.preset.value = draft.preset;
+      elements.presetDetails.innerHTML = `<span class="preset-swatch" data-preset-swatch="${escapeHtml(draft.preset)}" aria-hidden="true"></span><span><strong>${escapeHtml(preset.label)}</strong><small>${escapeHtml(preset.description)}</small></span>`;
       elements.mode.innerHTML = optionsHtml(catalog.MODES.map((mode) => [mode, mode[0].toUpperCase() + mode.slice(1)]), draft.mode);
       elements.mode.value = draft.mode;
       elements.mode.disabled = preset.colorCapability === "fixed";
@@ -186,7 +189,7 @@
       elements.components.innerHTML = Object.entries(catalog.COMPONENTS).map(([family, definition]) => {
         const selected = draft.components[family] || preset.components[family];
         const choices = definition.variants.map((variant) => [variant, variant.replaceAll("-", " ")]);
-        return `<label class="ui-component-row">${escapeHtml(definition.label)}<select class="setting-select" data-family="${escapeHtml(family)}">${optionsHtml(choices, selected)}</select></label>`;
+        return `<div class="ui-component-row"><label>${escapeHtml(definition.label)}<select class="setting-select" data-family="${escapeHtml(family)}">${optionsHtml(choices, selected)}</select></label><button class="secondary" type="button" data-reset-family="${escapeHtml(family)}">Use preset</button></div>`;
       }).join("");
       const count = Object.keys(draft.components).length;
       elements.summary.textContent = count === 1 ? "1 override" : `${count} overrides`;
@@ -199,13 +202,26 @@
       return render();
     }
 
-    elements.preset.addEventListener("change", () => preview(() => controller.selectPreset(elements.preset.value)));
+    elements.preset.addEventListener("change", () => {
+      const draft = controller.getDraft();
+      const replacingOverrides = elements.preset.value !== draft.preset && Object.keys(draft.components).length > 0;
+      if (replacingOverrides && !confirmReplacement("Changing preset will replace component overrides. Continue?")) {
+        elements.status.textContent = "Preset change canceled";
+        render();
+        return;
+      }
+      preview(() => controller.selectPreset(elements.preset.value));
+    });
     elements.mode.addEventListener("change", () => preview(() => controller.setMode(elements.mode.value)));
     elements.density.addEventListener("change", () => preview(() => controller.setDensity(elements.density.value)));
     elements.typography.addEventListener("change", () => preview(() => controller.setTypography(elements.typography.value)));
     elements.components.addEventListener("change", (event) => {
       const family = event.target?.dataset?.family;
       if (family) preview(() => controller.setComponent(family, event.target.value));
+    });
+    elements.components.addEventListener("click", (event) => {
+      const family = event.target?.dataset?.resetFamily;
+      if (family) preview(() => controller.resetComponent(family));
     });
     elements.save.addEventListener("click", () => { controller.save(); elements.status.textContent = "Appearance saved"; render(); });
     elements.cancel.addEventListener("click", () => { controller.cancel(); elements.status.textContent = "Appearance preview canceled"; render(); });

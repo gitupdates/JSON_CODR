@@ -16,15 +16,15 @@
   });
 
   const COMPONENTS = deepFreeze({
-    shell: { label: "Application shell", variants: ["classic", "operations", "operations-light", "focus", "accessible"] },
-    navigation: { label: "Navigation", variants: ["classic", "operations", "rail", "high-contrast"] },
-    topbar: { label: "Top bar", variants: ["classic", "operations", "minimal", "high-contrast"] },
-    panels: { label: "Panels", variants: ["glass", "outlined", "flat", "high-contrast"] },
-    controls: { label: "Controls", variants: ["rounded", "compact", "terminal", "accessible"] },
-    tabs: { label: "Tabs", variants: ["pill", "underline", "segmented", "high-contrast"] },
-    composer: { label: "Composer", variants: ["classic", "operations", "focus", "accessible"] },
-    status: { label: "Status", variants: ["classic", "signal", "terminal", "high-contrast"] },
-    terminal: { label: "Terminal", variants: ["classic", "integrated", "integrated-light", "focus", "accessible"] },
+    shell: { label: "Application shell", targets: [".app-layout", ".shell"], defaultVariant: "operations-light", variants: ["classic", "operations", "operations-light", "focus", "accessible"] },
+    navigation: { label: "Navigation", targets: [".app-sidebar", ".sidebar-destination"], defaultVariant: "operations", variants: ["classic", "operations", "rail", "high-contrast"] },
+    topbar: { label: "Top bar", targets: [".topbar"], defaultVariant: "operations", variants: ["classic", "operations", "minimal", "high-contrast"] },
+    panels: { label: "Panels", targets: [".workspace", ".context-panel", ".response"], defaultVariant: "flat", variants: ["glass", "outlined", "flat", "high-contrast"] },
+    controls: { label: "Controls", targets: ["button", "input", "select", "textarea"], defaultVariant: "compact", variants: ["rounded", "compact", "terminal", "accessible"] },
+    tabs: { label: "Tabs", targets: ["[role=\"tab\"]"], defaultVariant: "segmented", variants: ["pill", "underline", "segmented", "high-contrast"] },
+    composer: { label: "Composer", targets: [".composer"], defaultVariant: "operations", variants: ["classic", "operations", "focus", "accessible"] },
+    status: { label: "Status", targets: [".health", ".health-dot"], defaultVariant: "signal", variants: ["classic", "signal", "terminal", "high-contrast"] },
+    terminal: { label: "Terminal", targets: [".terminal-panel"], defaultVariant: "integrated-light", variants: ["classic", "integrated", "integrated-light", "focus", "accessible"] },
   });
 
   const PRESETS = deepFreeze({

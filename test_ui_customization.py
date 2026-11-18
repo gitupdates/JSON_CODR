@@ -70,6 +70,18 @@ for (const [presetId, preset] of Object.entries(ui.PRESETS)) {
 '''
         self.run_node(source)
 
+    def test_component_catalog_exposes_developer_targets_and_defaults(self):
+        source = r'''
+const assert = require("assert");
+const catalog = require(process.argv[1]);
+for (const definition of Object.values(catalog.COMPONENTS)) {
+  assert.ok(Array.isArray(definition.targets) && definition.targets.length > 0);
+  assert.ok(definition.targets.every(target => typeof target === "string" && target.length > 0));
+  assert.ok(definition.variants.includes(definition.defaultVariant));
+}
+'''
+        self.run_node(source)
+
     def test_controller_prefers_versioned_state_and_migrates_legacy_only_on_save(self):
         source = r'''
 const assert = require("assert");
@@ -221,6 +233,26 @@ assert.strictEqual(root.dataset.uiNavigation, "operations");
 '''
         self.run_node(source, CATALOG_MODULE, [BOOTSTRAP_MODULE])
 
+    def test_browser_globals_automatically_apply_first_paint_state(self):
+        source = r'''
+const assert = require("assert");
+const fs = require("fs");
+const vm = require("vm");
+const root = {dataset: {}, style: {}};
+const context = {
+  document: {documentElement: root},
+  localStorage: {getItem: key => key === "json_codr_ui_v1" ? JSON.stringify({schema: 1, preset: "terminal-focus"}) : null},
+  matchMedia: () => ({matches: false}),
+};
+context.window = context; context.globalThis = context;
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), context);
+vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), context);
+assert.strictEqual(root.dataset.uiPreset, "terminal-focus");
+assert.strictEqual(root.dataset.theme, "dark");
+'''
+        self.run_node(source, CATALOG_MODULE, [BOOTSTRAP_MODULE])
+
     def test_index_loads_ui_bootstrap_before_styles_and_controller_before_application(self):
         html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
         catalog = '/static/ui_catalog.js?v=1.0.18-alpha.10'
@@ -263,6 +295,9 @@ console.log(JSON.stringify({presets: Object.keys(catalog.PRESETS), components: c
             '[data-ui-panels="flat"]', '[data-ui-tabs="segmented"]',
         ):
             self.assertIn(contract, css)
+        for preset in ("gamma-operations", "json-codr-classic", "accessible-read"):
+            self.assertIn(f'[data-ui-preset="{preset}"][data-theme="dark"]', css)
+            self.assertIn(f'[data-ui-preset="{preset}"][data-theme="light"]', css)
 
     def test_gamma_fonts_are_approved_licensed_and_loaded_after_application_css(self):
         fonts = ROOT / "web" / "fonts"
@@ -326,17 +361,22 @@ class Fake {
 }
 const elements = Object.fromEntries([
   "preset", "mode", "density", "typography", "components", "summary", "status",
-  "save", "cancel", "resetPreset", "restoreDefaults", "modeHelp",
+  "save", "cancel", "resetPreset", "restoreDefaults", "modeHelp", "presetDetails",
 ].map(key => [key, new Fake()]));
 const editor = createController.bindUICustomizationEditor({controller, catalog, elements});
 assert.ok(elements.preset.innerHTML.includes("NOC Light"));
+assert.ok(elements.presetDetails.innerHTML.includes(catalog.PRESETS["noc-light"].description));
+assert.ok(elements.presetDetails.innerHTML.includes("preset-swatch"));
 assert.ok(elements.components.innerHTML.includes("data-family=\"navigation\""));
+assert.ok(elements.components.innerHTML.includes("data-reset-family=\"navigation\""));
 elements.preset.value = "terminal-focus"; elements.preset.fire("change");
 assert.strictEqual(root.dataset.theme, "dark");
 assert.strictEqual(elements.mode.disabled, true);
 elements.components.fire("change", {dataset: {family: "navigation"}, value: "operations"});
 assert.strictEqual(root.dataset.uiNavigation, "operations");
 assert.ok(elements.summary.textContent.includes("1 override"));
+elements.components.fire("click", {dataset: {resetFamily: "navigation"}});
+assert.strictEqual(Object.keys(controller.getDraft().components).length, 0);
 elements.preset.value = "gamma-operations"; elements.preset.fire("change");
 elements.typography.value = "opendyslexic"; elements.typography.fire("change");
 assert.strictEqual(controller.getDraft().density, "comfortable");
@@ -352,6 +392,26 @@ assert.deepStrictEqual(controller.getDraft(), catalog.DEFAULT_STATE);
 '''
         self.run_node(source, CATALOG_MODULE, [CONTROLLER_MODULE])
 
+    def test_preset_replacement_requires_confirmation_when_overrides_exist(self):
+        source = r'''
+const assert = require("assert");
+const catalog = require(process.argv[1]);
+const createController = require(process.argv[2]);
+const controller = createController({catalog, load: () => null});
+class Fake { constructor(){this.value="";this.disabled=false;this.textContent="";this.innerHTML="";this.listeners={};} addEventListener(t,c){this.listeners[t]=c;} fire(t,target=this){this.listeners[t]?.({target,preventDefault(){}});} }
+const elements = Object.fromEntries(["preset","mode","density","typography","components","summary","status","save","cancel","resetPreset","restoreDefaults","modeHelp","presetDetails"].map(key => [key,new Fake()]));
+let allow = false;
+createController.bindUICustomizationEditor({controller,catalog,elements,confirmPresetChange:() => allow});
+controller.setComponent("navigation", "rail");
+elements.preset.value = "terminal-focus"; elements.preset.fire("change");
+assert.strictEqual(controller.getDraft().preset, "noc-light");
+assert.strictEqual(controller.getDraft().components.navigation, "rail");
+allow = true; elements.preset.value = "terminal-focus"; elements.preset.fire("change");
+assert.strictEqual(controller.getDraft().preset, "terminal-focus");
+assert.deepStrictEqual(controller.getDraft().components, {});
+'''
+        self.run_node(source, CATALOG_MODULE, [CONTROLLER_MODULE])
+
     def test_appearance_editor_markup_is_accessible_and_complete(self):
         html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
         for element_id in (
@@ -363,6 +423,7 @@ assert.deepStrictEqual(controller.getDraft(), catalog.DEFAULT_STATE);
         for control_id in ("ui-preset", "ui-mode", "ui-density", "ui-typography"):
             self.assertIn(f'for="{control_id}"', html)
         self.assertIn('id="ui-preview-status" class="meta" role="status" aria-live="polite"', html)
+        self.assertIn('id="ui-preset-details"', html)
         self.assertNotIn('id="setting-theme"', html)
 
     def test_noc_navigation_collapse_preserves_destination_and_accessibility_contracts(self):
