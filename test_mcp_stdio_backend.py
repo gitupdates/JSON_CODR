@@ -192,7 +192,7 @@ class StdioMcpBackendTests(unittest.IsolatedAsyncioTestCase):
             _, backends = build_mcp_adapters(config_path, rea_provider_root=provider)
 
             self.assertEqual(Path(backends[0].config.command), Path(shutil.which("node")))
-            self.assertEqual(Path(backends[0].config.args[0]), script)
+            self.assertTrue(Path(backends[0].config.args[0]).samefile(script))
             self.assertEqual(backends[0].config.env["JAVA_HOME"], "D:/jdk")
 
     def test_managed_rea_is_registered_without_manual_mcp_entry(self):

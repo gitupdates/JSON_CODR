@@ -6,9 +6,10 @@ from web_app.core.adapters import AdapterEvent, CapabilityCall, ExecutionContext
 
 
 class McpAdapter:
-    def __init__(self, backend, *, allowed_tools: Set[str]) -> None:
+    def __init__(self, backend, *, allowed_tools: Set[str], server_id: str | None = None) -> None:
         self._backend = backend
         self._allowed_tools = frozenset(allowed_tools)
+        self.server_id = server_id
 
     async def execute(self, call: CapabilityCall, context: ExecutionContext):
         operation = call.capability_id.rsplit(".", 1)[-1]

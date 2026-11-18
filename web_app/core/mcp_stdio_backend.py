@@ -9,6 +9,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from web_app.core.canonical import canonical_digest
+from web_app.core.contracts import EffectClass
 from web_app.version import APP_VERSION
 
 
@@ -71,6 +73,46 @@ def load_mcp_server_configs(path: Path) -> tuple[McpServerConfig, ...]:
     return tuple(configs)
 
 
+def normalize_mcp_catalog(config: McpServerConfig, catalog: dict[str, Any]) -> dict[str, Any]:
+    """Return planning-safe identities and schemas without launch configuration or secrets."""
+    raw_server = catalog.get("server", {})
+    server = {
+        key: raw_server[key]
+        for key in ("name", "version")
+        if isinstance(raw_server, dict) and isinstance(raw_server.get(key), str)
+    }
+    tools = []
+    for raw in catalog.get("tools", []):
+        if not isinstance(raw, dict) or not isinstance(raw.get("name"), str):
+            continue
+        schema = raw.get("inputSchema", {})
+        if not isinstance(schema, dict):
+            schema = {}
+        annotations = raw.get("annotations", {})
+        if not isinstance(annotations, dict):
+            annotations = {}
+        if annotations.get("destructiveHint") is True:
+            effect = EffectClass.destructive
+        elif annotations.get("readOnlyHint") is True:
+            effect = EffectClass.observe
+        else:
+            effect = EffectClass.external_effect
+        tools.append({
+            "name": raw["name"],
+            "description": raw.get("description", "") if isinstance(raw.get("description", ""), str) else "",
+            "inputSchema": schema,
+            "annotations": annotations,
+            "tool_schema_digest": canonical_digest(schema),
+            "effect_class": effect.value,
+        })
+    tools.sort(key=lambda tool: tool["name"])
+    return {
+        "server_id": f"mcp.{config.name}",
+        "server": server,
+        "tools": tools,
+    }
+
+
 def build_mcp_adapters(
     path: Path,
     *,
@@ -100,13 +142,17 @@ def build_mcp_adapters(
     for config in configs:
         if config.name == "rea" and rea_provider_root is not None and (Path(rea_provider_root) / "state.sqlite").is_file():
             backend = LeasedReaBackend(Path(rea_provider_root), config)
-            adapters["mcp.rea"] = McpAdapter(backend, allowed_tools=config.allowed_tools or frozenset({"*"}))
+            adapters["mcp.rea"] = McpAdapter(
+                backend, allowed_tools=config.allowed_tools or frozenset({"*"}), server_id="mcp.rea",
+            )
             backends.append(backend)
             continue
         if config.name == "rea" and rea_provider_root is not None:
             config = _active_rea_config(config, Path(rea_provider_root))
         backend = StdioMcpBackend(config)
-        adapters[f"mcp.{config.name}"] = McpAdapter(backend, allowed_tools=config.allowed_tools)
+        adapters[f"mcp.{config.name}"] = McpAdapter(
+            backend, allowed_tools=config.allowed_tools, server_id=f"mcp.{config.name}",
+        )
         backends.append(backend)
     return adapters, tuple(backends)
 
@@ -165,7 +211,9 @@ class StdioMcpBackend:
                 raise RuntimeError(f"MCP server {self.config.name} repeated a pagination cursor")
             seen_cursors.add(next_cursor)
             cursor = next_cursor
-        return {"server": dict(self._server_info), "tools": tools}
+        return normalize_mcp_catalog(
+            self.config, {"server": dict(self._server_info), "tools": tools},
+        )
 
     async def invoke(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if "*" not in self.config.allowed_tools and name not in self.config.allowed_tools:
