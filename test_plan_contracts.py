@@ -94,6 +94,12 @@ class PlanContractTests(unittest.TestCase):
         self.assertEqual(pending.canonical_digest, completed.canonical_digest)
         self.assertEqual(review_plan.canonical_digest, approved_plan.canonical_digest)
 
+    def test_step_digest_is_stable_when_carried_to_a_new_plan_revision(self):
+        original = self.make_step(plan_revision=1)
+        carried = self.make_step(plan_revision=2)
+
+        self.assertEqual(original.canonical_digest, carried.canonical_digest)
+
     def test_supplied_incorrect_digest_is_rejected(self):
         with self.assertRaisesRegex(ValidationError, "canonical digest"):
             self.make_step(canonical_digest="sha256:" + "f" * 64)

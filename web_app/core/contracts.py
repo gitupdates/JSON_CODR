@@ -317,7 +317,7 @@ class PlannedStep(VersionedContract):
     @model_validator(mode="after")
     def set_or_validate_digest(self) -> "PlannedStep":
         expected = compute_canonical_digest(self.model_dump(
-            mode="json", exclude={"canonical_digest", "review_status", "disposition"},
+            mode="json", exclude={"canonical_digest", "review_status", "disposition", "plan_revision"},
         ))
         if self.canonical_digest is not None and self.canonical_digest != expected:
             raise ValueError("planned step canonical digest does not match its content")
@@ -380,6 +380,19 @@ class PlanRevision(VersionedContract):
             raise ValueError("plan revision canonical digest does not match its content")
         object.__setattr__(self, "canonical_digest", expected)
         return self
+
+
+class PlanReviewDecision(VersionedContract):
+    decision_id: Identifier
+    task_id: TaskId
+    plan_id: Identifier
+    plan_revision: int = Field(ge=1)
+    step_id: Identifier | None = None
+    plan_digest: Digest
+    principal: Identifier
+    decision: Literal["approve", "reject"]
+    reason: str | None = Field(default=None, max_length=4096)
+    decided_at: datetime
 
 
 class EvidenceRef(VersionedContract):

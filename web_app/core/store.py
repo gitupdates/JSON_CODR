@@ -13,10 +13,14 @@ from web_app.core.contracts import (
     EffectIntent,
     EffectIntentDraft,
     EffectState,
+    PlanReviewDecision,
+    PlanRevision,
+    StepDisposition,
     TaskCommand,
     TaskEvent,
     TaskEventDraft,
     TaskRecord,
+    TaskPhase,
     TaskStatus,
 )
 
@@ -104,6 +108,22 @@ class TaskStore:
                 step_event_sequence INTEGER NOT NULL,
                 PRIMARY KEY(parent_task_id, plan_id, plan_revision, step_id)
             );
+            CREATE TABLE IF NOT EXISTS plan_revisions (
+                task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+                plan_id TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                canonical_digest TEXT NOT NULL,
+                plan_json TEXT NOT NULL,
+                PRIMARY KEY(task_id, plan_id, revision)
+            );
+            CREATE TABLE IF NOT EXISTS plan_decisions (
+                decision_id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+                plan_id TEXT NOT NULL,
+                plan_revision INTEGER NOT NULL,
+                step_id TEXT,
+                decision_json TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS effects (
                 task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
                 effect_id TEXT NOT NULL,
@@ -115,6 +135,8 @@ class TaskStore:
             );
             CREATE INDEX IF NOT EXISTS tasks_parent_idx ON tasks(parent_task_id, task_id);
             CREATE INDEX IF NOT EXISTS effects_state_idx ON effects(task_id, json_extract(effect_json, '$.state'));
+            CREATE INDEX IF NOT EXISTS plan_decisions_scope_idx
+                ON plan_decisions(task_id, plan_id, plan_revision, step_id);
             """
         )
         self._migrate_event_order()
@@ -125,6 +147,182 @@ class TaskStore:
     def create(self, command: TaskCommand) -> TaskRecord:
         with self._transaction():
             return self._create_unlocked(command)
+
+    def append_plan(
+        self,
+        task_id: str,
+        plan: PlanRevision,
+        *,
+        expected_current_digest: str | None = None,
+    ) -> PlanRevision:
+        with self._transaction():
+            self._get_unlocked(task_id)
+            existing = self._connection.execute(
+                "SELECT plan_json FROM plan_revisions WHERE task_id = ? AND plan_id = ? AND revision = ?",
+                (task_id, plan.plan_id, plan.revision),
+            ).fetchone()
+            if existing is not None:
+                stored = PlanRevision.model_validate_json(existing["plan_json"])
+                if stored != plan:
+                    raise ConcurrencyConflict("plan revision already exists with different content")
+                return stored
+            latest_row = self._connection.execute(
+                """SELECT plan_json FROM plan_revisions
+                   WHERE task_id = ? AND plan_id = ? ORDER BY revision DESC LIMIT 1""",
+                (task_id, plan.plan_id),
+            ).fetchone()
+            latest = None if latest_row is None else PlanRevision.model_validate_json(latest_row["plan_json"])
+            if expected_current_digest is not None and (
+                latest is None or latest.canonical_digest != expected_current_digest
+            ):
+                raise ConcurrencyConflict("current plan digest does not match expected digest")
+            if latest is None:
+                if plan.revision != 1 or plan.parent_revision is not None:
+                    raise ConcurrencyConflict("first plan revision must be revision 1 without a parent")
+            elif plan.revision != latest.revision + 1 or plan.parent_revision != latest.revision:
+                raise ConcurrencyConflict("plan revisions must increase monotonically from their parent")
+            if latest is not None:
+                next_steps = {step.step_id: step for step in plan.steps}
+                for completed in (step for step in latest.steps if step.disposition is StepDisposition.completed):
+                    carried = next_steps.get(completed.step_id)
+                    if (
+                        carried is None
+                        or carried.disposition is not StepDisposition.completed
+                        or carried.canonical_digest != completed.canonical_digest
+                    ):
+                        raise ConcurrencyConflict("completed step must carry forward with the same digest")
+            self._append_unlocked(
+                task_id,
+                TaskEventDraft(
+                    event_type="agent.plan_revision_created",
+                    payload={
+                        "plan_id": plan.plan_id,
+                        "plan_revision": plan.revision,
+                        "plan_digest": plan.canonical_digest,
+                    },
+                ),
+            )
+            self._connection.execute(
+                "INSERT INTO plan_revisions VALUES (?, ?, ?, ?, ?)",
+                (task_id, plan.plan_id, plan.revision, plan.canonical_digest, plan.model_dump_json()),
+            )
+            return plan
+
+    def plan(self, task_id: str, plan_id: str, revision: int | None = None) -> PlanRevision:
+        with self._lock:
+            if revision is None:
+                row = self._connection.execute(
+                    """SELECT plan_json FROM plan_revisions WHERE task_id = ? AND plan_id = ?
+                       ORDER BY revision DESC LIMIT 1""",
+                    (task_id, plan_id),
+                ).fetchone()
+            else:
+                row = self._connection.execute(
+                    """SELECT plan_json FROM plan_revisions
+                       WHERE task_id = ? AND plan_id = ? AND revision = ?""",
+                    (task_id, plan_id, revision),
+                ).fetchone()
+            if row is None:
+                raise KeyError((task_id, plan_id, revision))
+            return PlanRevision.model_validate_json(row["plan_json"])
+
+    def plans(self, task_id: str) -> tuple[PlanRevision, ...]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT plan_json FROM plan_revisions WHERE task_id = ? ORDER BY plan_id, revision",
+                (task_id,),
+            ).fetchall()
+            return tuple(PlanRevision.model_validate_json(row["plan_json"]) for row in rows)
+
+    def record_plan_decision(
+        self,
+        task_id: str,
+        plan_id: str,
+        revision: int,
+        decision: str,
+        *,
+        principal: str,
+        expected_plan_digest: str,
+        step_id: str | None = None,
+        reason: str | None = None,
+    ) -> PlanReviewDecision:
+        if decision not in {"approve", "reject"}:
+            raise ValueError("decision must be approve or reject")
+        if decision == "reject" and not (reason or "").strip():
+            raise ValueError("rejection requires a reason")
+        with self._transaction():
+            plan = self.plan(task_id, plan_id, revision)
+            if plan.canonical_digest != expected_plan_digest:
+                raise ConcurrencyConflict("plan digest does not match expected digest")
+            rows = self._connection.execute(
+                """SELECT decision_json FROM plan_decisions
+                   WHERE task_id = ? AND plan_id = ? AND plan_revision = ?
+                     AND COALESCE(step_id, '') = COALESCE(?, '') ORDER BY rowid""",
+                (task_id, plan_id, revision, step_id),
+            ).fetchall()
+            prior = tuple(PlanReviewDecision.model_validate_json(row["decision_json"]) for row in rows)
+            if prior:
+                last = prior[-1]
+                if (
+                    last.decision == decision
+                    and last.principal == principal
+                    and last.reason == reason
+                    and last.plan_digest == expected_plan_digest
+                ):
+                    return last
+                if last.decision == "reject":
+                    raise ConcurrencyConflict("rejection is final for this revision and digest")
+            record = PlanReviewDecision(
+                decision_id=f"decision-{uuid7()}", task_id=task_id, plan_id=plan_id,
+                plan_revision=revision, step_id=step_id, plan_digest=expected_plan_digest,
+                principal=principal, decision=decision, reason=reason, decided_at=datetime.now(UTC),
+            )
+            self._append_unlocked(
+                task_id,
+                TaskEventDraft(
+                    event_type=f"agent.plan_{decision}d",
+                    payload={
+                        "decision_id": record.decision_id,
+                        "plan_id": plan_id,
+                        "plan_revision": revision,
+                        "step_id": step_id,
+                        "plan_digest": expected_plan_digest,
+                        "reason": reason,
+                    },
+                ),
+            )
+            self._connection.execute(
+                "INSERT INTO plan_decisions VALUES (?, ?, ?, ?, ?, ?)",
+                (record.decision_id, task_id, plan_id, revision, step_id, record.model_dump_json()),
+            )
+            return record
+
+    def plan_decisions(self, task_id: str, plan_id: str, revision: int) -> tuple[PlanReviewDecision, ...]:
+        with self._lock:
+            rows = self._connection.execute(
+                """SELECT decision_json FROM plan_decisions
+                   WHERE task_id = ? AND plan_id = ? AND plan_revision = ? ORDER BY rowid""",
+                (task_id, plan_id, revision),
+            ).fetchall()
+            return tuple(PlanReviewDecision.model_validate_json(row["decision_json"]) for row in rows)
+
+    def phase(self, task_id: str) -> TaskPhase:
+        record = self.get(task_id)
+        terminal = {
+            TaskStatus.completed: TaskPhase.completed,
+            TaskStatus.failed: TaskPhase.failed,
+            TaskStatus.cancelled: TaskPhase.cancelled,
+            TaskStatus.interrupted: TaskPhase.blocked,
+        }
+        if record.status in terminal:
+            return terminal[record.status]
+        for event in reversed(record.events):
+            if event.event_type == "agent.phase_changed":
+                try:
+                    return TaskPhase(str(event.payload.get("phase")))
+                except ValueError:
+                    return TaskPhase.blocked
+        return TaskPhase.planning if record.status is TaskStatus.running else TaskPhase.describe
 
     def plan_step_and_create_child(
         self,
