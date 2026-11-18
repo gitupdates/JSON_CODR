@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).parent
 CATALOG_MODULE = ROOT / "web" / "ui_catalog.js"
 CONTROLLER_MODULE = ROOT / "web" / "ui_customization.js"
+BOOTSTRAP_MODULE = ROOT / "web" / "ui_bootstrap.js"
 
 
 class GammaUICustomizationTests(unittest.TestCase):
@@ -159,6 +160,66 @@ assert.strictEqual(reloaded.getDraft().mode, persisted.mode);
 assert.deepStrictEqual(reloaded.getDraft().components, {});
 '''
         self.run_node(source, CATALOG_MODULE, [CONTROLLER_MODULE])
+
+    def test_first_paint_bootstrap_applies_validated_root_attributes_without_writing(self):
+        source = r'''
+const assert = require("assert");
+const catalog = require(process.argv[1]);
+const bootstrapUI = require(process.argv[2]);
+const writes = [];
+const root = {dataset: {}, style: {colorScheme: ""}};
+const state = {
+  schema: 1, preset: "terminal-focus", mode: "light", density: "comfortable",
+  typography: "system", components: {navigation: "operations"},
+};
+const storage = {
+  getItem: key => key === catalog.STORAGE_KEY ? JSON.stringify(state) : null,
+  setItem: (...args) => writes.push(args),
+};
+const effective = bootstrapUI({catalog, storage, root, systemDark: false});
+assert.strictEqual(effective.preset, "terminal-focus");
+assert.strictEqual(root.dataset.theme, "dark");
+assert.strictEqual(root.style.colorScheme, "dark");
+assert.strictEqual(root.dataset.uiPreset, "terminal-focus");
+assert.strictEqual(root.dataset.uiDensity, "comfortable");
+assert.strictEqual(root.dataset.uiTypography, "system");
+assert.strictEqual(root.dataset.uiNavigation, "operations");
+assert.strictEqual(root.dataset.uiPanels, "flat");
+assert.strictEqual(writes.length, 0);
+'''
+        self.run_node(source, CATALOG_MODULE, [BOOTSTRAP_MODULE])
+
+    def test_first_paint_bootstrap_recovers_corrupt_state_and_reads_legacy_mode(self):
+        source = r'''
+const assert = require("assert");
+const catalog = require(process.argv[1]);
+const bootstrapUI = require(process.argv[2]);
+const root = {dataset: {}, style: {}};
+const storage = {getItem: key => key === catalog.STORAGE_KEY ? "{broken" : "dark"};
+const effective = bootstrapUI({catalog, storage, root, systemDark: true});
+assert.strictEqual(effective.preset, "noc-light");
+assert.strictEqual(effective.mode, "dark");
+assert.strictEqual(effective.effectiveMode, "light");
+assert.strictEqual(root.dataset.theme, "light");
+assert.strictEqual(root.dataset.uiNavigation, "operations");
+'''
+        self.run_node(source, CATALOG_MODULE, [BOOTSTRAP_MODULE])
+
+    def test_index_loads_ui_bootstrap_before_styles_and_controller_before_application(self):
+        html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+        catalog = '/static/ui_catalog.js?v=1.0.18-alpha.10'
+        bootstrap = '/static/ui_bootstrap.js?v=1.0.18-alpha.10'
+        stylesheet = '/static/app.css?v=1.0.18-alpha.10'
+        controller = '/static/ui_customization.js?v=1.0.18-alpha.10'
+        application = '/static/app.js?v=1.0.18-alpha.10'
+        self.assertIn(catalog, html)
+        self.assertIn(bootstrap, html)
+        self.assertIn(controller, html)
+        self.assertLess(html.index(catalog), html.index(bootstrap))
+        self.assertLess(html.index(bootstrap), html.index(stylesheet))
+        self.assertLess(html.index(controller), html.index(application))
+        self.assertNotIn("vendor/charts", html)
+        self.assertNotIn("vendor/leaflet", html)
 
 
 if __name__ == "__main__":

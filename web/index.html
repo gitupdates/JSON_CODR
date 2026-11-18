@@ -4,18 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <script>
-      (() => {
-        const validModes = new Set(["light", "dark", "system"]);
-        const cachedMode = localStorage.getItem("json_codr_theme");
-        const mode = validModes.has(cachedMode) ? cachedMode : "dark";
-        const effectiveTheme = mode === "system"
-          ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
-          : mode;
-        document.documentElement.dataset.theme = effectiveTheme;
-        document.documentElement.style.colorScheme = effectiveTheme;
-      })();
-    </script>
+    <script src="/static/ui_catalog.js?v=1.0.18-alpha.10"></script>
+    <script src="/static/ui_bootstrap.js?v=1.0.18-alpha.10"></script>
     <title>JSON_CODR · Local model console</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/static/vendor/xterm.css" />
@@ -554,6 +544,7 @@
     <script src="/static/vendor/xterm-addon-fit.js" defer></script>
     <script src="/static/model_runs.js?v=1.0.18-alpha.10" defer></script>
     <script src="/static/workspace_layout.js?v=1.0.18-alpha.10" defer></script>
+    <script src="/static/ui_customization.js?v=1.0.18-alpha.10" defer></script>
     <script src="/static/app.js?v=1.0.18-alpha.10" defer></script>
   </body>
 </html>
