@@ -68,15 +68,15 @@ Gamma combines JSON_CODR's local-agent identity with selected NOCWatch qualities
 - Accessible typography option using the supplied OpenDyslexic files.
 - No imported maps, network terminology, legacy brands, or dashboard content.
 
-The default Gamma preset should feel intentional rather than decorative: dark graphite surfaces, a warm orange accent derived from the sanitized shell, compact navigation, and monospaced operational metadata. Existing JSON_CODR lime remains available in another preset.
+The default Gamma preset is NOC Light: bright neutral surfaces, blue-orange operational accents, compact cards, strong dividers, and an expanded labeled navigation/header that can collapse to the compact icon rail without changing the active workspace. Gamma Operations and the existing JSON_CODR lime identity remain available as alternate presets.
 
 ## Theme presets
 
 Ship these initial presets:
 
-1. **Gamma Operations** — default Gamma look; graphite surfaces, warm orange accent, IBM Plex, compact shell, squared operational controls.
+1. **Gamma Operations** — alternate dark Gamma look; graphite surfaces, warm orange accent, IBM Plex, compact shell, squared operational controls.
 2. **JSON_CODR Classic** — preserves the current dark/light token identity and component shapes as the compatibility preset.
-3. **NOC Light** — bright neutral surfaces, blue-orange operational accents, compact cards, strong dividers.
+3. **NOC Light** — default Gamma look; bright neutral surfaces, blue-orange operational accents, compact cards, strong dividers, and collapsible labeled application chrome.
 4. **Terminal Focus** — darker low-distraction surfaces, lime/cyan signals, mono-forward typography, dense controls.
 5. **Accessible Read** — high-contrast surfaces, larger spacing and targets, OpenDyslexic body option, reduced decorative effects.
 
@@ -88,11 +88,11 @@ Each preset defines a color mode, token set, and one variant choice for every su
 | --- | --- | --- | --- | --- | --- |
 | Gamma Operations | light/dark/system | dark | compact or comfortable; compact default | IBM Plex, system, or OpenDyslexic | operations, operations, operations, outlined, compact, underline, operations, signal, integrated |
 | JSON_CODR Classic | light/dark/system | current saved mode, otherwise dark | comfortable or compact; comfortable default | system, IBM Plex, or OpenDyslexic | classic, classic, classic, glass, rounded, pill, classic, classic, classic |
-| NOC Light | fixed light | light | compact or comfortable; compact default | IBM Plex, system, or OpenDyslexic | operations-light, rail, operations, flat, compact, segmented, operations, signal, integrated-light |
+| NOC Light | fixed light | light | compact or comfortable; compact default | IBM Plex, system, or OpenDyslexic | operations-light, operations, operations, flat, compact, segmented, operations, signal, integrated-light |
 | Terminal Focus | fixed dark | dark | compact or comfortable; compact default | mono-forward, IBM Plex, or system | focus, rail, minimal, flat, terminal, underline, focus, terminal, focus |
 | Accessible Read | light/dark/system | system | comfortable only | OpenDyslexic, system, or IBM Plex; OpenDyslexic default | accessible, high-contrast, high-contrast, high-contrast, accessible, high-contrast, accessible, high-contrast, accessible |
 
-Fixed-color presets retain the user's saved adaptive `mode` without applying it. Switching back to an adaptive preset restores that saved mode. The editor disables the mode control for fixed presets and explains why.
+Fixed-color presets retain the user's saved adaptive `mode` without applying it. Switching back to an adaptive preset restores that saved mode. The editor disables the mode control for fixed presets and explains why. NOC Light starts with its labeled navigation/header expanded; the existing collapse control switches it to the `rail` navigation variant and persists that chrome state independently from theme selection.
 
 OpenDyslexic always selects comfortable density. Selecting compact density while OpenDyslexic is active changes typography to the preset's non-accessibility default after confirmation. Accessible Read never permits compact density. All other listed typography/density combinations are valid.
 
@@ -178,13 +178,13 @@ Store one versioned object in local storage under `json_codr_ui_v1`:
 ```json
 {
   "schema": 1,
-  "preset": "gamma-operations",
-  "mode": "dark",
+  "preset": "noc-light",
+  "mode": "light",
   "density": "compact",
   "typography": "ibm-plex",
   "components": {
     "navigation": "operations",
-    "panels": "outlined",
+    "panels": "flat",
     "controls": "compact"
   }
 }
@@ -193,7 +193,7 @@ Store one versioned object in local storage under `json_codr_ui_v1`:
 On load, the catalog validator:
 
 1. Rejects non-object or unsupported-schema data.
-2. Resolves the preset or falls back to `gamma-operations`.
+2. Resolves the preset or falls back to `noc-light`.
 3. Filters component keys and variants against catalog allowlists.
 4. Applies preset defaults, then valid overrides.
 5. Preserves the existing `json_codr_theme` value by migrating it into `mode` on first load.
@@ -263,7 +263,7 @@ The archive does not include an IBM Plex license file. The IBM Plex binaries mus
 - Missing catalog entries use family defaults.
 - Unknown persisted variants are ignored.
 - A missing optional font falls back to the system font stack without blocking startup.
-- If customization JavaScript fails, CSS defaults render the Gamma Operations preset and the app remains operable.
+- If customization JavaScript fails, CSS defaults render the NOC Light preset with expanded labeled chrome and the app remains operable.
 - Existing `json_codr_theme` values migrate once and continue to influence compatible presets.
 - The Classic preset provides a visual rollback without changing branches.
 
@@ -284,7 +284,7 @@ Manual verification should exercise each preset at desktop, narrow, and mobile w
 
 ## Rollout
 
-Gamma ships only on `gamma/ui-customization`. The default is Gamma Operations, with JSON_CODR Classic available as an immediate visual rollback. No Alpha data is rewritten beyond the local appearance key. The implementation should be reviewable in vertical slices: catalog/state engine, token/variant CSS, Appearance editor, imported assets, then regression/accessibility verification.
+Gamma ships only on `gamma/ui-customization`. The default is NOC Light with collapsible labeled application chrome, with JSON_CODR Classic available as an immediate visual rollback. No Alpha data is rewritten beyond the local appearance key. The implementation should be reviewable in vertical slices: catalog/state engine, token/variant CSS, Appearance editor, imported assets, then regression/accessibility verification.
 
 ## Builder decisions left open
 
