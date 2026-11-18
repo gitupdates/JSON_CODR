@@ -141,6 +141,14 @@ class WebStaticTests(unittest.TestCase):
         self.assertEqual(javascript.status_code, 200)
         self.assertIn("javascript", javascript.headers["content-type"])
 
+    def test_workspace_layout_controller_loads_before_application(self):
+        html = self.client.get("/").text
+
+        layout_index = html.index('/static/workspace_layout.js')
+        application_index = html.index('/static/app.js')
+        self.assertLess(layout_index, application_index)
+        self.assertIn('json_codr_workspace_layout_v1', Path("web/workspace_layout.js").read_text(encoding="utf-8"))
+
     def test_global_navigation_and_hardware_sections_are_present(self):
         html = self.client.get("/").text
         parser = IdCollector()
