@@ -175,7 +175,11 @@
       const preset = catalog.PRESETS[draft.preset];
       elements.preset.innerHTML = optionsHtml(Object.entries(catalog.PRESETS).map(([id, value]) => [id, value.label]), draft.preset);
       elements.preset.value = draft.preset;
-      elements.presetDetails.innerHTML = `<span class="preset-swatch" data-preset-swatch="${escapeHtml(draft.preset)}" aria-hidden="true"></span><span><strong>${escapeHtml(preset.label)}</strong><small>${escapeHtml(preset.description)}</small></span>`;
+      elements.presetDetails.innerHTML = Object.entries(catalog.PRESETS).map(([presetId, value]) => {
+        const color = value.colorCapability === "fixed" ? `Fixed ${value.fixedMode}` : `Adaptive · default ${value.defaultMode}`;
+        const fonts = value.typographies.map((id) => catalog.TYPOGRAPHIES[id].label).join(", ");
+        return `<button type="button" class="ui-preset-card" data-preset-choice="${escapeHtml(presetId)}" aria-pressed="${presetId === draft.preset}"><span class="preset-swatch" data-preset-swatch="${escapeHtml(presetId)}" aria-hidden="true"></span><span class="ui-preset-card-copy"><strong>${escapeHtml(value.label)}</strong><small>${escapeHtml(value.description)}</small><span class="ui-preset-meta">Color: ${escapeHtml(color)} · Density: ${escapeHtml(value.densities.join(", "))} · Font: ${escapeHtml(fonts)}</span></span></button>`;
+      }).join("");
       elements.mode.innerHTML = optionsHtml(catalog.MODES.map((mode) => [mode, mode[0].toUpperCase() + mode.slice(1)]), draft.mode);
       elements.mode.value = draft.mode;
       elements.mode.disabled = preset.colorCapability === "fixed";
@@ -202,15 +206,23 @@
       return render();
     }
 
-    elements.preset.addEventListener("change", () => {
+    function choosePreset(presetId) {
       const draft = controller.getDraft();
-      const replacingOverrides = elements.preset.value !== draft.preset && Object.keys(draft.components).length > 0;
+      const replacingOverrides = presetId !== draft.preset && Object.keys(draft.components).length > 0;
       if (replacingOverrides && !confirmReplacement("Changing preset will replace component overrides. Continue?")) {
         elements.status.textContent = "Preset change canceled";
         render();
-        return;
+        return false;
       }
-      preview(() => controller.selectPreset(elements.preset.value));
+      preview(() => controller.selectPreset(presetId));
+      return true;
+    }
+
+    elements.preset.addEventListener("change", () => choosePreset(elements.preset.value));
+    elements.presetDetails.addEventListener("click", (event) => {
+      const choice = event.target?.closest?.("[data-preset-choice]") || event.target;
+      const presetId = choice?.dataset?.presetChoice;
+      if (presetId) choosePreset(presetId);
     });
     elements.mode.addEventListener("change", () => preview(() => controller.setMode(elements.mode.value)));
     elements.density.addEventListener("change", () => preview(() => controller.setDensity(elements.density.value)));

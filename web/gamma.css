@@ -215,9 +215,12 @@
 .appearance-editor { display: grid; gap: 8px; }
 .appearance-editor h3 { margin: 0; }
 .appearance-editor .setting-select { width: min(100%, 420px); max-width: 420px; }
-.ui-preset-details { width: min(100%, 420px); display: flex; gap: 10px; align-items: center; padding: 10px; border: 1px solid var(--line); background: var(--surface-input); }
-.ui-preset-details span:last-child { display: grid; gap: 2px; }
-.ui-preset-details small { color: var(--text-subtle); }
+.ui-preset-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 8px; }
+.ui-preset-card { min-height: 112px; display: flex; gap: 10px; align-items: flex-start; padding: 12px; color: var(--text); background: var(--surface-input); border: 1px solid var(--line); text-align: left; }
+.ui-preset-card[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.ui-preset-card-copy { display: grid; gap: 4px; }
+.ui-preset-card small { color: var(--text-subtle); }
+.ui-preset-meta { color: var(--muted); font-size: .72rem; line-height: 1.4; }
 .preset-swatch { width: 32px; height: 32px; flex: 0 0 32px; border: 1px solid var(--line-strong); background: linear-gradient(135deg, var(--accent) 0 35%, var(--surface-panel) 35% 68%, var(--bg) 68%); }
 .ui-component-editor { margin-top: 8px; padding: 10px; border: 1px solid var(--line); background: var(--surface-input); }
 .ui-component-editor > summary { cursor: pointer; font-weight: 700; }
