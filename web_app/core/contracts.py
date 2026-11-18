@@ -8,6 +8,24 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, field_serializer, field_validator, model_validator
 
+from web_app.core.canonical import canonical_digest as compute_canonical_digest
+
+
+class frozendict(dict):
+    """Small immutable mapping used by frozen contract payloads."""
+
+    def _immutable(self, *args, **kwargs):
+        raise TypeError("frozendict is immutable")
+
+    __delitem__ = _immutable
+    __ior__ = _immutable
+    __setitem__ = _immutable
+    clear = _immutable
+    pop = _immutable
+    popitem = _immutable
+    setdefault = _immutable
+    update = _immutable
+
 
 Identifier = Annotated[str, StringConstraints(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")]
 TaskId = Identifier
@@ -78,6 +96,62 @@ class CriterionStatus(str, Enum):
     blocked = "blocked"
 
 
+class TaskPhase(str, Enum):
+    describe = "describe"
+    planning = "planning"
+    plan_review = "plan_review"
+    executing = "executing"
+    verifying = "verifying"
+    delivering = "delivering"
+    completed = "completed"
+    blocked = "blocked"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class PlanReviewStatus(str, Enum):
+    draft = "draft"
+    in_review = "in_review"
+    approved = "approved"
+    rejected = "rejected"
+    superseded = "superseded"
+    executed = "executed"
+
+
+class StepReviewStatus(str, Enum):
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
+
+
+class StepDisposition(str, Enum):
+    pending = "pending"
+    completed = "completed"
+    failed = "failed"
+    interrupted = "interrupted"
+
+
+class RevisionAuthor(str, Enum):
+    planner = "planner"
+    user = "user"
+    system = "system"
+
+
+class EffectClass(str, Enum):
+    observe = "observe"
+    bounded_edit = "bounded_edit"
+    test = "test"
+    command = "command"
+    network = "network"
+    install = "install"
+    git_local = "git_local"
+    publish = "publish"
+    external_effect = "external_effect"
+    credential_use = "credential_use"
+    budget_override = "budget_override"
+    destructive = "destructive"
+
+
 class FrozenContract(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
@@ -95,7 +169,7 @@ class RuntimeIdentity(FrozenContract):
     runtime_fingerprint: Digest
     hardware_profile_id: Identifier
     hardware_fingerprint: Digest
-    model_digests: frozendict[str, Digest]
+    model_digests: Mapping[str, Digest]
 
 
 class CapabilityManifest(VersionedContract):
@@ -183,14 +257,52 @@ class GoalSpec(VersionedContract):
         return self
 
 
+class OriginReference(FrozenContract):
+    origin_type: Literal["skill", "skillset", "plugin", "command", "agent_profile"]
+    origin_id: Identifier
+    content_digest: Digest
+
+
+class ConnectorStepMetadata(FrozenContract):
+    server_id: Identifier
+    tool_name: Identifier
+    tool_schema_digest: Digest
+    argument_digest: Digest
+    declared_annotations: Mapping[str, JsonValue] = Field(default_factory=dict)
+    credential_reference: Identifier | None = None
+    requested_scope_refs: tuple[str, ...] = ()
+    data_origin: str = Field(default="", max_length=2048)
+
+    @field_validator("declared_annotations", mode="after")
+    @classmethod
+    def freeze_annotations(cls, value: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+        _validate_json_size(value)
+        return _freeze_json(value)
+
+    @field_serializer("declared_annotations")
+    def serialize_annotations(self, value: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+        return _thaw_json(value)
+
+
 class PlannedStep(VersionedContract):
     step_id: Identifier
     plan_id: Identifier
     plan_revision: int = Field(ge=1)
     criterion_ids: tuple[Identifier, ...] = Field(min_length=1)
+    title: str = Field(default="", max_length=512)
+    purpose: str = Field(default="", max_length=2048)
+    dependencies: tuple[Identifier, ...] = ()
     capability_id: str = Field(pattern=r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
     operation: str = Field(min_length=1, max_length=256)
+    target_path: str | None = Field(default=None, max_length=4096)
     arguments: Mapping[str, JsonValue] = Field(default_factory=dict)
+    effect_class: EffectClass = EffectClass.observe
+    expected_evidence: tuple[str, ...] = ()
+    origins: tuple[OriginReference, ...] = ()
+    connector: ConnectorStepMetadata | None = None
+    review_status: StepReviewStatus = StepReviewStatus.pending
+    disposition: StepDisposition = StepDisposition.pending
+    canonical_digest: Digest | None = None
 
     @field_validator("arguments", mode="after")
     @classmethod
@@ -202,13 +314,30 @@ class PlannedStep(VersionedContract):
     def serialize_arguments(self, value: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
         return _thaw_json(value)
 
+    @model_validator(mode="after")
+    def set_or_validate_digest(self) -> "PlannedStep":
+        expected = compute_canonical_digest(self.model_dump(
+            mode="json", exclude={"canonical_digest", "review_status", "disposition"},
+        ))
+        if self.canonical_digest is not None and self.canonical_digest != expected:
+            raise ValueError("planned step canonical digest does not match its content")
+        object.__setattr__(self, "canonical_digest", expected)
+        return self
+
 
 class PlanRevision(VersionedContract):
     plan_id: Identifier
     revision: int = Field(ge=1)
     goal_id: Identifier
     goal_revision: int = Field(ge=1)
+    summary: str = Field(default="", max_length=8192)
+    expected_deliverables: tuple[str, ...] = ()
+    author: RevisionAuthor = RevisionAuthor.planner
+    parent_revision: int | None = Field(default=None, ge=1)
+    revision_reason: str = Field(default="", max_length=2048)
+    review_status: PlanReviewStatus = PlanReviewStatus.draft
     steps: tuple[PlannedStep, ...] = ()
+    canonical_digest: Digest | None = None
 
     @model_validator(mode="after")
     def consistent_steps(self) -> "PlanRevision":
@@ -217,6 +346,39 @@ class PlanRevision(VersionedContract):
             raise ValueError("step identifiers must be unique")
         if any(item.plan_id != self.plan_id or item.plan_revision != self.revision for item in self.steps):
             raise ValueError("steps must belong to this plan revision")
+        known = set(identifiers)
+        for step in self.steps:
+            missing = set(step.dependencies) - known
+            if missing:
+                raise ValueError(f"step {step.step_id} depends on missing step {sorted(missing)[0]}")
+            if step.step_id in step.dependencies:
+                raise ValueError("plan dependency cycle detected")
+        graph = {step.step_id: step.dependencies for step in self.steps}
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(step_id: str) -> None:
+            if step_id in visiting:
+                raise ValueError("plan dependency cycle detected")
+            if step_id in visited:
+                return
+            visiting.add(step_id)
+            for dependency in graph[step_id]:
+                visit(dependency)
+            visiting.remove(step_id)
+            visited.add(step_id)
+
+        for step_id in graph:
+            visit(step_id)
+        digest_payload = self.model_dump(mode="json", exclude={"canonical_digest", "review_status", "steps"})
+        digest_payload["steps"] = [
+            step.model_dump(mode="json", exclude={"canonical_digest", "review_status", "disposition"})
+            for step in self.steps
+        ]
+        expected = compute_canonical_digest(digest_payload)
+        if self.canonical_digest is not None and self.canonical_digest != expected:
+            raise ValueError("plan revision canonical digest does not match its content")
+        object.__setattr__(self, "canonical_digest", expected)
         return self
 
 
