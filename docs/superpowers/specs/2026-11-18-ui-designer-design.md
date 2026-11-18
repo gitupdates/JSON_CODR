@@ -141,6 +141,16 @@ Cross-origin stylesheets or assets that cannot be read safely are recorded as un
 
 Selector usage is derived from captured routes, states, and breakpoints and reported as evidence, not used to destructively purge CSS by default; dynamic selectors that were not observed may still be required. Framework signals such as React, Next.js, Angular, Vue, Svelte, Tailwind, Bootstrap, and Material UI are advisory metadata only. Wget, HTTrack, SingleFile, Webrecorder, monolith, and similar mirroring tools are not bundled into the first release because their broad capture behavior conflicts with the bounded, reviewable reference format.
 
+### CSS dependency and preservation pipeline
+
+Captured CSS is tokenized before parsing; `@import` is never parsed with regex alone. Import edges retain quoted or `url(...)` targets, query strings, fragments, anonymous or named `layer()`, quoted layer-name normalization, `supports(...)`, remaining media text, source URL, and source location. Graph identity resolves relative URLs, retains query strings, and ignores fragments, while the original fragment remains on the edge for serialization.
+
+Resolution uses intercepted Playwright responses or the managed capture cache through an abstract loader. It caches each canonical stylesheet, terminates self-imports and cycles, records cycle paths, and enforces 32 levels, 512 stylesheets, 5 MiB per stylesheet, and 64 MiB total CSS. Tarjan strongly connected components become deterministic `bundle_scc_NNN.css` units. Internal SCC imports are removed; external imports, cascade order, layers, supports conditions, media conditions, and relative paths remain. Duplicate references to one SCC emit one bundle import per containing stylesheet.
+
+The parser represents comments as first-class ordered nodes whose `rawText` is the exact text between `/*` and `*/`, including spaces and newlines. It preserves consecutive, leading, inter-declaration, trailing, EOF, license, source-map, conditional-build, PurgeCSS-directive, nested-at-rule, keyframe, and comment-only block positions. It also preserves generic simple and block at-rules such as `@font-face`, `@keyframes`, `@property`, `@container`, `@scope`, `@page`, `@charset`, and vendor rules.
+
+Every token and AST node carries source URL and start/end line, column, and offset. Unchanged files must parse and serialize byte-for-byte, including comment whitespace. Rewritten imports and generated SCC wrappers use deterministic double-quoted URLs and `\n` line endings while emitting source mappings back to original files. Golden fixtures cover raw round trips, nested/empty comment blocks, imports, cycles, assets, generic at-rules, and bundle/source-map integrity.
+
 ## Persistence and history
 
 Python owns project persistence beneath the configured JSON_CODR data root. Writes are atomic. Each save creates an immutable revision with parent revision, timestamp, schema version, and content digest. Autosave maintains a recoverable draft without replacing the last explicit save. Users can restore a previous revision, duplicate a project, import a JSON design, or reset only the JSON_CODR customization overlay.
