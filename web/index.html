@@ -82,6 +82,12 @@
             <select id="model-select" name="model" aria-describedby="model-detail" disabled></select>
           </label>
           <button id="workspace-layout-menu" class="secondary" type="button" aria-haspopup="menu" aria-expanded="false">Layout</button>
+          <div id="workspace-layout-popover" class="workspace-layout-popover" role="menu" hidden>
+            <button type="button" role="menuitem" data-workspace-preset="focus">Focus preset</button>
+            <button type="button" role="menuitem" data-workspace-preset="code">Code preset</button>
+            <button type="button" role="menuitem" data-workspace-preset="observe">Observe preset</button>
+            <button type="button" role="menuitem" data-workspace-action="reset">Reset layout</button>
+          </div>
         </div>
         <div id="model-detail" class="model-detail">Waiting for Ollama model metadata.</div>
       </header>

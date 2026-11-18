@@ -130,6 +130,13 @@ const elements = {
   optimizedModelSearchRun: document.querySelector("#optimized-model-search-run"),
   optimizedModelSearchResults: document.querySelector("#optimized-model-search-results"),
   terminalPanel: document.querySelector("#terminal-panel"),
+  workspaceShell: document.querySelector(".workspace-shell"),
+  workspaceLeftDock: document.querySelector("#workspace-left-dock"),
+  workspaceRightDock: document.querySelector("#workspace-right-dock"),
+  workspaceBottomDock: document.querySelector("#workspace-bottom-dock"),
+  workspaceSeparators: [...document.querySelectorAll(".workspace-separator")],
+  workspaceLayoutMenu: document.querySelector("#workspace-layout-menu"),
+  workspaceLayoutPopover: document.querySelector("#workspace-layout-popover"),
   workspaceTabs: [...document.querySelectorAll("[data-workspace-mode]")],
   workspaceViews: [...document.querySelectorAll("[data-workspace-view]")],
   workspaceAgentForm: document.querySelector("#workspace-agent-form"),
@@ -244,6 +251,105 @@ let selectedLeaderboardSessionId = null;
 let selectedLeaderboardRowId = null;
 let leaderboardSort = { key: "rank", direction: "asc" };
 const actionButtons = new Map();
+const workspacePanels = new Map();
+const workspaceHosts = {
+  left: elements.workspaceLeftDock,
+  right: elements.workspaceRightDock,
+  bottom: elements.workspaceBottomDock,
+};
+const workspaceLayout = window.createWorkspaceLayoutController({
+  availablePanels: ["files", "skills", "activity", "terminal"],
+  panelPlacements: {
+    files: ["left", "right", "bottom"],
+    skills: ["left", "right", "bottom"],
+    activity: ["right", "left", "bottom"],
+    terminal: ["bottom", "left", "right"],
+  },
+});
+
+function registerWorkspacePanel({ id, element, allowedPlacements, managementDestination = null, onShown = null }) {
+  if (!id || !element || workspacePanels.has(id)) return false;
+  workspacePanels.set(id, { id, element, allowedPlacements, managementDestination, onShown });
+  return true;
+}
+
+function workspaceRegionForPanel(state, panelId) {
+  return ["left", "right", "bottom"].find((region) => state.regions[region].includes(panelId)) || null;
+}
+
+function renderWorkspaceLayout(state = workspaceLayout.getState()) {
+  for (const [region, host] of Object.entries(workspaceHosts)) {
+    const panelIds = state.regions[region].filter((id) => workspacePanels.has(id));
+    for (const panelId of panelIds) {
+      const panel = workspacePanels.get(panelId);
+      if (panel.element.parentElement !== host) host.append(panel.element);
+      panel.element.hidden = state.collapsed[region];
+      panel.element.dataset.workspacePanel = panelId;
+      if (!state.collapsed[region]) panel.onShown?.();
+    }
+    host.hidden = panelIds.length === 0 || state.collapsed[region];
+    elements.workspaceShell.style.setProperty(`--workspace-${region}-size`, `${state.sizes[region]}px`);
+    const separator = elements.workspaceSeparators.find((item) => item.classList.contains(`workspace-separator-${region}`));
+    if (separator) {
+      separator.hidden = host.hidden;
+      separator.setAttribute("aria-valuenow", String(state.sizes[region]));
+    }
+  }
+}
+
+function openWorkspacePanel(id, placement = null) {
+  const panel = workspacePanels.get(id);
+  if (!panel) return false;
+  const current = workspaceRegionForPanel(workspaceLayout.getState(), id);
+  const target = panel.allowedPlacements.includes(placement) ? placement : current || panel.allowedPlacements[0];
+  renderWorkspaceLayout(workspaceLayout.open(id, target));
+  panel.element.focus?.({ preventScroll: true });
+  return true;
+}
+
+function focusWorkspaceRegion(region) {
+  const state = workspaceLayout.getState();
+  const id = state.regions[region]?.at(-1);
+  if (!id) return false;
+  renderWorkspaceLayout(workspaceLayout.focus(id));
+  workspacePanels.get(id)?.element.focus?.({ preventScroll: true });
+  return true;
+}
+
+function bindWorkspaceSeparator(separator) {
+  const region = ["left", "right", "bottom"].find((name) => separator.classList.contains(`workspace-separator-${name}`));
+  if (!region) return;
+  const commitSize = (value) => renderWorkspaceLayout(workspaceLayout.resize(region, value));
+  separator.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    separator.setPointerCapture(event.pointerId);
+    const start = region === "bottom" ? event.clientY : event.clientX;
+    const initial = workspaceLayout.getState().sizes[region];
+    let pending = initial;
+    let frame = null;
+    const onMove = (moveEvent) => {
+      const current = region === "bottom" ? moveEvent.clientY : moveEvent.clientX;
+      const direction = region === "right" || region === "bottom" ? -1 : 1;
+      pending = initial + ((current - start) * direction);
+      if (frame === null) frame = requestAnimationFrame(() => { frame = null; commitSize(pending); });
+    };
+    const onUp = () => {
+      separator.removeEventListener("pointermove", onMove);
+      if (frame !== null) cancelAnimationFrame(frame);
+      commitSize(pending);
+    };
+    separator.addEventListener("pointermove", onMove);
+    separator.addEventListener("pointerup", onUp, { once: true });
+  });
+  separator.addEventListener("keydown", (event) => {
+    const delta = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -10
+      : event.key === "ArrowRight" || event.key === "ArrowDown" ? 10 : 0;
+    if (!delta) return;
+    event.preventDefault();
+    commitSize(workspaceLayout.getState().sizes[region] + delta);
+  });
+  separator.addEventListener("dblclick", () => commitSize(region === "left" ? 260 : region === "right" ? 300 : 260));
+}
 
 const dependencyInstallQueue = createDependencyInstallQueue(async (command) => {
   selectDestination("terminal");
@@ -2224,6 +2330,24 @@ elements.destructiveDialog.addEventListener("close", () => {
 for (const button of elements.navigationButtons) {
   button.addEventListener("click", () => selectDestination(button.dataset.destination));
 }
+elements.workspaceLayoutMenu.addEventListener("click", () => {
+  const opening = elements.workspaceLayoutPopover.hidden;
+  elements.workspaceLayoutPopover.hidden = !opening;
+  elements.workspaceLayoutMenu.setAttribute("aria-expanded", String(opening));
+  if (opening) elements.workspaceLayoutPopover.querySelector("button")?.focus();
+});
+elements.workspaceLayoutPopover.addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  const state = button.dataset.workspaceAction === "reset"
+    ? workspaceLayout.reset()
+    : workspaceLayout.applyPreset(button.dataset.workspacePreset);
+  renderWorkspaceLayout(state);
+  elements.workspaceLayoutPopover.hidden = true;
+  elements.workspaceLayoutMenu.setAttribute("aria-expanded", "false");
+  elements.workspaceLayoutMenu.focus();
+});
+for (const separator of elements.workspaceSeparators) bindWorkspaceSeparator(separator);
 for (const button of elements.hardwareSectionButtons) {
   button.addEventListener("click", () => selectHardwareSection(button.dataset.hardwareSection));
 }
@@ -2495,6 +2619,7 @@ document.addEventListener("keydown", (event) => {
     closeNavigationDrawer({ restoreFocus: true });
   }
 });
+renderWorkspaceLayout();
 initializeXterm();
 elements.workspaceProjectRoot.value = localStorage.getItem("json_codr_workspace_project_root") || ".";
 window.addEventListener("beforeunload", persistTerminalSessions);

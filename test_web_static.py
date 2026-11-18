@@ -110,6 +110,22 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('<span>Run</span>', html)
         self.assertNotIn('Agent Activity', html)
 
+    def test_workspace_panel_registry_uses_single_instance_layout_transitions(self):
+        script = self.client.get("/static/app.js").text
+        html = self.client.get("/").text
+
+        for contract in (
+            "workspacePanels = new Map", "registerWorkspacePanel", "renderWorkspaceLayout",
+            "openWorkspacePanel", "focusWorkspaceRegion", "setPointerCapture",
+            "workspaceLayout.resize", "workspaceLayout.reset",
+        ):
+            self.assertIn(contract, script)
+        self.assertIn("workspacePanels.has(id)", script)
+        self.assertIn("host.append(panel.element)", script)
+        self.assertIn('id="workspace-layout-popover"', html)
+        self.assertIn('data-workspace-preset="focus"', html)
+        self.assertIn('data-workspace-action="reset"', html)
+
     def test_plain_text_api_failures_are_rendered_without_json_parse_errors(self):
         script = self.client.get("/static/app.js").text
 

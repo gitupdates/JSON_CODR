@@ -144,12 +144,22 @@ body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 50% -
 .workspace-project { display: grid; gap: 4px; }
 .workspace-project strong { font: 700 13px ui-monospace, monospace; }
 .workspace-execution-controls { display: flex; align-items: end; justify-content: flex-end; gap: 10px; }
+.workspace-layout-popover { position: absolute; top: 58px; right: 18px; z-index: 20; min-width: 170px; padding: 6px; border: 1px solid var(--line); background: var(--surface-panel-solid); box-shadow: 0 16px 40px var(--shadow); }
+.workspace-layout-popover button { width: 100%; justify-content: flex-start; background: transparent; color: var(--text); }
 .workspace-execution-controls label { display: grid; gap: 5px; min-width: 180px; color: var(--muted); font-size: 11px; }
 .workspace-execution-controls select { height: 40px; }
 .workspace-execution-controls button { height: 40px; }
 .workspace-header .model-detail { grid-column: 1 / -1; min-height: 0; padding: 0; text-align: right; }
 .workspace-regions { display: grid; grid-template-columns: auto auto minmax(520px, 1fr) auto auto; align-items: stretch; min-height: 620px; }
-.workspace-task-canvas { min-width: 0; }
+.workspace-left-dock { grid-column: 1; }
+.workspace-separator-left { grid-column: 2; }
+.workspace-task-canvas { grid-column: 3; min-width: 0; }
+.workspace-separator-right { grid-column: 4; }
+.workspace-right-dock { grid-column: 5; }
+.workspace-task-canvas > .hero { max-width: none; padding: 24px 28px 20px; border-inline: 1px solid var(--line); }
+.workspace-task-canvas > .hero h1 { margin: 8px 0 10px; font-size: clamp(30px, 3.2vw, 48px); line-height: 1; }
+.workspace-task-canvas > .hero .intro { margin: 0; max-width: 760px; font-size: 14px; line-height: 1.55; }
+.workspace-task-canvas > .workspace { box-shadow: none; }
 .workspace-dock { min-width: 0; overflow: auto; border: 1px solid var(--line); background: var(--surface-panel-solid); }
 .workspace-left-dock { width: var(--workspace-left-size); }
 .workspace-right-dock { width: var(--workspace-right-size); }
