@@ -633,13 +633,23 @@ class GpuOptimizationSettings(BaseModel):
     model_profiles: Dict[str, GpuProfileSettings] = Field(default_factory=dict)
 
 
+PolicyOverride = Literal["allow", "ask", "deny"]
+
+
+class ExecutionPolicySettings(BaseModel):
+    preset: Literal["balanced", "strict", "autonomous"] = "balanced"
+    global_overrides: Dict[str, PolicyOverride] = Field(default_factory=dict)
+    project_overrides: Dict[str, Dict[str, PolicyOverride]] = Field(default_factory=dict)
+
+
 class SystemSettings(BaseModel):
-    version: int = 2
+    version: int = 3
     app_version: str = APP_VERSION
     ui: UiSettings = Field(default_factory=UiSettings)
     skill_scan: SkillScanSettings = Field(default_factory=SkillScanSettings)
     skill_routing: SkillRoutingSettings = Field(default_factory=SkillRoutingSettings)
     gpu_optimization: GpuOptimizationSettings = Field(default_factory=GpuOptimizationSettings)
+    execution_policy: ExecutionPolicySettings = Field(default_factory=ExecutionPolicySettings)
 
 
 class SettingsUpdate(BaseModel):
@@ -647,6 +657,7 @@ class SettingsUpdate(BaseModel):
     skill_scan: Optional[SkillScanSettings] = None
     skill_routing: Optional[SkillRoutingSettings] = None
     gpu_optimization: Optional[GpuOptimizationSettings] = None
+    execution_policy: Optional[ExecutionPolicySettings] = None
 
 
 class SkillScanRequest(BaseModel):

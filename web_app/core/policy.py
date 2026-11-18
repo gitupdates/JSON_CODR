@@ -9,17 +9,28 @@ from pydantic import Field
 
 from web_app.core.adapters import CapabilityCall
 from web_app.core.contracts import FrozenContract
+from web_app.core.canonical import canonical_digest
+from web_app.models import ExecutionPolicySettings
 
 
 class PolicyEffect(str, Enum):
     allow = "allow"
     deny = "deny"
     require_approval = "require_approval"
+    strong_confirmation = "strong_confirmation"
 
 
 class PolicyDecision(FrozenContract):
     effect: PolicyEffect
     reason: str = Field(min_length=1)
+
+
+class PolicySnapshot(FrozenContract):
+    preset: str
+    project_id: str
+    overrides: tuple[tuple[str, str], ...] = ()
+    requires_plan_approval: bool = True
+    canonical_digest: str
 
 
 _AUTOMATIC_OPERATIONS = {"read", "search", "test", "bounded_edit", "session", "interrupt", "close", "generate"}
@@ -47,7 +58,31 @@ class PolicyService:
     def close(self) -> None:
         self._connection.close()
 
-    def evaluate(self, principal: str, project_id: str, call: CapabilityCall) -> PolicyDecision:
+    def snapshot(self, settings: ExecutionPolicySettings, project_id: str) -> PolicySnapshot:
+        effective = dict(settings.global_overrides)
+        effective.update(settings.project_overrides.get(project_id, {}))
+        material = {
+            "preset": settings.preset,
+            "project_id": project_id,
+            "overrides": sorted(effective.items()),
+            "requires_plan_approval": True,
+        }
+        return PolicySnapshot(
+            preset=settings.preset,
+            project_id=project_id,
+            overrides=tuple(sorted(effective.items())),
+            canonical_digest=canonical_digest(material),
+        )
+
+    def evaluate(
+        self,
+        principal: str,
+        project_id: str,
+        call: CapabilityCall,
+        *,
+        snapshot: PolicySnapshot | None = None,
+        task_denials: frozenset[str] = frozenset(),
+    ) -> PolicyDecision:
         root = Path(call.project_root).resolve()
         if call.target_path is not None and not Path(call.target_path).resolve().is_relative_to(root):
             return PolicyDecision(effect=PolicyEffect.deny, reason="target escapes the approved project root")
@@ -56,6 +91,36 @@ class PolicyService:
             or call.cost_boundary != call.approved_cost_boundary
         ):
             return PolicyDecision(effect=PolicyEffect.deny, reason="brokered route crosses an approved boundary")
+        if snapshot is not None:
+            if call.operation == "destructive":
+                return PolicyDecision(
+                    effect=PolicyEffect.strong_confirmation,
+                    reason="destructive operation requires strong confirmation",
+                )
+            if call.capability_id in task_denials:
+                return PolicyDecision(effect=PolicyEffect.deny, reason="capability denied for this task")
+            override = dict(snapshot.overrides).get(call.capability_id)
+            if override is not None:
+                effects = {
+                    "allow": PolicyEffect.allow,
+                    "ask": PolicyEffect.require_approval,
+                    "deny": PolicyEffect.deny,
+                }
+                return PolicyDecision(effect=effects[override], reason="configured capability override")
+            automatic = {
+                "balanced": {"read", "search", "session", "interrupt", "close", "generate"},
+                "strict": set(),
+                "autonomous": {
+                    "read", "search", "session", "interrupt", "close", "generate",
+                    "bounded_edit", "test",
+                },
+            }
+            if call.operation in automatic.get(snapshot.preset, set()):
+                return PolicyDecision(effect=PolicyEffect.allow, reason=f"{snapshot.preset} preset allows operation")
+            return PolicyDecision(
+                effect=PolicyEffect.require_approval,
+                reason=f"{snapshot.preset} preset requires approval",
+            )
         if self._has_grant(principal, project_id, call):
             return PolicyDecision(effect=PolicyEffect.allow, reason="matching persistent grant")
         if call.operation in _AUTOMATIC_OPERATIONS:
