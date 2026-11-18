@@ -132,6 +132,7 @@ const elements = {
   optimizedModelSearchResults: document.querySelector("#optimized-model-search-results"),
   terminalPanel: document.querySelector("#terminal-panel"),
   workspaceShell: document.querySelector(".workspace-shell"),
+  workspaceAnnouncer: document.querySelector("#workspace-announcer"),
   workspaceLeftDock: document.querySelector("#workspace-left-dock"),
   workspaceRightDock: document.querySelector("#workspace-right-dock"),
   workspaceBottomDock: document.querySelector("#workspace-bottom-dock"),
@@ -360,6 +361,9 @@ function renderWorkspaceActivityNotice(message = "Ready", status = "idle") {
   if (elements.workspaceActivityNotice) elements.workspaceActivityNotice.textContent = text;
   if (elements.workspacePersistentNotice) elements.workspacePersistentNotice.textContent = text;
   if (elements.workspaceActivityStop) elements.workspaceActivityStop.hidden = status !== "running";
+  if (["completed", "failed", "approval_required"].includes(status) && elements.workspaceAnnouncer) {
+    elements.workspaceAnnouncer.textContent = `${status.replace("_", " ")}: ${message}`;
+  }
 }
 
 function workspaceRegionForPanel(state, panelId) {
@@ -367,6 +371,7 @@ function workspaceRegionForPanel(state, panelId) {
 }
 
 function renderWorkspaceLayout(state = workspaceLayout.getState()) {
+  elements.workspaceShell.setAttribute("data-workspace-mode", state.mode || "wide");
   for (const [region, host] of Object.entries(workspaceHosts)) {
     const panelIds = state.regions[region].filter((id) => workspacePanels.has(id));
     for (const panelId of panelIds) {
@@ -382,6 +387,7 @@ function renderWorkspaceLayout(state = workspaceLayout.getState()) {
     if (separator) {
       separator.hidden = host.hidden;
       separator.setAttribute("aria-valuenow", String(state.sizes[region]));
+      separator.setAttribute("aria-valuetext", `${state.sizes[region]} pixels`);
     }
   }
 }
@@ -2480,6 +2486,16 @@ elements.workspaceLayoutPopover.addEventListener("click", (event) => {
   elements.workspaceLayoutMenu.focus();
 });
 for (const separator of elements.workspaceSeparators) bindWorkspaceSeparator(separator);
+const applyWorkspaceViewport = () => renderWorkspaceLayout(workspaceLayout.applyViewport(window.innerWidth));
+window.addEventListener("resize", applyWorkspaceViewport);
+document.addEventListener("keydown", (event) => {
+  if (!event.altKey || event.ctrlKey || event.metaKey) return;
+  const region = event.key === "1" ? "left" : event.key === "2" ? "bottom" : event.key === "3" ? "right" : null;
+  if (!region) return;
+  event.preventDefault();
+  focusWorkspaceRegion(region);
+});
+// Discoverable labels for the direct region shortcuts: Alt+1, Alt+2, Alt+3.
 for (const button of elements.hardwareSectionButtons) {
   button.addEventListener("click", () => selectHardwareSection(button.dataset.hardwareSection));
 }
@@ -2782,7 +2798,7 @@ elements.workspaceFilesAttach?.addEventListener("click", () => elements.attachme
 for (const button of document.querySelectorAll("[data-manage-destination]")) {
   button.addEventListener("click", () => selectDestination(button.dataset.manageDestination));
 }
-renderWorkspaceLayout();
+applyWorkspaceViewport();
 initializeXterm();
 elements.workspaceProjectRoot.value = localStorage.getItem("json_codr_workspace_project_root") || ".";
 window.addEventListener("beforeunload", persistTerminalSessions);

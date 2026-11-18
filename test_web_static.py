@@ -206,7 +206,7 @@ class WebStaticTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.0.18-alpha.8", response.text)
+        self.assertIn("V1.0.18-alpha.9", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -231,7 +231,7 @@ class WebStaticTests(unittest.TestCase):
         html = self.client.get("/").text
         css = self.client.get("/static/app.css")
         javascript = self.client.get("/static/app.js")
-        self.assertIn('/static/app.css?v=1.0.18-alpha.8', html)
+        self.assertIn('/static/app.css?v=1.0.18-alpha.9', html)
         self.assertEqual(css.status_code, 200)
         self.assertIn("text/css", css.headers["content-type"])
         self.assertEqual(javascript.status_code, 200)
@@ -373,8 +373,8 @@ class WebStaticTests(unittest.TestCase):
         html = self.client.get("/").text
         javascript = self.client.get("/static/app.js").text
 
-        self.assertIn('/static/terminal_keyboard.js?v=1.0.18-alpha.8', html)
-        self.assertIn('/static/app.js?v=1.0.18-alpha.8', html)
+        self.assertIn('/static/terminal_keyboard.js?v=1.0.18-alpha.9', html)
+        self.assertIn('/static/app.js?v=1.0.18-alpha.9', html)
         self.assertLess(html.index("terminal_keyboard.js"), html.index("app.js"))
         self.assertIn("createTerminalKeyboardController", javascript)
         self.assertIn("attachCustomKeyEventHandler", javascript)
@@ -735,6 +735,21 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn(".attached-skill-chip", css)
         self.assertIn(".action-card", css)
         self.assertIn(":root[data-theme=\"light\"]", css)
+
+
+    def test_workspace_responsive_and_accessibility_contracts_are_present(self):
+        html = self.client.get("/").text
+        script = self.client.get("/static/app.js").text
+        css = self.client.get("/static/app.css").text
+        self.assertIn('data-workspace-mode', script)
+        self.assertIn('Alt+1', script)
+        self.assertIn('Alt+2', script)
+        self.assertIn('Alt+3', script)
+        self.assertIn('aria-valuetext', script)
+        self.assertIn('workspace-announcer', html)
+        self.assertIn('prefers-reduced-motion', css)
+        self.assertIn('[data-workspace-mode="mobile"]', css)
+        self.assertIn('[data-workspace-mode="intermediate"]', css)
 
 
 if __name__ == "__main__":

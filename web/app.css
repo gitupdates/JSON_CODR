@@ -162,8 +162,12 @@ body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 50% -
 .workspace-task-canvas > .workspace { box-shadow: none; }
 .workspace-dock { min-width: 0; overflow: auto; border: 1px solid var(--line); background: var(--surface-panel-solid); }
 .workspace-tool-panel { min-width: 0; padding: 14px; background: var(--surface-panel-solid); }
-.workspace-tool-head, .workspace-quick-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.workspace-tool-head, .workspace-quick-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.workspace-tool-head > strong { flex: 1 1 96px; min-width: 0; }
+.workspace-tool-head > button { flex: 0 1 auto; max-width: 100%; white-space: normal; }
 .workspace-quick-list { display: grid; gap: 8px; margin-top: 10px; }
+.workspace-quick-row > span { flex: 1 1 120px; min-width: 0; overflow-wrap: anywhere; }
+.workspace-quick-row > button { flex: 0 0 auto; max-width: 100%; white-space: normal; }
 .workspace-skills-list label { display: block; }
 .workspace-activity-notice { margin-top: 10px; color: var(--text-muted); }
 .workspace-left-dock { width: var(--workspace-left-size); }
@@ -180,6 +184,22 @@ body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 50% -
 .workspace-task-tabs button[aria-selected="true"] { color: var(--text); background: var(--surface-raised); }
 .workspace-attach { min-width: 44px; padding: 0; font-size: 18px; }
 .workspace-statusbar { min-height: 28px; display: flex; justify-content: space-between; align-items: center; padding: 5px 10px; color: var(--muted); border: 1px solid var(--line); border-top: 0; font: 600 10px ui-monospace, monospace; }
+.workspace-shell[data-workspace-mode="intermediate"] .workspace-header { grid-template-columns: 1fr; }
+.workspace-shell[data-workspace-mode="intermediate"] .workspace-execution-controls { justify-content: flex-start; }
+.workspace-shell[data-workspace-mode="narrow"] .workspace-header,
+.workspace-shell[data-workspace-mode="mobile"] .workspace-header { grid-template-columns: 1fr; }
+.workspace-shell[data-workspace-mode="narrow"] .workspace-execution-controls,
+.workspace-shell[data-workspace-mode="mobile"] .workspace-execution-controls { justify-content: stretch; flex-wrap: wrap; }
+.workspace-shell[data-workspace-mode="narrow"] .workspace-regions,
+.workspace-shell[data-workspace-mode="mobile"] .workspace-regions { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+.workspace-shell[data-workspace-mode="narrow"] .workspace-task-canvas,
+.workspace-shell[data-workspace-mode="mobile"] .workspace-task-canvas { grid-column: 1; }
+.workspace-shell[data-workspace-mode="mobile"] .workspace-execution-controls > label { min-width: 0; width: 100%; }
+.workspace-shell[data-workspace-mode="mobile"] .workspace-execution-controls > button { flex: 1; }
+.workspace-shell[data-workspace-mode="mobile"] .workspace { grid-template-columns: 1fr; }
+.workspace-shell[data-workspace-mode="mobile"] .composer { border-right: 0; border-bottom: 1px solid var(--line); }
+.workspace-shell[data-workspace-mode="mobile"] .workspace-task-canvas > .hero { padding-inline: 16px; }
+.workspace-shell[data-workspace-mode="mobile"] .workspace-bottom-dock { max-height: min(60vh, var(--workspace-bottom-size)); }
 .topbar { min-height: 82px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
 .brand { display: flex; gap: 13px; align-items: center; color: inherit; text-decoration: none; }
 .brand-mark { width: 38px; height: 38px; display: grid; place-items: center; border: 1px solid var(--accent-line); color: var(--lime); font: 700 13px ui-monospace, monospace; }

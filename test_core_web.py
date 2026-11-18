@@ -32,14 +32,14 @@ class CoreWebContractTests(unittest.TestCase):
     def test_submission_drop_and_immediate_steering_share_the_task_store(self):
         self.assertIn("JSONCodrCoreClient", self.app)
         self.assertIn("JSONCodrTaskView", self.app)
-        self.assertIn("coreClient.submit", self.app)
+        self.assertIn('fetch("/api/workspace/tasks"', self.app)
         self.assertIn('addEventListener("drop"', self.app)
         self.assertIn("activeCoreTaskId", self.app)
         self.assertIn("coreClient.steer", self.app)
         self.assertNotIn("Apply changes", self.html)
 
     def test_unified_submission_carries_the_session_for_skill_context(self):
-        self.assertIn("sessionId: sessionId", self.app)
+        self.assertIn("session_id: sessionId", self.app)
         self.assertIn("sessionId", self.client)
         self.assertIn("session_id: sessionId", self.client)
 

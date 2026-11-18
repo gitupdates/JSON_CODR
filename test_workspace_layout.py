@@ -128,6 +128,58 @@ process.stdout.write(JSON.stringify(narrow));
         result = self.run_node(source)
         self.assertEqual(len(json.loads(result.stdout)["regions"]["bottom"]), 3)
 
+    def test_explicit_viewport_modes_preserve_panels_and_restore_wide_layout(self):
+        source = r'''
+const assert = require("assert");
+const createWorkspaceLayoutController = require(process.argv[1]);
+const controller = createWorkspaceLayoutController({
+  availablePanels: ["files", "activity", "terminal"],
+  panelPlacements: {
+    files: ["left", "bottom"], activity: ["right", "bottom"], terminal: ["bottom", "right"],
+  },
+});
+assert.strictEqual(controller.applyViewport(1440).mode, "wide");
+const intermediate = controller.applyViewport(1050);
+assert.strictEqual(intermediate.mode, "intermediate");
+assert.deepStrictEqual(intermediate.regions.left, ["files"]);
+assert.deepStrictEqual(intermediate.regions.right, []);
+assert.deepStrictEqual(intermediate.regions.bottom, ["terminal", "activity"]);
+const narrow = controller.applyViewport(760);
+assert.strictEqual(narrow.mode, "narrow");
+assert.deepStrictEqual(narrow.regions.left, []);
+assert.deepStrictEqual(narrow.regions.right, []);
+assert.deepStrictEqual(narrow.regions.bottom.sort(), ["activity", "files", "terminal"]);
+assert.strictEqual(controller.applyViewport(480).mode, "mobile");
+const restored = controller.applyViewport(1440);
+assert.strictEqual(restored.mode, "wide");
+assert.deepStrictEqual(restored.regions, { left: ["files"], right: ["activity"], bottom: ["terminal"] });
+process.stdout.write(JSON.stringify(restored));
+'''
+        self.run_node(source)
+
+    def test_reload_while_narrow_restores_saved_desktop_regions_when_widened(self):
+        source = r'''
+const assert = require("assert");
+const createWorkspaceLayoutController = require(process.argv[1]);
+const options = {
+  availablePanels: ["files", "activity", "terminal"],
+  panelPlacements: {
+    files: ["left", "bottom"], activity: ["right", "bottom"], terminal: ["bottom", "right"],
+  },
+};
+let persisted = null;
+const first = createWorkspaceLayoutController({...options, save: value => persisted = value});
+first.applyViewport(700);
+assert.ok(persisted.desktopRegions);
+const reloaded = createWorkspaceLayoutController({...options, load: () => persisted, save: value => persisted = value});
+assert.strictEqual(reloaded.getState().mode, "narrow");
+const wide = reloaded.applyViewport(1400);
+assert.deepStrictEqual(wide.regions, {left:["files"], right:["activity"], bottom:["terminal"]});
+assert.strictEqual(wide.desktopRegions, null);
+process.stdout.write(JSON.stringify(wide));
+'''
+        self.run_node(source)
+
 
 if __name__ == "__main__":
     unittest.main()

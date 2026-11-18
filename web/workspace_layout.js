@@ -45,6 +45,8 @@
       }
       return {
         version: 1,
+        mode: "wide",
+        desktopRegions: null,
         regions,
         sizes: Object.fromEntries(REGIONS.map((region) => [region, bounds[region].default])),
         collapsed: { left: false, right: false, bottom: false },
@@ -76,6 +78,21 @@
       const visible = REGIONS.flatMap((region) => next.regions[region]);
       next.focusedPanel = visible.includes(candidate.focusedPanel) ? candidate.focusedPanel : (visible.at(-1) || null);
       next.preset = ["default", "focus", "code", "observe"].includes(candidate.preset) ? candidate.preset : "default";
+      next.mode = ["wide", "intermediate", "narrow", "mobile"].includes(candidate.mode) ? candidate.mode : "wide";
+      if (candidate.desktopRegions && typeof candidate.desktopRegions === "object") {
+        const desktopRegions = { left: [], right: [], bottom: [] };
+        const desktopSeen = new Set();
+        for (const region of REGIONS) {
+          const panels = Array.isArray(candidate.desktopRegions[region]) ? candidate.desktopRegions[region] : [];
+          for (const panel of panels) {
+            if (!desktopSeen.has(panel) && allowed(panel, region)) {
+              desktopRegions[region].push(panel);
+              desktopSeen.add(panel);
+            }
+          }
+        }
+        if (desktopSeen.size) next.desktopRegions = desktopRegions;
+      }
       return next;
     }
 
@@ -169,22 +186,30 @@
 
     function applyViewport(width) {
       if (!Number.isFinite(width)) return getState();
-      if (width < 900 && !wideRegions) {
-        wideRegions = clone(state.regions);
-        const ordered = REGIONS.flatMap((region) => state.regions[region]);
-        state.regions = { left: [], right: [], bottom: [] };
-        for (const panel of ordered) {
-          if (allowed(panel, "bottom")) state.regions.bottom.push(panel);
+      const mode = width >= 1200 ? "wide" : width >= 900 ? "intermediate" : width >= 600 ? "narrow" : "mobile";
+      if (mode === "wide") {
+        const desktopRegions = wideRegions || state.desktopRegions;
+        if (desktopRegions) {
+          state.regions = clone(desktopRegions);
+          wideRegions = null;
         }
-        state.focusedPanel = state.regions.bottom.at(-1) || null;
-        persist();
-      } else if (width >= 900 && wideRegions) {
-        state.regions = clone(wideRegions);
-        wideRegions = null;
-        const visible = REGIONS.flatMap((region) => state.regions[region]);
-        if (!visible.includes(state.focusedPanel)) state.focusedPanel = visible.at(-1) || null;
-        persist();
+        state.desktopRegions = null;
+      } else {
+        if (!wideRegions) wideRegions = clone(state.desktopRegions || state.regions);
+        state.desktopRegions = clone(wideRegions);
+        const source = clone(wideRegions);
+        if (mode === "intermediate") {
+          const migrated = source.right.filter((panel) => allowed(panel, "bottom"));
+          state.regions = { left: source.left, right: [], bottom: [...source.bottom, ...migrated] };
+        } else {
+          const ordered = REGIONS.flatMap((region) => source[region]);
+          state.regions = { left: [], right: [], bottom: ordered.filter((panel) => allowed(panel, "bottom")) };
+        }
       }
+      state.mode = mode;
+      const visible = REGIONS.flatMap((region) => state.regions[region]);
+      if (!visible.includes(state.focusedPanel)) state.focusedPanel = visible.at(-1) || null;
+      persist();
       return getState();
     }
 
