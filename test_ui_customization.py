@@ -221,6 +221,55 @@ assert.strictEqual(root.dataset.uiNavigation, "operations");
         self.assertNotIn("vendor/charts", html)
         self.assertNotIn("vendor/leaflet", html)
 
+    def test_gamma_styles_cover_every_preset_component_and_accessibility_contract(self):
+        gamma_path = ROOT / "web" / "gamma.css"
+        self.assertTrue(gamma_path.is_file(), "web/gamma.css must exist")
+        css = gamma_path.read_text(encoding="utf-8")
+        source = r'''
+const catalog = require(process.argv[1]);
+console.log(JSON.stringify({presets: Object.keys(catalog.PRESETS), components: catalog.COMPONENTS}));
+'''
+        completed = subprocess.run(
+            ["node", "-e", source, str(CATALOG_MODULE)], cwd=ROOT, text=True,
+            capture_output=True, check=True,
+        )
+        inventory = json.loads(completed.stdout)
+        for preset in inventory["presets"]:
+            self.assertIn(f'[data-ui-preset="{preset}"]', css)
+        for family, definition in inventory["components"].items():
+            attribute = f"ui-{family}"
+            for variant in definition["variants"]:
+                self.assertIn(f'[data-{attribute}="{variant}"]', css)
+        for contract in (
+            'color-scheme: light', '--signal-blue:', '--signal-orange:',
+            '@media (prefers-reduced-motion: reduce)', ':focus-visible',
+            '@media (max-width:', '[data-ui-navigation="high-contrast"]',
+            '[data-ui-panels="flat"]', '[data-ui-tabs="segmented"]',
+        ):
+            self.assertIn(contract, css)
+
+    def test_gamma_fonts_are_approved_licensed_and_loaded_after_application_css(self):
+        fonts = ROOT / "web" / "fonts"
+        expected = {
+            "fonts.css", "opendyslexic-400.woff2", "opendyslexic-700.woff2",
+            "OpenDyslexic-OFL.txt", "THIRD_PARTY_NOTICES.md",
+        }
+        self.assertTrue(fonts.is_dir(), "web/fonts must exist")
+        actual = {path.name for path in fonts.iterdir() if path.is_file()}
+        self.assertEqual(actual, expected)
+        self.assertGreater((fonts / "opendyslexic-400.woff2").stat().st_size, 1000)
+        self.assertGreater((fonts / "opendyslexic-700.woff2").stat().st_size, 1000)
+        notice = (fonts / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+        self.assertIn("C:\\UI\\UI.zip", notice)
+        self.assertIn("SHA-256", notice)
+        self.assertFalse(any("ibm-plex" in name.lower() for name in actual))
+        html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+        app_css = '/static/app.css?v=1.0.18-alpha.10'
+        fonts_css = '/static/fonts/fonts.css?v=1.0.18-alpha.10'
+        gamma_css = '/static/gamma.css?v=1.0.18-alpha.10'
+        self.assertLess(html.index(app_css), html.index(fonts_css))
+        self.assertLess(html.index(fonts_css), html.index(gamma_css))
+
 
 if __name__ == "__main__":
     unittest.main()
