@@ -4,11 +4,16 @@ from uuid import NAMESPACE_URL, uuid5
 
 from web_app.core.agent_verification import EvidenceResolver, FailureNormalizer, StaleEvidence
 from web_app.core.canonical import canonical_digest
-from web_app.core.contracts import GoalSpec, TaskCommand, TaskEventDraft, TaskStatus
+from web_app.core.adapters import CapabilityCall
+from web_app.core.contracts import GoalSpec, PlanRevision, TaskCommand, TaskEventDraft, TaskStatus
+from web_app.core.policy import PolicySnapshot
 
 
 class AgentRuntime:
-    def __init__(self, task_store, core_service, context, planner, verifier, project_fingerprint) -> None:
+    def __init__(
+        self, task_store, core_service, context, planner, verifier, project_fingerprint,
+        *, plan_service=None, policy_snapshot: PolicySnapshot | None = None,
+    ) -> None:
         self._tasks = task_store
         self._core = core_service
         self.context = context
@@ -16,6 +21,8 @@ class AgentRuntime:
         self._verifier = verifier
         self._project_fingerprint = project_fingerprint
         self._evidence = EvidenceResolver()
+        self._plan_service = plan_service
+        self._policy_snapshot = policy_snapshot
 
     async def run(self, task_id: str):
         root = self._tasks.get(task_id)
@@ -44,6 +51,8 @@ class AgentRuntime:
                 task_id,
                 TaskEventDraft(event_type="agent.phase_changed", payload={"phase": "planning"}),
             )
+        if self._plan_service is not None:
+            return await self._run_guided(task_id, goal, root_command)
         while True:
             root = self._tasks.get(task_id)
             context = self.context.assemble(root.thread_id, task_id, 32_000)
@@ -217,6 +226,145 @@ class AgentRuntime:
                     },
                 ),
             )
+
+    async def _run_guided(self, task_id: str, goal: GoalSpec, root_command: TaskCommand):
+        root = self._tasks.get(task_id)
+        plans = self._tasks.plans(task_id)
+        if not plans:
+            context = self.context.assemble(root.thread_id, task_id, 32_000)
+            proposed = await self._planner.plan(context)
+            if not isinstance(proposed, PlanRevision):
+                raise TypeError("guided planner must return a complete PlanRevision")
+            current = self._plan_service.create(task_id, proposed)
+            self._tasks.append(task_id, TaskEventDraft(
+                event_type="agent.plan_context_bound",
+                payload={
+                    "plan_id": current.plan_id,
+                    "plan_revision": current.revision,
+                    "plan_digest": current.canonical_digest,
+                    "project_fingerprint": self._project_fingerprint(None),
+                    "policy_digest": None if self._policy_snapshot is None else self._policy_snapshot.canonical_digest,
+                },
+            ))
+            self._tasks.append(
+                task_id, TaskEventDraft(event_type="agent.phase_changed", payload={"phase": "plan_review"}),
+            )
+            return self._tasks.get(task_id)
+
+        current = plans[-1]
+        decisions = self._tasks.plan_decisions(task_id, current.plan_id, current.revision)
+        approved = any(decision.step_id is None and decision.decision == "approve" for decision in decisions)
+        if not approved:
+            return self._tasks.get(task_id)
+
+        binding = next(
+            (
+                event for event in reversed(root.events)
+                if event.event_type == "agent.plan_context_bound"
+                and event.payload.get("plan_id") == current.plan_id
+                and event.payload.get("plan_revision") == current.revision
+            ),
+            None,
+        )
+        current_policy_digest = None if self._policy_snapshot is None else self._policy_snapshot.canonical_digest
+        if binding is None or (
+            binding.payload.get("project_fingerprint") != self._project_fingerprint(None)
+            or binding.payload.get("policy_digest") != current_policy_digest
+        ):
+            if not any(event.event_type == "agent.plan_invalidated" for event in root.events):
+                self._tasks.append(task_id, TaskEventDraft(
+                    event_type="agent.plan_invalidated",
+                    payload={"plan_id": current.plan_id, "plan_revision": current.revision, "reason": "execution context changed"},
+                ))
+                self._tasks.append(
+                    task_id, TaskEventDraft(event_type="agent.phase_changed", payload={"phase": "plan_review"}),
+                )
+            return self._tasks.get(task_id)
+
+        self._tasks.append(
+            task_id, TaskEventDraft(event_type="agent.phase_changed", payload={"phase": "executing"}),
+        )
+        project_root = str(root_command.payload.get("project_root") or ".")
+        for step in current.steps:
+            root = self._tasks.get(task_id)
+            if any(
+                event.event_type == "agent.action_completed"
+                and event.payload.get("step_id") == step.step_id
+                and event.payload.get("step_digest") == step.canonical_digest
+                for event in root.events
+            ):
+                continue
+            call = CapabilityCall(
+                capability_id=step.capability_id,
+                operation=step.operation,
+                project_root=project_root,
+                target_path=step.target_path,
+                arguments=dict(step.arguments),
+            )
+            child_id = str(uuid5(NAMESPACE_URL, f"json-codr:{task_id}:{current.revision}:{step.canonical_digest}:task"))
+            command_id = str(uuid5(NAMESPACE_URL, f"json-codr:{task_id}:{current.revision}:{step.canonical_digest}:command"))
+            child_command = TaskCommand(
+                command_id=command_id, task_id=child_id, thread_id=root.thread_id,
+                project_id=root.project_id, parent_task_id=task_id,
+                command_type=call.capability_id, payload=call.model_dump(mode="json"),
+            )
+            self._tasks.plan_step_and_create_child(
+                task_id, current.plan_id, current.revision, step.step_id, child_command,
+            )
+            child = await self._core.submit(child_command, policy_snapshot=self._policy_snapshot)
+            if any(event.event_type == "task.permission_required" for event in child.events):
+                self._tasks.append(task_id, TaskEventDraft(
+                    event_type="agent.approval_required",
+                    payload={
+                        "child_task_id": child_id, "step_id": step.step_id,
+                        "step_digest": step.canonical_digest,
+                    },
+                ))
+                return self._tasks.get(task_id)
+            if child.status is not TaskStatus.completed:
+                self._tasks.append(task_id, TaskEventDraft(
+                    event_type="agent.action_failed",
+                    payload={"child_task_id": child_id, "step_id": step.step_id, "step_digest": step.canonical_digest},
+                ))
+                return self._tasks.get(task_id)
+            self._tasks.append(task_id, TaskEventDraft(
+                event_type="agent.action_completed",
+                payload={
+                    "capability_id": step.capability_id, "child_task_id": child_id,
+                    "step_id": step.step_id, "step_digest": step.canonical_digest,
+                    "project_fingerprint": self._project_fingerprint(project_root),
+                },
+            ))
+
+        self._tasks.append(
+            task_id, TaskEventDraft(event_type="agent.phase_changed", payload={"phase": "verifying"}),
+        )
+        context = self.context.assemble(root.thread_id, task_id, 32_000)
+        report = await self._verifier.verify(goal, self._tasks.get(task_id), context)
+        try:
+            self._evidence.validate(
+                report, goal, root_command,
+                current_project_fingerprint=self._project_fingerprint(None),
+            )
+        except StaleEvidence as error:
+            self._tasks.append(task_id, TaskEventDraft(
+                event_type="agent.verification_failed",
+                payload={"reason": str(error), "report_id": report.report_id},
+            ))
+            return self._tasks.get(task_id)
+        if not report.satisfied:
+            self._tasks.append(task_id, TaskEventDraft(
+                event_type="agent.verification_failed", payload=report.model_dump(mode="json"),
+            ))
+            return self._tasks.get(task_id)
+        self._tasks.append(task_id, TaskEventDraft(
+            event_type="agent.verification_completed", payload=report.model_dump(mode="json"),
+        ))
+        self._tasks.append(task_id, TaskEventDraft(
+            event_type="agent.verified", payload={"report_id": report.report_id, "goal_revision": goal.revision},
+        ))
+        self._tasks.append(task_id, TaskEventDraft(event_type="task.completed"))
+        return self._tasks.get(task_id)
 
     def steer(self, task_id: str, user_input: str):
         return self._tasks.append(task_id, TaskEventDraft(event_type="task.steered", payload={"input": user_input}))

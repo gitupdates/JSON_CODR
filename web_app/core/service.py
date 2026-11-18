@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 
 from web_app.core.adapters import AdapterEvent, CapabilityAdapter, CapabilityCall, CapabilityExecutionError, ExecutionContext
 from web_app.core.contracts import JsonValue, TaskCommand, TaskEvent, TaskEventDraft, TaskRecord, TaskStatus
-from web_app.core.policy import PolicyEffect, PolicyService
+from web_app.core.policy import PolicyEffect, PolicyService, PolicySnapshot
 from web_app.core.store import TaskStore
 
 
@@ -30,8 +30,11 @@ class CoreService:
         self._runs: dict[str, asyncio.Task[None]] = {}
         self._event_signals: dict[str, asyncio.Event] = {}
 
-    async def submit(self, command: TaskCommand, *, principal: str = "user") -> TaskRecord:
-        record = await self.start(command, principal=principal)
+    async def submit(
+        self, command: TaskCommand, *, principal: str = "user",
+        policy_snapshot: PolicySnapshot | None = None,
+    ) -> TaskRecord:
+        record = await self.start(command, principal=principal, policy_snapshot=policy_snapshot)
         if record.status in {
             TaskStatus.completed,
             TaskStatus.failed,
@@ -41,26 +44,35 @@ class CoreService:
             return record
         return await self.wait(command.task_id)
 
-    async def start(self, command: TaskCommand, *, principal: str = "user") -> TaskRecord:
+    async def start(
+        self, command: TaskCommand, *, principal: str = "user",
+        policy_snapshot: PolicySnapshot | None = None,
+    ) -> TaskRecord:
         async with self._submission_lock:
             record = self._tasks.create(command)
             if record.status is not TaskStatus.pending or len(record.events) > 1:
                 return record
             try:
                 call = CapabilityCall.model_validate(command.model_dump(mode="json")["payload"])
-                decision = self._policy.evaluate(principal, command.project_id, call)
+                decision = self._policy.evaluate(
+                    principal, command.project_id, call, snapshot=policy_snapshot,
+                )
                 if decision.effect is PolicyEffect.deny:
                     self._append(
                         command.task_id,
                         TaskEventDraft(event_type="task.failed", payload={"reason": decision.reason}),
                     )
                     return self._tasks.get(command.task_id)
-                if decision.effect is PolicyEffect.require_approval:
+                if decision.effect in {PolicyEffect.require_approval, PolicyEffect.strong_confirmation}:
                     self._append(
                         command.task_id,
                         TaskEventDraft(
                             event_type="task.permission_required",
-                            payload={"capability_id": call.capability_id, "operation": call.operation},
+                            payload={
+                                "capability_id": call.capability_id,
+                                "operation": call.operation,
+                                "strong_confirmation": decision.effect is PolicyEffect.strong_confirmation,
+                            },
                         ),
                     )
                     return self._tasks.get(command.task_id)
