@@ -126,6 +126,17 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('data-workspace-preset="focus"', html)
         self.assertIn('data-workspace-action="reset"', html)
 
+    def test_terminal_is_registered_once_as_a_persistent_workspace_panel(self):
+        html = self.client.get("/").text
+        script = self.client.get("/static/app.js").text
+
+        self.assertEqual(html.count('id="terminal-panel"'), 1)
+        self.assertIn('id="terminal-panel" class="terminal-panel"', html)
+        self.assertIn('registerWorkspacePanel({', script)
+        self.assertIn('id: "terminal"', script)
+        self.assertIn('onShown: () =>', script)
+        self.assertIn('openWorkspacePanel("terminal", "bottom")', script)
+
     def test_plain_text_api_failures_are_rendered_without_json_parse_errors(self):
         script = self.client.get("/static/app.js").text
 

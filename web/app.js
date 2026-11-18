@@ -165,7 +165,7 @@ const elements = {
 const VALID_THEME_MODES = new Set(["light", "dark", "system"]);
 const TERMINAL_SESSIONS_KEY = "json_codr_terminal_sessions";
 const TERMINAL_COMMAND_HISTORY_KEY = "json_codr_terminal_command_history";
-const NAVIGATION_DESTINATIONS = new Set(["workspace", "terminal", "context", "skills", "hardware", "settings"]);
+const NAVIGATION_DESTINATIONS = new Set(["workspace", "context", "skills", "hardware", "settings"]);
 const HARDWARE_SECTIONS = new Set(["overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "leaderboard", "history", "localperf"]);
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 const narrowNavigationQuery = window.matchMedia("(max-width: 700px)");
@@ -352,7 +352,8 @@ function bindWorkspaceSeparator(separator) {
 }
 
 const dependencyInstallQueue = createDependencyInstallQueue(async (command) => {
-  selectDestination("terminal");
+  openWorkspacePanel("terminal", "bottom");
+  selectDestination("workspace");
   elements.terminalStatus.textContent = "Installing prerequisites...";
   appendTerminalOutput(`Installing prerequisites: ${command}\n`);
   try {
@@ -439,6 +440,10 @@ function selectHardwareSection(section, { persist = true, focus = false } = {}) 
 }
 
 function selectDestination(destination, { persist = true, focus = false } = {}) {
+  if (destination === "terminal") {
+    openWorkspacePanel("terminal", "bottom");
+    destination = "workspace";
+  }
   if (!NAVIGATION_DESTINATIONS.has(destination)) destination = "workspace";
   activeDestination = destination;
   for (const button of elements.navigationButtons) {
@@ -2609,7 +2614,8 @@ elements.workspaceAgentForm.addEventListener("submit", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.ctrlKey && !event.altKey && event.key.toLowerCase() === "j") {
     event.preventDefault();
-    selectDestination("terminal");
+    selectDestination("workspace");
+    openWorkspacePanel("terminal", "bottom");
   }
   if (event.ctrlKey && event.altKey && event.key.toLowerCase() === "b") {
     event.preventDefault();
@@ -2618,6 +2624,15 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && document.body.classList.contains("navigation-open")) {
     closeNavigationDrawer({ restoreFocus: true });
   }
+});
+registerWorkspacePanel({
+  id: "terminal",
+  element: elements.terminalPanel,
+  allowedPlacements: ["bottom", "left", "right"],
+  onShown: () => {
+    initializeXterm();
+    requestAnimationFrame(() => terminalFitAddon?.fit());
+  },
 });
 renderWorkspaceLayout();
 initializeXterm();
