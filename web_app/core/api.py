@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from web_app.core.artifact_store import ArtifactStore
 from web_app.core.contracts import TaskCommand, TaskStatus
 from web_app.core.policy import PolicyService
+from web_app.core.plan_service import PlanConflict, PlanService
 from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
 from web_app.core.component_manager import ComponentManager
@@ -19,6 +20,7 @@ from web_app.core.component_registry import ComponentRequest, ComponentScope
 
 Runtime = tuple[CoreService, TaskStore, PolicyService]
 RuntimeProvider = Callable[[], Runtime]
+PlanServiceProvider = Callable[[], PlanService]
 
 
 class SteeringRequest(BaseModel):
@@ -36,14 +38,166 @@ class ComponentInstallApproval(BaseModel):
     approved_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
 
 
+class PlanDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_plan_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    reason: str | None = Field(default=None, max_length=4096)
+
+
+class StepEditRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_plan_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    changes: dict[str, Any]
+
+
+class PlanReviseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_plan_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    summary: str = Field(max_length=8192)
+    reason: str = Field(min_length=1, max_length=2048)
+
+
+class PolicyApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_plan_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    policy_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
+class BaselineRefreshRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_plan_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    project_root: str = Field(min_length=1, max_length=4096)
+
+
 def create_core_router(
     runtime: RuntimeProvider,
     *,
     artifact_store: Callable[[], ArtifactStore] | None = None,
     capabilities: Callable[[], Sequence[Mapping[str, Any]]] = tuple,
     components: Callable[[], ComponentManager] | None = None,
+    plan_service: PlanServiceProvider | None = None,
+    project_adapter: Callable[[], Any] | None = None,
 ) -> APIRouter:
     router = APIRouter()
+
+    def plans() -> PlanService:
+        if plan_service is None:
+            raise HTTPException(status_code=503, detail={
+                "type": "about:blank", "title": "Plan service unavailable", "status": 503,
+            })
+        return plan_service()
+
+    def plan_result(call):
+        try:
+            return call()
+        except PlanConflict as error:
+            raise HTTPException(status_code=409, detail={
+                "type": "urn:json-codr:plan-conflict", "title": "Plan conflict", "status": 409,
+                "detail": str(error), "current_revision": error.current_revision,
+                "current_digest": error.current_digest,
+            }) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail={
+                "type": "urn:json-codr:not-found", "title": "Plan not found", "status": 404,
+            }) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail={
+                "type": "urn:json-codr:invalid-plan-edit", "title": "Invalid plan edit", "status": 422,
+                "detail": str(error),
+            }) from error
+
+    @router.get("/api/tasks/{task_id}/plans")
+    def list_plans(task_id: str):
+        try:
+            return runtime()[1].plans(task_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="task not found") from error
+
+    @router.post("/api/tasks/{task_id}/plans/{plan_id}/{revision}/approve")
+    def approve_plan(
+        task_id: str, plan_id: str, revision: int, request: PlanDecisionRequest,
+        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+    ):
+        return plan_result(lambda: plans().approve_plan(
+            task_id, plan_id, revision, principal, request.expected_plan_digest,
+        ))
+
+    @router.post("/api/tasks/{task_id}/plans/{plan_id}/{revision}/reject")
+    def reject_plan(
+        task_id: str, plan_id: str, revision: int, request: PlanDecisionRequest,
+        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+    ):
+        if not request.reason:
+            raise HTTPException(status_code=422, detail={
+                "type": "urn:json-codr:invalid-plan-decision", "title": "Reason required", "status": 422,
+            })
+        return plan_result(lambda: plans().reject_plan(
+            task_id, plan_id, revision, principal, request.expected_plan_digest, request.reason,
+        ))
+
+    @router.post("/api/tasks/{task_id}/plans/{plan_id}/{revision}/steps/{step_id}/approve")
+    def approve_step(
+        task_id: str, plan_id: str, revision: int, step_id: str, request: PlanDecisionRequest,
+        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+    ):
+        return plan_result(lambda: plans().approve_step(
+            task_id, plan_id, revision, step_id, principal, request.expected_plan_digest,
+        ))
+
+    @router.post("/api/tasks/{task_id}/plans/{plan_id}/{revision}/steps/{step_id}/reject")
+    def reject_step(
+        task_id: str, plan_id: str, revision: int, step_id: str, request: PlanDecisionRequest,
+        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+    ):
+        if not request.reason:
+            raise HTTPException(status_code=422, detail={
+                "type": "urn:json-codr:invalid-plan-decision", "title": "Reason required", "status": 422,
+            })
+        return plan_result(lambda: plans().reject_step(
+            task_id, plan_id, revision, step_id, principal, request.expected_plan_digest, request.reason,
+        ))
+
+    @router.patch("/api/tasks/{task_id}/plans/{plan_id}/{revision}/steps/{step_id}")
+    def edit_step(
+        task_id: str, plan_id: str, revision: int, step_id: str, request: StepEditRequest,
+        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+    ):
+        return plan_result(lambda: plans().edit_step(
+            task_id, plan_id, revision, step_id, principal,
+            request.expected_plan_digest, request.changes,
+        ))
+
+    @router.post("/api/tasks/{task_id}/plans/{plan_id}/{revision}/revise")
+    def revise_plan(
+        task_id: str, plan_id: str, revision: int, request: PlanReviseRequest,
+        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+    ):
+        return plan_result(lambda: plans().revise_plan(
+            task_id, plan_id, revision, principal, request.expected_plan_digest,
+            summary=request.summary, reason=request.reason,
+        ))
+
+    @router.post("/api/tasks/{task_id}/plans/{plan_id}/{revision}/policy")
+    def apply_policy(
+        task_id: str, plan_id: str, revision: int, request: PolicyApplyRequest,
+    ):
+        return plan_result(lambda: plans().apply_policy(
+            task_id, plan_id, revision, request.expected_plan_digest,
+            policy_digest=request.policy_digest,
+        ))
+
+    @router.post("/api/tasks/{task_id}/plans/{plan_id}/{revision}/baseline")
+    def refresh_baseline(
+        task_id: str, plan_id: str, revision: int, request: BaselineRefreshRequest,
+    ):
+        if project_adapter is None:
+            raise HTTPException(status_code=503, detail={
+                "type": "about:blank", "title": "Project adapter unavailable", "status": 503,
+            })
+        return plan_result(lambda: plans().refresh_baseline(
+            task_id, plan_id, revision, request.expected_plan_digest,
+            project_adapter=project_adapter(), project_root=request.project_root,
+        ))
 
     @router.post("/api/components/plan")
     def plan_component(request: ComponentRequest):

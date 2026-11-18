@@ -669,6 +669,36 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("workspace context evidence", model_service.last_prompt)
         self.assertEqual(missing_project.status_code, 400)
 
+    def test_guided_workspace_submission_returns_durable_task_without_one_shot_execution(self):
+        class NoExecuteService(FakeService):
+            async def chat(self, model, prompt, images=None):
+                raise AssertionError("guided submission must not execute the one-shot workspace route")
+
+        project = Path(self.temporary_directory.name) / "guided-workspace"
+        project.mkdir()
+        (project / "README.md").write_text("guided\n", encoding="utf-8")
+        session = self.workspace.create_session()
+        previous = os.environ.get("JSON_CODR_GUIDED_TASK_FLOW")
+        os.environ["JSON_CODR_GUIDED_TASK_FLOW"] = "1"
+        try:
+            client = self.track_core_client(TestClient(create_app(NoExecuteService(), self.workspace)))
+        finally:
+            if previous is None:
+                os.environ.pop("JSON_CODR_GUIDED_TASK_FLOW", None)
+            else:
+                os.environ["JSON_CODR_GUIDED_TASK_FLOW"] = previous
+
+        response = client.post("/api/workspace/tasks", json={
+            "project_root": str(project), "session_id": session.id,
+            "engine_id": "borg", "model_selection": "auto", "prompt": "Inspect safely",
+        })
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["route"], "guided_task_flow")
+        self.assertEqual(response.json()["result"]["phase"], "describe")
+        durable = client.get(f"/api/tasks/{response.json()['task_id']}")
+        self.assertEqual(durable.status_code, 200)
+
     def test_optimized_connector_catalog_and_install_plans_are_additive(self):
         client = TestClient(create_app(self.service, self.workspace, optimized=True))
 

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import asyncio
+import hashlib
 import os
 import re
 import sys
@@ -36,11 +37,16 @@ from web_app.core.adapters import CapabilityCall
 from web_app.core.api import create_core_router
 from web_app.core.artifact_store import ArtifactStore
 from web_app.core.assimilation import AssimilationService, FunctionalProbeResult, SkillInstallAdapter
-from web_app.core.contracts import TaskCommand, TaskStatus
+from web_app.core.contracts import (
+    CapabilityManifest, CompletionCriterion, CriterionKind, GoalSpec, ManifestAuthority,
+    ModelScope, TaskCommand, TaskStatus,
+)
+from web_app.core.capabilities import CapabilityRegistry
 from web_app.core.git_adapter import GitExecutionAdapter
 from web_app.core.inference_adapter import InferenceAdapter
 from web_app.core.mcp_stdio_backend import build_mcp_adapters
 from web_app.core.policy import PolicyService
+from web_app.core.plan_service import PlanService
 from web_app.core.project_adapter import ProjectAdapter
 from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
@@ -210,6 +216,9 @@ def create_app(
     core_artifacts = None
     core_capabilities = ()
     core_mcp_backends = []
+    core_plan_service = None
+    core_project_adapter_instance = None
+    guided_task_flow = os.environ.get("JSON_CODR_GUIDED_TASK_FLOW", "0") == "1"
 
     async def probe_component(manifest, staged):
         if manifest.kind != "skill-pack":
@@ -233,13 +242,14 @@ def create_app(
         raise ValueError("Unsupported skill source")
 
     def get_core_runtime():
-        nonlocal core_runtime, core_capabilities
+        nonlocal core_runtime, core_capabilities, core_plan_service, core_project_adapter_instance
         if core_runtime is None:
             core_root = workspace.data_root / "core"
             core_tasks = TaskStore(core_root / "tasks.sqlite")
             core_policy = PolicyService(core_root / "policy.sqlite")
             core_terminal_adapter = TerminalAdapter(terminals)
             core_project_adapter = ProjectAdapter(core_root / "project-state")
+            core_project_adapter_instance = core_project_adapter
             def prepare_inference_prompt(call, prompt):
                 model = call.arguments.get("model")
                 if not isinstance(model, str):
@@ -306,11 +316,30 @@ def create_app(
                 restore_checkpoint=core_project_adapter.restore,
             )
             core_capabilities = tuple({"capability_id": capability_id} for capability_id in sorted(adapters))
+            registry = CapabilityRegistry()
+            for capability_id in sorted(adapters):
+                registry.register(CapabilityManifest(
+                    capability_id=capability_id,
+                    implementation_id=f"{capability_id}.runtime",
+                    version="1",
+                    model_scope=ModelScope.independent,
+                    authority=ManifestAuthority.host_builtin,
+                    manifest_digest="sha256:" + hashlib.sha256(capability_id.encode()).hexdigest(),
+                ), lambda: object(), lambda _: True)
+            core_plan_service = PlanService(core_tasks, registry)
             core_runtime = (core_service, core_tasks, core_policy)
             application.state.core_service = core_service
             application.state.core_task_store = core_tasks
             application.state.core_policy = core_policy
         return core_runtime
+
+    def get_core_plan_service() -> PlanService:
+        get_core_runtime()
+        return core_plan_service
+
+    def get_core_project_adapter() -> ProjectAdapter:
+        get_core_runtime()
+        return core_project_adapter_instance
 
     def get_core_artifacts() -> ArtifactStore:
         nonlocal core_artifacts
@@ -336,6 +365,8 @@ def create_app(
             artifact_store=get_core_artifacts,
             capabilities=lambda: core_capabilities if get_core_runtime() else (),
             components=get_component_manager,
+            plan_service=get_core_plan_service,
+            project_adapter=get_core_project_adapter,
         )
     )
     action_proposals = ActionProposalService()
@@ -1280,6 +1311,43 @@ def create_app(
             raise HTTPException(status_code=409, detail="Requested engine is not a verified Workspace engine")
         try:
             session = workspace.get_session(request.session_id)
+            if guided_task_flow:
+                project_snapshot = get_core_project_adapter().snapshot(request.project_root)
+                task_id = str(uuid7())
+                goal = GoalSpec(
+                    goal_id=f"goal-{task_id}", revision=1, objective=request.prompt, accepted=True,
+                    criteria=(CompletionCriterion(
+                        criterion_id="verified-project-state",
+                        kind=CriterionKind.project_state,
+                        description="The requested project outcome is verified from fresh evidence",
+                    ),),
+                )
+                execution_policy = settings.get().execution_policy
+                policy_snapshot = get_core_runtime()[2].snapshot(execution_policy, "workspace")
+                get_core_runtime()[1].create(TaskCommand(
+                    command_id=str(uuid7()), task_id=task_id, thread_id=session.id,
+                    project_id="workspace", command_type="agent.run",
+                    payload={
+                        "goal_spec": goal.model_dump(mode="json"),
+                        "project_root": project_snapshot.project_root,
+                        "project_fingerprint": project_snapshot.fingerprint,
+                        "policy_digest": policy_snapshot.canonical_digest,
+                        "model_selection": request.model_selection,
+                        "context_references": request.context_references,
+                    },
+                ))
+                response.status_code = 202
+                return WorkspaceTaskResponse(
+                    task_id=task_id, requested_engine=request.engine_id, effective_engine="borg",
+                    requested_model=request.model_selection, effective_model=None,
+                    route="guided_task_flow", status="pending", warnings=[],
+                    result={
+                        "phase": "describe", "event_url": f"/api/tasks/{task_id}/events",
+                        "policy_preset": execution_policy.preset,
+                        "policy_digest": policy_snapshot.canonical_digest,
+                    },
+                    artifact_references=[],
+                )
             installed = [
                 item for item in await (inference_router.list_models() if inference_router else service.list_models())
                 if item.get("installed")
