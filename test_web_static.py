@@ -156,7 +156,7 @@ class WebStaticTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.0.18-alpha.7", response.text)
+        self.assertIn("V1.0.18-alpha.8", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -181,7 +181,7 @@ class WebStaticTests(unittest.TestCase):
         html = self.client.get("/").text
         css = self.client.get("/static/app.css")
         javascript = self.client.get("/static/app.js")
-        self.assertIn('/static/app.css?v=1.0.18-alpha.7', html)
+        self.assertIn('/static/app.css?v=1.0.18-alpha.8', html)
         self.assertEqual(css.status_code, 200)
         self.assertIn("text/css", css.headers["content-type"])
         self.assertEqual(javascript.status_code, 200)
@@ -323,8 +323,8 @@ class WebStaticTests(unittest.TestCase):
         html = self.client.get("/").text
         javascript = self.client.get("/static/app.js").text
 
-        self.assertIn('/static/terminal_keyboard.js?v=1.0.18-alpha.7', html)
-        self.assertIn('/static/app.js?v=1.0.18-alpha.7', html)
+        self.assertIn('/static/terminal_keyboard.js?v=1.0.18-alpha.8', html)
+        self.assertIn('/static/app.js?v=1.0.18-alpha.8', html)
         self.assertLess(html.index("terminal_keyboard.js"), html.index("app.js"))
         self.assertIn("createTerminalKeyboardController", javascript)
         self.assertIn("attachCustomKeyEventHandler", javascript)

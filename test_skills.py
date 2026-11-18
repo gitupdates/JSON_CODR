@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from web_app.app import create_app
 from web_app.attachments import AttachmentService
+from web_app.models import SkillPack, SkillRecord
 from web_app.skills import DuplicateSkillPack, GithubSkillService, SkillConverterService, SkillDiscoveryService, SkillLibraryService
 from web_app.workspace import WorkspaceService
 
@@ -118,6 +119,46 @@ class SkillLibraryTests(unittest.TestCase):
         self.assertIn("VOTE: <GO, NO GO, or ABSTAIN>", installed.skills[0].content)
         self.assertIn("preserved original", installed.skills[0].content)
         self.assertIn("human decision-maker", installed.skills[0].content)
+
+    def test_builtin_readteam_skill_requires_evidence_first_adversarial_review(self):
+        library = SkillLibraryService(self.root)
+
+        pack = library.ensure_builtin_readteam()
+        installed = next(item for item in library.list() if item.id == "readteam")
+
+        self.assertEqual(pack.id, "readteam")
+        self.assertTrue(installed.skills[0].enabled)
+        self.assertIn("JSON_CODR_SKILL_SCHEMA: 1", installed.skills[0].content)
+        self.assertIn("/readteam", installed.skills[0].content)
+        self.assertIn("CLAIM LEDGER", installed.skills[0].content)
+        self.assertIn("FACT, INFERENCE, ASSUMPTION, or UNKNOWN", installed.skills[0].content)
+        self.assertIn("SECURITY, PRIVACY, SAFETY, AND STANDARDS", installed.skills[0].content)
+        self.assertIn("MUST be INSUFFICIENT EVIDENCE", installed.skills[0].content)
+        self.assertIn("Do not execute", installed.skills[0].content)
+
+    def test_builtin_readteam_refreshes_an_outdated_builtin_without_duplicating_the_pack(self):
+        library = SkillLibraryService(self.root)
+        library.install(SkillPack(
+            id="readteam",
+            name="READTEAM secondary review",
+            source_format="generic",
+            source_name="JSON_CODR built-in READTEAM review",
+            source_digest="json-codr-readteam-v1",
+            skills=[SkillRecord(
+                id="readteam-secondary-review",
+                name="READTEAM adversarial review",
+                content="JSON_CODR_SKILL_SCHEMA: 1\nOld instructions",
+                enabled=False,
+            )],
+        ))
+
+        refreshed = library.ensure_builtin_readteam()
+
+        self.assertEqual([pack.id for pack in library.list()].count("readteam"), 1)
+        self.assertEqual(refreshed.source_digest, "json-codr-readteam-v3")
+        self.assertFalse(refreshed.skills[0].enabled)
+        self.assertIn("defensive evidence review", refreshed.skills[0].content)
+        self.assertIn("INSUFFICIENT EVIDENCE", refreshed.skills[0].content)
 
     def test_native_json_codr_envelope_is_imported_without_conversion(self):
         source = self.root / "native.zip"
@@ -335,7 +376,7 @@ Review the supplied artifact.
         self.assertEqual(disabled.status_code, 200)
         self.assertNotIn(selection, skillsets_path.read_text(encoding="utf-8"))
         self.assertEqual(client.delete(f'/api/skills/{installed["id"]}').status_code, 204)
-        builtins = {"rea-agents", "multi-model-jury"}
+        builtins = {"rea-agents", "multi-model-jury", "readteam"}
         self.assertEqual([item for item in client.get("/api/skills").json() if item["id"] not in builtins], [])
 
     def test_api_save_and_apply_updates_skill_and_selects_it_for_session(self):
@@ -532,7 +573,7 @@ Review the supplied artifact.
 
         preview = client.post("/api/skills/scan", json={"directory": str(scan_root)})
         self.assertEqual(preview.status_code, 200)
-        builtins = {"rea-agents", "multi-model-jury"}
+        builtins = {"rea-agents", "multi-model-jury", "readteam"}
         self.assertEqual([item for item in client.get("/api/skills").json() if item["id"] not in builtins], [])
         installed = client.post("/api/skills/install-discovery", json={"discovery_id": preview.json()["discoveries"][0]["id"]})
         self.assertEqual(installed.status_code, 201)

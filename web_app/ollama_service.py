@@ -321,20 +321,37 @@ class OllamaService:
         reasoning_entries: list[ReasoningEntry] = []
         warnings: list[str] = []
         try:
-            stream = await self._chat_with_optimization(resolved, request)
-            async with asyncio.timeout(self.timeout_seconds):
-                async for chunk in stream:
-                    message = chunk.message if hasattr(chunk, "message") else chunk.get("message", {})
-                    content = getattr(message, "content", None) if not isinstance(message, dict) else message.get("content")
-                    reasoning = getattr(message, "thinking", None) if not isinstance(message, dict) else message.get("thinking")
-                    for delta in normalizer.feed({"content": content or "", "reasoning": reasoning or ""}):
-                        event = self._stream_delta(delta, reasoning_entries, content_parts, warnings)
-                        if event:
-                            yield event
-                for delta in normalizer.finish():
-                    event = self._stream_delta(delta, reasoning_entries, content_parts, warnings)
-                    if event:
-                        yield event
+            attempts = [request]
+            if request.get("think") is True:
+                attempts.append({key: value for key, value in request.items() if key != "think"})
+            for attempt in attempts:
+                received_chunk = False
+                try:
+                    stream = await self._chat_with_optimization(resolved, attempt)
+                    async with asyncio.timeout(self.timeout_seconds):
+                        async for chunk in stream:
+                            received_chunk = True
+                            message = chunk.message if hasattr(chunk, "message") else chunk.get("message", {})
+                            content = getattr(message, "content", None) if not isinstance(message, dict) else message.get("content")
+                            reasoning = getattr(message, "thinking", None) if not isinstance(message, dict) else message.get("thinking")
+                            for delta in normalizer.feed({"content": content or "", "reasoning": reasoning or ""}):
+                                event = self._stream_delta(delta, reasoning_entries, content_parts, warnings)
+                                if event:
+                                    yield event
+                    break
+                except ollama.ResponseError as error:
+                    unsupported_thinking = (
+                        attempt.get("think") is True
+                        and not received_chunk
+                        and "does not support thinking" in str(error).casefold()
+                    )
+                    if unsupported_thinking:
+                        continue
+                    raise
+            for delta in normalizer.finish():
+                event = self._stream_delta(delta, reasoning_entries, content_parts, warnings)
+                if event:
+                    yield event
         except TimeoutError as error:
             raise ModelTimeoutError("Model request timed out") from error
         except (ModelTimeoutError, ModelOutputError, OllamaUnavailableError, ValueError):

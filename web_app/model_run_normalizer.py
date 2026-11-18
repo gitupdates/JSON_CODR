@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Iterable
 
 from web_app.models import (
@@ -11,7 +12,29 @@ from web_app.models import (
     ModelTiming,
     OriginalModelOutput,
     ReasoningEntry,
+    ResponseConsistency,
 )
+
+
+def assess_response_consistency(
+    *,
+    required_labels: tuple[str, ...],
+    content: str,
+    normalized_answer: str,
+) -> ResponseConsistency:
+    present = [
+        label
+        for label in required_labels
+        if re.search(rf"(?im)(?:^|;)\s*{re.escape(label)}\s*:", content)
+    ]
+    missing = [label for label in required_labels if label not in present]
+    return ResponseConsistency(
+        required_labels=list(required_labels),
+        present_labels=present,
+        missing_labels=missing,
+        format_compliant=not missing,
+        answer_matches_original=normalized_answer == content,
+    )
 
 
 def capture_original_output(
@@ -51,6 +74,7 @@ def normalize_model_result(
     *,
     warnings: list[str],
     timing: ModelTiming,
+    required_labels: tuple[str, ...] = (),
 ) -> CanonicalModelResult:
     answer = result.content if result is not None else original.content
     summary = result.summary.strip() if result is not None else ""
@@ -76,4 +100,9 @@ def normalize_model_result(
         warnings=normalized_warnings,
         references=references,
         actions=list(result.actions) if result is not None else [],
+        consistency=assess_response_consistency(
+            required_labels=required_labels,
+            content=original.content,
+            normalized_answer=answer,
+        ),
     )

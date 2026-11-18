@@ -45,6 +45,8 @@ def canonical_model_prompt(
         f"{context or '(none)'}\n\n"
         "RESPONSE RULES:\n"
         "- Answer the user task directly and concisely.\n"
+        "- You are one independently invoked model. JSON_CODR, not this model, coordinates any multi-model run; "
+        "do not infer that other installed models are unavailable merely because you cannot invoke them.\n"
         "- Follow the response format required by the active profile; JSON_CODR normalizes comparable fields.\n"
         "- Do not claim tools, files, or actions that were not actually available.\n"
         "- Keep facts from supplied context distinct from your own conclusions."
@@ -292,6 +294,7 @@ class ModelRunService:
                     original,
                     result,
                     warnings=normalization_warnings,
+                    required_labels=required_response_labels(run.prompt),
                     timing=ModelTiming(
                         started_at=started,
                         completed_at=completed,
@@ -361,13 +364,14 @@ class ModelRunService:
             model=requested_model,
             content=result.content,
             reasoning_entries=result.reasoning.entries if result.reasoning else [],
-            provider_events=[],
+            provider_events=list(result.provider_events),
         )
         result_id = run.results[0].result_id
         self.store.append_original(run.run_id, result_id, original)
         now = datetime.now(timezone.utc)
         normalized = normalize_model_result(
             original, result, warnings=[],
+            required_labels=required_response_labels(prompt),
             timing=ModelTiming(started_at=now, completed_at=now, duration_ms=0),
         ).model_copy(update={"result_id": result_id, "requested_model": requested_model})
         return self.store.update_result(run.run_id, normalized)

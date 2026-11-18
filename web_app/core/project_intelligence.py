@@ -1,0 +1,244 @@
+from __future__ import annotations
+
+import hashlib
+import re
+import sqlite3
+import threading
+from datetime import UTC, datetime
+from pathlib import Path
+
+from pydantic import Field
+
+from web_app.core.contracts import FrozenContract
+
+
+class ProjectFile(FrozenContract):
+    relative_path: str
+    digest: str
+    size: int = Field(ge=0)
+    content: str
+
+
+class ProjectInstruction(FrozenContract):
+    relative_path: str
+    scope: str
+    precedence: int = Field(ge=0)
+    trust: str
+    content: str
+    digest: str
+
+
+class IndexGeneration(FrozenContract):
+    generation: int = Field(ge=1)
+    project_root: str
+    project_fingerprint: str
+    created_at: datetime
+
+
+class IndexResult(FrozenContract):
+    generation: int = Field(ge=1)
+    relative_path: str
+    digest: str
+    score: int = Field(ge=1)
+    excerpt: str
+
+
+class StaleIndex(RuntimeError):
+    pass
+
+
+class ProjectReader:
+    DEFAULT_IGNORED_DIRECTORIES = frozenset({
+        ".git", ".runtime", ".venv", "__pycache__", "node_modules", "dist", "build",
+    })
+
+    def __init__(
+        self,
+        project_root: str | Path,
+        *,
+        max_file_bytes: int = 1_048_576,
+        max_total_bytes: int = 33_554_432,
+        ignored_directories: frozenset[str] | None = None,
+    ) -> None:
+        self.root = Path(project_root).resolve()
+        if not self.root.is_dir():
+            raise ValueError("project root must exist")
+        self.max_file_bytes = max_file_bytes
+        self.max_total_bytes = max_total_bytes
+        self.ignored_directories = ignored_directories or self.DEFAULT_IGNORED_DIRECTORIES
+
+    def files(self) -> tuple[ProjectFile, ...]:
+        result: list[ProjectFile] = []
+        total = 0
+        for path in sorted(self.root.rglob("*"), key=lambda item: item.as_posix().casefold()):
+            if not path.is_file() or path.is_symlink():
+                continue
+            relative = path.relative_to(self.root)
+            if any(part in self.ignored_directories for part in relative.parts[:-1]):
+                continue
+            size = path.stat().st_size
+            if size > self.max_file_bytes or total + size > self.max_total_bytes:
+                continue
+            content_bytes = path.read_bytes()
+            if b"\x00" in content_bytes:
+                continue
+            try:
+                content = content_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            total += size
+            result.append(ProjectFile(
+                relative_path=relative.as_posix(),
+                digest=f"sha256:{hashlib.sha256(content_bytes).hexdigest()}",
+                size=size,
+                content=content,
+            ))
+        return tuple(result)
+
+    def fingerprint(self) -> str:
+        digest = hashlib.sha256()
+        for item in self.files():
+            digest.update(f"{item.relative_path}\0{item.digest}\0{item.size}\n".encode("utf-8"))
+        return f"sha256:{digest.hexdigest()}"
+
+    def instructions_for(self, target_path: str | Path) -> tuple[ProjectInstruction, ...]:
+        target = (self.root / target_path).resolve() if not Path(target_path).is_absolute() else Path(target_path).resolve()
+        if target != self.root and not target.is_relative_to(self.root):
+            raise ValueError("instruction target escapes project root")
+        directory = target if target.is_dir() else target.parent
+        relative_directory = directory.relative_to(self.root)
+        directories = [self.root]
+        current = self.root
+        for part in relative_directory.parts:
+            current = current / part
+            directories.append(current)
+        result = []
+        for precedence, scope in enumerate(directories):
+            candidate = scope / "AGENTS.md"
+            if not candidate.is_file() or candidate.is_symlink():
+                continue
+            content_bytes = candidate.read_bytes()
+            if len(content_bytes) > self.max_file_bytes or b"\x00" in content_bytes:
+                continue
+            try:
+                content = content_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            result.append(ProjectInstruction(
+                relative_path=candidate.relative_to(self.root).as_posix(),
+                scope=scope.relative_to(self.root).as_posix(),
+                precedence=precedence,
+                trust="project" if scope == self.root else "scoped_project",
+                content=content,
+                digest=f"sha256:{hashlib.sha256(content_bytes).hexdigest()}",
+            ))
+        return tuple(result)
+
+
+class RepositoryIndex:
+    def __init__(self, database: str | Path) -> None:
+        path = Path(database)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._connection = sqlite3.connect(path, check_same_thread=False)
+        self._connection.row_factory = sqlite3.Row
+        self._lock = threading.RLock()
+        self._connection.execute("PRAGMA journal_mode = WAL")
+        self._connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS repository_generations (
+                generation INTEGER PRIMARY KEY,
+                project_root TEXT NOT NULL,
+                project_fingerprint TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS repository_files (
+                generation INTEGER NOT NULL REFERENCES repository_generations(generation) ON DELETE CASCADE,
+                relative_path TEXT NOT NULL,
+                digest TEXT NOT NULL,
+                content TEXT NOT NULL,
+                symbols TEXT NOT NULL,
+                PRIMARY KEY(generation, relative_path)
+            );
+            """
+        )
+
+    def close(self) -> None:
+        self._connection.close()
+
+    def rebuild(self, reader: ProjectReader) -> IndexGeneration:
+        files = reader.files()
+        fingerprint = reader.fingerprint()
+        with self._lock, self._connection:
+            row = self._connection.execute(
+                "SELECT COALESCE(MAX(generation), 0) + 1 AS generation FROM repository_generations"
+            ).fetchone()
+            generation_number = int(row["generation"])
+            generation = IndexGeneration(
+                generation=generation_number,
+                project_root=str(reader.root),
+                project_fingerprint=fingerprint,
+                created_at=datetime.now(UTC),
+            )
+            self._connection.execute(
+                "INSERT INTO repository_generations VALUES (?, ?, ?, ?)",
+                (
+                    generation.generation, generation.project_root,
+                    generation.project_fingerprint, generation.created_at.isoformat(),
+                ),
+            )
+            for item in files:
+                symbols = "\n".join(re.findall(
+                    r"(?m)^\s*(?:async\s+def|def|class|function|interface|type)\s+([A-Za-z_$][\w$]*)",
+                    item.content,
+                ))
+                self._connection.execute(
+                    "INSERT INTO repository_files VALUES (?, ?, ?, ?, ?)",
+                    (generation.generation, item.relative_path, item.digest, item.content, symbols),
+                )
+        return generation
+
+    def search(self, reader: ProjectReader, query: str, limit: int = 20) -> tuple[IndexResult, ...]:
+        if not query.strip():
+            return ()
+        with self._lock:
+            generation = self._latest_generation()
+            if generation is None:
+                return ()
+            if generation.project_root != str(reader.root) or generation.project_fingerprint != reader.fingerprint():
+                raise StaleIndex("repository index does not match the current project snapshot")
+            rows = self._connection.execute(
+                "SELECT * FROM repository_files WHERE generation = ?",
+                (generation.generation,),
+            ).fetchall()
+        needle = query.casefold()
+        results = []
+        for row in rows:
+            haystack = f"{row['relative_path']}\n{row['symbols']}\n{row['content']}".casefold()
+            score = haystack.count(needle)
+            if score == 0:
+                continue
+            content = row["content"]
+            position = content.casefold().find(needle)
+            start = max(0, position - 120) if position >= 0 else 0
+            excerpt = content[start:start + 320]
+            results.append(IndexResult(
+                generation=generation.generation,
+                relative_path=row["relative_path"],
+                digest=row["digest"],
+                score=score,
+                excerpt=excerpt,
+            ))
+        results.sort(key=lambda item: (-item.score, item.relative_path))
+        return tuple(results[:limit])
+
+    def _latest_generation(self) -> IndexGeneration | None:
+        row = self._connection.execute(
+            "SELECT * FROM repository_generations ORDER BY generation DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return None
+        return IndexGeneration(
+            generation=row["generation"], project_root=row["project_root"],
+            project_fingerprint=row["project_fingerprint"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )

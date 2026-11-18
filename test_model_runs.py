@@ -116,6 +116,26 @@ class ModelRunServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([call[0] for call in self.inference.calls], ["model-b", "model-a"])
         self.assertLessEqual(self.inference.maximum, 2)
 
+    async def test_single_model_record_uses_the_same_format_consistency_contract(self):
+        run = self.service.record_single(
+            session_id="a" * 32,
+            prompt="Return exactly this format:\nVOTE: <GO or NO GO>\nRISKS: <primary risk>",
+            requested_model="model-a",
+            result=ChatResult(
+                model="model-a",
+                status="success",
+                summary="GO",
+                content="VOTE: GO",
+                provider_events=[{"type": "provider.audit", "value": "kept"}],
+            ),
+        )
+
+        result = run.results[0]
+        original = self.service.store.get_original(run.run_id, result.result_id)
+        self.assertFalse(result.consistency.format_compliant)
+        self.assertEqual(result.consistency.missing_labels, ["RISKS"])
+        self.assertEqual(original.provider_events, [{"type": "provider.audit", "value": "kept"}])
+
     async def test_requested_parallelism_is_persisted_and_limits_only_that_run(self):
         self.inference.installed_models = ["model-a", "model-b", "model-c", "model-d"]
         run = await self.service.create(ModelRunCreateRequest(
@@ -157,6 +177,10 @@ class ModelRunServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(prompt.count("USER TASK (authoritative):\nReview once"), 1)
             self.assertNotIn("USER REQUEST:\nReview once", prompt)
             self.assertIn("JSON_CODR normalizes comparable fields", prompt)
+            self.assertIn(
+                "JSON_CODR, not this model, coordinates any multi-model run",
+                prompt,
+            )
             self.assertNotIn("use the requested model identifier", prompt)
 
     async def test_outlier_gets_one_targeted_format_repair_and_both_outputs_are_auditable(self):
@@ -193,6 +217,9 @@ class ModelRunServiceTests(unittest.IsolatedAsyncioTestCase):
         result = next(item for item in self.service.get(run.run_id).results if item.requested_model == "model-a")
         self.assertEqual(result.status, "completed")
         self.assertIn("PURPOSE:", result.answer)
+        self.assertTrue(result.consistency.format_compliant)
+        self.assertEqual(result.consistency.required_labels, ["PURPOSE", "RISKS", "IMPROVEMENT"])
+        self.assertTrue(result.consistency.answer_matches_original)
         original = self.service.store.get_original(run.run_id, result.result_id)
         alignment = next(event for event in original.provider_events if event["type"] == "format_alignment")
         self.assertEqual(alignment["initial_content"], "A useful answer without the requested labels.")

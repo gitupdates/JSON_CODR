@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 
 from web_app.core.contracts import FrozenContract
+from web_app.core.project_intelligence import ProjectReader
 
 
 class ExternalChangeEvent(FrozenContract):
@@ -37,11 +38,10 @@ class ProjectWatcher:
         )
 
     def _scan(self) -> dict[str, str]:
-        result = {}
-        for path in self._root.rglob("*"):
-            if path.is_file() and ".git" not in path.parts:
-                result[str(path.relative_to(self._root)).replace("\\", "/")] = hashlib.sha256(path.read_bytes()).hexdigest()
-        return result
+        return {
+            item.relative_path: item.digest.removeprefix("sha256:")
+            for item in ProjectReader(self._root).files()
+        }
 
     @staticmethod
     def _fingerprint(state: dict[str, str]) -> str:

@@ -50,7 +50,7 @@ from web_app.core.terminal_adapter import TerminalAdapter
 from web_app.dependencies import DependencyService
 from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
 from web_app.model_run_store import ModelRunStore, RequestKeyConflict
-from web_app.model_runs import ModelRunService
+from web_app.model_runs import ModelRunService, canonical_model_prompt
 from web_app.ollama_service import (
     ModelOutputError,
     ModelTimeoutError,
@@ -109,6 +109,7 @@ def create_app(
     skill_library = SkillLibraryService(workspace.data_root)
     skill_library.ensure_builtin_rea()
     skill_library.ensure_builtin_multi_model_jury()
+    skill_library.ensure_builtin_readteam()
     skill_library.ensure_envelopes()
     skill_converter = SkillConverterService()
     settings = SettingsService(workspace.data_root)
@@ -239,13 +240,20 @@ def create_app(
             core_terminal_adapter = TerminalAdapter(terminals)
             core_project_adapter = ProjectAdapter(core_root / "project-state")
             def prepare_inference_prompt(call, prompt):
+                model = call.arguments.get("model")
+                if not isinstance(model, str):
+                    raise ValueError("inference generation requires model")
                 session_id = call.arguments.get("session_id")
                 if not isinstance(session_id, str):
-                    return prompt, {}
+                    return canonical_model_prompt(model=model, task=prompt, assembled_prompt=prompt), {}
                 session = workspace.get_session(session_id)
                 recommendation_result = recommendations.recommend(session, prompt)
                 context_result = context_assembler.build(session, prompt, recommendation_result)
-                return context_result.prompt, {
+                return canonical_model_prompt(
+                    model=model,
+                    task=prompt,
+                    assembled_prompt=context_result.prompt,
+                ), {
                     "attached_skills": [item.model_dump(mode="json") for item in context_result.attached_skills],
                     "attached_skillsets": context_result.skillsets,
                     "skill_recommendations": [
@@ -1516,13 +1524,24 @@ def create_app(
         except WebSocketDisconnect:
             pass
 
-    async def generate_chat_through_core(model: str, prompt: str, images: list[Path], thread_id: str) -> ChatResult:
+    async def generate_chat_through_core(
+        model: str,
+        prompt: str,
+        images: list[Path],
+        thread_id: str,
+        session_id: str | None = None,
+    ) -> ChatResult:
         core_service, _, _ = get_core_runtime()
         call = CapabilityCall(
             capability_id="inference.generate",
             operation="generate",
             project_root=str(Path(__file__).resolve().parent.parent),
-            arguments={"model": model, "prompt": prompt, "images": [str(path) for path in images]},
+            arguments={
+                "model": model,
+                "prompt": prompt,
+                "images": [str(path) for path in images],
+                **({"session_id": session_id} if session_id else {}),
+            },
         )
         task_id = str(uuid7())
         record = await core_service.submit(TaskCommand(
@@ -1573,6 +1592,11 @@ def create_app(
                 None,
             )
             if wants_conversion and source_archive:
+                model_prompt = canonical_model_prompt(
+                    model=request.model,
+                    task=original_prompt,
+                    assembled_prompt=model_prompt,
+                )
                 bundle = await service.convert_archive(request.model, model_prompt)
                 artifact = artifact_service.save_conversion(
                     request.session_id,
@@ -1601,9 +1625,10 @@ def create_app(
             else:
                 result = await generate_chat_through_core(
                     request.model,
-                    model_prompt,
+                    original_prompt,
                     model_images,
                     request.session_id or f"chat:{uuid7()}",
+                    request.session_id,
                 )
             if context_result and recommendation_result:
                 result.attached_skills = context_result.attached_skills

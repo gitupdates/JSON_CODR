@@ -244,6 +244,14 @@ class OriginalModelOutput(CanonicalContract):
     captured_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class ResponseConsistency(CanonicalContract):
+    required_labels: List[str] = Field(default_factory=list, max_length=100)
+    present_labels: List[str] = Field(default_factory=list, max_length=100)
+    missing_labels: List[str] = Field(default_factory=list, max_length=100)
+    format_compliant: bool = True
+    answer_matches_original: bool = True
+
+
 class CanonicalModelResult(CanonicalContract):
     result_id: str = Field(min_length=1, max_length=128)
     requested_model: str = Field(min_length=1, max_length=500)
@@ -260,6 +268,7 @@ class CanonicalModelResult(CanonicalContract):
     warnings: List[str] = Field(default_factory=list, max_length=1000)
     references: List[ObjectReference] = Field(default_factory=list, max_length=1000)
     actions: List[ActionSuggestion] = Field(default_factory=list, max_length=1000)
+    consistency: ResponseConsistency = Field(default_factory=ResponseConsistency)
     normalizer_version: Literal[1] = 1
     error_code: Optional[str] = Field(default=None, max_length=128)
     error_message: Optional[str] = Field(default=None, max_length=2000)

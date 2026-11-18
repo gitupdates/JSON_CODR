@@ -9,6 +9,7 @@ from pydantic import Field
 
 from web_app.core.adapters import AdapterEvent, CapabilityCall, ExecutionContext
 from web_app.core.contracts import FrozenContract
+from web_app.core.project_intelligence import ProjectReader
 
 
 class ProjectSnapshot(FrozenContract):
@@ -138,4 +139,4 @@ class ProjectAdapter:
 
     @staticmethod
     def _files(root: Path) -> tuple[Path, ...]:
-        return tuple(sorted((path for path in root.rglob("*") if path.is_file() and ".git" not in path.parts), key=str))
+        return tuple(root / item.relative_path for item in ProjectReader(root).files())

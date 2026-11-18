@@ -1,12 +1,25 @@
 import tempfile
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid7
 
 from web_app.core.adapters import AdapterEvent, CapabilityCall
+from web_app.core.adapters import CapabilityExecutionError
 from web_app.core.agent_runtime import AgentRuntime
 from web_app.core.context_service import ContextService
-from web_app.core.contracts import ExecutionMode, TaskCommand, TaskEventDraft, TaskStatus
+from web_app.core.contracts import (
+    CompletionCriterion,
+    CriterionKind,
+    CriterionStatus,
+    EvidenceRef,
+    ExecutionMode,
+    GoalSpec,
+    TaskCommand,
+    TaskEventDraft,
+    TaskStatus,
+    VerificationReport,
+)
 from web_app.core.memory import MemoryStore
 from web_app.core.policy import PolicyService
 from web_app.core.router import ExecutionCandidate, ExecutionRouter, RouteConsentRequired
@@ -23,12 +36,50 @@ class RecordingAdapter:
         yield AdapterEvent(event_type="capability.result", payload={"operation": call.operation})
 
 
+class FailingAdapter:
+    def __init__(self):
+        self.calls = []
+
+    async def execute(self, call, context):
+        self.calls.append(call)
+        raise CapabilityExecutionError("tests_failed", "focused tests failed")
+        yield
+
+
 class DeterministicPlanner:
     def __init__(self, calls):
         self.calls = list(calls)
 
     async def plan(self, context):
         return self.calls.pop(0) if self.calls else None
+
+
+class DeterministicVerifier:
+    def __init__(self, satisfied=True):
+        self.satisfied = satisfied
+        self.calls = []
+
+    async def verify(self, goal, task, context):
+        self.calls.append((goal, task, context))
+        status = CriterionStatus.passed if self.satisfied else CriterionStatus.failed
+        evidence = ()
+        if self.satisfied:
+            evidence = tuple(
+                EvidenceRef(
+                    evidence_id=f"evidence-{criterion.criterion_id}", task_id=task.task_id,
+                    project_id=task.project_id, goal_id=goal.goal_id, goal_revision=goal.revision,
+                    criterion_id=criterion.criterion_id, source_ref=f"task:{task.task_id}",
+                    project_fingerprint="sha256:" + "1" * 64, observed_at=datetime.now(UTC),
+                )
+                for criterion in goal.criteria
+            )
+        return VerificationReport(
+            report_id=f"report-{task.task_id}", task_id=task.task_id, project_id=task.project_id,
+            goal_id=goal.goal_id, goal_revision=goal.revision,
+            expected_criterion_ids=tuple(item.criterion_id for item in goal.criteria),
+            results={item.criterion_id: status for item in goal.criteria},
+            evidence=evidence, verified_at=datetime.now(UTC),
+        )
 
 
 class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
@@ -45,11 +96,19 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.tasks.close()
         self.temporary.cleanup()
 
-    def create_root_task(self):
+    def create_root_task(self, *, accepted=True):
         task_id = str(uuid7())
+        goal = GoalSpec(
+            goal_id="goal-1", revision=1, objective="Complete the requested coding task",
+            criteria=(CompletionCriterion(
+                criterion_id="verified", kind=CriterionKind.project_state,
+                description="The resulting project state is verified",
+            ),),
+            accepted=accepted,
+        )
         command = TaskCommand(
             command_id=str(uuid7()), task_id=task_id, thread_id="thread-1", project_id="project-1",
-            command_type="agent.run", payload={},
+            command_type="agent.run", payload={"goal_spec": goal.model_dump(mode="json")},
         )
         self.tasks.create(command)
         return task_id
@@ -63,7 +122,8 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             CapabilityCall(capability_id="test.run", operation="test", project_root=str(self.root)),
         ]
         runtime = AgentRuntime(
-            self.tasks, core, ContextService(self.tasks, self.memory), DeterministicPlanner(calls)
+            self.tasks, core, ContextService(self.tasks, self.memory), DeterministicPlanner(calls),
+            DeterministicVerifier(), lambda _root: "sha256:" + "1" * 64,
         )
         task_id = self.create_root_task()
 
@@ -76,7 +136,12 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(child.status is TaskStatus.completed for child in children))
         self.assertEqual(
             [event.event_type for event in result.events if event.event_type.startswith("agent.")],
-            ["agent.started", "agent.action_completed", "agent.action_completed", "agent.action_completed", "agent.verified"],
+            [
+                "agent.goal_registered", "agent.started", "agent.phase_changed",
+                "agent.step_planned", "agent.action_completed", "agent.step_planned",
+                "agent.action_completed", "agent.step_planned", "agent.action_completed",
+                "agent.phase_changed", "agent.verification_completed", "agent.verified",
+            ],
         )
 
     async def test_steering_is_durable_and_visible_to_the_next_plan(self):
@@ -84,7 +149,8 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         planner = DeterministicPlanner([])
         runtime = AgentRuntime(
             self.tasks, CoreService(self.tasks, self.policy, {"project.read": adapter}),
-            ContextService(self.tasks, self.memory), planner,
+            ContextService(self.tasks, self.memory), planner, DeterministicVerifier(),
+            lambda _root: "sha256:" + "1" * 64,
         )
         task_id = self.create_root_task()
 
@@ -93,6 +159,56 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("inspect configuration first", context.text)
         self.assertTrue(any(source.kind == "task_event" for source in context.sources))
+
+    async def test_planner_silence_cannot_complete_when_verification_fails(self):
+        runtime = AgentRuntime(
+            self.tasks, CoreService(self.tasks, self.policy, {}),
+            ContextService(self.tasks, self.memory), DeterministicPlanner([]),
+            DeterministicVerifier(satisfied=False), lambda _root: "sha256:" + "1" * 64,
+        )
+        task_id = self.create_root_task()
+
+        result = await runtime.run(task_id)
+
+        self.assertEqual(result.status, TaskStatus.pending)
+        self.assertNotIn("task.completed", [event.event_type for event in result.events])
+        self.assertIn("agent.verification_failed", [event.event_type for event in result.events])
+
+    async def test_unaccepted_generated_goal_blocks_before_mutation(self):
+        adapter = RecordingAdapter()
+        runtime = AgentRuntime(
+            self.tasks, CoreService(self.tasks, self.policy, {"project.patch": adapter}),
+            ContextService(self.tasks, self.memory),
+            DeterministicPlanner([CapabilityCall(
+                capability_id="project.patch", operation="bounded_edit", project_root=str(self.root)
+            )]),
+            DeterministicVerifier(), lambda _root: "sha256:" + "1" * 64,
+        )
+        task_id = self.create_root_task(accepted=False)
+
+        result = await runtime.run(task_id)
+
+        self.assertEqual(adapter.calls, [])
+        self.assertIn("agent.goal_acceptance_required", [event.event_type for event in result.events])
+
+    async def test_unchanged_failed_action_is_not_executed_twice(self):
+        adapter = FailingAdapter()
+        call = CapabilityCall(
+            capability_id="test.run", operation="test", project_root=str(self.root)
+        )
+        runtime = AgentRuntime(
+            self.tasks, CoreService(self.tasks, self.policy, {"test.run": adapter}),
+            ContextService(self.tasks, self.memory), DeterministicPlanner([call, call]),
+            DeterministicVerifier(), lambda _root: "sha256:" + "1" * 64,
+        )
+        task_id = self.create_root_task()
+
+        result = await runtime.run(task_id)
+
+        self.assertEqual(len(adapter.calls), 1)
+        self.assertIn("agent.action_failed", [event.event_type for event in result.events])
+        blocked = next(event for event in result.events if event.event_type == "agent.blocked")
+        self.assertEqual(blocked.payload["reason"], "unchanged repair loop")
 
     def test_context_compaction_preserves_provenance_to_original_events(self):
         task_id = self.create_root_task()

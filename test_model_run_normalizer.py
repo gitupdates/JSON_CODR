@@ -175,6 +175,34 @@ class ModelRunNormalizerTests(unittest.TestCase):
         self.assertEqual(normalized.status, "completed")
         self.assertEqual(normalized.warnings, ["Model returned plain text; JSON_CODR normalized the response."])
 
+    def test_consistency_assessment_reports_contract_and_content_fidelity(self):
+        module = self.normalizer()
+
+        assessment = module.assess_response_consistency(
+            required_labels=("VOTE", "CONFIDENCE", "RATIONALE"),
+            content="VOTE: GO\nRATIONALE: Evidence supports adoption.",
+            normalized_answer="VOTE: GO\nRATIONALE: Evidence supports adoption.",
+        )
+
+        self.assertEqual(assessment.required_labels, ["VOTE", "CONFIDENCE", "RATIONALE"])
+        self.assertEqual(assessment.present_labels, ["VOTE", "RATIONALE"])
+        self.assertEqual(assessment.missing_labels, ["CONFIDENCE"])
+        self.assertFalse(assessment.format_compliant)
+        self.assertTrue(assessment.answer_matches_original)
+
+    def test_consistency_assessment_does_not_treat_semantic_disagreement_as_inaccuracy(self):
+        module = self.normalizer()
+
+        assessment = module.assess_response_consistency(
+            required_labels=(),
+            content="NO GO because the migration risk is high.",
+            normalized_answer="NO GO because the migration risk is high.",
+        )
+
+        self.assertTrue(assessment.format_compliant)
+        self.assertEqual(assessment.missing_labels, [])
+        self.assertTrue(assessment.answer_matches_original)
+
 
 if __name__ == "__main__":
     unittest.main()

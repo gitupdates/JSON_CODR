@@ -37,13 +37,20 @@
       row = document.createElement("article");
       row.className = "all-model-result";
       row.dataset.resultId = result.result_id;
-      row.innerHTML = '<div class="all-model-result-head"><strong></strong><span class="meta"></span></div><h3></h3><pre></pre><a class="original-output-link">View preserved original</a><pre class="original-output-raw" hidden></pre>';
+      row.innerHTML = '<div class="all-model-result-head"><strong></strong><span class="meta"></span></div><div class="all-model-consistency meta"></div><h3></h3><pre></pre><a class="original-output-link">View preserved original</a><pre class="original-output-raw" hidden></pre>';
       row.querySelector(".original-output-link").addEventListener("click", openOriginal);
       elements["all-model-results"].append(row);
     }
     row.dataset.search = `${result.requested_model} ${result.status} ${result.summary} ${result.answer}`.toLowerCase();
     row.querySelector("strong").textContent = result.requested_model;
     row.querySelector("span").textContent = result.status;
+    const consistency = result.consistency || {};
+    const missing = consistency.missing_labels || [];
+    row.querySelector(".all-model-consistency").textContent = consistency.answer_matches_original === false
+      ? "Content fidelity failed"
+      : missing.length
+        ? `Format incomplete · missing ${missing.join(", ")}`
+        : "Content preserved · format consistent";
     row.querySelector("h3").textContent = result.summary || "Awaiting response";
     row.querySelector("pre").textContent = result.answer || result.error_message || "";
     const original = row.querySelector(".original-output-link");
