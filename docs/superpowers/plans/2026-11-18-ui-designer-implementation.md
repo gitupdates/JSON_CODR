@@ -187,7 +187,46 @@
 
   `git add web_app/designer/assets.py web_app/designer/references.py web_app/designer/capture_adapters.py web/designer_capture.js tools/playwright_ui_capture.mjs tools/make_ui_reference_archive.py docs/user/ui-reference-capture.md test_designer_assets.py test_designer_references.py && git commit -m "feat(designer): import sanitized UI references"`
 
-### Task 6: Designer API surface and conflict-safe uploads
+### Task 6: Lossless CSS parser, import resolver, and cycle bundles
+
+**Files:**
+- Create: `tools/ui_capture/css_tokens.mjs`
+- Create: `tools/ui_capture/css_parser.mjs`
+- Create: `tools/ui_capture/css_resolver.mjs`
+- Create: `tools/ui_capture/css_bundler.mjs`
+- Create: `tools/ui_capture/css_serializer.mjs`
+- Create: `test_designer_css_pipeline.py`
+- Create: `test_fixtures/designer_css/comments.css`
+- Create: `test_fixtures/designer_css/comments-edge.css`
+- Create: `test_fixtures/designer_css/import-cycle/`
+
+**Interfaces:**
+- Consumes: captured stylesheet response bodies and resource metadata from Task 5.
+- Produces: `tokenizeCss(source, sourceUrl)`, `parseCss(source, sourceUrl)`, `parseImport(tokens)`, `resolveImports(entryUrl, loader, limits)`, `stronglyConnectedComponents(graph)`, `bundleCycles(resolution)`, `serializeCss(ast, options)`, and deterministic source-map/bundle manifests.
+
+- [ ] **Step 1: Write failing tokenizer/parser/round-trip tests**
+
+  Run real Node modules from Python fixtures. Cover strings, escapes, comments with raw interior whitespace and locations, comments between/before/after declarations, consecutive/EOF/license comments, comments inside nested `@layer`/`@media`/`@supports`/`@keyframes`, comment-only and empty blocks, generic simple/block at-rules, and byte-identical golden parse→serialize round trips.
+
+- [ ] **Step 2: Write failing import/resolver/bundle tests**
+
+  Cover quoted and `url(...)` imports, anonymous/named/quoted layers, `supports()`, media text, whitespace/comments, query retention, fragment identity, URL normalization, cache hits, self-imports, depth/count/size limits, cycle paths, Tarjan SCCs, stable bundle names, topological member order, internal-import removal, external-import preservation, duplicate bundle suppression, relative rewrites, asset URLs, source locations, and source-map integrity.
+
+- [ ] **Step 3: Run tests and verify modules are missing**
+
+  Run: `python -m unittest test_designer_css_pipeline.py -v`
+
+- [ ] **Step 4: Implement the lossless token/AST pipeline**
+
+  Preserve raw source slices for unchanged nodes. Only rewritten imports and generated wrappers use canonical formatting. Enforce 32 levels, 512 stylesheets, 5 MiB per stylesheet, and 64 MiB total CSS through the loader boundary; reject non-HTTP(S)/managed URL schemes.
+
+- [ ] **Step 5: Run focused tests and commit**
+
+  Run: `python -m unittest test_designer_css_pipeline.py -v`
+
+  `git add tools/ui_capture test_designer_css_pipeline.py test_fixtures/designer_css && git commit -m "feat(designer): preserve and bundle captured CSS"`
+
+### Task 7: Designer API surface and conflict-safe uploads
 
 **Files:**
 - Create: `web_app/designer/api.py`
@@ -217,7 +256,7 @@
 
   `git add web_app/designer/api.py web_app/app.py web_app/models.py test_designer_api.py && git commit -m "feat(api): expose visual designer projects"`
 
-### Task 7: Sandboxed renderer, validation, and static export
+### Task 8: Sandboxed renderer, validation, and static export
 
 **Files:**
 - Create: `web_app/designer/render.py`
@@ -227,7 +266,7 @@
 - Test: `test_designer_export.py`
 
 **Interfaces:**
-- Consumes: registered components/actions, managed assets, and normalized documents.
+- Consumes: registered components/actions, managed assets, normalized documents, and lossless CSS bundles from Task 6.
 - Produces: `validate_for_preview(document)`, `render_preview(document, allowlist)`, `StaticExportService.export(project_id, revision_id) -> Path`, and browser `renderScene(root, document, options)`.
 
 - [ ] **Step 1: Write failing renderer/export tests**
@@ -248,7 +287,7 @@
 
   `git add web_app/designer/render.py web_app/designer/export.py web/designer_renderer.js test_designer_render.py test_designer_export.py && git commit -m "feat(designer): render and export safe interfaces"`
 
-### Task 8: Settings enablement and designer application shell
+### Task 9: Settings enablement and designer application shell
 
 **Files:**
 - Modify: `web/index.html`
@@ -261,7 +300,7 @@
 - Modify: `test_web_static.py`
 
 **Interfaces:**
-- Consumes: Designer settings/API and renderer from Tasks 6 and 7.
+- Consumes: Designer settings/API and renderer from Tasks 7 and 8.
 - Produces: Settings enable/default/snap/grid/autosave controls and a Designer destination with command bar, left library/pages/layers/templates/reference panel, canvas, right inspector, and live status region.
 
 - [ ] **Step 1: Write failing static and interaction tests**
@@ -282,7 +321,7 @@
 
   `git add web/index.html web/app.js web/app.css web/gamma.css web/designer_app.js web/designer.css test_designer_ui.py test_web_static.py && git commit -m "feat(ui): add visual designer workspace"`
 
-### Task 9: Canvas manipulation, inspector, and reference drafting
+### Task 10: Canvas manipulation, inspector, and reference drafting
 
 **Files:**
 - Create: `web/designer_canvas.js`
@@ -293,7 +332,7 @@
 - Test: `test_designer_inspector.py`
 
 **Interfaces:**
-- Consumes: Task 4 command engine, Task 7 renderer, and Task 8 shell.
+- Consumes: Task 4 command engine, Task 8 renderer, and Task 9 shell.
 - Produces: pointer/keyboard selection, drag, resize, drop, alignment, grouping, layers, snapping, device bounds, and Content/Layout/Style/Typography/Asset/Actions/Accessibility/Advanced inspectors.
 
 - [ ] **Step 1: Write failing browser-module tests**
@@ -314,7 +353,7 @@
 
   `git add web/designer_canvas.js web/designer_inspector.js web/designer_app.js web/designer.css test_designer_canvas.py test_designer_inspector.py && git commit -m "feat(designer): add canvas and property inspector"`
 
-### Task 10: Protected JSON_CODR overlay, rebase, and safe mode
+### Task 11: Protected JSON_CODR overlay, rebase, and safe mode
 
 **Files:**
 - Create: `web/designer_overlay.js`
@@ -347,7 +386,7 @@
 
   `git add web/designer_overlay.js web/ui_catalog.js web/ui_customization.js web/ui_bootstrap.js web/index.html test_designer_overlay.py test_ui_customization.py && git commit -m "feat(designer): protect JSON_CODR customization"`
 
-### Task 11: End-to-end verification, documentation, and release integration
+### Task 12: End-to-end verification, documentation, and release integration
 
 **Files:**
 - Create: `test_designer_e2e.py`
