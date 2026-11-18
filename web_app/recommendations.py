@@ -11,6 +11,7 @@ from web_app.skillsets import SkillsetService
 
 GENERIC_TERMS = frozenset({"help", "task", "skill", "use", "create", "build", "make", "work", "project"})
 PROVIDER_TERMS = frozenset({"claude", "cursor", "copilot", "gemini", "anthropic"})
+EXPLICIT_ONLY_SKILLS = frozenset({"readteam:readteam-secondary-review"})
 ROUTING_SYNONYMS = {
     "bug": "debug",
     "fix": "debug",
@@ -55,6 +56,26 @@ class SkillRecommendationService:
                     reference=reference, name=skill.name, score=1000,
                     reasons=["selected manually"], manual=True,
                 ))
+        slash_command = prompt.lstrip().split(maxsplit=1)[0].casefold() if prompt.strip() else ""
+        slash_skills = {
+            "/readteam": "readteam:readteam-secondary-review",
+            "/redteam": "readteam:readteam-secondary-review",
+        }
+        slash_reference = slash_skills.get(slash_command)
+        if (
+            slash_reference
+            and slash_reference in skills
+            and slash_reference not in session.excluded_skill_ids
+            and slash_reference not in {item.reference for item in manual}
+        ):
+            skill = skills[slash_reference]
+            manual.append(SkillRecommendation(
+                reference=slash_reference,
+                name=skill.name,
+                score=1000,
+                reasons=[f"explicit slash command: {slash_command}"],
+                manual=True,
+            ))
         routing = self.settings.get().skill_routing
         if not session.auto_attach_skills or not routing.auto_attach:
             return SkillRecommendationResult(recommendations=manual)
@@ -94,7 +115,7 @@ class SkillRecommendationService:
         excluded = set(session.excluded_skill_ids)
         manual_refs = {item.reference for item in manual}
         for reference, skill in skills.items():
-            if reference in excluded or reference in manual_refs:
+            if reference in excluded or reference in manual_refs or reference in EXPLICIT_ONLY_SKILLS:
                 continue
             score = 0
             reasons: list[str] = []

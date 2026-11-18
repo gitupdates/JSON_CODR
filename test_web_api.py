@@ -231,7 +231,7 @@ class WebApiTests(unittest.TestCase):
         })
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertEqual(body["content"], "Answered: hello")
+        self.assertIn("USER TASK (authoritative):\nhello", body["content"])
         self.assertEqual(body["summary"], "Ready")
         self.assertRegex(body["run_id"], r"^[0-9a-f]{32}$")
         self.assertEqual(self.client.get(f"/api/model-runs/{body['run_id']}").status_code, 200)
@@ -333,7 +333,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(failed.status_code, 403)
         direct = client.post("/api/chat", json={"model": "qwen2.5-coder:7b-instruct-q4_K_M", "prompt": "fallback"})
         self.assertEqual(direct.status_code, 200)
-        self.assertEqual(direct.json()["content"], "Answered: fallback")
+        self.assertIn("USER TASK (authoritative):\nfallback", direct.json()["content"])
 
     def test_broker_status_grant_execute_and_revoke_are_project_scoped(self):
         project = Path(self.temporary_directory.name) / "broker-project"
@@ -454,7 +454,7 @@ class WebApiTests(unittest.TestCase):
         response = self.client.post("/api/chat", json={"model": "qwen", "prompt": "hello"})
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["content"], "Answered: hello")
+        self.assertIn("USER TASK (authoritative):\nhello", response.json()["content"])
         with closing(sqlite3.connect(self.workspace.data_root / "core" / "tasks.sqlite")) as database:
             command = database.execute("SELECT command_json FROM tasks").fetchone()[0]
             event_types = [
@@ -493,6 +493,7 @@ class WebApiTests(unittest.TestCase):
             event for event in response.json()["events"] if event["event_type"] == "inference.completed"
         )
         result = completed["payload"]["result"]
+        self.assertIn("USER TASK (authoritative):\nPlan an evidence-driven", self.service.last_prompt)
         self.assertIn("ATTACHED SKILL rea-agents:reverse-engineer-anything", self.service.last_prompt)
         self.assertEqual(result["attached_skillsets"], ["planning"])
         self.assertEqual(result["attached_skills"][0]["reference"], "rea-agents:reverse-engineer-anything")
@@ -953,6 +954,27 @@ class WebApiTests(unittest.TestCase):
         restored = self.workspace.get_session(session.id)
         self.assertEqual([message.role for message in restored.messages], ["user", "assistant"])
         self.assertEqual(restored.messages[0].content, "Review the attachment")
+
+    def test_direct_chat_uses_the_same_authoritative_task_boundary_as_batch_runs(self):
+        from web_app.attachments import AttachmentService
+
+        session = self.workspace.create_session()
+        AttachmentService(self.workspace).import_text(
+            session.id,
+            "This is stale test context and must not redefine current system capabilities.",
+            "old-evidence.txt",
+        )
+
+        response = self.client.post(
+            "/api/chat",
+            json={"model": "qwen", "prompt": "Report current capabilities", "session_id": session.id},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("USER TASK (authoritative):\nReport current capabilities", self.service.last_prompt)
+        self.assertIn("ACTIVE SKILLS AND REFERENCE CONTEXT:", self.service.last_prompt)
+        self.assertIn("old-evidence.txt", self.service.last_prompt)
+        self.assertIn("Keep facts from supplied context distinct", self.service.last_prompt)
 
     def test_chat_recalculates_recommendations_and_returns_attachment_metadata(self):
         from web_app.models import SkillPack, SkillRecord
