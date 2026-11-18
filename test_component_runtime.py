@@ -167,6 +167,20 @@ class ComponentRuntimeTests(unittest.TestCase):
         self.assertEqual(127, observation.exit_code)
         self.assertIn("missing executable", observation.output)
 
+    def test_executable_bundle_probes_cli_companion_instead_of_desktop_app(self):
+        plan = self._plan("executable", ("craft-anything", "craft-anything-cli"))
+        from web_app.core.component_runtime import InstalledRuntime
+        runtime = InstalledRuntime(
+            component_id=plan.component_id, runtime_root="fixture", runtime_kind="executable",
+            entry_points={"craft-anything": ("desktop",), "craft-anything-cli": ("cli",)},
+        )
+        outcome = subprocess.CompletedProcess([], 0, "cli help", "")
+        with patch("web_app.core.component_probe.subprocess.run", return_value=outcome) as run:
+            observation = ComponentProbe().probe(plan, runtime)
+        self.assertTrue(observation.succeeded)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0], ("cli", "--help"))
+
     @staticmethod
     def _plan(runtime_kind, entry_points):
         return ComponentPlan(

@@ -71,7 +71,12 @@ def load_mcp_server_configs(path: Path) -> tuple[McpServerConfig, ...]:
     return tuple(configs)
 
 
-def build_mcp_adapters(path: Path, *, rea_provider_root: Path | None = None):
+def build_mcp_adapters(
+    path: Path,
+    *,
+    rea_provider_root: Path | None = None,
+    craft_command: tuple[str, ...] | None = None,
+):
     from web_app.core.mcp_adapter import McpAdapter
 
     adapters = {}
@@ -79,6 +84,19 @@ def build_mcp_adapters(path: Path, *, rea_provider_root: Path | None = None):
     configs = list(load_mcp_server_configs(path))
     if rea_provider_root is not None and not any(config.name == "rea" for config in configs):
         configs.append(McpServerConfig(name="rea", command="managed", allowed_tools=frozenset({"*"})))
+    if craft_command:
+        command, *base_args = craft_command
+        configured = {config.name for config in configs}
+        for name, mode in (("craft-clean-room", "--clean-room"), ("craft-deep", "--deep")):
+            if name not in configured:
+                configs.append(McpServerConfig(
+                    name=name,
+                    command=command,
+                    args=(*base_args, mode, "mcp"),
+                    allowed_tools=frozenset({"*"}),
+                    startup_timeout_seconds=60,
+                    tool_timeout_seconds=900,
+                ))
     for config in configs:
         if config.name == "rea" and rea_provider_root is not None and (Path(rea_provider_root) / "state.sqlite").is_file():
             backend = LeasedReaBackend(Path(rea_provider_root), config)

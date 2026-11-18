@@ -36,3 +36,17 @@ class ComponentCatalog:
             ))
         return tuple(result)
 
+
+def active_component_command(root: str | Path, command_name: str) -> tuple[str, ...] | None:
+    registry_path = Path(root) / "registry.sqlite"
+    if not registry_path.is_file():
+        return None
+    registry = ComponentRegistry(registry_path)
+    try:
+        return next((
+            component.commands[command_name]
+            for component in ComponentCatalog(registry).resolve_components("")
+            if command_name in component.commands
+        ), None)
+    finally:
+        registry.close()

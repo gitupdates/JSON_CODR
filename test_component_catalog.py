@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_app.core.component_catalog import ComponentCatalog
+from web_app.core.component_catalog import ComponentCatalog, active_component_command
 from web_app.core.component_registry import ComponentRegistry, ComponentRequest, ComponentScope, ComponentSource
 from web_app.core.component_shims import ShimManager
 
@@ -26,6 +26,18 @@ class ComponentCatalogTests(unittest.TestCase):
             self.assertTrue((Path(temporary) / "borg-one-shared.cmd").is_file())
             self.assertTrue((Path(temporary) / "borg-two-shared.cmd").is_file())
             self.assertFalse((Path(temporary) / "shared.cmd").exists())
+
+    def test_active_component_command_reads_and_closes_global_registry(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            registry = ComponentRegistry(root / "registry.sqlite")
+            self._activate(registry, temporary, "craft-anything-cli", ComponentScope.global_)
+            registry.close()
+
+            command = active_component_command(root, "craft-anything-cli")
+
+            self.assertEqual(command, ("cmd", "/c", "exit", "0"))
+            (root / "registry.sqlite").unlink()
 
     @staticmethod
     def _activate(registry, temporary, name, scope, project_id=None):

@@ -212,6 +212,21 @@ class StdioMcpBackendTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(set(adapters), {"mcp.rea"})
             self.assertIsInstance(backends[0], LeasedReaBackend)
 
+    def test_active_craft_component_registers_clean_room_and_deep_mcp_adapters(self):
+        with tempfile.TemporaryDirectory() as directory:
+            command = ("D:/components/craft-anything-cli.exe",)
+
+            adapters, backends = build_mcp_adapters(
+                Path(directory) / "mcp_servers.json", craft_command=command,
+            )
+
+            self.assertEqual(set(adapters), {"mcp.craft-clean-room", "mcp.craft-deep"})
+            configs = {backend.config.name: backend.config for backend in backends}
+            self.assertEqual(configs["craft-clean-room"].command, command[0])
+            self.assertEqual(configs["craft-clean-room"].args, ("--clean-room", "mcp"))
+            self.assertEqual(configs["craft-deep"].args, ("--deep", "mcp"))
+            self.assertEqual(configs["craft-deep"].allowed_tools, frozenset({"*"}))
+
     async def test_rejects_repeated_pagination_cursor(self):
         backend = StdioMcpBackend(McpServerConfig(name="loop", command="unused"))
 

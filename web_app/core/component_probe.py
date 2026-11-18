@@ -26,11 +26,15 @@ class ComponentProbe:
         else:
             observations = []
             exit_code = 0
-            if len(runtime.entry_points) > 64:
+            commands = runtime.entry_points
+            if runtime.runtime_kind == "executable":
+                cli_bases = {name[:-4] for name in commands if name.endswith("-cli")}
+                commands = {name: command for name, command in commands.items() if name not in cli_bases}
+            if len(commands) > 64:
                 raise ValueError("component exposes more than 64 commands")
             environment = _probe_environment()
-            command_timeout = max(1.0, timeout / len(runtime.entry_points))
-            for name, command in runtime.entry_points.items():
+            command_timeout = max(1.0, timeout / len(commands))
+            for name, command in commands.items():
                 try:
                     completed = subprocess.run(
                         (*command, "--help"), capture_output=True, text=True, timeout=command_timeout,

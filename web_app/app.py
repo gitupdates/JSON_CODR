@@ -45,6 +45,7 @@ from web_app.core.project_adapter import ProjectAdapter
 from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
 from web_app.core.component_manager import ComponentManager
+from web_app.core.component_catalog import active_component_command
 from web_app.core.component_adapter import LazyComponentExecutionAdapter
 from web_app.core.terminal_adapter import TerminalAdapter
 from web_app.dependencies import DependencyService
@@ -290,9 +291,11 @@ def create_app(
                 "component.install": component_adapter,
                 "component.execute": LazyComponentExecutionAdapter(get_component_manager),
             }
+            craft_command = active_component_command(component_root, "craft-anything-cli")
             mcp_adapters, mcp_backends = build_mcp_adapters(
                 workspace.data_root / "mcp_servers.json",
                 rea_provider_root=workspace.data_root / "providers" / "rea",
+                craft_command=craft_command,
             )
             adapters.update(mcp_adapters)
             core_mcp_backends.extend(mcp_backends)
