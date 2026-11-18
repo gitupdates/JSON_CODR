@@ -658,6 +658,14 @@ class ExecutionPolicySettings(BaseModel):
     project_overrides: Dict[str, Dict[str, PolicyOverride]] = Field(default_factory=dict)
 
 
+class DesignerSettings(BaseModel):
+    enabled: bool = False
+    default_mode: Literal["project", "json_codr"] = "project"
+    snap: bool = True
+    grid_size: int = Field(default=8, ge=1, le=64)
+    autosave: bool = True
+
+
 class SystemSettings(BaseModel):
     version: int = 3
     app_version: str = APP_VERSION
@@ -666,6 +674,7 @@ class SystemSettings(BaseModel):
     skill_routing: SkillRoutingSettings = Field(default_factory=SkillRoutingSettings)
     gpu_optimization: GpuOptimizationSettings = Field(default_factory=GpuOptimizationSettings)
     execution_policy: ExecutionPolicySettings = Field(default_factory=ExecutionPolicySettings)
+    designer: DesignerSettings = Field(default_factory=DesignerSettings)
 
 
 class SettingsUpdate(BaseModel):
@@ -674,6 +683,7 @@ class SettingsUpdate(BaseModel):
     skill_routing: Optional[SkillRoutingSettings] = None
     gpu_optimization: Optional[GpuOptimizationSettings] = None
     execution_policy: Optional[ExecutionPolicySettings] = None
+    designer: Optional[DesignerSettings] = None
 
 
 class SkillScanRequest(BaseModel):
