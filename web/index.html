@@ -199,7 +199,21 @@
       </div>
       <div class="workspace-separator workspace-separator-bottom" role="separator" aria-label="Resize execution tools" aria-orientation="horizontal" aria-valuemin="140" aria-valuemax="600" aria-valuenow="260" tabindex="0" hidden></div>
       <section id="workspace-bottom-dock" class="workspace-dock workspace-bottom-dock" aria-label="Execution tools" hidden></section>
-      <div id="workspace-statusbar" class="workspace-statusbar" role="status" aria-live="polite"><span>Ready</span><span>Local workspace</span></div>
+      <div id="workspace-statusbar" class="workspace-statusbar" role="status" aria-live="polite"><span id="workspace-persistent-notice">Ready</span><button id="workspace-activity-stop" class="secondary" type="button" hidden>Stop</button><span>Local workspace</span></div>
+      </section>
+
+      <section id="workspace-files-panel" class="workspace-tool-panel" aria-label="Task files" tabindex="-1" hidden>
+        <div class="workspace-tool-head"><strong>Files</strong><button type="button" data-manage-destination="context">Manage files</button></div>
+        <button id="workspace-files-attach" class="secondary" type="button">Attach files</button>
+        <div id="workspace-files-list" class="workspace-quick-list"><p class="meta">No files attached.</p></div>
+      </section>
+      <section id="workspace-skills-panel" class="workspace-tool-panel" aria-label="Task skills" tabindex="-1" hidden>
+        <div class="workspace-tool-head"><strong>Skills</strong><button type="button" data-manage-destination="skills">Manage skills</button></div>
+        <div id="workspace-skills-list" class="workspace-quick-list"><p class="meta">No skills installed.</p></div>
+      </section>
+      <section id="workspace-activity-panel" class="workspace-tool-panel" aria-label="Task activity summary" tabindex="-1" hidden>
+        <div class="workspace-tool-head"><strong>Activity</strong></div>
+        <div id="workspace-activity-notice" class="workspace-activity-notice" aria-live="polite">Ready</div>
       </section>
 
       <aside id="context-panel" class="context-panel app-view" data-view="context" aria-label="Attachment context" hidden>
@@ -304,6 +318,11 @@
           <div class="actions"><button id="component-plan" class="secondary" type="button">Review installation plan</button><button id="component-install" class="primary" type="button" disabled>Install verified component</button></div>
           <pre id="component-plan-details" class="attachment-preview" hidden></pre>
           <div id="component-list" class="dependency-list"><p class="meta">No verified components loaded.</p></div>
+        </section>
+        <section class="dependency-review" aria-labelledby="disabled-components-heading">
+          <div class="dependency-head"><div><span class="eyebrow">INACTIVE</span><strong id="disabled-components-heading">Disabled components</strong></div></div>
+          <p class="meta">Unavailable tools and models stay out of the Workspace until their requirements are satisfied.</p>
+          <div id="disabled-components" class="dependency-list"><p class="meta">No disabled components.</p></div>
         </section>
       </aside>
 

@@ -161,6 +161,11 @@ body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 50% -
 .workspace-task-canvas > .hero .intro { margin: 0; max-width: 760px; font-size: 14px; line-height: 1.55; }
 .workspace-task-canvas > .workspace { box-shadow: none; }
 .workspace-dock { min-width: 0; overflow: auto; border: 1px solid var(--line); background: var(--surface-panel-solid); }
+.workspace-tool-panel { min-width: 0; padding: 14px; background: var(--surface-panel-solid); }
+.workspace-tool-head, .workspace-quick-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.workspace-quick-list { display: grid; gap: 8px; margin-top: 10px; }
+.workspace-skills-list label { display: block; }
+.workspace-activity-notice { margin-top: 10px; color: var(--text-muted); }
 .workspace-left-dock { width: var(--workspace-left-size); }
 .workspace-right-dock { width: var(--workspace-right-size); }
 .workspace-bottom-dock { height: var(--workspace-bottom-size); }

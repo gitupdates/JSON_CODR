@@ -137,6 +137,16 @@ const elements = {
   workspaceSeparators: [...document.querySelectorAll(".workspace-separator")],
   workspaceLayoutMenu: document.querySelector("#workspace-layout-menu"),
   workspaceLayoutPopover: document.querySelector("#workspace-layout-popover"),
+  workspaceFilesPanel: document.querySelector("#workspace-files-panel"),
+  workspaceFilesList: document.querySelector("#workspace-files-list"),
+  workspaceFilesAttach: document.querySelector("#workspace-files-attach"),
+  workspaceSkillsPanel: document.querySelector("#workspace-skills-panel"),
+  workspaceSkillsList: document.querySelector("#workspace-skills-list"),
+  workspaceActivityPanel: document.querySelector("#workspace-activity-panel"),
+  workspaceActivityNotice: document.querySelector("#workspace-activity-notice"),
+  workspacePersistentNotice: document.querySelector("#workspace-persistent-notice"),
+  workspaceActivityStop: document.querySelector("#workspace-activity-stop"),
+  disabledComponents: document.querySelector("#disabled-components"),
   workspaceTabs: [...document.querySelectorAll("[data-workspace-mode]")],
   workspaceViews: [...document.querySelectorAll("[data-workspace-view]")],
   workspaceAgentForm: document.querySelector("#workspace-agent-form"),
@@ -225,6 +235,8 @@ let restoredConversationSessionId = null;
 function handleCoreRecord(record) {
   if (record.task_id !== activeCoreTaskId) return;
   taskView.render(record);
+  const latestEvent = (record.events || []).at(-1);
+  renderWorkspaceActivityNotice(latestEvent?.event_type || record.status, record.status);
   const message = conversationView.apply(record);
   const completion = [...(record.events || [])].reverse().find((item) => item.event_type === "inference.completed");
   if (completion) {
@@ -271,6 +283,81 @@ function registerWorkspacePanel({ id, element, allowedPlacements, managementDest
   if (!id || !element || workspacePanels.has(id)) return false;
   workspacePanels.set(id, { id, element, allowedPlacements, managementDestination, onShown });
   return true;
+}
+
+function getActiveWorkspacePanels(components) {
+  const disabled = new Set(
+    components.filter((component) => component.available === false).map((component) => component.workspacePanel).filter(Boolean),
+  );
+  return ["files", "skills", "activity", "terminal"].filter((panelId) => !disabled.has(panelId));
+}
+
+function renderDisabledComponents(components) {
+  if (!elements.disabledComponents) return;
+  const disabled = components.filter((component) => component.available === false);
+  elements.disabledComponents.replaceChildren();
+  if (!disabled.length) {
+    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "No disabled components.";
+    elements.disabledComponents.append(empty); return;
+  }
+  for (const component of disabled) {
+    const unavailableReason = component.reason || "Required runtime or installation was not verified.";
+    const statusSource = component.statusSource || "component registry";
+    const row = document.createElement("article"); row.className = "dependency-item";
+    const title = document.createElement("strong"); title.textContent = component.name || component.component_id;
+    const detail = document.createElement("p"); detail.className = "meta";
+    detail.textContent = `${unavailableReason} · Status source: ${statusSource}`;
+    const enable = document.createElement("button"); enable.type = "button"; enable.className = "secondary";
+    enable.textContent = "Enable or configure";
+    enable.addEventListener("click", () => selectDestination(component.destination || "settings"));
+    row.append(title, detail, enable); elements.disabledComponents.append(row);
+  }
+}
+
+function renderWorkspaceFiles(attachments) {
+  if (!elements.workspaceFilesList) return;
+  elements.workspaceFilesList.replaceChildren();
+  if (!attachments.length) {
+    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "No files attached.";
+    elements.workspaceFilesList.append(empty); return;
+  }
+  for (const attachment of attachments) {
+    const row = document.createElement("div"); row.className = "workspace-quick-row";
+    const name = document.createElement("span"); name.textContent = attachment.display_name;
+    const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "Remove";
+    remove.addEventListener("click", async () => {
+      await fetch(`/api/sessions/${sessionId}/attachments/${attachment.id}`, { method: "DELETE" });
+      await loadAttachments();
+    });
+    row.append(name, remove); elements.workspaceFilesList.append(row);
+  }
+}
+
+function renderWorkspaceSkills(packs, selected) {
+  if (!elements.workspaceSkillsList) return;
+  elements.workspaceSkillsList.replaceChildren();
+  const skills = packs.flatMap((pack) => pack.skills.map((skill) => ({ pack, skill })));
+  if (!skills.length) {
+    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "No skills installed.";
+    elements.workspaceSkillsList.append(empty); return;
+  }
+  for (const { pack, skill } of skills) {
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input"); checkbox.type = "checkbox";
+    checkbox.value = `${pack.id}:${skill.id}`; checkbox.checked = selected.has(checkbox.value); checkbox.disabled = !skill.enabled;
+    checkbox.addEventListener("change", async () => {
+      const selected = [...elements.workspaceSkillsList.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
+      await saveSkillSelection(selected); await loadSkills();
+    });
+    label.append(checkbox, document.createTextNode(` ${skill.name}`)); elements.workspaceSkillsList.append(label);
+  }
+}
+
+function renderWorkspaceActivityNotice(message = "Ready", status = "idle") {
+  const text = status === "running" ? `${message} · Stop is available in Activity` : message;
+  if (elements.workspaceActivityNotice) elements.workspaceActivityNotice.textContent = text;
+  if (elements.workspacePersistentNotice) elements.workspacePersistentNotice.textContent = text;
+  if (elements.workspaceActivityStop) elements.workspaceActivityStop.hidden = status !== "running";
 }
 
 function workspaceRegionForPanel(state, panelId) {
@@ -1756,6 +1843,7 @@ async function loadAttachments() {
   await ensureSession();
   elements.exportArchive.href = `/api/sessions/${sessionId}/archive.zip`;
   const attachments = await fetch(`/api/sessions/${sessionId}/attachments`).then((response) => response.json());
+  renderWorkspaceFiles(attachments);
   elements.contextCount.textContent = `${attachments.length} item${attachments.length === 1 ? "" : "s"}`;
   elements.attachmentList.replaceChildren();
   if (!attachments.length) elements.attachmentList.innerHTML = '<p class="meta">No context attached.</p>';
@@ -1808,8 +1896,8 @@ async function loadAttachments() {
   await loadSkills();
 }
 
-async function saveSkillSelection() {
-  const selected = [...elements.skillList.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
+async function saveSkillSelection(selected = null) {
+  selected = selected || [...elements.skillList.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
   const response = await fetch(`/api/sessions/${sessionId}/skills`, {
     method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ selected }),
   });
@@ -1845,6 +1933,7 @@ async function loadSkills() {
   ]);
   if (generation !== skillLoadGeneration) return;
   const selected = new Set(session.selected_skill_ids || []);
+  renderWorkspaceSkills(packs, selected);
   const content = document.createDocumentFragment();
   if (!packs.length) {
     const empty = document.createElement("p");
@@ -2626,6 +2715,23 @@ document.addEventListener("keydown", (event) => {
   }
 });
 registerWorkspacePanel({
+  id: "files",
+  element: elements.workspaceFilesPanel,
+  allowedPlacements: ["left", "right", "bottom"],
+  managementDestination: "context",
+});
+registerWorkspacePanel({
+  id: "skills",
+  element: elements.workspaceSkillsPanel,
+  allowedPlacements: ["left", "right", "bottom"],
+  managementDestination: "skills",
+});
+registerWorkspacePanel({
+  id: "activity",
+  element: elements.workspaceActivityPanel,
+  allowedPlacements: ["right", "left", "bottom"],
+});
+registerWorkspacePanel({
   id: "terminal",
   element: elements.terminalPanel,
   allowedPlacements: ["bottom", "left", "right"],
@@ -2634,12 +2740,16 @@ registerWorkspacePanel({
     requestAnimationFrame(() => terminalFitAddon?.fit());
   },
 });
+elements.workspaceFilesAttach?.addEventListener("click", () => elements.attachmentInput.click());
+for (const button of document.querySelectorAll("[data-manage-destination]")) {
+  button.addEventListener("click", () => selectDestination(button.dataset.manageDestination));
+}
 renderWorkspaceLayout();
 initializeXterm();
 elements.workspaceProjectRoot.value = localStorage.getItem("json_codr_workspace_project_root") || ".";
 window.addEventListener("beforeunload", persistTerminalSessions);
 restoreTerminalSessions().catch(() => localStorage.removeItem(TERMINAL_SESSIONS_KEY));
-loadApplication().then(() => queueSettingsLoad()).catch((error) => showError(error.message));
+loadApplication().then(() => queueSettingsLoad()).then(() => loadComponents()).catch((error) => showError(error.message));
 loadHardwareStatus().catch((error) => showError(error.message));
 loadAttachments().catch((error) => showError(error.message));
 loadSkillsets().catch((error) => showError(error.message));
@@ -2648,12 +2758,29 @@ let pendingComponentPlan = null;
 async function loadComponents() {
   const container = document.querySelector("#component-list");
   if (!container) return;
-  const components = await coreClient.listComponents("");
+  const installedComponents = await coreClient.listComponents("");
+  const unavailableModels = models.filter((model) => !model.installed).map((model) => ({
+    component_id: model.name,
+    name: model.name,
+    available: false,
+    reason: "Model is configured but not installed in Ollama.",
+    statusSource: "Ollama model roster",
+    destination: "hardware",
+  }));
+  const components = [
+    ...installedComponents.map((component) => ({ ...component, available: component.state !== "quarantined", statusSource: "BORG component registry" })),
+    ...unavailableModels,
+  ];
+  renderDisabledComponents(components);
+  const activePanels = new Set(getActiveWorkspacePanels(components));
+  for (const [panelId, panel] of workspacePanels) {
+    if (!activePanels.has(panelId)) panel.element.hidden = true;
+  }
   container.replaceChildren();
-  if (!components.length) {
+  if (!installedComponents.length) {
     const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "No verified components loaded."; container.append(empty); return;
   }
-  components.forEach((component) => {
+  installedComponents.forEach((component) => {
     const row = document.createElement("article"); row.className = "dependency-item";
     const title = document.createElement("strong"); title.textContent = component.component_id;
     const detail = document.createElement("p"); detail.className = "meta"; detail.textContent = `${component.runtime_kind} · generation ${component.generation} · verified brokered capability`;
@@ -2682,4 +2809,4 @@ componentInstallButton?.addEventListener("click", async () => {
   pendingComponentPlan = null;
   await loadComponents();
 });
-loadComponents().catch((error) => showError(error.message));
+elements.workspaceActivityStop?.addEventListener("click", () => elements.taskStop.click());

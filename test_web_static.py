@@ -137,6 +137,39 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('onShown: () =>', script)
         self.assertIn('openWorkspacePanel("terminal", "bottom")', script)
 
+    def test_task_context_panels_reuse_existing_state_and_link_to_management(self):
+        html = self.client.get("/").text
+        script = self.client.get("/static/app.js").text
+
+        for identifier in (
+            "workspace-files-panel", "workspace-files-list", "workspace-files-attach",
+            "workspace-skills-panel", "workspace-skills-list",
+            "workspace-activity-panel", "workspace-activity-notice",
+        ):
+            self.assertIn(f'id="{identifier}"', html)
+        self.assertIn('data-manage-destination="context"', html)
+        self.assertIn('data-manage-destination="skills"', html)
+        for panel_id in ("files", "skills", "activity"):
+            self.assertIn(f'id: "{panel_id}"', script)
+        self.assertIn("renderWorkspaceFiles", script)
+        self.assertIn("renderWorkspaceSkills", script)
+        self.assertIn("saveSkillSelection(selected)", script)
+        self.assertIn("renderWorkspaceActivityNotice", script)
+        self.assertNotIn('onShown: () => loadAttachments()', script)
+        self.assertNotIn('onShown: () => loadSkills()', script)
+
+    def test_disabled_components_are_settings_only_and_workspace_panels_are_filtered(self):
+        html = self.client.get("/").text
+        script = self.client.get("/static/app.js").text
+
+        self.assertIn('id="disabled-components"', html)
+        self.assertIn("function getActiveWorkspacePanels", script)
+        self.assertIn("function renderDisabledComponents", script)
+        self.assertIn("unavailableReason", script)
+        self.assertIn("statusSource", script)
+        self.assertIn("Enable or configure", script)
+        self.assertIn("getActiveWorkspacePanels(components)", script)
+
     def test_plain_text_api_failures_are_rendered_without_json_parse_errors(self):
         script = self.client.get("/static/app.js").text
 
