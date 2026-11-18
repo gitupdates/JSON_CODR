@@ -27,6 +27,17 @@ class TaskStatus(str, Enum):
     cancel_requested = "cancel_requested"
 
 
+class EffectState(str, Enum):
+    pending = "pending"
+    leased = "leased"
+    running = "running"
+    succeeded = "succeeded"
+    failed = "failed"
+    cancel_requested = "cancel_requested"
+    cancelled = "cancelled"
+    unknown_requires_reconciliation = "unknown_requires_reconciliation"
+
+
 class ExecutionMode(str, Enum):
     native = "native"
     brokered = "brokered"
@@ -51,6 +62,20 @@ class CapabilityStatus(str, Enum):
     missing_dependency = "missing_dependency"
     missing_model_identity = "missing_model_identity"
     unsupported_route = "unsupported_route"
+
+
+class CriterionKind(str, Enum):
+    command_succeeds = "command_succeeds"
+    artifact_exists = "artifact_exists"
+    project_state = "project_state"
+    user_acceptance = "user_acceptance"
+
+
+class CriterionStatus(str, Enum):
+    pending = "pending"
+    passed = "passed"
+    failed = "failed"
+    blocked = "blocked"
 
 
 class FrozenContract(BaseModel):
@@ -126,6 +151,131 @@ class CapabilityResult(VersionedContract):
     reason: str | None = None
 
 
+class CompletionCriterion(VersionedContract):
+    criterion_id: Identifier
+    kind: CriterionKind
+    description: str = Field(min_length=1, max_length=2048)
+    parameters: Mapping[str, JsonValue] = Field(default_factory=dict)
+
+    @field_validator("parameters", mode="after")
+    @classmethod
+    def freeze_parameters(cls, value: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+        _validate_json_size(value)
+        return _freeze_json(value)
+
+    @field_serializer("parameters")
+    def serialize_parameters(self, value: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+        return _thaw_json(value)
+
+
+class GoalSpec(VersionedContract):
+    goal_id: Identifier
+    revision: int = Field(ge=1)
+    objective: str = Field(min_length=1, max_length=8192)
+    criteria: tuple[CompletionCriterion, ...] = Field(min_length=1)
+    accepted: bool = False
+
+    @model_validator(mode="after")
+    def unique_criteria(self) -> "GoalSpec":
+        identifiers = [item.criterion_id for item in self.criteria]
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("criterion identifiers must be unique")
+        return self
+
+
+class PlannedStep(VersionedContract):
+    step_id: Identifier
+    plan_id: Identifier
+    plan_revision: int = Field(ge=1)
+    criterion_ids: tuple[Identifier, ...] = Field(min_length=1)
+    capability_id: str = Field(pattern=r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
+    operation: str = Field(min_length=1, max_length=256)
+    arguments: Mapping[str, JsonValue] = Field(default_factory=dict)
+
+    @field_validator("arguments", mode="after")
+    @classmethod
+    def freeze_arguments(cls, value: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+        _validate_json_size(value)
+        return _freeze_json(value)
+
+    @field_serializer("arguments")
+    def serialize_arguments(self, value: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+        return _thaw_json(value)
+
+
+class PlanRevision(VersionedContract):
+    plan_id: Identifier
+    revision: int = Field(ge=1)
+    goal_id: Identifier
+    goal_revision: int = Field(ge=1)
+    steps: tuple[PlannedStep, ...] = ()
+
+    @model_validator(mode="after")
+    def consistent_steps(self) -> "PlanRevision":
+        identifiers = [item.step_id for item in self.steps]
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("step identifiers must be unique")
+        if any(item.plan_id != self.plan_id or item.plan_revision != self.revision for item in self.steps):
+            raise ValueError("steps must belong to this plan revision")
+        return self
+
+
+class EvidenceRef(VersionedContract):
+    evidence_id: Identifier
+    task_id: TaskId
+    project_id: ProjectId
+    goal_id: Identifier
+    goal_revision: int = Field(ge=1)
+    criterion_id: Identifier
+    source_ref: str = Field(min_length=1, max_length=2048)
+    project_fingerprint: Digest
+    observed_at: datetime
+
+
+class VerificationReport(VersionedContract):
+    report_id: Identifier
+    task_id: TaskId
+    project_id: ProjectId
+    goal_id: Identifier
+    goal_revision: int = Field(ge=1)
+    expected_criterion_ids: tuple[Identifier, ...] = Field(min_length=1)
+    results: Mapping[Identifier, CriterionStatus]
+    evidence: tuple[EvidenceRef, ...] = ()
+    verified_at: datetime
+
+    @field_validator("results", mode="after")
+    @classmethod
+    def freeze_results(cls, value: Mapping[Identifier, CriterionStatus]) -> Mapping[Identifier, CriterionStatus]:
+        return frozendict(value)
+
+    @field_serializer("results")
+    def serialize_results(self, value: Mapping[Identifier, CriterionStatus]) -> dict[str, str]:
+        return {key: status.value for key, status in value.items()}
+
+    @model_validator(mode="after")
+    def complete_result_set(self) -> "VerificationReport":
+        if set(self.results) != set(self.expected_criterion_ids):
+            raise ValueError("verification results must exactly match expected criteria")
+        evidence_by_criterion = {item.criterion_id for item in self.evidence}
+        passed = {criterion_id for criterion_id, status in self.results.items() if status is CriterionStatus.passed}
+        if not passed.issubset(evidence_by_criterion):
+            raise ValueError("passing verification results require criterion evidence")
+        if any(
+            item.task_id != self.task_id
+            or item.project_id != self.project_id
+            or item.goal_id != self.goal_id
+            or item.goal_revision != self.goal_revision
+            or item.criterion_id not in self.results
+            for item in self.evidence
+        ):
+            raise ValueError("verification evidence does not belong to this report")
+        return self
+
+    @property
+    def satisfied(self) -> bool:
+        return bool(self.results) and all(status is CriterionStatus.passed for status in self.results.values())
+
+
 class TaskCommand(VersionedContract):
     command_id: CommandId
     task_id: TaskId
@@ -170,11 +320,51 @@ class TaskEvent(_TaskEventContent):
     event_id: UUID
     task_id: TaskId
     sequence: int = Field(ge=0)
+    global_sequence: int = Field(ge=0)
     source: str = Field(min_length=1)
     subject: str = Field(min_length=1)
     occurred_at: datetime
     previous_event_digest: Digest | None = None
     event_digest: Digest
+
+
+class _EffectIntentContent(VersionedContract):
+    effect_id: Identifier
+    capability_id: Identifier
+    operation: Identifier
+    payload: Mapping[str, JsonValue] = Field(default_factory=dict)
+    principal: Identifier
+    project_root: str = Field(min_length=1, max_length=4096)
+    effect_class: Identifier
+    approval_required: bool
+    retry_classification: Literal["never", "safe", "reconcile_before_retry"]
+    reconciler_id: Identifier
+    correlation_id: Identifier
+    causation_id: Identifier
+
+    @field_validator("payload", mode="after")
+    @classmethod
+    def freeze_payload(cls, value: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+        _validate_json_size(value)
+        return _freeze_json(value)
+
+    @field_serializer("payload")
+    def serialize_payload(self, value: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+        return _thaw_json(value)
+
+
+class EffectIntentDraft(_EffectIntentContent):
+    pass
+
+
+class EffectIntent(_EffectIntentContent):
+    task_id: TaskId
+    state: EffectState
+    attempt_count: int = Field(ge=0)
+    lease_owner: Identifier | None = None
+    lease_expires_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class TaskRecord(VersionedContract):
