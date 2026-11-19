@@ -4,14 +4,16 @@ import sys
 from pathlib import Path
 
 from web_app.core.adapters import AdapterEvent, CapabilityCall, ExecutionContext
+from web_app.core.command_runtime import CommandPolicy, CommandRuntime
 
 
 class NativePrimitiveAdapter:
     capability_ids = frozenset({"native.read", "native.write", "native.edit", "native.shell"})
 
-    def __init__(self, project, terminal) -> None:
+    def __init__(self, project, terminal, command_runtime: CommandRuntime | None = None) -> None:
         self._project = project
         self._terminal = terminal
+        self._commands = command_runtime or CommandRuntime()
 
     async def execute(self, call: CapabilityCall, context: ExecutionContext):
         if call.capability_id not in self.capability_ids:
@@ -54,16 +56,19 @@ class NativePrimitiveAdapter:
         timeout = call.arguments.get("timeout", 60)
         if not isinstance(timeout, int) or not 1 <= timeout <= 300:
             raise ValueError("native shell timeout must be between 1 and 300 seconds")
-        command = call.arguments.get("command")
-        if not isinstance(command, str) or not command:
-            raise ValueError("native shell requires a command")
-        shell = str(call.arguments.get("shell", "powershell" if sys.platform == "win32" else "sh"))
+        argv = call.arguments.get("argv")
+        if not isinstance(argv, (list, tuple)) or not argv or not all(isinstance(item, str) and item for item in argv):
+            raise ValueError("native shell requires an exact argv array")
         yield AdapterEvent(
             event_type="native.shell.started",
-            payload={"route": "native", "timeout_seconds": timeout, "shell": shell},
+            payload={"route": "native", "timeout_seconds": timeout, "argv": list(argv)},
         )
-        result = await self._terminal.run_bounded(command, Path(call.project_root), shell, timeout)
+        result = await self._commands.run(CommandPolicy(
+            argv=tuple(argv), cwd=str(call.arguments.get("cwd", ".")),
+            timeout_seconds=timeout,
+            network_approved=bool(call.arguments.get("network_approved", False)),
+        ), project_root=call.project_root)
         yield AdapterEvent(
             event_type="native.shell.completed",
-            payload={"route": "native", "timeout_seconds": timeout, **result},
+            payload={"route": "native", "timeout_seconds": timeout, **result.model_dump(mode="json")},
         )

@@ -82,13 +82,14 @@ class NativePrimitiveTests(unittest.IsolatedAsyncioTestCase):
 
         terminal_service = _TerminalService()
         terminal = TerminalAdapter(terminal_service)
-        terminal.run_bounded = AsyncMock(return_value={
-            "exit_code": 0,
-            "stdout": "verified\n",
-            "stderr": "",
-            "timed_out": False,
-        })
-        adapter = NativePrimitiveAdapter(ProjectAdapter(self.state), terminal)
+        from web_app.core.command_runtime import CommandResult
+        commands = AsyncMock()
+        commands.run.return_value = CommandResult(
+            argv=("python", "-V"), cwd=str(self.root), exit_code=0,
+            stdout="verified\n", stderr="", timed_out=False, truncated=False,
+            isolation_level="test",
+        )
+        adapter = NativePrimitiveAdapter(ProjectAdapter(self.state), terminal, commands)
         (self.root / "source.txt").write_text("hello\n", encoding="utf-8")
 
         read = CapabilityCall(
@@ -106,12 +107,12 @@ class NativePrimitiveTests(unittest.IsolatedAsyncioTestCase):
             capability_id="native.shell",
             operation="shell",
             project_root=str(self.root),
-            arguments={"command": "Write-Output verified", "timeout": 15},
+            arguments={"argv": ["python", "-V"], "timeout": 15},
         )
         events = [event async for event in adapter.execute(shell, self.context)]
         self.assertEqual(events[0].payload["route"], "native")
         self.assertEqual(events[-1].payload["exit_code"], 0)
-        terminal.run_bounded.assert_awaited_once_with("Write-Output verified", self.root, "powershell", 15)
+        commands.run.assert_awaited_once()
 
 
 if __name__ == "__main__":
