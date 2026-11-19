@@ -2,11 +2,12 @@ import tempfile
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid7
+from uuid import NAMESPACE_URL, uuid5, uuid7
 
 from web_app.core.adapters import AdapterEvent, CapabilityCall
 from web_app.core.adapters import CapabilityExecutionError
 from web_app.core.agent_runtime import AgentRuntime
+from web_app.core.agent_services import EventEvidenceVerifier
 from web_app.core.context_service import ContextService
 from web_app.core.contracts import (
     CompletionCriterion,
@@ -45,6 +46,15 @@ class FailingAdapter:
         self.calls.append(call)
         raise CapabilityExecutionError("tests_failed", "focused tests failed")
         yield
+
+
+class MutatingAdapter:
+    def __init__(self, path):
+        self.path = path
+
+    async def execute(self, call, context):
+        self.path.write_text("answer = 43\n", encoding="utf-8")
+        yield AdapterEvent(event_type="capability.result", payload={"operation": call.operation})
 
 
 class DeterministicPlanner:
@@ -188,6 +198,108 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Use project evidence.", planned_context.text)
         self.assertIn("PROJECT_FACT = 42", planned_context.text)
         self.assertTrue(any(source.kind == "project_snapshot" for source in planned_context.sources))
+
+    async def test_mutation_refreshes_project_context_before_verification(self):
+        project = self.root / "project"
+        project.mkdir()
+        target = project / "module.py"
+        target.write_text("answer = 42\n", encoding="utf-8")
+        adapter = MutatingAdapter(target)
+        context = ContextService(self.tasks, self.memory)
+        call = CapabilityCall(
+            capability_id="project.patch", operation="bounded_edit",
+            project_root=str(project), target_path=str(target),
+        )
+        self.policy.grant("user", "project-1", call, scope="project")
+        runtime = AgentRuntime(
+            self.tasks,
+            CoreService(self.tasks, self.policy, {"project.patch": adapter}),
+            context,
+            DeterministicPlanner([call]),
+            EventEvidenceVerifier(),
+            lambda _root: ProjectReader(project).fingerprint(),
+            project_reader_resolver=lambda _command: (ProjectReader(project), "."),
+        )
+        task_id = self.create_root_task(project_root=project)
+
+        result = await runtime.run(task_id)
+
+        self.assertEqual(
+            result.status,
+            TaskStatus.completed,
+            [event.model_dump(mode="json") for event in result.events],
+        )
+        self.assertIn("answer = 43", context.assemble("thread-1", task_id, 32_000).text)
+
+    async def test_cancel_requested_stops_before_next_agent_action(self):
+        adapter = RecordingAdapter()
+        task_id = self.create_root_task()
+
+        class CancellingPlanner:
+            async def plan(_self, _context):
+                self.tasks.request_cancel(task_id)
+                return CapabilityCall(
+                    capability_id="project.patch", operation="bounded_edit", project_root=str(self.root)
+                )
+
+        runtime = AgentRuntime(
+            self.tasks, CoreService(self.tasks, self.policy, {"project.patch": adapter}),
+            ContextService(self.tasks, self.memory), CancellingPlanner(),
+            DeterministicVerifier(), lambda _root: "sha256:" + "1" * 64,
+        )
+
+        result = await runtime.run(task_id)
+
+        self.assertEqual(result.status, TaskStatus.cancelled)
+        self.assertEqual(adapter.calls, [])
+
+    async def test_approved_child_can_resume_the_agent_root(self):
+        adapter = RecordingAdapter()
+        call = CapabilityCall(
+            capability_id="project.read", operation="install",
+            project_root=str(self.root), target_path=str(self.root / "file.py"),
+        )
+        core = CoreService(self.tasks, self.policy, {"project.read": adapter})
+        runtime = AgentRuntime(
+            self.tasks, core, ContextService(self.tasks, self.memory),
+            DeterministicPlanner([call, call]), DeterministicVerifier(),
+            lambda _root: "sha256:" + "1" * 64,
+        )
+        task_id = self.create_root_task()
+
+        waiting = await runtime.run(task_id)
+        approval = next(event for event in waiting.events if event.event_type == "agent.approval_required")
+        await core.approve(approval.payload["child_task_id"])
+        completed = await runtime.resume(task_id)
+
+        self.assertEqual(completed.status, TaskStatus.completed)
+        self.assertEqual(len(adapter.calls), 1)
+
+    async def test_restart_does_not_treat_unresolved_running_child_as_failed(self):
+        call = CapabilityCall(
+            capability_id="project.read", operation="read", project_root=str(self.root)
+        )
+        task_id = self.create_root_task()
+        child_id = str(uuid5(NAMESPACE_URL, f"json-codr:{task_id}:step-1:task"))
+        child_command = TaskCommand(
+            command_id=str(uuid5(NAMESPACE_URL, f"json-codr:{task_id}:step-1:command")),
+            task_id=child_id, thread_id="thread-1", project_id="project-1",
+            parent_task_id=task_id, command_type="project.read",
+            payload=call.model_dump(mode="json"),
+        )
+        self.tasks.create(child_command)
+        self.tasks.append(child_id, TaskEventDraft(event_type="task.started"))
+        runtime = AgentRuntime(
+            self.tasks, CoreService(self.tasks, self.policy, {"project.read": RecordingAdapter()}),
+            ContextService(self.tasks, self.memory), DeterministicPlanner([call]),
+            DeterministicVerifier(), lambda _root: "sha256:" + "1" * 64,
+        )
+
+        result = await runtime.run(task_id)
+
+        self.assertNotIn("agent.action_failed", [event.event_type for event in result.events])
+        blocked = next(event for event in result.events if event.event_type == "agent.blocked")
+        self.assertEqual(blocked.payload["reason"], "child outcome requires reconciliation")
 
     async def test_planner_silence_cannot_complete_when_verification_fails(self):
         runtime = AgentRuntime(

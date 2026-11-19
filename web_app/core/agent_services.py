@@ -81,17 +81,21 @@ class EventEvidenceVerifier:
     ) -> VerificationReport:
         fingerprint = self._project_fingerprint(context)
         completed = [event for event in task.events if event.event_type == "agent.action_completed"]
-        passed = bool(completed)
-        results = {
-            criterion.criterion_id: CriterionStatus.passed if passed else CriterionStatus.failed
-            for criterion in goal.criteria
-        }
-        evidence = ()
-        if passed:
-            source = completed[-1]
-            child = source.payload.get("child_task_id", "unknown")
-            observed_at = datetime.now(UTC)
-            evidence = tuple(
+        accepted = any(event.event_type == "agent.user_accepted" for event in task.events)
+        results = {}
+        evidence_items = []
+        observed_at = datetime.now(UTC)
+        for criterion in goal.criteria:
+            source = self._criterion_source(criterion.kind.value, criterion.parameters, completed, accepted)
+            if criterion.kind.value == "user_acceptance" and source is None:
+                results[criterion.criterion_id] = CriterionStatus.pending
+                continue
+            if source is None:
+                results[criterion.criterion_id] = CriterionStatus.failed
+                continue
+            results[criterion.criterion_id] = CriterionStatus.passed
+            child = source.payload.get("child_task_id", "user-acceptance")
+            evidence_items.append(
                 EvidenceRef(
                     evidence_id=str(uuid7()), task_id=task.task_id, project_id=task.project_id,
                     goal_id=goal.goal_id, goal_revision=goal.revision,
@@ -99,13 +103,31 @@ class EventEvidenceVerifier:
                     source_ref=f"task:{task.task_id}:child:{child}",
                     project_fingerprint=fingerprint, observed_at=observed_at,
                 )
-                for criterion in goal.criteria
             )
         return VerificationReport(
             report_id=str(uuid7()), task_id=task.task_id, project_id=task.project_id,
             goal_id=goal.goal_id, goal_revision=goal.revision,
             expected_criterion_ids=tuple(item.criterion_id for item in goal.criteria),
-            results=results, evidence=evidence, verified_at=datetime.now(UTC),
+            results=results, evidence=tuple(evidence_items), verified_at=datetime.now(UTC),
+        )
+
+    @staticmethod
+    def _criterion_source(kind: str, parameters, completed, accepted):
+        if kind == "user_acceptance":
+            return completed[-1] if accepted and completed else None
+        if kind == "artifact_exists":
+            return next((event for event in reversed(completed) if event.payload.get("artifact_id")), None)
+        if kind not in {"project_state", "command_succeeds"}:
+            return None
+        expected_capability = parameters.get("capability_id")
+        expected_operation = parameters.get("operation")
+        return next(
+            (
+                event for event in reversed(completed)
+                if (expected_capability is None or event.payload.get("capability_id") == expected_capability)
+                and (expected_operation is None or event.payload.get("operation") == expected_operation)
+            ),
+            None,
         )
 
     @staticmethod

@@ -57,8 +57,15 @@ class AgentRuntime:
             )
         while True:
             root = self._tasks.get(task_id)
+            if root.status is TaskStatus.cancel_requested:
+                self._tasks.append(task_id, TaskEventDraft(event_type="task.cancelled"))
+                return self._tasks.get(task_id)
             context = self.context.assemble(root.thread_id, task_id, 32_000)
             call = await self._planner.plan(context)
+            root = self._tasks.get(task_id)
+            if root.status is TaskStatus.cancel_requested:
+                self._tasks.append(task_id, TaskEventDraft(event_type="task.cancelled"))
+                return self._tasks.get(task_id)
             if call is None:
                 self._tasks.append(
                     task_id,
@@ -175,6 +182,19 @@ class AgentRuntime:
                 child_command,
             )
             child = await self._core.submit(child_command)
+            if child.status in {TaskStatus.running, TaskStatus.cancel_requested}:
+                self._tasks.append(
+                    task_id,
+                    TaskEventDraft(
+                        event_type="agent.blocked",
+                        payload={
+                            "reason": "child outcome requires reconciliation",
+                            "child_task_id": child_id,
+                            "step_id": step_id,
+                        },
+                    ),
+                )
+                return self._tasks.get(task_id)
             if child.status is not TaskStatus.completed:
                 if any(event.event_type == "task.permission_required" for event in child.events):
                     self._tasks.append(
@@ -222,12 +242,21 @@ class AgentRuntime:
                     event_type="agent.action_completed",
                     payload={
                         "capability_id": call.capability_id,
+                        "operation": call.operation,
                         "child_task_id": child_id,
                         "step_id": step_id,
                         "project_fingerprint": project_fingerprint,
                     },
                 ),
             )
+            if resolved is not None:
+                reader, target_path = resolved
+                self.context.capture_project(
+                    root.thread_id,
+                    task_id,
+                    reader,
+                    target_path=target_path if isinstance(target_path, str) else ".",
+                )
 
     def steer(self, task_id: str, user_input: str):
         return self._tasks.append(task_id, TaskEventDraft(event_type="task.steered", payload={"input": user_input}))

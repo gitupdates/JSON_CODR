@@ -31,6 +31,11 @@ class RestoreRequest(BaseModel):
     checkpoint_id: str = Field(min_length=1, max_length=512)
 
 
+class TaskApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    scope: str = Field(pattern=r"^(project|schedule)$")
+
+
 class ComponentInstallApproval(BaseModel):
     model_config = ConfigDict(extra="forbid")
     approved_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
@@ -124,6 +129,19 @@ def create_core_router(
             return runtime()[0].cancel(task_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="task not found") from error
+
+    @router.post("/api/tasks/{task_id}/approve")
+    async def approve_task(
+        task_id: str,
+        request: TaskApprovalRequest,
+        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+    ):
+        try:
+            return await runtime()[0].approve(task_id, principal=principal, scope=request.scope)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="task not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @router.post("/api/tasks/{task_id}/retry")
     async def retry_task(

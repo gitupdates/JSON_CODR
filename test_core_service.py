@@ -179,6 +179,20 @@ class CoreServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status, TaskStatus.completed)
         self.assertEqual(calls, [command.task_id])
 
+    async def test_permission_required_task_runs_after_explicit_approval(self):
+        adapter = RecordingAdapter()
+        service = CoreService(self.store, self.policy, {"project.read": adapter})
+        payload = dict(self.command().payload)
+        payload["operation"] = "install"
+        command = self.command().model_copy(update={"payload": payload})
+
+        pending = await service.submit(command)
+        completed = await service.approve(command.task_id)
+
+        self.assertEqual(pending.events[-1].event_type, "task.permission_required")
+        self.assertEqual(completed.status, TaskStatus.completed)
+        self.assertEqual(len(adapter.calls), 1)
+
     async def test_submit_executes_once_per_idempotency_key_and_redacts_credentials(self):
         adapter = RecordingAdapter()
         service = CoreService(self.store, self.policy, {"project.read": adapter})

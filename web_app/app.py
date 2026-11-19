@@ -345,6 +345,17 @@ def create_app(
             async def generate_agent_plan(model: str, prompt: str) -> str:
                 return (await service.chat(model, prompt)).content
 
+            def agent_project_fingerprint(root: str | None) -> str:
+                reader = ProjectReader(root or project_root)
+                instruction_paths = {
+                    instruction.relative_path for instruction in reader.instructions_for(".")
+                }
+                files = tuple(
+                    project_file for project_file in reader.files()
+                    if project_file.relative_path not in instruction_paths
+                )
+                return reader.fingerprint(files)
+
             planner = InferencePlanner(generate_agent_plan, model=str(native_config["model"]))
             agent_runtime = AgentRuntime(
                 core_tasks,
@@ -352,7 +363,7 @@ def create_app(
                 ContextService(core_tasks, core_memory),
                 planner,
                 EventEvidenceVerifier(),
-                lambda root: ProjectReader(root or project_root).fingerprint(),
+                agent_project_fingerprint,
                 project_reader_resolver=resolver.resolve,
             )
             application.state.agent_runtime = agent_runtime
@@ -374,7 +385,8 @@ def create_app(
     async def close_core_runtime() -> None:
         await asyncio.gather(*(backend.close() for backend in core_mcp_backends), return_exceptions=True)
         if core_runtime is not None:
-            _, core_tasks, core_policy = core_runtime
+            core_service, core_tasks, core_policy = core_runtime
+            await core_service.shutdown()
             if core_artifacts is not None:
                 core_artifacts.close()
             core_policy.close()

@@ -85,6 +85,16 @@ class CoreApiTests(unittest.TestCase):
         self.assertEqual(permission.json()["status"], "pending")
         self.assertEqual(permission.json()["events"][-1]["event_type"], "task.permission_required")
 
+    def test_permission_required_task_has_explicit_approval_route(self):
+        command = self.command(operation="install", command_id="command-install", task_id="task-install")
+        pending = self.client.post("/api/tasks", json=command)
+
+        approved = self.client.post("/api/tasks/task-install/approve", json={"scope": "project"})
+
+        self.assertEqual(pending.status_code, 202)
+        self.assertEqual(approved.status_code, 200)
+        self.assertEqual(approved.json()["status"], "completed")
+
     def test_event_replay_multiple_observers_steering_cancellation_and_threads(self):
         self.client.post("/api/tasks", json=self.command())
         replay = self.client.get("/api/tasks/task-1/events", params={"after_sequence": 1})

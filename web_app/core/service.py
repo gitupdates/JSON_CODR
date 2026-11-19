@@ -65,7 +65,8 @@ class CoreService:
                 self._runs[command.task_id] = run
                 run.add_done_callback(lambda _task, task_id=command.task_id: self._runs.pop(task_id, None))
                 return self._tasks.get(command.task_id)
-            if record.status is not TaskStatus.pending or len(record.events) > 1:
+            permission_wait = record.events[-1].event_type == "task.permission_required"
+            if record.status is not TaskStatus.pending or (len(record.events) > 1 and not permission_wait):
                 return record
             try:
                 call = CapabilityCall.model_validate(command.model_dump(mode="json")["payload"])
@@ -165,6 +166,14 @@ class CoreService:
             await asyncio.shield(run)
         return self._tasks.get(task_id)
 
+    async def shutdown(self) -> None:
+        runs = tuple(self._runs.values())
+        for run in runs:
+            run.cancel()
+        if runs:
+            await asyncio.gather(*runs, return_exceptions=True)
+        self._runs.clear()
+
     async def wait_for_events(self, task_id: str, after_sequence: int = -1) -> tuple[TaskEvent, ...]:
         while True:
             events = self.subscribe(task_id, after_sequence)
@@ -192,6 +201,29 @@ class CoreService:
         record = self._tasks.request_cancel(task_id)
         self._event_signals.setdefault(task_id, asyncio.Event()).set()
         return record
+
+    async def approve(
+        self, task_id: str, *, principal: str = "user", scope: str = "project"
+    ) -> TaskRecord:
+        command = self._tasks.command(task_id)
+        record = self._tasks.get(task_id)
+        if command.command_type == "agent.run":
+            approval = next(
+                (event for event in reversed(record.events) if event.event_type == "agent.approval_required"),
+                None,
+            )
+            if approval is None:
+                raise ValueError("task is not awaiting approval")
+            child_task_id = approval.payload.get("child_task_id")
+            if not isinstance(child_task_id, str):
+                raise ValueError("approval request is invalid")
+            await self.approve(child_task_id, principal=principal, scope=scope)
+            return await self.submit(command, principal=principal)
+        if not record.events or record.events[-1].event_type != "task.permission_required":
+            raise ValueError("task is not awaiting approval")
+        call = CapabilityCall.model_validate(command.payload)
+        self._policy.grant(principal, command.project_id, call, scope=scope)
+        return await self.submit(command, principal=principal)
 
     def subscribe(self, task_id: str, after_sequence: int = -1) -> tuple[TaskEvent, ...]:
         return self._tasks.events(task_id, after_sequence)

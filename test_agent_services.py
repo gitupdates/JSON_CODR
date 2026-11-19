@@ -94,10 +94,20 @@ class AgentServicesTests(unittest.IsolatedAsyncioTestCase):
             ))
             goal = GoalSpec(
                 goal_id="goal-1", revision=1, objective="inspect project", accepted=True,
-                criteria=(CompletionCriterion(
-                    criterion_id="criterion-1", kind=CriterionKind.project_state,
-                    description="project action completed",
-                ),),
+                criteria=(
+                    CompletionCriterion(
+                        criterion_id="criterion-1", kind=CriterionKind.project_state,
+                        description="project action completed",
+                    ),
+                    CompletionCriterion(
+                        criterion_id="artifact-1", kind=CriterionKind.artifact_exists,
+                        description="an artifact exists",
+                    ),
+                    CompletionCriterion(
+                        criterion_id="acceptance-1", kind=CriterionKind.user_acceptance,
+                        description="the user accepted the result",
+                    ),
+                ),
             )
             context = ContextBundle(
                 thread_id="thread-1", task_id="task-1", text="evidence",
@@ -112,7 +122,10 @@ class AgentServicesTests(unittest.IsolatedAsyncioTestCase):
 
             report = await EventEvidenceVerifier().verify(goal, store.get("task-1"), context)
 
-            self.assertTrue(report.satisfied)
+            self.assertFalse(report.satisfied)
+            self.assertEqual(report.results["criterion-1"].value, "passed")
+            self.assertEqual(report.results["artifact-1"].value, "failed")
+            self.assertEqual(report.results["acceptance-1"].value, "pending")
             self.assertEqual(report.evidence[0].source_ref, "task:task-1:child:child-1")
             self.assertEqual(report.evidence[0].project_fingerprint, "sha256:" + "1" * 64)
         finally:
