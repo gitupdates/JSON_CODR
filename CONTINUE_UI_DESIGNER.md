@@ -1,6 +1,8 @@
 # UI Designer emergency restore and continuation
 
-Updated: 2026-11-18 (America/Chicago)
+Updated: 2026-11-19 (America/Chicago)
+
+Integration base: `alpha/hybrid-zero-layer` at `a3dd575`. The UI Designer checkpoints were replayed onto that base without replaying the older guided-agent commits that the Hybrid runtime supersedes.
 
 This file is the compact recovery record for continuing the Gamma UI Designer work from another machine. The authoritative requirements and task details are already committed in:
 
@@ -14,7 +16,7 @@ For a new clone in PowerShell:
 ```powershell
 git clone https://github.com/gitupdates/JSON_CODR.git
 cd JSON_CODR
-git switch --track origin/codex/alpha.12-guided-task-flow
+git switch --track origin/codex/hybrid-zero-layer-ui-designer
 git status
 git log -1 --oneline
 ```
@@ -23,50 +25,50 @@ For an existing clone:
 
 ```powershell
 git fetch origin
-git switch codex/alpha.12-guided-task-flow
+git switch codex/hybrid-zero-layer-ui-designer
 git pull --ff-only
 git status
 git log -1 --oneline
 ```
 
-Expected branch: `codex/alpha.12-guided-task-flow`.
+Expected branch: `codex/hybrid-zero-layer-ui-designer`.
 
-Install the project dependencies with a compatible Python 3.12 environment. Python 3.14 may run the web host and focused pure-Python tests, but optional hardware runtime environments require Python 3.11 or 3.12.
+Use Python 3.14 for the Hybrid web host because Hybrid uses the standard-library `uuid7`. Keep Python 3.12 as the explicitly configured optional-hardware sidecar runtime.
 
 ```powershell
-py -3.12 -m venv .venv
-& .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-$env:JSON_CODR_COMPATIBLE_PYTHON = (Resolve-Path .\.venv\Scripts\python.exe)
+& "$env:LOCALAPPDATA\Programs\Python\Python314\python.exe" -m pip install -r requirements.txt
+$env:JSON_CODR_COMPATIBLE_PYTHON = "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe"
 ```
 
 Verify the restored checkpoint:
 
 ```powershell
-& .\.venv\Scripts\python.exe -m unittest test_designer_contracts.py test_designer_store.py test_designer_components.py -v
-& .\.venv\Scripts\python.exe -m unittest test_guided_task_e2e.py -v
+& "$env:LOCALAPPDATA\Programs\Python\Python314\python.exe" -m unittest test_designer_contracts.py test_designer_store.py test_designer_components.py test_settings.py test_inference_sidecar.py -v
 ```
+
+The 2026-11-19 integration checkpoint passes all 55 focused Designer/settings/sidecar tests. The full repository discovery run completed 691 tests with 2 failures and 6 errors in pre-existing Windows environment-sensitive tests (short-path versus long-path comparisons, PowerShell helper execution, and a Node subprocess crash); these are outside the Designer integration surface.
 
 ## Current progress
 
-Completed and pushed:
+Completed on the Hybrid integration branch:
 
 1. Scene contracts, Designer settings, appearance migration, canonical digesting, immutable nested scene data, responsive overrides, and bounded graph validation.
 2. Atomic project store, immutable parent-linked revisions, optimistic digest conflicts, recoverable drafts, restore, duplication, deletion confirmation, and managed-root confinement.
 3. Data-only registry for all 24 built-in component types, Blank/Landing Page/Dashboard/Form templates, NOC Light defaults, and the versioned 16-region protected JSON_CODR manifest.
-4. Existing guided task flow retains persistent SQLite task/plan/event state; `test_guided_task_e2e.py` verifies a reviewed task survives restart and produces verified delivery.
+4. Python 3.14 host execution can explicitly select a Python 3.11/3.12 optional-hardware sidecar through `JSON_CODR_COMPATIBLE_PYTHON`.
 
 Important checkpoint commits, oldest to newest:
 
 | Commit | Purpose |
 |---|---|
-| `b73d8c5` | UI Designer design specification |
-| `ba7c1dd` | Sanitized UI reference capture design |
-| `cb83788` | Implementation plan |
-| `9b62ff0` | Playwright-only first-release capture policy |
-| `2156d39` | Scene contracts and settings |
-| `f36f913` | Lossless CSS extraction requirements |
-| `b3dda90` | Atomic project history |
-| `b36d74c` | Components, templates, and protected manifest |
+| `d792fab` | UI Designer design specification |
+| `5dc0256` | Sanitized UI reference capture design |
+| `4b2a753` | Implementation plan |
+| `c6ed1e6` | Playwright-only first-release capture policy |
+| `08adaa3` | Scene contracts and Hybrid-compatible Designer settings |
+| `f01f1d8` | Lossless CSS extraction requirements |
+| `b1701d8` | Atomic project history |
+| `fb7aa07` | Components, templates, and protected manifest |
 
 ## Resume point
 
@@ -103,7 +105,7 @@ For each task, follow the same recoverable cycle:
 3. Run its focused tests plus affected earlier Designer tests.
 4. Run `git diff --check` and inspect `git status`.
 5. Commit a small task-specific checkpoint.
-6. Push `codex/alpha.12-guided-task-flow` to `origin` immediately.
+6. Push `codex/hybrid-zero-layer-ui-designer` to `origin` immediately.
 7. Update this file if the resume point or a major ruling changes.
 
 ## Requirements that must not be lost
@@ -128,7 +130,7 @@ On the next machine, first run:
 
 ```powershell
 git fetch origin
-git switch codex/alpha.12-guided-task-flow
+git switch codex/hybrid-zero-layer-ui-designer
 git pull --ff-only
 git status
 ```

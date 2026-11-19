@@ -1,15 +1,27 @@
 import asyncio
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from web_app.inference.contracts import ProviderKind
-from web_app.inference.environments import EnvironmentManager
+from web_app.inference.environments import EnvironmentManager, find_compatible_python
 from web_app.inference.sidecar import SidecarClient, SidecarError
 from web_app.inference.sidecar_main import handle_request
 
 
 class EnvironmentManagerTests(unittest.TestCase):
+    def test_configured_compatible_python_supports_a_newer_host_runtime(self):
+        configured = Path("C:/configured/python.exe")
+
+        with patch.dict(os.environ, {"JSON_CODR_COMPATIBLE_PYTHON": str(configured)}), patch(
+            "web_app.inference.environments.subprocess.run",
+            return_value=SimpleNamespace(returncode=0, stdout="3.12\n"),
+        ):
+            self.assertEqual(find_compatible_python(), configured)
+
     def test_provider_environments_are_isolated_and_install_plans_are_pinned(self):
         with tempfile.TemporaryDirectory() as directory:
             manager = EnvironmentManager(Path(directory))

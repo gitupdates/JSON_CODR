@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -19,6 +20,20 @@ PACKAGES = {
 
 
 def find_compatible_python() -> Path:
+    configured = os.environ.get("JSON_CODR_COMPATIBLE_PYTHON")
+    if configured:
+        candidate = Path(configured)
+        result = subprocess.run(
+            [str(candidate), "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+            capture_output=True,
+            text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+        if result.returncode == 0 and result.stdout.strip() in {"3.11", "3.12"}:
+            return candidate
+        raise RuntimeError(
+            "JSON_CODR_COMPATIBLE_PYTHON must point to a working Python 3.11 or 3.12 executable"
+        )
     if (3, 11) <= sys.version_info[:2] <= (3, 12):
         return Path(sys.executable)
     if sys.platform == "win32" and shutil.which("py"):

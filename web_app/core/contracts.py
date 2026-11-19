@@ -9,6 +9,22 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, field_serializer, field_validator, model_validator
 
 
+class frozendict(dict):
+    """Small immutable mapping used by frozen contract payloads."""
+
+    def _immutable(self, *args, **kwargs):
+        raise TypeError("frozendict is immutable")
+
+    __delitem__ = _immutable
+    __ior__ = _immutable
+    __setitem__ = _immutable
+    clear = _immutable
+    pop = _immutable
+    popitem = _immutable
+    setdefault = _immutable
+    update = _immutable
+
+
 Identifier = Annotated[str, StringConstraints(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")]
 TaskId = Identifier
 ThreadId = Identifier
@@ -111,7 +127,7 @@ class RuntimeIdentity(FrozenContract):
     runtime_fingerprint: Digest
     hardware_profile_id: Identifier
     hardware_fingerprint: Digest
-    model_digests: frozendict[str, Digest]
+    model_digests: Mapping[str, Digest]
 
 
 class CapabilityManifest(VersionedContract):
