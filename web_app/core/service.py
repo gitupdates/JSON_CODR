@@ -46,22 +46,27 @@ class CoreService:
     async def start(self, command: TaskCommand, *, principal: str = "user") -> TaskRecord:
         async with self._submission_lock:
             record = self._tasks.create(command)
-            if record.status is not TaskStatus.pending or len(record.events) > 1:
-                return record
             if command.command_type == "agent.run":
+                if record.status in {
+                    TaskStatus.completed, TaskStatus.failed, TaskStatus.cancelled, TaskStatus.interrupted,
+                } or command.task_id in self._runs:
+                    return record
                 if self._agent_runner is None:
                     self._append(
                         command.task_id,
                         TaskEventDraft(event_type="task.failed", payload={"reason": "agent runtime unavailable"}),
                     )
                     return self._tasks.get(command.task_id)
-                self._append(command.task_id, TaskEventDraft(event_type="task.started"))
+                if record.status is TaskStatus.pending:
+                    self._append(command.task_id, TaskEventDraft(event_type="task.started"))
                 run = asyncio.create_task(
                     self._execute_agent(command.task_id), name=f"json-codr-agent-{command.task_id}"
                 )
                 self._runs[command.task_id] = run
                 run.add_done_callback(lambda _task, task_id=command.task_id: self._runs.pop(task_id, None))
                 return self._tasks.get(command.task_id)
+            if record.status is not TaskStatus.pending or len(record.events) > 1:
+                return record
             try:
                 call = CapabilityCall.model_validate(command.model_dump(mode="json")["payload"])
                 decision = self._policy.evaluate(principal, command.project_id, call)

@@ -161,6 +161,24 @@ class CoreServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(agent.events[-1].payload.get("reason"), "agent runtime unavailable")
         self.assertEqual(direct.status, TaskStatus.completed)
 
+    async def test_running_agent_task_resumes_once_after_service_restart(self):
+        command = self.agent_command()
+        self.store.create(command)
+        self.store.append(command.task_id, TaskEventDraft(event_type="task.started"))
+        calls = []
+
+        async def resume_agent(task_id):
+            calls.append(task_id)
+            self.store.append(task_id, TaskEventDraft(event_type="task.completed"))
+            return self.store.get(task_id)
+
+        restarted = CoreService(self.store, self.policy, {}, agent_runner=resume_agent)
+
+        result = await restarted.submit(command)
+
+        self.assertEqual(result.status, TaskStatus.completed)
+        self.assertEqual(calls, [command.task_id])
+
     async def test_submit_executes_once_per_idempotency_key_and_redacts_credentials(self):
         adapter = RecordingAdapter()
         service = CoreService(self.store, self.policy, {"project.read": adapter})

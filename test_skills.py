@@ -202,6 +202,7 @@ Review the supplied artifact.
             if hasattr(client.app.state, "core_policy"):
                 client.app.state.core_policy.close()
                 client.app.state.core_task_store.close()
+                client.app.state.core_memory.close()
             client.close()
         self.temporary_directory.cleanup()
 
