@@ -191,6 +191,34 @@ class GitBrokerExecutionTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "changed since authorization"):
                 service.execute(request, model="qwen", grant_id="grant-1")
 
+    def test_local_status_does_not_fetch_or_change_remote_tracking_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project, remote = self._repository(root)
+            initial_remote_head = git(project, "rev-parse", "refs/remotes/origin/main")
+            publisher = root / "publisher"
+            git(root, "clone", "-b", "main", str(remote), str(publisher))
+            git(publisher, "config", "user.name", "Remote User")
+            git(publisher, "config", "user.email", "remote@example.com")
+            (publisher / "REMOTE.md").write_text("remote\n", encoding="utf-8")
+            git(publisher, "add", "REMOTE.md")
+            git(publisher, "commit", "-m", "remote change")
+            git(publisher, "push", "origin", "HEAD:main")
+            remote_head = git(remote, "rev-parse", "main")
+            self.assertNotEqual(initial_remote_head, remote_head)
+            service = GitBrokerService(root / "data")
+            baseline = service.inspect(project)
+            request = BrokerActionRequest(
+                schema_version=1,
+                project_root=str(project),
+                baseline_fingerprint=baseline.dirty_fingerprint,
+                actions=[{"kind": "status"}],
+            )
+
+            service.execute(request, model="qwen", grant_id="grant-1")
+
+            self.assertEqual(git(project, "rev-parse", "refs/remotes/origin/main"), initial_remote_head)
+
     def test_execute_can_create_read_review_and_run_allowlisted_check(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

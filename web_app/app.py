@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import asyncio
+from dataclasses import asdict
 import os
 import re
 import sys
@@ -1270,7 +1271,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="Execution grant not found") from error
 
     async def execute_git_through_core(action_request, model: str, grant_id: str):
-        core_service, _, core_policy = get_core_runtime()
+        core_service, _, _ = get_core_runtime()
         operation = next(
             (kind for kind in ("push", "commit", "sync") if any(action.kind == kind for action in action_request.actions)),
             "bounded_edit" if any(action.kind == "apply_patch" for action in action_request.actions) else "read",
@@ -1285,8 +1286,6 @@ def create_app(
                 "grant_id": grant_id,
             },
         )
-        if operation in {"push", "commit", "sync"}:
-            core_policy.grant("user", "legacy", call, scope="project")
         task_id = str(uuid7())
         record = await core_service.submit(TaskCommand(
             command_id=str(uuid7()),
@@ -1296,6 +1295,8 @@ def create_app(
             command_type="git.execute",
             payload=call.model_dump(mode="json"),
         ))
+        if any(event.event_type == "task.permission_required" for event in record.events):
+            raise PermissionError(f"Git {operation} requires explicit approval")
         if record.status is not TaskStatus.completed:
             raise RuntimeError(record.events[-1].payload.get("reason", "Git execution failed"))
         completed = next(event for event in reversed(record.events) if event.event_type == "git.completed")
@@ -1335,7 +1336,6 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     async def execute_project_workspace(project_root: str, model: str, outcome: str) -> dict:
-        grant = coding_agents.grant(project_root, "broker")
         snapshot = await asyncio.to_thread(git_broker.inspect, project_root)
         contract = git_adapter.prompt_contract(snapshot.root, snapshot.dirty_fingerprint)
         generated = await service.chat(model, f"{outcome}\n\n{contract}")
@@ -1344,10 +1344,18 @@ def create_app(
             raise ValueError("Model response changed the authorized project root")
         if action_request.baseline_fingerprint != snapshot.dirty_fingerprint:
             raise ValueError("Model response changed the authorized baseline")
-        result = await execute_git_through_core(action_request, generated.model, grant.id)
+        if any(action.kind not in {"status", "read"} for action in action_request.actions):
+            raise PermissionError("Model-generated project effects require canonical task approval")
+        result = await asyncio.to_thread(
+            git_broker.execute,
+            action_request,
+            generated.model,
+            "compatibility-read-only",
+            lambda: True,
+        )
         return {
             "route": "broker_adapter", "effective_model": generated.model,
-            "project_root": snapshot.root, "result": result,
+            "project_root": snapshot.root, "result": asdict(result),
         }
 
     @application.post("/api/project-workspace/run", status_code=201)

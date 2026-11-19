@@ -182,8 +182,6 @@ class GitBrokerService:
             status = "completed"
             outputs: dict = {"files": {}, "checks": {}, "diff": ""}
             try:
-                if snapshot.upstream:
-                    self._git(project, "fetch", "--quiet")
                 for action in request.actions:
                     if authorized is not None and not authorized():
                         raise PermissionError("Authorization was revoked")

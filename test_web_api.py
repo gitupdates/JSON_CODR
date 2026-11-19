@@ -538,7 +538,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(len(commands), 1)
         self.assertIn('"command_type":"git.execute"', commands[0])
 
-    def test_project_workspace_reuses_project_grant_and_returns_verified_result(self):
+    def test_project_workspace_read_only_run_does_not_create_persistent_broker_grant(self):
         class WorkspaceModelService(FakeService):
             async def chat(self, model, prompt, images=None):
                 baseline = prompt.split("baseline_fingerprint='", 1)[1].split("'", 1)[0]
@@ -583,7 +583,57 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(first.json()["result"]["status"], "completed")
         self.assertEqual(second.status_code, 201)
         grants = [item for item in agents.status()["grants"] if item["profile"] == "broker"]
-        self.assertEqual(len(grants), 1)
+        self.assertEqual(grants, [])
+
+    def test_project_workspace_rejects_model_generated_commit_without_granting_it(self):
+        class CommittingModelService(FakeService):
+            async def chat(self, model, prompt, images=None):
+                baseline = prompt.split("baseline_fingerprint='", 1)[1].split("'", 1)[0]
+                project_root = prompt.split("project_root='", 1)[1].split("';", 1)[0]
+                patch = (
+                    "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n"
+                    "@@ -1 +1 @@\n-test\n+changed\n"
+                )
+                return ChatResult(model=model, status="ready", summary="Commit ready", content=json.dumps({
+                    "schema_version": 1,
+                    "project_root": project_root,
+                    "baseline_fingerprint": baseline,
+                    "actions": [
+                        {"kind": "apply_patch", "patch": patch},
+                        {"kind": "commit", "message": "Model commit"},
+                    ],
+                }))
+
+        project = Path(self.temporary_directory.name) / "sensitive-workspace-project"
+        project.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=project, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=project, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project, check=True)
+        (project / "README.md").write_text("test\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=project, check=True)
+        subprocess.run(["git", "commit", "-m", "initial"], cwd=project, check=True, capture_output=True)
+        initial_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=project, check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        agents = CodingAgentService(self.workspace.data_root, executable_finder=lambda name: None)
+        client = self.track_core_client(TestClient(create_app(
+            CommittingModelService(), self.workspace, coding_agents=agents,
+        )))
+
+        response = client.post("/api/project-workspace/run", headers={"X-JSON-CODR": "1"}, json={
+            "project_root": str(project),
+            "model": "yi-coder:9b-chat",
+            "outcome": "Change and commit the README",
+        })
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("approval", response.json()["detail"].lower())
+        self.assertEqual((project / "README.md").read_text(encoding="utf-8"), "test\n")
+        current_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=project, check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        self.assertEqual(current_head, initial_head)
+        self.assertEqual([item for item in agents.status()["grants"] if item["profile"] == "broker"], [])
 
     def test_project_workspace_rejects_missing_project_before_model_execution(self):
         response = self.client.post(
@@ -649,7 +699,7 @@ class WebApiTests(unittest.TestCase):
             **base, "project_root": str(project / "missing"), "model_selection": "auto",
         })
 
-        self.assertEqual(explicit.status_code, 201)
+        self.assertEqual(explicit.status_code, 201, explicit.text)
         self.assertEqual(explicit.json()["requested_model"], "qwen2.5-coder:7b-instruct-q4_K_M")
         self.assertEqual(explicit.json()["effective_model"], "qwen2.5-coder:7b-instruct-q4_K_M")
         self.assertEqual(explicit.json()["requested_engine"], "borg")
