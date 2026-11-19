@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import hashlib
 import os
@@ -9,6 +11,8 @@ import zipfile
 import tempfile
 import time
 import stat
+import urllib.parse
+import urllib.request
 from pathlib import Path, PurePosixPath
 
 from web_app.models import SkillDiscovery, SkillPack, SkillRecord, SkillScanResult
@@ -127,6 +131,18 @@ class SkillConverterService:
             or source_format == "generic"
             or (source_format == "claude" and any(part in PurePosixPath(name).parts for part in ("commands", "agents")))
         }
+        if source_format == "generic":
+            markdown_by_parent: dict[PurePosixPath, list[PurePosixPath]] = {}
+            for name in candidates:
+                path = PurePosixPath(name)
+                markdown_by_parent.setdefault(path.parent, []).append(path)
+            candidates = {
+                name: content for name, content in candidates.items()
+                if not (
+                    PurePosixPath(name).name.casefold() == "prompt.md"
+                    and any(item.name.casefold() != "prompt.md" for item in markdown_by_parent[PurePosixPath(name).parent])
+                )
+            }
         for path, content in candidates.items():
             fallback = PurePosixPath(path).parent.name if path.endswith("/SKILL.md") else PurePosixPath(path).stem
             name_match = re.search(r"(?m)^name:\s*([^\n]+)", content)
@@ -201,6 +217,39 @@ class SkillLibraryService:
             return []
         return [SkillPack.model_validate(item) for item in json.loads(self.catalog_path.read_text(encoding="utf-8"))]
 
+    def ensure_builtin_rea(self) -> SkillPack:
+        existing = next((pack for pack in self.list() if pack.id == "rea-agents"), None)
+        if existing is not None:
+            return existing
+        instructions = (
+            "capabilities: Read, project-scoped terminal actions, unified patch editing, verification checks\n\n"
+            "Use REA when the request depends on evidence from a shipped application, package, binary, "
+            "Electron/JavaScript application, website, or recorded runtime behavior. For an extracted "
+            "JavaScript/Electron directory or ASAR, propose the authorized project terminal command "
+            "`rea analyze-javascript-application <absolute-target-path> --json`. Preserve returned Evidence "
+            "IDs, distinguish observations from inferences and unknowns, and explain limitations. After "
+            "collecting evidence, use the JSON_CODR Coding sandbox to inspect the active project, create or "
+            "edit files with unified patches, run the available test/build checks, and show the resulting diff. "
+            "Do not claim native decompilation is available unless REA reports a configured Hopper, Ghidra, "
+            "IDA, or Kuna provider. Never broaden the analyzed target or project boundary without user direction."
+        )
+        skill = SkillRecord(
+            id="reverse-engineer-anything",
+            name="Reverse engineer anything (REA)",
+            description="Collect evidence from applications and use it to build a similar feature in the active project.",
+            content=_wrap_skill_content("Reverse engineer anything (REA)", "Evidence-driven feature reconstruction", instructions),
+            original_content=instructions,
+            enabled=True,
+        )
+        return self.install(SkillPack(
+            id="rea-agents",
+            name="REA agents",
+            source_format="generic",
+            source_name="JSON_CODR built-in REA integration",
+            source_digest="json-codr-rea-agents-6.7.0-v1",
+            skills=[skill],
+        ))
+
     def _save(self, packs: list[SkillPack]) -> None:
         temporary = self.root / f".catalog-{uuid.uuid4().hex}.tmp"
         temporary.write_text(json.dumps([pack.model_dump(mode="json") for pack in packs], indent=2), encoding="utf-8")
@@ -246,17 +295,28 @@ class SkillLibraryService:
 
     def deduplicate(self) -> dict[str, object]:
         with self._lock:
+            packs = self.list()
             retained: list[SkillPack] = []
             seen_digests: set[str] = set()
             seen_skills: set[str] = set()
+            name_winners: dict[str, tuple[tuple[int, int], str, str]] = {}
+            for pack in packs:
+                for skill in pack.skills:
+                    key = _slug(skill.name)
+                    content = skill.original_content or skill.content
+                    quality = (1 if skill.description.strip() else 0, len(content))
+                    winner = name_winners.get(key)
+                    if winner is None or quality > winner[0]:
+                        name_winners[key] = (quality, pack.id, skill.id)
             removed_pack_ids: list[str] = []
             removed_skills = 0
-            for pack in self.list():
+            for pack in packs:
                 fingerprints = [_skill_fingerprint(skill) for skill in pack.skills]
                 duplicate_source = bool(pack.source_digest and pack.source_digest in seen_digests)
                 unique_skills = [
                     skill for skill, fingerprint in zip(pack.skills, fingerprints)
                     if fingerprint not in seen_skills
+                    and name_winners[_slug(skill.name)][1:] == (pack.id, skill.id)
                 ]
                 removed_skills += len(pack.skills) - len(unique_skills)
                 if duplicate_source or not unique_skills:
@@ -501,6 +561,60 @@ class SkillDiscoveryService:
             self._previews.pop(oldest)["snapshot"].unlink(missing_ok=True)
         return SkillScanResult(discoveries=discoveries, warnings=warnings, fallback_token=token)
 
+    def scan_uploaded_folder(self, entries: list[tuple[str, bytes]]) -> SkillScanResult:
+        if not entries:
+            raise ValueError("Select at least one folder entry")
+        if len(entries) > 500:
+            raise ValueError("Folder upload is limited to 500 entries")
+        validated: list[tuple[PurePosixPath, bytes]] = []
+        seen: set[str] = set()
+        total_bytes = 0
+        for raw_path, data in entries:
+            normalized = raw_path.replace("\\", "/")
+            starts_absolute = normalized.startswith("/")
+            normalized = normalized.strip("/")
+            raw_parts = normalized.split("/") if normalized else []
+            path = PurePosixPath(normalized)
+            if (
+                not raw_parts
+                or starts_absolute
+                or path.is_absolute()
+                or any(part in {"", ".", ".."} for part in raw_parts)
+                or ":" in raw_parts[0]
+            ):
+                raise ValueError(f"Unsafe folder entry path: {raw_path}")
+            if len(path.parts) - 1 > 5:
+                raise ValueError(f"Folder entry exceeds depth 5: {raw_path}")
+            key = path.as_posix().casefold()
+            if key in seen:
+                raise ValueError(f"Duplicate folder entry path: {raw_path}")
+            seen.add(key)
+            total_bytes += len(data)
+            if total_bytes > 10 * 1024 * 1024:
+                raise ValueError("Folder upload is limited to 10 MB")
+            validated.append((path, data))
+
+        staging_parent = self.data_root / "skill-upload-staging"
+        staging_root = staging_parent / uuid.uuid4().hex
+        try:
+            staging_root.mkdir(parents=True)
+            for relative_path, data in validated:
+                target = staging_root.joinpath(*relative_path.parts)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            result = self.scan(staging_root)
+            selected_root = validated[0][0].parts[0]
+            for item in result.discoveries:
+                self._previews[item.id]["uploaded"] = True
+                item.source_path = selected_root
+            return result
+        finally:
+            shutil.rmtree(staging_root, ignore_errors=True)
+            try:
+                staging_parent.rmdir()
+            except OSError:
+                pass
+
     def scan_known(self, fallback_token: str) -> SkillScanResult:
         expiry = self._tokens.pop(fallback_token, None)
         if expiry is None or expiry < time.monotonic():
@@ -520,12 +634,155 @@ class SkillDiscoveryService:
         if preview is None or preview["expires"] < time.monotonic():
             raise ValueError("Discovery preview expired; scan again")
         source = preview["path"]
-        if not source.exists() or self._digest(source) != preview["digest"]:
+        if not preview.get("uploaded") and (not source.exists() or self._digest(source) != preview["digest"]):
             preview["snapshot"].unlink(missing_ok=True)
             raise ValueError("Skill source changed after preview; scan again")
         snapshot = preview["snapshot"]
         try:
             pack = self.converter.convert(snapshot, f"{source.name}.zip" if source.is_dir() else source.name)
             return self.library.install(pack)
+        finally:
+            snapshot.unlink(missing_ok=True)
+
+
+class GithubSkillService:
+    def __init__(
+        self,
+        library: SkillLibraryService,
+        converter: SkillConverterService,
+        data_root: Path,
+        fetch=None,
+    ) -> None:
+        self.library = library
+        self.converter = converter
+        self.preview_root = Path(data_root).resolve() / "skill_library" / "github-previews"
+        self.preview_root.mkdir(parents=True, exist_ok=True)
+        self._fetch = fetch or self._fetch_url
+        self._previews: dict[str, dict[str, object]] = {}
+
+    @staticmethod
+    def _fetch_url(url: str) -> bytes:
+        request = urllib.request.Request(
+            url,
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "JSON_CODR-skill-installer"},
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = response.read(25 * 1024 * 1024 + 1)
+        if len(payload) > 25 * 1024 * 1024:
+            raise ValueError("GitHub skill download exceeds 25 MB")
+        return payload
+
+    @staticmethod
+    def _parse_url(url: str) -> tuple[str, str, str, PurePosixPath]:
+        parsed = urllib.parse.urlsplit(url.strip())
+        if parsed.scheme != "https" or parsed.hostname not in {"github.com", "www.github.com"}:
+            raise ValueError("Enter an HTTPS github.com skill URL")
+        parts = [urllib.parse.unquote(part) for part in parsed.path.strip("/").split("/") if part]
+        if len(parts) < 5 or parts[2] not in {"blob", "tree"}:
+            raise ValueError("GitHub URL must point to a SKILL.md file or its containing directory")
+        owner, repository, kind, reference = parts[:4]
+        target = PurePosixPath(*parts[4:])
+        if kind == "blob":
+            if target.name.casefold() != "skill.md":
+                raise ValueError("GitHub file URL must point to SKILL.md")
+            target = target.parent
+        if not owner or not repository or not reference or target.is_absolute() or ".." in target.parts:
+            raise ValueError("Invalid GitHub skill URL")
+        return owner, repository.removesuffix(".git"), reference, target
+
+    def preview(self, url: str) -> dict[str, object]:
+        owner, repository, reference, target = self._parse_url(url)
+        commit_url = (
+            f"https://api.github.com/repos/{urllib.parse.quote(owner)}/{urllib.parse.quote(repository)}"
+            f"/commits/{urllib.parse.quote(reference, safe='')}"
+        )
+        try:
+            commit = json.loads(self._fetch(commit_url))
+            revision = commit["sha"]
+        except (KeyError, TypeError, json.JSONDecodeError) as error:
+            raise ValueError("GitHub did not return a valid commit for this skill URL") from error
+        if not re.fullmatch(r"[0-9a-fA-F]{7,64}", revision):
+            raise ValueError("GitHub returned an invalid commit identifier")
+        preview_id = uuid.uuid4().hex
+        snapshot = self.preview_root / f"{preview_id}.zip"
+        entries = 0
+        total_bytes = 0
+        found_entry = False
+        try:
+            queue = [target]
+            with zipfile.ZipFile(snapshot, "w", zipfile.ZIP_DEFLATED) as output:
+                while queue:
+                    directory = queue.pop(0)
+                    encoded_path = urllib.parse.quote(directory.as_posix(), safe="/")
+                    contents_url = (
+                        f"https://api.github.com/repos/{urllib.parse.quote(owner)}/{urllib.parse.quote(repository)}"
+                        f"/contents/{encoded_path}?ref={urllib.parse.quote(revision, safe='')}"
+                    )
+                    try:
+                        listing = json.loads(self._fetch(contents_url))
+                    except (TypeError, json.JSONDecodeError) as error:
+                        raise ValueError("GitHub returned an invalid skill directory listing") from error
+                    if not isinstance(listing, list):
+                        raise ValueError("GitHub skill URL does not resolve to a directory")
+                    for item in listing:
+                        item_type = item.get("type")
+                        item_path = PurePosixPath(item.get("path", ""))
+                        if item_path.is_absolute() or ".." in item_path.parts or target not in (item_path, *item_path.parents):
+                            raise ValueError("GitHub directory listing contains an unsafe path")
+                        if item_type == "dir":
+                            queue.append(item_path)
+                            continue
+                        if item_type != "file" or not item.get("download_url"):
+                            continue
+                        skill_relative = item_path.relative_to(target)
+                        entries += 1
+                        if entries > self.converter.max_entries:
+                            raise ValueError("GitHub skill directory exceeds installation limits")
+                        data = self._fetch(item["download_url"])
+                        total_bytes += len(data)
+                        if total_bytes > self.converter.max_bytes:
+                            raise ValueError("GitHub skill directory exceeds installation limits")
+                        output.writestr(PurePosixPath(target.name, skill_relative).as_posix(), data)
+                        if skill_relative.name.casefold() == "skill.md":
+                            found_entry = True
+        except Exception:
+            snapshot.unlink(missing_ok=True)
+            raise
+        if not found_entry:
+            snapshot.unlink(missing_ok=True)
+            raise ValueError("The selected GitHub directory does not contain SKILL.md")
+        source_name = f"{owner}-{repository}-{target.name}-{revision[:12]}.zip"
+        try:
+            pack = self.converter.convert(snapshot, source_name).model_copy(update={
+                "source_name": url,
+                "source_path": str(snapshot.resolve()),
+                "source_digest": hashlib.sha256(snapshot.read_bytes()).hexdigest(),
+            })
+        except Exception:
+            snapshot.unlink(missing_ok=True)
+            raise
+        self._previews[preview_id] = {
+            "snapshot": snapshot,
+            "pack": pack,
+            "expires": time.monotonic() + 600,
+            "repository": f"{owner}/{repository}",
+            "revision": revision,
+            "source_path": target.as_posix(),
+        }
+        return {
+            "preview_id": preview_id,
+            "repository": f"{owner}/{repository}",
+            "revision": revision,
+            "source_path": target.as_posix(),
+            "pack": pack.model_dump(mode="json"),
+        }
+
+    def install(self, preview_id: str) -> SkillPack:
+        preview = self._previews.pop(preview_id, None)
+        if preview is None or preview["expires"] < time.monotonic():
+            raise ValueError("GitHub skill preview expired; preview the URL again")
+        snapshot = preview["snapshot"]
+        try:
+            return self.library.install(preview["pack"])
         finally:
             snapshot.unlink(missing_ok=True)

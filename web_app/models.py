@@ -1,14 +1,129 @@
 from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from web_app.version import APP_VERSION
 
 
 class ChatRequest(BaseModel):
     model: str
     prompt: str
     session_id: Optional[str] = None
+
+
+class HardwareProbeRequest(BaseModel):
+    backend: Literal["cpu", "ollama_gpu", "cuda_v12", "cuda_v13", "rocm_v7_1", "vulkan"]
+    model: str = Field(min_length=1, max_length=200)
+
+
+class HardwareBenchmarkRequest(BaseModel):
+    suite: Literal["quick", "thorough"] = "quick"
+    model: str = Field(min_length=1, max_length=200)
+    backend: str = Field(default="all", min_length=1, max_length=50, pattern=r"^[a-z0-9_-]+$")
+
+
+class IntegrityBenchmarkRequest(BaseModel):
+    suite: Literal["quick", "thorough"] = "quick"
+    model: str = Field(min_length=1, max_length=200)
+
+
+class ActionSuggestion(BaseModel):
+    command: str = Field(min_length=1, max_length=2000)
+    cwd: Optional[str] = Field(default=None, max_length=500)
+    explanation: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("command", "cwd", "explanation")
+    @classmethod
+    def reject_control_characters(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError("Control characters are not allowed")
+        return value
+
+
+class CodingAgentSuggestion(BaseModel):
+    tool: Literal["continue", "aider"]
+    project_root: str = Field(min_length=1, max_length=1000)
+    prompt: str = Field(min_length=1, max_length=20_000)
+
+
+class BrokerAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["status", "read", "apply_patch", "verify", "commit", "sync", "push"]
+    paths: List[str] = Field(default_factory=list, max_length=100)
+    patch: Optional[str] = Field(default=None, max_length=200_000)
+    message: Optional[str] = Field(default=None, max_length=500)
+    checks: List[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("paths")
+    @classmethod
+    def paths_stay_relative(cls, values: List[str]) -> List[str]:
+        for value in values:
+            path = value.replace("\\", "/")
+            if not path or path.startswith("/") or ":" in path or ".." in path.split("/"):
+                raise ValueError("Broker paths must stay inside the project")
+        return values
+
+
+class BrokerActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
+    project_root: str = Field(min_length=1, max_length=1000)
+    actions: List[BrokerAction] = Field(min_length=1, max_length=50)
+    baseline_fingerprint: str = Field(min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_workflow(self):
+        if sum(len(action.patch or "") for action in self.actions) > 250_000:
+            raise ValueError("aggregate patch payload is too large")
+        kinds = [action.kind for action in self.actions]
+        if "push" in kinds and kinds[-1] != "push":
+            raise ValueError("push must be the final action")
+        if "commit" in kinds:
+            commit_index = kinds.index("commit")
+            if "apply_patch" not in kinds[:commit_index]:
+                raise ValueError("commit requires a preceding apply_patch action")
+        if "push" in kinds and "commit" not in kinds[:kinds.index("push")]:
+            raise ValueError("push requires a preceding commit action")
+        return self
+
+
+class ActionProposal(BaseModel):
+    id: str
+    session_id: str
+    command: str
+    cwd: str
+    explanation: str
+    source_skill_ids: List[str] = Field(default_factory=list)
+    risk: Literal["normal", "destructive"]
+    risk_reason: str
+    status: Literal["pending", "awaiting_confirmation", "approved", "rejected", "superseded", "consumed"] = "pending"
+    confirmation_phrase: Optional[str] = None
+
+
+class ActionApprovalResult(BaseModel):
+    proposal_id: str
+    requires_confirmation: bool = False
+    confirmation_phrase: Optional[str] = None
+    token: Optional[str] = None
+    expires_in: Optional[int] = None
+
+
+class ApprovedAction(BaseModel):
+    proposal_id: str
+    command: str
+    cwd: str
+
+
+class ActionApprovalRequest(BaseModel):
+    terminal_id: str = Field(min_length=1, max_length=64)
+
+
+class DestructiveConfirmationRequest(ActionApprovalRequest):
+    phrase: str = Field(min_length=1, max_length=200)
 
 
 class ChatResult(BaseModel):
@@ -18,6 +133,12 @@ class ChatResult(BaseModel):
     content: str
     error: Optional[str] = None
     artifact: Optional["ArtifactRecord"] = None
+    attached_skills: List["AttachedSkill"] = Field(default_factory=list)
+    attached_skillsets: List[str] = Field(default_factory=list)
+    skill_recommendations: List["SkillRecommendation"] = Field(default_factory=list)
+    actions: List[ActionSuggestion] = Field(default_factory=list)
+    coding_agent_tasks: List[CodingAgentSuggestion] = Field(default_factory=list)
+    action_proposals: List[ActionProposal] = Field(default_factory=list)
 
 
 class GeneratedFile(BaseModel):
@@ -72,13 +193,20 @@ class AttachmentRecord(BaseModel):
 
 
 class SessionRecord(BaseModel):
-    schema_version: int = 1
+    schema_version: int = 2
     id: str
     created_at: datetime
     updated_at: datetime
     messages: List[ChatMessage] = Field(default_factory=list)
     attachments: List[AttachmentRecord] = Field(default_factory=list)
     selected_skill_ids: List[str] = Field(default_factory=list)
+    auto_attach_skills: bool = True
+    excluded_skill_ids: List[str] = Field(default_factory=list)
+
+    @field_validator("excluded_skill_ids")
+    @classmethod
+    def deduplicate_exclusions(cls, value: List[str]) -> List[str]:
+        return list(dict.fromkeys(value))
 
 
 class ClipboardTextRequest(BaseModel):
@@ -92,6 +220,35 @@ class AttachmentUpdate(BaseModel):
 class TerminalCreateRequest(BaseModel):
     shell: Literal["powershell", "cmd"] = "powershell"
     cwd: Optional[str] = None
+
+
+class CodingAgentGrantRequest(BaseModel):
+    project_root: str = Field(min_length=1, max_length=1000)
+    tool: Literal["broker", "shell", "continue", "aider"]
+
+
+class BrokerGrantRequest(BaseModel):
+    project_root: str = Field(min_length=1, max_length=1000)
+    profile: Literal["broker", "shell", "continue", "aider"] = "broker"
+
+
+class BrokerTaskRequest(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+    grant_id: str = Field(min_length=1, max_length=64)
+    request: BrokerActionRequest
+
+
+class BrokerAdapterRunRequest(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+    grant_id: str = Field(min_length=1, max_length=64)
+    project_root: str = Field(min_length=1, max_length=1000)
+    prompt: str = Field(min_length=1, max_length=20_000)
+
+
+class CodingAgentLaunchRequest(CodingAgentGrantRequest):
+    model: str = Field(min_length=1, max_length=200)
+    mode: Literal["interactive", "delegated"] = "interactive"
+    prompt: Optional[str] = Field(default=None, max_length=20_000)
 
 
 class SkillRecord(BaseModel):
@@ -113,6 +270,62 @@ class SkillPack(BaseModel):
     skills: List[SkillRecord] = Field(default_factory=list)
 
 
+class SkillsetMember(BaseModel):
+    reference: str
+    name: str
+
+
+class SkillsetRecord(BaseModel):
+    id: str
+    name: str
+    category: str
+    members: List[SkillsetMember] = Field(default_factory=list)
+    routing_terms: List[str] = Field(default_factory=list)
+    attachment_extensions: List[str] = Field(default_factory=list)
+    summary: str = ""
+    enabled: bool = True
+    auto_attach: bool = True
+    version: int = 1
+
+
+class SkillRecommendation(BaseModel):
+    reference: str
+    name: str
+    score: int
+    reasons: List[str] = Field(default_factory=list)
+    skillset_ids: List[str] = Field(default_factory=list)
+    manual: bool = False
+
+
+class SkillRecommendationResult(BaseModel):
+    recommendations: List[SkillRecommendation] = Field(default_factory=list)
+    skillset_ids: List[str] = Field(default_factory=list)
+
+
+class AttachedSkill(BaseModel):
+    reference: str
+    name: str
+    score: int = 0
+    reasons: List[str] = Field(default_factory=list)
+    manual: bool = False
+
+
+class ContextBuildResult(BaseModel):
+    prompt: str
+    attached_skills: List[AttachedSkill] = Field(default_factory=list)
+    skillsets: List[str] = Field(default_factory=list)
+    omitted: List[str] = Field(default_factory=list)
+
+
+class SkillRecommendationRequest(BaseModel):
+    prompt: str = Field(min_length=1)
+
+
+class SessionSkillRoutingUpdate(BaseModel):
+    auto_attach_skills: Optional[bool] = None
+    excluded_skill_ids: Optional[List[str]] = None
+
+
 class SkillUpdateRequest(BaseModel):
     content: str
     enabled: bool = True
@@ -129,21 +342,119 @@ class SkillSelectionRequest(BaseModel):
 
 class UiSettings(BaseModel):
     skill_catalog_open: bool = True
+    theme: Literal["light", "dark", "system"] = "dark"
+    sidebar_collapsed: bool = False
+    sidebar_width: int = 260
+    primary_destination: Literal["chat", "terminal", "context", "skills", "hardware", "settings"] = "chat"
+    hardware_section: Literal[
+        "overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "leaderboard", "history", "localperf"
+    ] = "overview"
+
+    @field_validator("sidebar_width", mode="before")
+    @classmethod
+    def bound_sidebar_width(cls, value: object) -> int:
+        width = int(value)
+        return min(380, max(220, width))
+
+
+class UiSettingsUpdate(BaseModel):
+    skill_catalog_open: Optional[bool] = None
+    theme: Optional[Literal["light", "dark", "system"]] = None
+    sidebar_collapsed: Optional[bool] = None
+    sidebar_width: Optional[int] = None
+    primary_destination: Optional[Literal["chat", "terminal", "context", "skills", "hardware", "settings"]] = None
+    hardware_section: Optional[Literal[
+        "overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "leaderboard", "history", "localperf"
+    ]] = None
+
+    @field_validator("sidebar_width", mode="before")
+    @classmethod
+    def bound_sidebar_width(cls, value: object) -> Optional[int]:
+        if value is None:
+            return None
+        width = int(value)
+        return min(380, max(220, width))
+
+    @model_validator(mode="after")
+    def reject_explicit_nulls(self) -> "UiSettingsUpdate":
+        for field in (
+            "skill_catalog_open", "theme", "sidebar_collapsed", "sidebar_width",
+            "primary_destination", "hardware_section",
+        ):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} cannot be null")
+        return self
+
 
 
 class SkillScanSettings(BaseModel):
     approved_directories: List[str] = Field(default_factory=list)
 
 
+class SkillRoutingSettings(BaseModel):
+    auto_attach: bool = True
+    max_skillsets: int = Field(default=3, ge=1, le=10)
+    max_skills: int = Field(default=5, ge=1, le=20)
+    minimum_score: int = Field(default=8, ge=1, le=100)
+
+
+class GpuProfileSettings(BaseModel):
+    mode: Literal[
+        "automatic", "gpu_preferred", "balanced", "vram_conservative", "cpu_only", "advanced"
+    ] = "automatic"
+    num_gpu: Optional[int] = Field(default=None, ge=0, le=999)
+    main_gpu: Optional[int] = Field(default=None, ge=0, le=15)
+    num_ctx: Optional[int] = Field(default=None, ge=512, le=131072)
+    num_batch: Optional[int] = Field(default=None, ge=1, le=2048)
+
+    @model_validator(mode="after")
+    def validate_advanced_profile(self) -> "GpuProfileSettings":
+        manual = (self.num_gpu, self.main_gpu, self.num_ctx, self.num_batch)
+        if self.mode == "advanced" and all(value is None for value in manual):
+            raise ValueError("Advanced profile requires at least one manual option")
+        if self.mode != "advanced" and any(value is not None for value in manual):
+            raise ValueError("Manual options require the advanced profile")
+        return self
+
+    def ollama_options(self) -> dict:
+        presets = {
+            "automatic": {},
+            "gpu_preferred": {"num_gpu": 999},
+            "balanced": {"num_gpu": 16},
+            "vram_conservative": {"num_ctx": 2048, "num_batch": 128},
+            "cpu_only": {"num_gpu": 0},
+        }
+        if self.mode != "advanced":
+            return presets[self.mode]
+        return {
+            name: value for name, value in (
+                ("num_gpu", self.num_gpu),
+                ("main_gpu", self.main_gpu),
+                ("num_ctx", self.num_ctx),
+                ("num_batch", self.num_batch),
+            ) if value is not None
+        }
+
+
+class GpuOptimizationSettings(BaseModel):
+    default_profile: GpuProfileSettings = Field(default_factory=GpuProfileSettings)
+    model_profiles: Dict[str, GpuProfileSettings] = Field(default_factory=dict)
+
+
 class SystemSettings(BaseModel):
-    version: int = 1
+    version: int = 2
+    app_version: str = APP_VERSION
     ui: UiSettings = Field(default_factory=UiSettings)
     skill_scan: SkillScanSettings = Field(default_factory=SkillScanSettings)
+    skill_routing: SkillRoutingSettings = Field(default_factory=SkillRoutingSettings)
+    gpu_optimization: GpuOptimizationSettings = Field(default_factory=GpuOptimizationSettings)
 
 
 class SettingsUpdate(BaseModel):
-    ui: Optional[UiSettings] = None
+    ui: Optional[UiSettingsUpdate] = None
     skill_scan: Optional[SkillScanSettings] = None
+    skill_routing: Optional[SkillRoutingSettings] = None
+    gpu_optimization: Optional[GpuOptimizationSettings] = None
 
 
 class SkillScanRequest(BaseModel):
@@ -156,6 +467,14 @@ class KnownSkillScanRequest(BaseModel):
 
 class DiscoveryInstallRequest(BaseModel):
     discovery_id: str
+
+
+class GithubSkillPreviewRequest(BaseModel):
+    url: str
+
+
+class GithubSkillInstallRequest(BaseModel):
+    preview_id: str
 
 
 class SkillDiscovery(BaseModel):

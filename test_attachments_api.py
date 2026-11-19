@@ -92,6 +92,29 @@ class AttachmentServiceTests(unittest.TestCase):
             204,
         )
 
+    def test_http_folder_upload_preserves_safe_relative_path(self):
+        client = TestClient(create_app(FakeOllamaService(), self.workspace, self.service))
+
+        upload = client.post(
+            f"/api/sessions/{self.session.id}/attachments",
+            data={"relative_path": "project/src/notes.txt"},
+            files={"file": ("notes.txt", b"folder context", "text/plain")},
+        )
+
+        self.assertEqual(upload.status_code, 201)
+        self.assertEqual(upload.json()["display_name"], "project/src/notes.txt")
+
+    def test_http_folder_upload_rejects_unsafe_relative_path(self):
+        client = TestClient(create_app(FakeOllamaService(), self.workspace, self.service))
+
+        upload = client.post(
+            f"/api/sessions/{self.session.id}/attachments",
+            data={"relative_path": "../secret.txt"},
+            files={"file": ("secret.txt", b"unsafe", "text/plain")},
+        )
+
+        self.assertEqual(upload.status_code, 400)
+
     def test_http_original_download_and_extraction_retry(self):
         client = TestClient(create_app(FakeOllamaService(), self.workspace, self.service))
         upload = client.post(

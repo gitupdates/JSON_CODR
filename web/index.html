@@ -3,33 +3,78 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light dark" />
+    <script>
+      (() => {
+        const validModes = new Set(["light", "dark", "system"]);
+        const cachedMode = localStorage.getItem("json_codr_theme");
+        const mode = validModes.has(cachedMode) ? cachedMode : "dark";
+        const effectiveTheme = mode === "system"
+          ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+          : mode;
+        document.documentElement.dataset.theme = effectiveTheme;
+        document.documentElement.style.colorScheme = effectiveTheme;
+      })();
+    </script>
     <title>JSON_CODR · Local model console</title>
-    <link rel="stylesheet" href="/static/app.css" />
+    <link rel="stylesheet" href="/static/vendor/xterm.css" />
+    <link rel="stylesheet" href="/static/app.css?v=1.0.17-beta.5" />
   </head>
   <body>
     <div class="ambient ambient-one"></div>
     <div class="ambient ambient-two"></div>
-    <main class="shell">
+    <svg class="nav-symbols" aria-hidden="true">
+      <symbol id="icon-chat" viewBox="0 0 24 24"><path d="M5 5h14v11H9l-4 3V5Z"/><path d="M8 9h8M8 12h5"/></symbol>
+      <symbol id="icon-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></symbol>
+      <symbol id="icon-context" viewBox="0 0 24 24"><path d="M4 6h6l2 2h8v10H4V6Z"/><path d="M8 12h8M8 15h5"/></symbol>
+      <symbol id="icon-skills" viewBox="0 0 24 24"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3Z"/><path d="m18 15 .8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8L18 15Z"/></symbol>
+      <symbol id="icon-hardware" viewBox="0 0 24 24"><path d="M4 12h4l2-6 4 12 2-6h4"/><path d="M4 4v16h16"/></symbol>
+      <symbol id="icon-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1a7 7 0 0 0-1.7-1L14.5 3h-5l-.4 3.1a7 7 0 0 0-1.7 1l-2.4-1-2 3.4L5.1 11a7 7 0 0 0 0 2L3 14.5l2 3.4 2.4-1a7 7 0 0 0 1.7 1l.4 3.1h5l.4-3.1a7 7 0 0 0 1.7-1l2.4 1 2-3.4-2.1-1.5c.1-.3.1-.7.1-1Z"/></symbol>
+    </svg>
+    <div id="navigation-backdrop" class="navigation-backdrop" hidden></div>
+    <div class="app-layout">
+      <nav id="app-sidebar" class="app-sidebar" aria-label="Primary navigation">
+        <div class="sidebar-brand">
+          <span class="sidebar-brand-mark">{ }</span><strong>JSON_CODR</strong>
+          <button id="sidebar-collapse" class="sidebar-icon-button" type="button" aria-label="Collapse navigation" aria-expanded="true">‹</button>
+        </div>
+        <div class="sidebar-destinations">
+          <button class="sidebar-destination is-active" type="button" data-destination="chat" aria-current="page" title="Chat"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-chat"/></svg><span>Chat</span></button>
+          <button class="sidebar-destination" type="button" data-destination="terminal" title="Live CLI"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-terminal"/></svg><span>Live CLI</span></button>
+          <button class="sidebar-destination" type="button" data-destination="context" title="Context &amp; files"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-context"/></svg><span>Context &amp; files</span></button>
+          <button class="sidebar-destination" type="button" data-destination="skills" title="Skills"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-skills"/></svg><span>Skills</span></button>
+          <button class="sidebar-destination" type="button" data-destination="hardware" title="Hardware"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-hardware"/></svg><span>Hardware</span></button>
+          <div id="hardware-subnavigation" class="hardware-subnavigation" hidden>
+            <button type="button" data-hardware-section="overview" aria-current="page">Overview</button>
+            <button type="button" data-hardware-section="profiles">Profiles &amp; optimization</button>
+            <button type="button" data-hardware-section="runtimes">Hardware &amp; runtimes</button>
+            <button type="button" data-hardware-section="compatibility">Model compatibility</button>
+            <button type="button" data-hardware-section="model-search">Optimized model search</button>
+            <button type="button" data-hardware-section="benchmarks">Performance benchmarks</button>
+            <button type="button" data-hardware-section="leaderboard">Leaderboard</button>
+            <button type="button" data-hardware-section="history">Results &amp; history</button>
+            <button type="button" data-hardware-section="localperf">LocalPerf packages</button>
+          </div>
+          <button class="sidebar-destination" type="button" data-destination="settings" title="Settings"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-settings"/></svg><span>Settings</span></button>
+        </div>
+        <div id="sidebar-resize-handle" class="sidebar-resize-handle" role="separator" aria-label="Resize navigation" aria-orientation="vertical" aria-valuemin="220" aria-valuemax="380" aria-valuenow="260" tabindex="0"></div>
+      </nav>
+      <main class="shell">
       <header class="topbar">
         <a class="brand" href="/" aria-label="JSON CODR home">
           <span class="brand-mark">{ }</span>
-          <span><strong>JSON_CODR</strong><small>V1.0.2 · local model console</small></span>
+          <span><strong>JSON_CODR</strong><small>V1.0.17-beta.5 · local model console</small></span>
         </a>
         <div id="health-status" class="health" role="status" aria-live="polite">
           <span class="health-dot"></span><span>Connecting</span>
         </div>
-        <div class="topbar-actions">
-          <button id="terminal-toggle" class="panel-toggle" type="button" aria-controls="terminal-panel" aria-expanded="false" title="Toggle terminal (Ctrl+J)">CLI</button>
-          <button id="context-toggle" class="panel-toggle" type="button" aria-controls="context-panel" aria-expanded="true" title="Toggle context panel (Ctrl+Alt+B)">Context</button>
-          <button id="skills-toggle" class="panel-toggle" type="button" aria-controls="skills-panel" aria-expanded="true">Skills</button>
-          <button id="settings-toggle" class="panel-toggle" type="button" aria-controls="settings-panel" aria-expanded="false">Settings</button>
-        </div>
+        <button id="mobile-navigation-toggle" class="panel-toggle mobile-navigation-toggle" type="button" aria-controls="app-sidebar" aria-expanded="false">Menu</button>
       </header>
 
+      <section id="view-chat" class="app-view" data-view="chat" aria-labelledby="chat-heading">
       <section class="hero">
         <p class="eyebrow">STRUCTURED INFERENCE / LOCAL ONLY</p>
-        <h1>One prompt.<br /><span>One precise model.</span></h1>
+        <h1 id="chat-heading">One prompt.<br /><span>One precise model.</span></h1>
         <p class="intro">Choose a local coding model and receive a validated response with a clean summary and full result.</p>
       </section>
 
@@ -68,6 +113,7 @@
             <p>Your validated response will appear here.</p>
           </div>
           <div id="result-state" hidden>
+            <section id="attached-skills" class="attached-skills" aria-label="Skills attached to this response" hidden></section>
             <article>
               <p class="result-label">SUMMARY</p>
               <h2 id="summary-output"></h2>
@@ -77,16 +123,23 @@
               <pre id="content-output"></pre>
               <a id="artifact-output" class="artifact-output" href="#" hidden>Download generated archive</a>
             </article>
+            <section id="action-review" class="action-review" aria-label="Proposed terminal actions" hidden>
+              <p class="result-label">REVIEW ACTIONS</p>
+              <div id="action-list" class="action-list"></div>
+            </section>
           </div>
           <div id="error-output" class="error" role="alert" hidden></div>
         </section>
       </section>
+      </section>
 
-      <aside id="context-panel" class="context-panel" aria-label="Attachment context">
+      <aside id="context-panel" class="context-panel app-view" data-view="context" aria-label="Attachment context" hidden>
         <div class="context-head"><div><span class="eyebrow">MODEL CONTEXT</span><h2>Files &amp; pasted content</h2></div><span id="context-count" class="meta">0 items</span></div>
         <div class="context-actions">
-          <label class="secondary file-button" for="attachment-input">Import files</label>
+          <label class="secondary file-button" for="attachment-input">Browse files</label>
           <input id="attachment-input" type="file" multiple hidden />
+          <label class="secondary file-button" for="attachment-folder-input">Browse folder</label>
+          <input id="attachment-folder-input" type="file" webkitdirectory multiple hidden />
           <button id="paste-text-button" class="secondary" type="button">Paste</button>
           <a id="export-archive" class="secondary file-button" href="#">Export ZIP</a>
         </div>
@@ -101,7 +154,7 @@
         </section>
       </aside>
 
-      <aside id="skills-panel" class="context-panel" aria-label="Active installed and saved skills">
+      <aside id="skills-panel" class="context-panel app-view" data-view="skills" aria-label="Active installed and saved skills" hidden>
         <section id="skill-library" aria-label="Installed skill library">
           <div class="dependency-head">
             <div><span class="eyebrow">SKILL LIBRARY</span><strong>Active installed &amp; saved skills</strong></div>
@@ -110,8 +163,16 @@
             <button id="skill-deduplicate" class="secondary" type="button">Remove duplicates</button>
           </div>
           <p id="skill-conversion-status" class="meta">Choose “Review as skills” on an imported ZIP to convert Claude, Codex, or generic skills.</p>
-          <p class="meta"><a href="/api/skills/standard/envelope.md" download>JSON_CODR skill authoring standard</a> Â· <a href="/api/skills/standard/envelope.schema.json" download>JSON Schema</a></p>
+          <p class="meta"><a href="/api/skills/standard/envelope.md" download>JSON_CODR skill authoring standard</a> &middot; <a href="/api/skills/standard/envelope.schema.json" download>JSON Schema</a></p>
           <div id="skill-list" class="skill-list"><p class="meta">No skills installed.</p></div>
+          <section id="skillset-library" class="skillset-library" aria-label="Automatic Skillsets">
+            <div class="dependency-head">
+              <div><span class="eyebrow">SKILLSETS</span><strong>Automatic routing packs</strong></div>
+              <label class="skill-routing-toggle"><input id="auto-attach-skills" type="checkbox" checked /> Auto-attach relevant skills</label>
+            </div>
+            <div id="skill-recommendations" class="skill-recommendations" aria-live="polite"></div>
+            <div id="skillset-list" class="skillset-list"><details class="skillset-pack"><summary>Loading Skillsets…</summary><p class="meta">Automatic routing packs are loading.</p></details></div>
+          </section>
           <article id="skill-details" class="skill-details" hidden aria-live="polite"></article>
           <div class="skill-editor-wrap">
             <label><input id="skill-enabled" type="checkbox" disabled /> Skill enabled</label>
@@ -121,11 +182,23 @@
               <button id="skill-remove-pack" class="secondary" type="button" disabled>Remove pack</button>
             </div>
           </div>
+          <section class="skill-discovery" aria-label="Install skill from GitHub">
+            <div><span class="eyebrow">GITHUB</span><strong>Install a repository skill</strong></div>
+            <p class="meta">Paste a GitHub SKILL.md or skill-folder URL. JSON_CODR pins its commit, preserves the complete folder, and converts it to the provider-neutral skill envelope.</p>
+            <div class="scan-controls">
+              <input id="skill-github-url" type="url" placeholder="https://github.com/owner/repository/blob/main/path/to/SKILL.md" aria-label="GitHub skill URL" />
+              <button id="skill-github-preview" class="secondary" type="button">Preview GitHub skill</button>
+              <button id="skill-github-install" class="primary" type="button" disabled>Install skill</button>
+            </div>
+            <p id="skill-github-status" class="meta" role="status" aria-live="polite">No GitHub skill has been reviewed.</p>
+          </section>
           <section class="skill-discovery" aria-label="Skill discovery">
             <div><span class="eyebrow">DISCOVERY</span><strong>Scan an approved local folder</strong></div>
             <div class="scan-controls">
               <input id="skill-scan-directory" type="text" placeholder="D:\path\to\skills" aria-label="Skill scan directory" />
               <button id="skill-scan" class="secondary" type="button">Scan folder</button>
+              <label class="secondary file-button" for="skill-folder-input">Browse folder</label>
+              <input id="skill-folder-input" type="file" webkitdirectory multiple hidden />
               <button id="skill-scan-known" class="secondary" type="button" hidden>Scan known locations</button>
             </div>
             <div id="skill-scan-results" class="skill-list"><p class="meta">No scan has run.</p></div>
@@ -133,11 +206,18 @@
         </section>
       </aside>
 
-      <aside id="settings-panel" class="context-panel" aria-label="JSON CODR settings" hidden>
+      <aside id="settings-panel" class="context-panel app-view" data-view="settings" aria-label="JSON CODR settings" hidden>
         <div class="context-head"><div><span class="eyebrow">SETTINGS</span><h2>System configuration</h2></div></div>
         <section class="dependency-review">
           <strong>Interface</strong>
-          <label class="setting-row"><input id="setting-skills-open" type="checkbox" /> Reopen Skills panel on startup</label>
+          <label class="setting-row" for="setting-theme">Appearance</label>
+          <select id="setting-theme" class="setting-select" aria-describedby="setting-theme-help" disabled>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+            <option value="system">System</option>
+          </select>
+          <p id="setting-theme-help" class="meta setting-help">System follows your Windows appearance.</p>
+          <label class="setting-row"><input id="setting-skills-open" type="checkbox" disabled /> Reopen Skills panel on startup</label>
         </section>
         <section class="dependency-review">
           <strong>Approved skill directories</strong>
@@ -145,12 +225,191 @@
         </section>
       </aside>
 
-      <section id="terminal-panel" class="terminal-panel" aria-label="Live command line" hidden>
+      <aside id="hardware-panel" class="context-panel app-view" data-view="hardware" aria-label="Hardware optimization" hidden>
+        <div class="context-head"><div><span class="eyebrow">HARDWARE</span><h2>Hardware optimization</h2><p id="hardware-status" class="meta">CPU compatibility mode</p></div></div>
+        <div class="hardware-sections">
+          <section data-hardware-view="overview" aria-labelledby="hardware-section-overview">
+            <h3 id="hardware-section-overview">Compatibility overview</h3>
+            <p class="meta">Ollama remains the compatible default. Optional OpenVINO, Ryzen AI, WinML, and DirectML connectors use isolated environments and activate only after a successful model probe.</p>
+            <div id="hardware-telemetry" class="dependency-list" aria-live="polite"><p class="meta">GPU and model telemetry has not been loaded.</p></div>
+          </section>
+
+          <section data-hardware-view="profiles" aria-labelledby="hardware-section-profiles" hidden>
+            <h3 id="hardware-section-profiles">Profiles &amp; optimization</h3>
+            <label class="setting-row" for="hardware-profile-model">Optimization target</label>
+            <select id="hardware-profile-model" class="setting-select">
+              <option value="__default__">All models · default</option>
+            </select>
+            <label class="setting-row" for="hardware-profile-mode">GPU / VRAM profile</label>
+            <select id="hardware-profile-mode" class="setting-select">
+              <option value="automatic">Automatic · Ollama managed</option>
+              <option value="gpu_preferred">GPU preferred</option>
+              <option value="balanced">Balanced GPU / CPU offload</option>
+              <option value="vram_conservative">VRAM conservative</option>
+              <option value="cpu_only">CPU only</option>
+              <option value="advanced">Advanced manual</option>
+            </select>
+            <div id="hardware-profile-advanced" hidden>
+              <label class="setting-row" for="hardware-profile-num-gpu">GPU layers</label>
+              <input id="hardware-profile-num-gpu" class="setting-select" type="number" min="0" max="999" placeholder="Automatic" />
+              <label class="setting-row" for="hardware-profile-main-gpu">Primary GPU index</label>
+              <input id="hardware-profile-main-gpu" class="setting-select" type="number" min="0" max="15" placeholder="Automatic" />
+              <label class="setting-row" for="hardware-profile-num-ctx">Context tokens</label>
+              <input id="hardware-profile-num-ctx" class="setting-select" type="number" min="512" max="131072" placeholder="Automatic" />
+              <label class="setting-row" for="hardware-profile-num-batch">Batch size</label>
+              <input id="hardware-profile-num-batch" class="setting-select" type="number" min="1" max="2048" placeholder="Automatic" />
+            </div>
+            <div class="actions">
+              <button id="hardware-profile-save" class="primary" type="button">Save profile</button>
+              <button id="hardware-profile-reset" class="secondary" type="button">Reset to Automatic</button>
+              <button id="hardware-restore-cpu" class="secondary" type="button">Restore CPU</button>
+              <span id="hardware-profile-status" class="meta" role="status" aria-live="polite"></span>
+            </div>
+          </section>
+
+          <section data-hardware-view="runtimes" aria-labelledby="hardware-section-runtimes" hidden>
+            <h3 id="hardware-section-runtimes">Hardware &amp; runtimes</h3>
+            <div class="actions">
+              <button id="hardware-detect" class="secondary" type="button">Scan again</button>
+            </div>
+            <div id="hardware-candidates" class="dependency-list"><p class="meta">Run detection to list compatible backends.</p></div>
+          </section>
+
+          <section data-hardware-view="compatibility" aria-labelledby="hardware-section-compatibility" hidden>
+            <h3 id="hardware-section-compatibility">Model compatibility</h3>
+            <p class="meta">Installed models are marked accelerated only after model-specific evidence or a successful provider probe.</p>
+            <div id="hardware-model-compatibility" class="dependency-list"><p class="meta">Run hardware detection to compare installed models with verified runtimes.</p></div>
+          </section>
+
+          <section data-hardware-view="model-search" aria-labelledby="hardware-section-model-search" hidden>
+            <h3 id="hardware-section-model-search">Compatible optimized models</h3>
+            <p class="meta">Pinned models remain available offline. Live remote search runs only when requested; results require download and a successful probe.</p>
+            <select id="optimized-model-search-provider" class="setting-select">
+              <option value="openvino">OpenVINO</option><option value="ryzen_ai">Ryzen AI</option>
+              <option value="winml">WinML</option><option value="directml">DirectML</option>
+            </select>
+            <input id="optimized-model-search-query" class="setting-select" value="coder" aria-label="Optimized model search query" />
+            <button id="optimized-model-search-run" class="secondary" type="button">Search compatible models</button>
+            <div id="optimized-model-search-results" class="dependency-list"><p class="meta">Run an on-demand search to find additional candidates.</p></div>
+          </section>
+
+          <section data-hardware-view="benchmarks" aria-labelledby="hardware-section-benchmarks" hidden>
+            <h3 id="hardware-section-benchmarks">Performance benchmarks</h3>
+            <p class="meta">LocalPerf 0.3.0-localperf · LocalPerf-Core-v1. Runs the same versioned 12-prompt workload on CPU first and then each available backend.</p>
+            <label class="setting-row" for="hardware-benchmark-suite">Benchmark suite</label>
+            <select id="hardware-benchmark-suite" class="setting-select">
+              <option value="quick">Quick · 12 prompts × 3 repetitions</option>
+              <option value="thorough">Thorough · 12 prompts × 7 repetitions</option>
+            </select>
+            <label class="setting-row" for="hardware-benchmark-model">Benchmark model</label>
+            <select id="hardware-benchmark-model" class="setting-select"></select>
+            <label class="setting-row" for="hardware-benchmark-backend">Hardware optimization</label>
+            <select id="hardware-benchmark-backend" class="setting-select">
+              <option value="all">All detected and available</option>
+            </select>
+            <div class="actions">
+              <button id="hardware-benchmark-run" class="primary" type="button">Run benchmark</button>
+              <span id="hardware-benchmark-status" class="meta" role="status" aria-live="polite"></span>
+            </div>
+            <div id="hardware-benchmark-results" class="dependency-list"><p class="meta">No benchmark selected.</p></div>
+            <section class="integrity-benchmark-panel" aria-labelledby="integrity-benchmark-heading">
+              <div class="leaderboard-heading"><div>
+                <p class="eyebrow">MODEL QUALITY / LOCAL ONLY</p>
+                <h4 id="integrity-benchmark-heading">Integrity &amp; Comprehension</h4>
+                <p class="meta">Tests whether a model understands linked truths and preserves them under pressure. Scores remain separate from LocalPerf performance rankings.</p>
+              </div></div>
+              <label class="setting-row" for="integrity-benchmark-suite">Evaluation suite</label>
+              <select id="integrity-benchmark-suite" class="setting-select">
+                <option value="quick">Quick · 5 scenarios × 3 repetitions</option>
+                <option value="thorough">Thorough · 5 scenarios × 7 repetitions</option>
+              </select>
+              <label class="setting-row" for="integrity-benchmark-model">Evaluation model</label>
+              <select id="integrity-benchmark-model" class="setting-select"></select>
+              <div class="actions">
+                <button id="integrity-benchmark-run" class="primary" type="button">Run integrity evaluation</button>
+                <span id="integrity-benchmark-status" class="meta" role="status" aria-live="polite"></span>
+              </div>
+              <div id="integrity-benchmark-scores" class="integrity-score-grid" aria-label="Integrity and comprehension scores"></div>
+              <div id="integrity-benchmark-results" class="dependency-list"><p class="meta">No integrity evaluation selected.</p></div>
+              <strong>Integrity evaluation history</strong>
+              <div id="integrity-benchmark-history" class="dependency-list"><p class="meta">No integrity evaluation history.</p></div>
+            </section>
+          </section>
+
+          <section data-hardware-view="leaderboard" aria-labelledby="hardware-section-leaderboard" hidden>
+            <div class="leaderboard-heading">
+              <div><h3 id="hardware-section-leaderboard">LocalPerf leaderboard</h3><p class="meta">Rank and compare measured local inference performance across CPU, GPU, NPU, and optimized runtimes.</p></div>
+              <span id="leaderboard-status" class="meta" role="status" aria-live="polite">Load benchmark history to compare results.</span>
+            </div>
+            <p class="leaderboard-disclaimer">Holistic capability ranks strict integrity/comprehension tiers first and uses verified performance only to order models within the same capability tier. Performance can never outrank a higher capability result.</p>
+            <div class="leaderboard-filters" aria-label="Leaderboard filters">
+              <label>Search<input id="leaderboard-search" type="search" placeholder="Model or backend" /></label>
+              <label>Model<select id="leaderboard-model-filter"><option value="all">All models</option></select></label>
+              <label>Backend<select id="leaderboard-backend-filter"><option value="all">All backends</option></select></label>
+              <label>Suite<select id="leaderboard-suite-filter"><option value="all">All suites</option></select></label>
+              <label>Rank by<select id="leaderboard-metric"><option value="holistic_capability" selected>Holistic capability</option><option value="tokens_per_second">Throughput</option><option value="ttft_ms">Time to first token</option><option value="average_total_seconds">Total duration</option><option value="peak_vram_mb">Peak VRAM</option><option value="performance_index">Performance index</option><option value="integrity_overall">Integrity &amp; comprehension</option><option value="combined_score">Weighted quality + performance</option></select></label>
+            </div>
+            <div id="leaderboard-kpis" class="leaderboard-kpis" aria-label="Benchmark key performance indicators"></div>
+            <div class="leaderboard-table-wrap">
+              <table class="leaderboard-table">
+                <caption class="sr-only">Local inference performance leaderboard</caption>
+                <thead><tr><th scope="col"><button type="button" data-sort-key="rank">Rank</button></th><th scope="col"><button type="button" data-sort-key="model">Model / backend</button></th><th scope="col"><button type="button" data-sort-key="performance_index">Index</button></th><th scope="col"><button type="button" data-sort-key="integrity_overall">Integrity</button></th><th scope="col"><button type="button" data-sort-key="combined_score">Combined</button></th><th scope="col"><button type="button" data-sort-key="tokens_per_second">Tokens/s</button></th><th scope="col"><button type="button" data-sort-key="ttft_ms">TTFT</button></th><th scope="col"><button type="button" data-sort-key="average_total_seconds">Duration</button></th><th scope="col"><button type="button" data-sort-key="peak_vram_mb">Peak VRAM</button></th><th scope="col"><button type="button" data-sort-key="speedup_vs_cpu">CPU speed</button></th><th scope="col"><button type="button" data-sort-key="status">Status</button></th></tr></thead>
+                <tbody id="leaderboard-table"><tr><td colspan="11" class="meta">No benchmark history loaded.</td></tr></tbody>
+              </table>
+            </div>
+            <div class="leaderboard-charts">
+              <figure id="leaderboard-backend-chart" class="leaderboard-chart" aria-label="Backend performance comparison"><figcaption>Throughput versus responsiveness</figcaption><p class="meta">Run benchmarks to plot backend results.</p></figure>
+              <figure id="leaderboard-trend-chart" class="leaderboard-chart" aria-label="Performance history trend"><figcaption>Performance history</figcaption><p class="meta">Select a tested backend to view its history.</p></figure>
+            </div>
+            <article id="leaderboard-details" class="leaderboard-details" aria-live="polite"><p class="meta">Select a leaderboard row for percentile statistics and per-prompt evidence.</p></article>
+          </section>
+
+          <section data-hardware-view="history" aria-labelledby="hardware-section-history" hidden>
+            <h3 id="hardware-section-history">Results &amp; history</h3>
+            <strong>Previous runs</strong>
+            <button id="hardware-benchmark-clear" class="secondary" type="button">Clear benchmark data</button>
+            <div id="hardware-benchmark-history" class="dependency-list"><p class="meta">No benchmark history.</p></div>
+          </section>
+
+          <section data-hardware-view="localperf" aria-labelledby="hardware-section-localperf" hidden>
+            <h3 id="hardware-section-localperf">Portable LocalPerf package</h3>
+            <p class="meta">Exports are sanitized by default. Full system details require explicit opt-in.</p>
+            <label class="setting-row"><input id="localperf-include-details" type="checkbox" /> Include full system details in export</label>
+            <div class="actions">
+              <button id="localperf-export" class="secondary" type="button" disabled>Export selected run</button>
+              <label class="secondary file-button" for="localperf-import-input">Choose package</label>
+              <input id="localperf-import-input" type="file" accept=".zip,.localperf.zip,application/zip" hidden />
+              <button id="localperf-import" class="secondary" type="button" disabled>Import reviewed package</button>
+            </div>
+            <label class="setting-row"><input id="localperf-retain-details" type="checkbox" disabled /> Retain imported system details (explicit consent)</label>
+            <p id="localperf-package-status" class="meta" role="status" aria-live="polite">No package selected.</p>
+          </section>
+        </div>
+      </aside>
+
+      <section id="terminal-panel" class="terminal-panel app-view" data-view="terminal" aria-label="Live command line" hidden>
         <div class="terminal-head">
           <div><span class="eyebrow">LOCAL POWERSHELL</span><strong>Live CLI passthrough</strong></div>
           <span id="terminal-status" class="meta">Not started</span>
         </div>
-        <pre id="terminal-output" class="terminal-output" aria-live="polite"></pre>
+        <div id="terminal-tabs" class="terminal-tabs" role="tablist" aria-label="Terminal sessions">
+          <button type="button" role="tab" data-terminal-profile="powershell" aria-selected="true">PowerShell</button>
+          <button type="button" role="tab" data-terminal-profile="continue" aria-selected="false">Continue</button>
+          <button type="button" role="tab" data-terminal-profile="aider" aria-selected="false">Aider</button>
+        </div>
+        <form id="coding-agent-launcher" class="coding-agent-launcher">
+          <div><span class="eyebrow">BETA CODING AGENTS</span><strong>Project execution profiles</strong></div>
+          <label>Agent<select id="coding-agent-tool"><option value="broker" selected>Coding sandbox · create, review, edit &amp; run</option><option value="shell">Unrestricted shell · non-sandboxed</option><option value="continue">Continue CLI</option><option value="aider">Aider</option></select></label>
+          <label>Model<select id="coding-agent-model"></select></label>
+          <label>Project root<input id="coding-agent-project" type="text" value="D:\\JSON_CODR_repo" /></label>
+          <label>Mode<select id="coding-agent-mode"><option value="interactive">Interactive</option><option value="delegated">Delegated</option></select></label>
+          <label><input id="coding-agent-persistent" type="checkbox" checked /> Full persistent authorization for this project and agent</label>
+          <button id="coding-agent-launch" class="primary" type="submit">Launch agent</button>
+          <span id="coding-agent-status" class="meta" role="status" aria-live="polite"></span>
+          <div id="coding-agent-grants" class="coding-agent-grants" aria-live="polite"></div>
+        </form>
+        <div id="terminal-xterm" class="terminal-xterm" aria-label="Interactive terminal"></div>
+        <pre id="terminal-output" class="terminal-output terminal-output-fallback" aria-live="polite"></pre>
         <div class="terminal-command">
           <span aria-hidden="true">PS&gt;</span>
           <input id="terminal-input" type="text" autocomplete="off" spellcheck="false" aria-label="PowerShell command" placeholder="Enter a command" />
@@ -159,8 +418,31 @@
         </div>
       </section>
 
+      <dialog id="destructive-confirmation-dialog" class="confirmation-dialog" aria-labelledby="destructive-confirmation-title">
+        <form method="dialog">
+          <p class="eyebrow">STRONG CONFIRMATION REQUIRED</p>
+          <h2 id="destructive-confirmation-title">Review destructive action</h2>
+          <p>Command</p><code id="destructive-confirmation-command"></code>
+          <p>Working directory</p><code id="destructive-confirmation-cwd"></code>
+          <p>Risk</p><strong id="destructive-confirmation-risk"></strong>
+          <p>Enter confirmation code <code id="destructive-confirmation-phrase"></code> to continue.</p>
+          <label for="destructive-confirmation-input">Confirmation code</label>
+          <input id="destructive-confirmation-input" type="text" autocomplete="off" spellcheck="false" />
+          <div class="actions">
+            <button id="destructive-confirmation-submit" class="primary" type="button">Confirm and run</button>
+            <button class="secondary" value="cancel">Cancel</button>
+          </div>
+        </form>
+      </dialog>
+
       <footer><span>Runs entirely on this machine</span><span>127.0.0.1 · Ollama</span></footer>
-    </main>
-    <script src="/static/app.js" defer></script>
+      </main>
+    </div>
+    <script src="/static/dependency_install_queue.js?v=1.0.17-beta.5" defer></script>
+    <script src="/static/benchmark_leaderboard.js?v=1.0.17-beta.5" defer></script>
+    <script src="/static/terminal_keyboard.js?v=1.0.17-beta.5-clipboard2" defer></script>
+    <script src="/static/vendor/xterm.js" defer></script>
+    <script src="/static/vendor/xterm-addon-fit.js" defer></script>
+    <script src="/static/app.js?v=1.0.17-beta.5-clipboard2" defer></script>
   </body>
 </html>

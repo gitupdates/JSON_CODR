@@ -1,11 +1,11 @@
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import ollama
 from pydantic import ValidationError
 
 from cli import StructuredCLIResponse, load_config, parse_response_content
-from web_app.models import ChatResult, ConversionBundle
+from web_app.models import ChatResult, ConversionBundle, GpuProfileSettings
 
 
 class OllamaUnavailableError(RuntimeError):
@@ -21,10 +21,31 @@ class ModelTimeoutError(RuntimeError):
 
 
 class OllamaService:
-    def __init__(self, client: Optional[Any] = None, timeout_seconds: int = 180) -> None:
+    def __init__(
+        self,
+        client: Optional[Any] = None,
+        timeout_seconds: int = 180,
+        optimization_provider: Optional[Callable[[str], GpuProfileSettings]] = None,
+    ) -> None:
         self.config = load_config()
         self.client = client or ollama.AsyncClient(host=self.config["host"])
         self.timeout_seconds = timeout_seconds
+        self.optimization_provider = optimization_provider or (lambda model: GpuProfileSettings())
+
+    def set_optimization_provider(self, provider: Callable[[str], GpuProfileSettings]) -> None:
+        self.optimization_provider = provider
+
+    async def _chat_with_optimization(self, model: str, request: dict):
+        options = self.optimization_provider(model).ollama_options()
+        if options:
+            request["options"] = options
+        try:
+            return await asyncio.wait_for(self.client.chat(**request), timeout=self.timeout_seconds)
+        except Exception:
+            if not options:
+                raise
+            request.pop("options", None)
+            return await asyncio.wait_for(self.client.chat(**request), timeout=self.timeout_seconds)
 
     async def health(self) -> Dict[str, bool]:
         try:
@@ -59,6 +80,25 @@ class OllamaService:
             )
         return result
 
+    async def running_models(self) -> List[dict]:
+        try:
+            response = await asyncio.wait_for(self.client.ps(), timeout=5)
+        except Exception:
+            return []
+        payload = response.model_dump() if hasattr(response, "model_dump") else response
+        result = []
+        for item in payload.get("models", []):
+            size = int(item.get("size") or 0)
+            size_vram = int(item.get("size_vram") or 0)
+            gpu_percent = round(size_vram * 100 / size) if size else 0
+            result.append({
+                "name": item.get("model") or item.get("name"),
+                "size": size,
+                "size_vram": size_vram,
+                "processor": f"{gpu_percent}% GPU" if gpu_percent else "100% CPU",
+            })
+        return result
+
     async def supports_vision(self, model: str) -> bool:
         resolved = self._resolve(model)
         try:
@@ -68,6 +108,67 @@ class OllamaService:
         payload = response.model_dump() if hasattr(response, "model_dump") else response
         capabilities = payload.get("capabilities", [])
         return "vision" in capabilities
+
+    async def supports_tools(self, model: str) -> bool:
+        resolved = self._resolve(model)
+        verified = self.config.get("verified_tool_models")
+        if isinstance(verified, list):
+            return resolved in verified
+        try:
+            response = await asyncio.wait_for(self.client.show(resolved), timeout=5)
+        except Exception:
+            return False
+        payload = response.model_dump() if hasattr(response, "model_dump") else response
+        return "tools" in payload.get("capabilities", [])
+
+    async def tool_compatibility(self, model: str) -> dict:
+        resolved = self._resolve(model)
+        try:
+            response = await asyncio.wait_for(self.client.show(resolved), timeout=5)
+            payload = response.model_dump() if hasattr(response, "model_dump") else response
+            advertised = "tools" in payload.get("capabilities", [])
+        except Exception:
+            advertised = False
+
+        verified = self.config.get("verified_tool_models")
+        verified_models = verified if isinstance(verified, list) else []
+        if resolved in verified_models:
+            route = "native_verified"
+            effective_model = resolved
+        else:
+            fallback = str(self.config.get("tool_fallback_model", "")).strip()
+            effective_model = fallback if fallback in verified_models else None
+            route = "delegated_verified" if effective_model else "unavailable"
+        return {
+            "requested_model": resolved,
+            "advertised_tools": advertised,
+            "native_tools_verified": resolved in verified_models,
+            "route": route,
+            "effective_tool_model": effective_model,
+            "available": effective_model is not None,
+        }
+
+    async def generate_deterministic(
+        self, model: str, messages: List[dict], temperature: float = 0.0
+    ) -> str:
+        resolved = self._resolve(model)
+        live = await self._live_models()
+        if resolved not in live:
+            raise OllamaUnavailableError("Model is not installed")
+        try:
+            response = await asyncio.wait_for(
+                self.client.chat(
+                    model=resolved,
+                    messages=messages,
+                    options={"temperature": temperature, "num_predict": 512},
+                ),
+                timeout=self.timeout_seconds,
+            )
+        except asyncio.TimeoutError as error:
+            raise ModelTimeoutError("Model request timed out") from error
+        except Exception as error:
+            raise OllamaUnavailableError("Ollama request failed") from error
+        return str(response.message.content if hasattr(response, "message") else response["message"]["content"])
 
     def _resolve(self, requested: str) -> str:
         configured = self.config["jury_models"]
@@ -83,15 +184,13 @@ class OllamaService:
         live = await self._live_models()
         if resolved not in live:
             raise OllamaUnavailableError("Model is not installed")
+        request = {
+            "model": resolved,
+            "messages": [{"role": "user", "content": prompt, "images": images or None}],
+            "format": StructuredCLIResponse.model_json_schema(),
+        }
         try:
-            response = await asyncio.wait_for(
-                self.client.chat(
-                    model=resolved,
-                    messages=[{"role": "user", "content": prompt, "images": images or None}],
-                    format=StructuredCLIResponse.model_json_schema(),
-                ),
-                timeout=self.timeout_seconds,
-            )
+            response = await self._chat_with_optimization(resolved, request)
         except asyncio.TimeoutError as error:
             raise ModelTimeoutError("Model request timed out") from error
         except Exception as error:
@@ -117,14 +216,11 @@ class OllamaService:
             "installed or executed. Return only the requested structured conversion bundle."
         )
         try:
-            response = await asyncio.wait_for(
-                self.client.chat(
-                    model=resolved,
-                    messages=[{"role": "user", "content": conversion_prompt}],
-                    format=ConversionBundle.model_json_schema(),
-                ),
-                timeout=self.timeout_seconds,
-            )
+            response = await self._chat_with_optimization(resolved, {
+                "model": resolved,
+                "messages": [{"role": "user", "content": conversion_prompt}],
+                "format": ConversionBundle.model_json_schema(),
+            })
         except asyncio.TimeoutError as error:
             raise ModelTimeoutError("Model conversion timed out") from error
         except Exception as error:

@@ -1,0 +1,258 @@
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import stat
+import uuid
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Callable
+
+
+TOOLS = {"continue": "cn", "aider": "aider"}
+PROFILES = {"broker", "shell", *TOOLS}
+
+
+@dataclass(frozen=True)
+class CodingAgentGrant:
+    id: str
+    project_root: str
+    profile: str
+    scope: str
+    enabled: bool
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class CodingAgentLaunchPlan:
+    tool: str
+    argv: tuple[str, ...]
+    cwd: str
+    environment: dict[str, str]
+    interactive: bool
+
+
+class CodingAgentService:
+    def __init__(self, data_root: Path, executable_finder: Callable[[str], str | None] = shutil.which) -> None:
+        self.path = Path(data_root).resolve() / "coding-agent-grants.json"
+        self.executable_finder = executable_finder
+
+    @staticmethod
+    def _project(path: Path | str) -> Path:
+        candidate = Path(path).expanduser()
+        if not candidate.is_dir():
+            raise ValueError("Project root must be an existing directory")
+        details = candidate.lstat()
+        if candidate.is_symlink() or bool(getattr(details, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+            raise ValueError("Project root cannot be a reparse point")
+        return candidate.resolve()
+
+    @staticmethod
+    def _tool(tool: str) -> str:
+        normalized = tool.strip().lower()
+        if normalized not in PROFILES:
+            raise ValueError("Unsupported coding agent")
+        return normalized
+
+    def _read(self) -> list[dict]:
+        if not self.path.is_file():
+            return []
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        if not isinstance(payload, list):
+            return []
+        grants = []
+        for value in payload:
+            if not isinstance(value, dict):
+                continue
+            item = dict(value)
+            item["profile"] = item.pop("tool", item.get("profile", ""))
+            grants.append(item)
+        return grants
+
+    def _write(self, grants: list[dict]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.parent / f".coding-agent-grants-{uuid.uuid4().hex}.tmp"
+        temporary.write_text(json.dumps(grants, indent=2), encoding="utf-8")
+        os.replace(temporary, self.path)
+
+    def grant(self, project_root: Path | str, tool: str) -> CodingAgentGrant:
+        project = str(self._project(project_root))
+        normalized_tool = self._tool(tool)
+        grants = self._read()
+        now = datetime.now(timezone.utc).isoformat()
+        existing = next((item for item in grants if item.get("project_root") == project and item.get("profile") == normalized_tool), None)
+        if existing:
+            existing.update({"scope": "full", "enabled": True, "updated_at": now})
+            record = CodingAgentGrant(**existing)
+        else:
+            record = CodingAgentGrant(uuid.uuid4().hex, project, normalized_tool, "full", True, now, now)
+            grants.append(asdict(record))
+        self._write(grants)
+        return record
+
+    def revoke(self, grant_id: str) -> CodingAgentGrant:
+        grants = self._read()
+        target = next((item for item in grants if item.get("id") == grant_id), None)
+        if target is None:
+            raise KeyError(grant_id)
+        target["enabled"] = False
+        target["updated_at"] = datetime.now(timezone.utc).isoformat()
+        self._write(grants)
+        return CodingAgentGrant(**target)
+
+    def authorized(self, working_directory: Path | str, tool: str) -> bool:
+        try:
+            working = self._project(working_directory)
+            normalized_tool = self._tool(tool)
+        except ValueError:
+            return False
+        for item in self._read():
+            if not item.get("enabled") or item.get("profile") != normalized_tool:
+                continue
+            try:
+                root = self._project(item.get("project_root", ""))
+                working.relative_to(root)
+                return True
+            except (ValueError, TypeError):
+                continue
+        return False
+
+    def authorized_grant(self, grant_id: str, working_directory: Path | str, profile: str) -> bool:
+        try:
+            working = self._project(working_directory)
+            normalized_profile = self._tool(profile)
+        except ValueError:
+            return False
+        for item in self._read():
+            if item.get("id") != grant_id or not item.get("enabled") or item.get("profile") != normalized_profile:
+                continue
+            try:
+                working.relative_to(self._project(item.get("project_root", "")))
+                return True
+            except (ValueError, TypeError):
+                return False
+        return False
+
+    def status(self) -> dict:
+        return {
+            "tools": [{"id": tool, "executable": executable, "installed": bool(self.executable_finder(executable))}
+                      for tool, executable in TOOLS.items()],
+            "grants": self._read(),
+        }
+
+    def _continue_config(self, model: str, supports_tools: bool) -> Path:
+        directory = self.path.parent / "coding-agent-configs"
+        directory.mkdir(parents=True, exist_ok=True)
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", model).strip("-")
+        target = directory / f"continue-ollama-{safe_name}.yaml"
+        analysis_environment = self._analysis_environment()
+        content = (
+            "name: JSON_CODR Local Ollama\n"
+            "version: 1.0.0\n"
+            "schema: v1\n"
+            "models:\n"
+            f"  - name: JSON_CODR {model}\n"
+            "    provider: ollama\n"
+            f"    model: {model}\n"
+            "    apiBase: http://127.0.0.1:11434\n"
+            "    roles:\n"
+            "      - chat\n"
+            "      - edit\n"
+            "      - apply\n"
+        )
+        if supports_tools:
+            content += "    capabilities:\n      - tool_use\n"
+        else:
+            content += "experimental:\n  onlyUseSystemMessageTools: true\n"
+        if supports_tools:
+            content += (
+                "mcpServers:\n"
+                "  - name: REA reverse engineering\n"
+                f"    command: {json.dumps(self.executable_finder('rea') or 'rea')}\n"
+                "    args:\n"
+                "      - mcp\n"
+            )
+            if analysis_environment:
+                content += "    env:\n" + "".join(
+                    f"      {key}: {json.dumps(value)}\n" for key, value in analysis_environment.items()
+                )
+        temporary = directory / f".{target.name}.{uuid.uuid4().hex}.tmp"
+        temporary.write_text(content, encoding="utf-8")
+        os.replace(temporary, target)
+        return target
+
+    def _analysis_environment(self) -> dict[str, str]:
+        environment = {}
+        ghidra = os.environ.get("GHIDRA_INSTALL_DIR")
+        java_home = os.environ.get("JAVA_HOME")
+        if ghidra:
+            environment["GHIDRA_INSTALL_DIR"] = ghidra
+        if java_home:
+            environment["JAVA_HOME"] = java_home
+        return environment
+
+    def launch_plan(
+        self,
+        tool: str,
+        working_directory: Path | str,
+        model: str,
+        mode: str,
+        prompt: str | None = None,
+        supports_tools: bool = True,
+    ) -> CodingAgentLaunchPlan:
+        normalized_tool = self._tool(tool)
+        if normalized_tool not in TOOLS:
+            raise ValueError("This execution profile does not launch a coding agent")
+        working = self._project(working_directory)
+        if not self.authorized(working, normalized_tool):
+            raise PermissionError("Coding agent requires persistent authorization for this project and tool")
+        if not re.fullmatch(r"[A-Za-z0-9_.:/-]{1,200}", model):
+            raise ValueError("Invalid model name")
+        if mode not in {"interactive", "delegated"}:
+            raise ValueError("Unsupported coding agent mode")
+        if mode == "delegated" and not (prompt or "").strip():
+            raise ValueError("Delegated mode requires a prompt")
+        executable = self.executable_finder(TOOLS[normalized_tool])
+        if not executable:
+            raise RuntimeError(f"{TOOLS[normalized_tool]} is not installed")
+        interactive = mode == "interactive"
+        if normalized_tool == "continue":
+            config_path = str(self._continue_config(model, supports_tools))
+            if interactive:
+                argv = (executable, "--config", config_path)
+            elif supports_tools:
+                argv = (
+                    executable, "-p", prompt.strip(), "--allow", "Read", "--allow", "Write", "--allow", "Edit",
+                    "--exclude", "Bash", "--config", config_path
+                )
+            else:
+                excluded_tools = ("Read", "Write", "Edit", "Fetch", "MultiEdit", "Bash", "Skills")
+                argv = (executable, "-p", prompt.strip(), *(
+                    option for name in excluded_tools for option in ("--exclude", name)
+                ), "--config", config_path)
+            environment = self._analysis_environment()
+        else:
+            model_name = f"ollama_chat/{model}"
+            ollama_options = (
+                "--set-env", "OLLAMA_API_BASE=http://127.0.0.1:11434",
+                "--no-show-model-warnings",
+            )
+            argv = (
+                executable, "--model", model_name, "--no-check-update", "--no-fancy-input", *ollama_options
+            ) if interactive else (
+                executable, "--model", model_name, "--message", prompt.strip(), "--subtree-only",
+                "--no-suggest-shell-commands", "--no-auto-commits", "--yes-always",
+                "--no-check-update", "--no-fancy-input", "--no-pretty", *ollama_options
+            )
+            environment = {
+                **self._analysis_environment(),
+                "OLLAMA_API_BASE": "http://127.0.0.1:11434",
+            }
+        return CodingAgentLaunchPlan(normalized_tool, argv, str(working), environment, interactive)

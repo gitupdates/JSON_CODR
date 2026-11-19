@@ -15,14 +15,22 @@ const elements = {
   content: document.querySelector("#content-output"),
   artifactOutput: document.querySelector("#artifact-output"),
   error: document.querySelector("#error-output"),
-  contextToggle: document.querySelector("#context-toggle"),
+  appSidebar: document.querySelector("#app-sidebar"),
+  sidebarCollapse: document.querySelector("#sidebar-collapse"),
+  sidebarResizeHandle: document.querySelector("#sidebar-resize-handle"),
+  mobileNavigationToggle: document.querySelector("#mobile-navigation-toggle"),
+  navigationBackdrop: document.querySelector("#navigation-backdrop"),
+  navigationButtons: [...document.querySelectorAll("[data-destination]")],
+  destinationViews: [...document.querySelectorAll("[data-view]")],
+  hardwareSubnavigation: document.querySelector("#hardware-subnavigation"),
+  hardwareSectionButtons: [...document.querySelectorAll("[data-hardware-section]")],
+  hardwareSectionViews: [...document.querySelectorAll("[data-hardware-view]")],
   contextPanel: document.querySelector("#context-panel"),
-  skillsToggle: document.querySelector("#skills-toggle"),
   skillsPanel: document.querySelector("#skills-panel"),
-  settingsToggle: document.querySelector("#settings-toggle"),
   settingsPanel: document.querySelector("#settings-panel"),
   contextCount: document.querySelector("#context-count"),
   attachmentInput: document.querySelector("#attachment-input"),
+  attachmentFolderInput: document.querySelector("#attachment-folder-input"),
   pasteTextButton: document.querySelector("#paste-text-button"),
   attachmentList: document.querySelector("#attachment-list"),
   attachmentPreview: document.querySelector("#attachment-preview"),
@@ -42,36 +50,379 @@ const elements = {
   skillScanDirectory: document.querySelector("#skill-scan-directory"),
   skillScan: document.querySelector("#skill-scan"),
   skillScanKnown: document.querySelector("#skill-scan-known"),
+  skillFolderInput: document.querySelector("#skill-folder-input"),
   skillScanResults: document.querySelector("#skill-scan-results"),
+  skillGithubUrl: document.querySelector("#skill-github-url"),
+  skillGithubPreview: document.querySelector("#skill-github-preview"),
+  skillGithubInstall: document.querySelector("#skill-github-install"),
+  skillGithubStatus: document.querySelector("#skill-github-status"),
+  skillsetList: document.querySelector("#skillset-list"),
+  skillRecommendations: document.querySelector("#skill-recommendations"),
+  autoAttachSkills: document.querySelector("#auto-attach-skills"),
+  attachedSkills: document.querySelector("#attached-skills"),
+  actionReview: document.querySelector("#action-review"),
+  actionList: document.querySelector("#action-list"),
+  destructiveDialog: document.querySelector("#destructive-confirmation-dialog"),
+  destructiveCommand: document.querySelector("#destructive-confirmation-command"),
+  destructiveCwd: document.querySelector("#destructive-confirmation-cwd"),
+  destructiveRisk: document.querySelector("#destructive-confirmation-risk"),
+  destructivePhrase: document.querySelector("#destructive-confirmation-phrase"),
+  destructiveInput: document.querySelector("#destructive-confirmation-input"),
+  destructiveSubmit: document.querySelector("#destructive-confirmation-submit"),
   settingSkillsOpen: document.querySelector("#setting-skills-open"),
+  settingTheme: document.querySelector("#setting-theme"),
   approvedSkillDirectories: document.querySelector("#approved-skill-directories"),
-  terminalToggle: document.querySelector("#terminal-toggle"),
+  hardwareStatus: document.querySelector("#hardware-status"),
+  hardwareDetect: document.querySelector("#hardware-detect"),
+  hardwareCandidates: document.querySelector("#hardware-candidates"),
+  hardwareTelemetry: document.querySelector("#hardware-telemetry"),
+  hardwareProfileModel: document.querySelector("#hardware-profile-model"),
+  hardwareProfileMode: document.querySelector("#hardware-profile-mode"),
+  hardwareProfileAdvanced: document.querySelector("#hardware-profile-advanced"),
+  hardwareProfileNumGpu: document.querySelector("#hardware-profile-num-gpu"),
+  hardwareProfileMainGpu: document.querySelector("#hardware-profile-main-gpu"),
+  hardwareProfileNumCtx: document.querySelector("#hardware-profile-num-ctx"),
+  hardwareProfileNumBatch: document.querySelector("#hardware-profile-num-batch"),
+  hardwareProfileSave: document.querySelector("#hardware-profile-save"),
+  hardwareProfileReset: document.querySelector("#hardware-profile-reset"),
+  hardwareProfileStatus: document.querySelector("#hardware-profile-status"),
+  hardwareRestoreCpu: document.querySelector("#hardware-restore-cpu"),
+  hardwareModelCompatibility: document.querySelector("#hardware-model-compatibility"),
+  hardwareBenchmarkSuite: document.querySelector("#hardware-benchmark-suite"),
+  hardwareBenchmarkModel: document.querySelector("#hardware-benchmark-model"),
+  hardwareBenchmarkBackend: document.querySelector("#hardware-benchmark-backend"),
+  hardwareBenchmarkRun: document.querySelector("#hardware-benchmark-run"),
+  hardwareBenchmarkStatus: document.querySelector("#hardware-benchmark-status"),
+  hardwareBenchmarkResults: document.querySelector("#hardware-benchmark-results"),
+  hardwareBenchmarkHistory: document.querySelector("#hardware-benchmark-history"),
+  hardwareBenchmarkClear: document.querySelector("#hardware-benchmark-clear"),
+  integrityBenchmarkSuite: document.querySelector("#integrity-benchmark-suite"),
+  integrityBenchmarkModel: document.querySelector("#integrity-benchmark-model"),
+  integrityBenchmarkRun: document.querySelector("#integrity-benchmark-run"),
+  integrityBenchmarkStatus: document.querySelector("#integrity-benchmark-status"),
+  integrityBenchmarkScores: document.querySelector("#integrity-benchmark-scores"),
+  integrityBenchmarkResults: document.querySelector("#integrity-benchmark-results"),
+  integrityBenchmarkHistory: document.querySelector("#integrity-benchmark-history"),
+  leaderboardSearch: document.querySelector("#leaderboard-search"),
+  leaderboardModelFilter: document.querySelector("#leaderboard-model-filter"),
+  leaderboardBackendFilter: document.querySelector("#leaderboard-backend-filter"),
+  leaderboardSuiteFilter: document.querySelector("#leaderboard-suite-filter"),
+  leaderboardMetric: document.querySelector("#leaderboard-metric"),
+  leaderboardKpis: document.querySelector("#leaderboard-kpis"),
+  leaderboardTable: document.querySelector("#leaderboard-table"),
+  leaderboardSortButtons: [...document.querySelectorAll("[data-sort-key]")],
+  leaderboardBackendChart: document.querySelector("#leaderboard-backend-chart"),
+  leaderboardTrendChart: document.querySelector("#leaderboard-trend-chart"),
+  leaderboardDetails: document.querySelector("#leaderboard-details"),
+  leaderboardStatus: document.querySelector("#leaderboard-status"),
+  localperfExport: document.querySelector("#localperf-export"),
+  localperfIncludeDetails: document.querySelector("#localperf-include-details"),
+  localperfImportInput: document.querySelector("#localperf-import-input"),
+  localperfImport: document.querySelector("#localperf-import"),
+  localperfRetainDetails: document.querySelector("#localperf-retain-details"),
+  localperfPackageStatus: document.querySelector("#localperf-package-status"),
+  optimizedModelSearchProvider: document.querySelector("#optimized-model-search-provider"),
+  optimizedModelSearchQuery: document.querySelector("#optimized-model-search-query"),
+  optimizedModelSearchRun: document.querySelector("#optimized-model-search-run"),
+  optimizedModelSearchResults: document.querySelector("#optimized-model-search-results"),
   terminalPanel: document.querySelector("#terminal-panel"),
+  terminalXterm: document.querySelector("#terminal-xterm"),
+  terminalTabs: [...document.querySelectorAll("[data-terminal-profile]")],
   terminalOutput: document.querySelector("#terminal-output"),
   terminalInput: document.querySelector("#terminal-input"),
   terminalRun: document.querySelector("#terminal-run"),
   terminalStop: document.querySelector("#terminal-stop"),
   terminalStatus: document.querySelector("#terminal-status"),
+  codingAgentLauncher: document.querySelector("#coding-agent-launcher"),
+  codingAgentTool: document.querySelector("#coding-agent-tool"),
+  codingAgentModel: document.querySelector("#coding-agent-model"),
+  codingAgentProject: document.querySelector("#coding-agent-project"),
+  codingAgentMode: document.querySelector("#coding-agent-mode"),
+  codingAgentPersistent: document.querySelector("#coding-agent-persistent"),
+  codingAgentStatus: document.querySelector("#coding-agent-status"),
+  codingAgentGrants: document.querySelector("#coding-agent-grants"),
 };
+
+const VALID_THEME_MODES = new Set(["light", "dark", "system"]);
+const TERMINAL_SESSIONS_KEY = "json_codr_terminal_sessions";
+const TERMINAL_COMMAND_HISTORY_KEY = "json_codr_terminal_command_history";
+const NAVIGATION_DESTINATIONS = new Set(["chat", "terminal", "context", "skills", "hardware", "settings"]);
+const HARDWARE_SECTIONS = new Set(["overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "leaderboard", "history", "localperf"]);
+const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+const narrowNavigationQuery = window.matchMedia("(max-width: 700px)");
 
 let models = [];
 let activeRequest = null;
 let sessionId = localStorage.getItem("json_codr_session");
 let terminalId = null;
 let terminalSocket = null;
+let selectedLocalperfEvaluationId = null;
+let pendingLocalperfPackage = null;
+let terminalConnectionPromise = null;
+let xterm = null;
+let terminalFitAddon = null;
+let terminalKeyboardController = null;
+let lastTerminalSequence = 0;
+let activeTerminalProfile = "powershell";
+const terminalSessions = new Map();
+let terminalPersistenceTimer = null;
 let skillAttachmentId = null;
 let editingSkill = null;
 let skillLoadGeneration = 0;
 let settingsState = null;
 let skillFallbackToken = null;
+let githubSkillPreviewId = null;
+let settingsSaveQueue = Promise.resolve();
+let themeSaveRevision = 0;
+let skillsChangeRevision = 0;
+let navigationChangeRevision = 0;
+let activeDestination = "chat";
+let activeHardwareSection = "overview";
+let sidebarWidth = 260;
+let currentThemeMode = normalizeThemeMode(localStorage.getItem("json_codr_theme"));
+let persistedThemeMode = null;
+let excludedSkillIds = [];
+let pendingDestructiveAction = null;
+let pendingActionProposalId = null;
+let hardwareDetectionPromise = null;
+let leaderboardHistoryCache = [];
+let integrityHistoryCache = [];
+let leaderboardCandidateCache = [];
+let selectedLeaderboardSessionId = null;
+let selectedLeaderboardRowId = null;
+let leaderboardSort = { key: "rank", direction: "asc" };
+const actionButtons = new Map();
+
+const dependencyInstallQueue = createDependencyInstallQueue(async (command) => {
+  selectDestination("terminal");
+  elements.terminalStatus.textContent = "Installing prerequisites...";
+  appendTerminalOutput(`Installing prerequisites: ${command}\n`);
+  try {
+    await runTerminalCommand(command);
+  } catch (error) {
+    appendTerminalOutput(`Error: ${error.message}\n`);
+    throw error;
+  }
+});
+
+function normalizeThemeMode(mode) {
+  return VALID_THEME_MODES.has(mode) ? mode : "dark";
+}
+
+function applyThemeMode(mode, { cache = true } = {}) {
+  const normalized = normalizeThemeMode(mode);
+  const effective = normalized === "system" ? (systemThemeQuery.matches ? "dark" : "light") : normalized;
+  currentThemeMode = normalized;
+  document.documentElement.dataset.theme = effective;
+  document.documentElement.style.colorScheme = effective;
+  if (cache) localStorage.setItem("json_codr_theme", normalized);
+  if (elements.settingTheme) elements.settingTheme.value = normalized;
+  return effective;
+}
+
+systemThemeQuery.addEventListener("change", () => {
+  if (currentThemeMode === "system") applyThemeMode("system", { cache: false });
+});
+applyThemeMode(currentThemeMode);
+
+function boundedSidebarWidth(value) {
+  return Math.max(220, Math.min(380, Math.round(Number(value) || 260)));
+}
+
+function applySidebarWidth(value) {
+  const width = boundedSidebarWidth(value);
+  sidebarWidth = width;
+  document.documentElement.style.setProperty("--sidebar-width", `${width}px`);
+  elements.sidebarResizeHandle.setAttribute("aria-valuenow", String(width));
+  return width;
+}
+
+function closeNavigationDrawer({ restoreFocus = false } = {}) {
+  document.body.classList.remove("navigation-open");
+  elements.navigationBackdrop.hidden = true;
+  elements.mobileNavigationToggle.setAttribute("aria-expanded", "false");
+  if (restoreFocus) elements.mobileNavigationToggle.focus();
+}
+
+function openNavigationDrawer() {
+  document.body.classList.add("navigation-open");
+  elements.navigationBackdrop.hidden = false;
+  elements.mobileNavigationToggle.setAttribute("aria-expanded", "true");
+}
+
+function setSidebarCollapsed(collapsed, { persist = true } = {}) {
+  navigationChangeRevision += persist ? 1 : 0;
+  document.body.classList.toggle("sidebar-collapsed", collapsed);
+  elements.sidebarCollapse.setAttribute("aria-expanded", String(!collapsed));
+  elements.sidebarCollapse.setAttribute("aria-label", collapsed ? "Expand navigation" : "Collapse navigation");
+  if (persist) saveSettings({ ui: { sidebar_collapsed: collapsed } }).catch((error) => showError(error.message));
+}
+
+function selectHardwareSection(section, { persist = true, focus = false } = {}) {
+  if (!HARDWARE_SECTIONS.has(section)) section = "overview";
+  activeHardwareSection = section;
+  for (const button of elements.hardwareSectionButtons) {
+    if (button.dataset.hardwareSection === section) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  }
+  for (const view of elements.hardwareSectionViews) view.hidden = view.dataset.hardwareView !== section;
+  if (focus) document.querySelector(`[data-hardware-view="${section}"] h3`)?.focus({ preventScroll: true });
+  if (section === "overview") loadHardwareTelemetry().catch((error) => showError(error.message));
+  if (section === "runtimes" || section === "compatibility" || section === "benchmarks") {
+    detectHardware().catch((error) => showError(error.message));
+  }
+  if (section === "benchmarks" || section === "history") loadBenchmarkHistory().catch((error) => showError(error.message));
+  if (section === "benchmarks") loadIntegrityBenchmarkHistory().catch((error) => showError(error.message));
+  if (section === "leaderboard") loadBenchmarkLeaderboard().catch((error) => { elements.leaderboardStatus.textContent = error.message; });
+  if (persist) {
+    navigationChangeRevision += 1;
+    saveSettings({ ui: { hardware_section: section } }).catch((error) => showError(error.message));
+  }
+}
+
+function selectDestination(destination, { persist = true, focus = false } = {}) {
+  if (!NAVIGATION_DESTINATIONS.has(destination)) destination = "chat";
+  activeDestination = destination;
+  for (const button of elements.navigationButtons) {
+    const selected = button.dataset.destination === destination;
+    button.classList.toggle("is-active", selected);
+    if (selected) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  }
+  for (const view of elements.destinationViews) view.hidden = view.dataset.view !== destination;
+  elements.hardwareSubnavigation.hidden = destination !== "hardware";
+  if (destination === "hardware") selectHardwareSection(activeHardwareSection, { persist: false });
+  if (destination === "terminal") {
+    initializeXterm();
+    if (!terminalId) elements.terminalStatus.textContent = "Choose PowerShell, Continue, or Aider";
+  }
+  if (focus) elements.destinationViews.find((view) => view.dataset.view === destination)?.querySelector("h1, h2, h3")?.focus({ preventScroll: true });
+  if (narrowNavigationQuery.matches) closeNavigationDrawer();
+  if (persist) {
+    navigationChangeRevision += 1;
+    skillsChangeRevision += 1;
+    elements.settingSkillsOpen.checked = destination === "skills";
+    saveSettings({ ui: { primary_destination: destination, skill_catalog_open: destination === "skills" } }).catch((error) => showError(error.message));
+  }
+}
+
+function normalizeTerminalOutput(text) {
+  if (String(text).toLowerCase().includes("does not support tools")) {
+    return "This model uses the JSON_CODR broker adapter for project tools. Select Git broker and launch the delegated task.\n";
+  }
+  return text;
+}
 
 function appendTerminalOutput(text) {
+  text = normalizeTerminalOutput(text);
+  if (xterm) xterm.write(text);
   elements.terminalOutput.textContent += text;
   elements.terminalOutput.scrollTop = elements.terminalOutput.scrollHeight;
 }
 
 async function ensureTerminal() {
-  if (terminalSocket?.readyState === WebSocket.OPEN) return;
+  const activeSession = terminalSessions.get(activeTerminalProfile);
+  if (terminalSocket?.readyState === WebSocket.OPEN && terminalId === activeSession?.terminal?.id) return;
+  if (terminalConnectionPromise) return terminalConnectionPromise;
+  terminalConnectionPromise = createTerminalConnection();
+  try {
+    await terminalConnectionPromise;
+  } finally {
+    terminalConnectionPromise = null;
+  }
+}
+
+function persistTerminalSessions() {
+  const sessions = {};
+  for (const [profile, session] of terminalSessions) {
+    if (session.terminal?.id) {
+      sessions[profile] = { id: session.terminal.id, lastSequence: session.lastSequence || 0 };
+    }
+  }
+  localStorage.setItem(TERMINAL_SESSIONS_KEY, JSON.stringify(sessions));
+}
+
+function scheduleTerminalSessionPersistence() {
+  if (terminalPersistenceTimer) return;
+  terminalPersistenceTimer = window.setTimeout(() => {
+    terminalPersistenceTimer = null;
+    persistTerminalSessions();
+  }, 200);
+}
+
+async function restoreTerminalSessions() {
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem(TERMINAL_SESSIONS_KEY) || "{}");
+  } catch (_error) {
+    localStorage.removeItem(TERMINAL_SESSIONS_KEY);
+  }
+  const response = await fetch("/api/terminals");
+  if (!response.ok) return;
+  const available = new Map(
+    (await response.json())
+      .filter((terminal) => !terminal.external)
+      .map((terminal) => [terminal.id, terminal]),
+  );
+  for (const [profile, session] of Object.entries(saved)) {
+    const terminal = available.get(session.id);
+    if (terminal) terminalSessions.set(profile, { terminal, lastSequence: session.lastSequence || 0 });
+  }
+  persistTerminalSessions();
+}
+
+function initializeXterm() {
+  if (xterm || !window.Terminal || !elements.terminalXterm) return;
+  xterm = new window.Terminal({
+    convertEol: true,
+    cursorBlink: true,
+    fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace",
+    fontSize: 13,
+    scrollback: 5000,
+    theme: { background: "#090d12", foreground: "#e8edf4", cursor: "#b7ff32" },
+  });
+  terminalFitAddon = new window.FitAddon.FitAddon();
+  xterm.loadAddon(terminalFitAddon);
+  xterm.open(elements.terminalXterm);
+  terminalFitAddon.fit();
+  elements.terminalOutput.hidden = true;
+  terminalKeyboardController = window.createTerminalKeyboardController({
+    copyText: async (text) => {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch (error) {
+        appendTerminalOutput(`Clipboard copy failed: ${error.message}\n`);
+      }
+    },
+    interrupt: () => {
+      if (terminalSocket?.readyState === WebSocket.OPEN) {
+        terminalSocket.send(JSON.stringify({ type: "interrupt" }));
+      }
+    },
+    loadHistory: () => JSON.parse(localStorage.getItem(TERMINAL_COMMAND_HISTORY_KEY) || "[]"),
+    saveHistory: (history) => localStorage.setItem(TERMINAL_COMMAND_HISTORY_KEY, JSON.stringify(history)),
+  });
+  xterm.attachCustomKeyEventHandler((event) => terminalKeyboardController.handleKeyEvent(
+    event,
+    xterm.hasSelection() ? xterm.getSelection() : "",
+  ));
+  xterm.onData((data) => {
+    // ConPTY queries terminal capabilities while PowerShell starts. xterm answers
+    // those queries through onData, but PowerShell treats the answers as typed
+    // input and leaves them in its command buffer.
+    if (/^\x1b\[(?:\?|>)[0-9;]*c$/.test(data)) return;
+    if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type: "input", data }));
+  });
+  xterm.onResize(({ cols, rows }) => {
+    if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type: "resize", cols, rows }));
+  });
+  new ResizeObserver(() => {
+    terminalFitAddon.fit();
+  }).observe(elements.terminalXterm);
+}
+
+async function createTerminalConnection(profile = "powershell") {
+  initializeXterm();
   elements.terminalStatus.textContent = "Starting...";
   const response = await fetch("/api/terminals", {
     method: "POST",
@@ -80,30 +431,337 @@ async function ensureTerminal() {
   });
   if (!response.ok) throw new Error((await response.json()).detail || "Unable to start terminal");
   const terminal = await response.json();
+  await connectTerminalRecord(terminal, profile);
+}
+
+async function closeActiveTerminal() {
+  const previousId = terminalId;
+  const previousSocket = terminalSocket;
+  terminalId = null;
+  terminalSocket = null;
+  if (previousSocket) previousSocket.close();
+  if (!previousId) return;
+  const response = await fetch(`/api/terminals/${previousId}`, {
+    method: "DELETE",
+    headers: { "X-JSON-CODR": "1" },
+  });
+  if (!response.ok && response.status !== 404) {
+    throw new Error((await response.json()).detail || "Unable to close the previous terminal");
+  }
+  for (const [profile, session] of terminalSessions) {
+    if (session.terminal?.id === previousId) terminalSessions.delete(profile);
+  }
+  persistTerminalSessions();
+}
+
+async function connectTerminalRecord(terminal, profile = activeTerminalProfile) {
+  initializeXterm();
+  const storedSession = terminalSessions.get(profile) || { lastSequence: 0 };
+  if (storedSession.terminal?.id !== terminal.id) storedSession.lastSequence = 0;
+  storedSession.terminal = terminal;
+  terminalSessions.set(profile, storedSession);
+  persistTerminalSessions();
+  if (profile !== activeTerminalProfile) return;
+  if (terminalSocket) terminalSocket.close();
   terminalId = terminal.id;
+  const session = storedSession;
+  // The shared xterm surface is cleared when profiles change, so replay this
+  // profile's bounded server history instead of resuming into a blank screen.
+  lastTerminalSequence = 0;
+  if (xterm) xterm.clear();
+  elements.terminalOutput.textContent = "";
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  terminalSocket = new WebSocket(`${protocol}//${location.host}/ws/terminals/${terminalId}`);
+  const socket = new WebSocket(`${protocol}//${location.host}/ws/terminals/${terminalId}?after_seq=${lastTerminalSequence}`);
+  terminalSocket = socket;
   terminalSocket.addEventListener("open", () => {
-    elements.terminalStatus.textContent = `PowerShell · PID ${terminal.pid}`;
-    appendTerminalOutput(`PowerShell ready in ${terminal.cwd}\n`);
+    elements.terminalStatus.textContent = `${terminal.shell} · PID ${terminal.pid}`;
+    terminalSocket.send(JSON.stringify({ type: "attach", after_seq: lastTerminalSequence }));
+    if (terminal.backend === "conpty" && terminalFitAddon) terminalFitAddon.fit();
   });
   terminalSocket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
-    if (message.type === "output") appendTerminalOutput(message.data);
+    if (message.type === "output") {
+      appendTerminalOutput(message.data);
+      if (Number.isInteger(message.seq)) {
+        lastTerminalSequence = message.seq;
+        session.lastSequence = message.seq;
+        scheduleTerminalSessionPersistence();
+      }
+    }
     if (message.type === "exit") elements.terminalStatus.textContent = "Stopped";
+    if (message.type === "action_started") {
+      if (pendingActionProposalId === message.proposal_id) pendingActionProposalId = null;
+      elements.terminalStatus.textContent = "Command accepted — installation running...";
+      appendTerminalOutput("Command accepted by PowerShell. Installation is running; initial setup may be quiet.\n");
+      const button = actionButtons.get(message.proposal_id);
+      if (button) button.textContent = "Started";
+    }
+    if (message.type === "action_completed") {
+      elements.terminalOutput.textContent = elements.terminalOutput.textContent.replace(
+        new RegExp(`__JSON_CODR_ACTION_DONE__:${message.proposal_id}:-?\\d+\\r?\\n?`, "g"),
+        "",
+      );
+      elements.terminalStatus.textContent = message.success ? "Installation complete" : "Installation finished with errors";
+      appendTerminalOutput(message.success
+        ? "Approved installation completed successfully.\n"
+        : `Approved installation finished with exit code ${message.exit_code}. Review the output above.\n`);
+      const button = actionButtons.get(message.proposal_id);
+      if (button) {
+        button.disabled = message.success;
+        button.textContent = message.success ? "Completed" : "Retry";
+      }
+    }
+    if (message.type === "action_error") {
+      if (pendingActionProposalId === message.proposal_id) pendingActionProposalId = null;
+      const button = actionButtons.get(message.proposal_id);
+      if (button) { button.disabled = false; button.textContent = "Approve and run"; }
+      elements.terminalStatus.textContent = "Approved action failed";
+      appendTerminalOutput(`Approved action failed: ${message.error || "Unknown error"}\n`);
+      showError(message.error || "Approved action failed");
+    }
   });
-  terminalSocket.addEventListener("close", () => { elements.terminalStatus.textContent = "Disconnected"; });
+  terminalSocket.addEventListener("close", () => {
+    if (terminalSocket !== socket) return;
+    if (pendingActionProposalId) {
+      const button = actionButtons.get(pendingActionProposalId);
+      if (button) { button.disabled = false; button.textContent = "Approve and run"; }
+      appendTerminalOutput("Terminal disconnected before action was accepted. Retry the approved action.\n");
+      showError("Terminal disconnected before action was accepted");
+      pendingActionProposalId = null;
+    }
+    elements.terminalStatus.textContent = "Disconnected";
+  });
+  await new Promise((resolve, reject) => {
+    const cleanup = () => {
+      terminalSocket.removeEventListener("open", onOpen);
+      terminalSocket.removeEventListener("error", onFailure);
+      terminalSocket.removeEventListener("close", onFailure);
+    };
+    const onOpen = () => { cleanup(); resolve(); };
+    const onFailure = () => { cleanup(); reject(new Error("Terminal connection failed")); };
+    terminalSocket.addEventListener("open", onOpen, { once: true });
+    terminalSocket.addEventListener("error", onFailure, { once: true });
+    terminalSocket.addEventListener("close", onFailure, { once: true });
+  });
 }
 
-async function runTerminalCommand() {
-  const command = elements.terminalInput.value;
-  if (!command.trim()) return;
+async function launchCodingAgent(event) {
+  event.preventDefault();
+  const payload = {
+    tool: elements.codingAgentTool.value,
+    model: elements.codingAgentModel.value,
+    project_root: elements.codingAgentProject.value,
+    mode: elements.codingAgentMode.value,
+    prompt: elements.codingAgentMode.value === "delegated" ? elements.prompt.value.trim() : null,
+  };
+  elements.codingAgentStatus.textContent = "Validating authorization…";
+  if (payload.tool === "broker" || payload.tool === "shell") {
+    const grantResponse = await fetch("/api/git-broker/grants", {
+      method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
+      body: JSON.stringify({ profile: payload.tool, project_root: payload.project_root }),
+    });
+    if (!grantResponse.ok) throw new Error(await responseErrorMessage(grantResponse, "Unable to save execution authorization"));
+    const grant = await grantResponse.json();
+    await renderExecutionGrant(grant, payload);
+    if (payload.tool === "broker") {
+      const statusResponse = await fetch(`/api/git-broker/status?project_root=${encodeURIComponent(payload.project_root)}`);
+      if (!statusResponse.ok) throw new Error(await responseErrorMessage(statusResponse, "Unable to inspect project"));
+      const status = await statusResponse.json();
+      const repository = status.repository;
+      if (payload.mode === "delegated") {
+        elements.codingAgentStatus.textContent = `Broker adapter running ${payload.model}…`;
+        const executionResponse = await fetch("/api/git-broker/adapter", {
+          method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
+          body: JSON.stringify({ model: payload.model, grant_id: grant.id, project_root: payload.project_root, prompt: payload.prompt }),
+        });
+        if (!executionResponse.ok) throw new Error(await responseErrorMessage(executionResponse, "Broker adapter task failed"));
+        const execution = await executionResponse.json();
+        const result = execution.result;
+        elements.codingAgentStatus.textContent = `Broker adapter ${result.status} · ${result.branch || repository.branch || "detached HEAD"}${result.commit ? ` · ${result.commit.slice(0, 10)}` : ""}`;
+        return;
+      }
+      elements.codingAgentStatus.textContent = `Broker adapter ready · ${repository.branch || "detached HEAD"} · ${repository.clean ? "in sync" : "local changes detected"}`;
+      return;
+    }
+    const terminalResponse = await fetch("/api/terminals", {
+      method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
+      body: JSON.stringify({ shell: "powershell", cwd: payload.project_root }),
+    });
+    if (!terminalResponse.ok) throw new Error(await responseErrorMessage(terminalResponse, "Unable to launch non-sandboxed shell"));
+    await connectTerminalRecord(await terminalResponse.json(), "powershell");
+    elements.codingAgentStatus.textContent = "Unrestricted non-sandboxed shell launched for the authorized project.";
+    return;
+  }
+  if (elements.codingAgentPersistent.checked) {
+    const grant = await fetch("/api/coding-agents/grants", {
+      method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
+      body: JSON.stringify({ tool: payload.tool, project_root: payload.project_root }),
+    });
+    if (!grant.ok) throw new Error(await responseErrorMessage(grant, "Unable to save coding-agent authorization"));
+  }
+  const response = await fetch("/api/coding-agents/launch", {
+    method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" }, body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await responseErrorMessage(response, "Unable to launch coding agent"));
+  const terminal = await response.json();
+  const effectiveModel = terminal.effective_model || payload.model;
+  const compatibility = terminal.tool_compatibility;
+  const modelStatus = compatibility?.route === "delegated_verified"
+    ? `${effectiveModel} · delegated verified tools for ${payload.model} · native tools not verified`
+    : compatibility?.route === "native_verified"
+      ? `${effectiveModel} · native tools verified`
+      : terminal.tool_fallback_used
+        ? `${effectiveModel} (verified tool fallback for ${payload.model})`
+        : effectiveModel;
+  activeTerminalProfile = payload.tool;
+  elements.terminalTabs.forEach((tab) => tab.setAttribute("aria-selected", String(tab.dataset.terminalProfile === activeTerminalProfile)));
+  elements.terminalOutput.textContent = "";
+  if (terminal.external) {
+    await closeActiveTerminal();
+    elements.terminalStatus.textContent = `${terminal.shell} launched`;
+    elements.codingAgentStatus.textContent = `${payload.tool} opened in Windows Terminal with ${modelStatus}`;
+    return;
+  }
+  await connectTerminalRecord(terminal, payload.tool);
+  elements.codingAgentStatus.textContent = `${payload.tool} launched with ${modelStatus}`;
+}
+
+async function renderExecutionGrant(grant, payload) {
+  elements.codingAgentGrants.replaceChildren();
+  const label = document.createElement("span");
+  label.className = "meta";
+  const support = payload.tool === "broker" ? "broker adapter" : "non-sandboxed shell";
+  label.textContent = `${payload.model} · ${support} · ${payload.project_root}`;
+  const revoke = document.createElement("button");
+  revoke.type = "button";
+  revoke.className = "secondary";
+  revoke.textContent = "Revoke";
+  revoke.addEventListener("click", async () => {
+    const response = await fetch(`/api/git-broker/grants/${encodeURIComponent(grant.id)}`, {
+      method: "DELETE", headers: { "X-JSON-CODR": "1" },
+    });
+    if (!response.ok) throw new Error(await responseErrorMessage(response, "Unable to revoke authorization"));
+    elements.codingAgentGrants.replaceChildren();
+    elements.codingAgentStatus.textContent = `${payload.tool} authorization revoked.`;
+  });
+  elements.codingAgentGrants.append(label, revoke);
+}
+
+async function sendApprovedAction(proposal, token, approveButton) {
   await ensureTerminal();
   if (terminalSocket.readyState !== WebSocket.OPEN) {
     await new Promise((resolve) => terminalSocket.addEventListener("open", resolve, { once: true }));
   }
+  elements.terminalStatus.textContent = "Sending approved action...";
+  appendTerminalOutput(`Sending approved action: ${proposal.explanation}\n`);
+  if (approveButton) { approveButton.disabled = true; approveButton.textContent = "Sending..."; }
+  pendingActionProposalId = proposal.id;
+  try {
+    terminalSocket.send(JSON.stringify({ type: "approved_action", proposal_id: proposal.id, token }));
+  } catch (error) {
+    pendingActionProposalId = null;
+    if (approveButton) { approveButton.disabled = false; approveButton.textContent = "Approve and run"; }
+    throw error;
+  }
+  elements.terminalPanel.hidden = false;
+  selectDestination("terminal");
+}
+
+async function approveAction(proposal, approveButton) {
+  await ensureTerminal();
+  const response = await fetch(`/api/sessions/${sessionId}/action-proposals/${proposal.id}/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
+    body: JSON.stringify({ terminal_id: terminalId }),
+  });
+  const approval = await response.json();
+  if (!response.ok) throw new Error(approval.detail || "Unable to approve action");
+  if (!approval.requires_confirmation) return sendApprovedAction(proposal, approval.token, approveButton);
+  pendingDestructiveAction = { proposal, phrase: approval.confirmation_phrase, approveButton };
+  approveButton.textContent = "Confirm to run";
+  elements.destructiveCommand.textContent = proposal.command;
+  elements.destructiveCwd.textContent = proposal.cwd;
+  elements.destructiveRisk.textContent = `${proposal.risk}: ${proposal.risk_reason}`;
+  elements.destructivePhrase.textContent = approval.confirmation_phrase;
+  elements.destructiveInput.value = "";
+  elements.destructiveDialog.showModal();
+  elements.destructiveInput.focus();
+}
+
+function renderActions(proposals) {
+  elements.actionList.replaceChildren();
+  actionButtons.clear();
+  elements.actionReview.hidden = !proposals.length;
+  for (const proposal of proposals) {
+    const card = document.createElement("article"); card.className = "action-card";
+    const title = document.createElement("strong"); title.textContent = proposal.explanation;
+    const command = document.createElement("code"); command.textContent = proposal.command;
+    const cwd = document.createElement("small"); cwd.textContent = `Working directory: ${proposal.cwd}`;
+    const risk = document.createElement("p"); risk.className = `action-risk ${proposal.risk}`;
+    risk.textContent = `${proposal.risk.toUpperCase()} · ${proposal.risk_reason}`;
+    const controls = document.createElement("div"); controls.className = "action-controls";
+    const copy = document.createElement("button"); copy.type = "button"; copy.className = "secondary"; copy.textContent = "Copy";
+    copy.addEventListener("click", () => navigator.clipboard.writeText(proposal.command));
+    const reject = document.createElement("button"); reject.type = "button"; reject.className = "secondary"; reject.textContent = "Reject";
+    reject.addEventListener("click", async () => {
+      const response = await fetch(`/api/sessions/${sessionId}/action-proposals/${proposal.id}/reject`, { method: "POST" });
+      if (!response.ok) return showError((await response.json()).detail || "Unable to reject action");
+      card.remove();
+      elements.actionReview.hidden = !elements.actionList.children.length;
+    });
+    const approve = document.createElement("button"); approve.type = "button"; approve.className = "primary"; approve.textContent = "Approve and run";
+    actionButtons.set(proposal.id, approve);
+    approve.addEventListener("click", async () => {
+      approve.disabled = true;
+      approve.textContent = "Connecting...";
+      try {
+        await approveAction(proposal, approve);
+      } catch (error) {
+        approve.disabled = false;
+        approve.textContent = "Approve and run";
+        showError(error.message);
+      }
+    });
+    controls.append(copy, reject, approve);
+    card.append(title, command, cwd, risk, controls);
+    elements.actionList.append(card);
+  }
+}
+
+async function runTerminalCommand(command = null) {
+  const fromInput = command === null;
+  command = fromInput ? elements.terminalInput.value : command;
+  command = command.trim();
+  if (!command) return;
+  if (command === "clr --history") {
+    if (xterm) xterm.clear();
+    elements.terminalOutput.textContent = "";
+    if (fromInput) elements.terminalInput.value = "";
+    return;
+  }
+  if (command === "clr --command") {
+    terminalKeyboardController?.clearCommandHistory();
+    if (fromInput) elements.terminalInput.value = "";
+    return;
+  }
+  if (fromInput) terminalKeyboardController?.recordCommand(command);
+  await ensureTerminal();
+  if (terminalSocket.readyState !== WebSocket.OPEN) {
+    await new Promise((resolve, reject) => {
+      const cleanup = () => {
+        terminalSocket.removeEventListener("open", onOpen);
+        terminalSocket.removeEventListener("error", onFailure);
+        terminalSocket.removeEventListener("close", onFailure);
+      };
+      const onOpen = () => { cleanup(); resolve(); };
+      const onFailure = () => { cleanup(); reject(new Error("Terminal connection failed")); };
+      terminalSocket.addEventListener("open", onOpen, { once: true });
+      terminalSocket.addEventListener("error", onFailure, { once: true });
+      terminalSocket.addEventListener("close", onFailure, { once: true });
+    });
+  }
   terminalSocket.send(JSON.stringify({ type: "input", data: `${command}\r\n` }));
-  elements.terminalInput.value = "";
+  if (fromInput) elements.terminalInput.value = "";
 }
 
 async function ensureSession() {
@@ -114,13 +772,26 @@ async function ensureSession() {
   return sessionId;
 }
 
-async function saveSettings(update) {
+async function persistSettings(update) {
   const response = await fetch("/api/settings", {
     method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(update),
   });
   if (!response.ok) throw new Error((await response.json()).detail || "Unable to save settings");
   settingsState = await response.json();
+  persistedThemeMode = normalizeThemeMode(settingsState.ui.theme);
   renderApprovedDirectories();
+}
+
+function saveSettings(update) {
+  const operation = settingsSaveQueue.then(() => persistSettings(update));
+  settingsSaveQueue = operation.catch(() => undefined);
+  return operation;
+}
+
+function queueSettingsLoad() {
+  const operation = settingsSaveQueue.then(() => loadSettings());
+  settingsSaveQueue = operation.catch(() => undefined);
+  return operation;
 }
 
 function renderApprovedDirectories() {
@@ -142,15 +813,858 @@ function renderApprovedDirectories() {
   }
 }
 
+function selectedGpuProfile() {
+  const optimization = settingsState?.gpu_optimization;
+  if (!optimization) return { mode: "automatic" };
+  const target = elements.hardwareProfileModel.value;
+  return target === "__default__"
+    ? optimization.default_profile
+    : optimization.model_profiles[target] || optimization.default_profile;
+}
+
+function renderGpuProfileControls() {
+  const selectedTarget = elements.hardwareProfileModel.value || "__default__";
+  elements.hardwareProfileModel.replaceChildren();
+  const defaultOption = document.createElement("option");
+  defaultOption.value = "__default__"; defaultOption.textContent = "All models · default";
+  elements.hardwareProfileModel.append(defaultOption);
+  for (const model of models.filter((item) => item.installed)) {
+    const option = document.createElement("option"); option.value = model.name; option.textContent = model.name;
+    elements.hardwareProfileModel.append(option);
+  }
+  elements.hardwareProfileModel.value = [...elements.hardwareProfileModel.options].some((item) => item.value === selectedTarget)
+    ? selectedTarget : "__default__";
+  const profile = selectedGpuProfile();
+  elements.hardwareProfileMode.value = profile.mode;
+  elements.hardwareProfileAdvanced.hidden = profile.mode !== "advanced";
+  elements.hardwareProfileNumGpu.value = profile.num_gpu ?? "";
+  elements.hardwareProfileMainGpu.value = profile.main_gpu ?? "";
+  elements.hardwareProfileNumCtx.value = profile.num_ctx ?? "";
+  elements.hardwareProfileNumBatch.value = profile.num_batch ?? "";
+}
+
+function numericProfileValue(element) {
+  return element.value === "" ? null : Number(element.value);
+}
+
+async function saveGpuProfile(reset = false) {
+  const current = settingsState.gpu_optimization;
+  const target = elements.hardwareProfileModel.value;
+  const mode = reset ? "automatic" : elements.hardwareProfileMode.value;
+  const profile = { mode, num_gpu: null, main_gpu: null, num_ctx: null, num_batch: null };
+  if (mode === "advanced") {
+    profile.num_gpu = numericProfileValue(elements.hardwareProfileNumGpu);
+    profile.main_gpu = numericProfileValue(elements.hardwareProfileMainGpu);
+    profile.num_ctx = numericProfileValue(elements.hardwareProfileNumCtx);
+    profile.num_batch = numericProfileValue(elements.hardwareProfileNumBatch);
+  }
+  const update = {
+    default_profile: { ...current.default_profile },
+    model_profiles: { ...current.model_profiles },
+  };
+  if (target === "__default__") update.default_profile = profile;
+  else if (reset) delete update.model_profiles[target];
+  else update.model_profiles[target] = profile;
+  elements.hardwareProfileSave.disabled = true;
+  elements.hardwareProfileStatus.textContent = "Saving…";
+  try {
+    await saveSettings({ gpu_optimization: update });
+    elements.hardwareProfileStatus.textContent = reset ? "Automatic profile restored" : "Profile saved";
+    renderGpuProfileControls();
+  } finally {
+    elements.hardwareProfileSave.disabled = false;
+  }
+}
+
+async function loadHardwareTelemetry() {
+  elements.hardwareTelemetry.innerHTML = '<p class="meta">Reading GPU and Ollama runtime data…</p>';
+  const response = await fetch("/api/hardware/telemetry");
+  if (!response.ok) throw new Error("Unable to load hardware telemetry");
+  const payload = await response.json();
+  elements.hardwareTelemetry.replaceChildren();
+  if (!payload.gpus.length && !payload.models.length) {
+    elements.hardwareTelemetry.innerHTML = '<p class="meta">No active GPU or loaded Ollama model telemetry.</p>';
+    return;
+  }
+  for (const gpu of payload.gpus) {
+    const row = document.createElement("div"); row.className = "dependency-row";
+    const label = document.createElement("div");
+    const name = document.createElement("strong"); name.textContent = `GPU ${gpu.index} · ${gpu.name}`;
+    const detail = document.createElement("p"); detail.className = "meta";
+    detail.textContent = `${gpu.memory_free.toLocaleString()} MiB free of ${gpu.memory_total.toLocaleString()} MiB · ${gpu.utilization}% load · ${gpu.temperature}°C`;
+    label.append(name, detail); row.append(label); elements.hardwareTelemetry.append(row);
+  }
+  for (const model of payload.models) {
+    const row = document.createElement("div"); row.className = "dependency-row";
+    const label = document.createElement("div");
+    const name = document.createElement("strong"); name.textContent = model.name;
+    const detail = document.createElement("p"); detail.className = "meta";
+    detail.textContent = `${model.processor} · ${(model.size_vram / 1048576).toFixed(0)} MiB VRAM`;
+    label.append(name, detail); row.append(label); elements.hardwareTelemetry.append(row);
+  }
+}
+
 async function loadSettings() {
+  const themeRevisionAtStart = themeSaveRevision;
+  const skillsRevisionAtStart = skillsChangeRevision;
+  const navigationRevisionAtStart = navigationChangeRevision;
   const response = await fetch("/api/settings");
   if (!response.ok) throw new Error("Unable to load settings");
   settingsState = await response.json();
-  const open = settingsState.ui.skill_catalog_open;
-  elements.skillsPanel.hidden = !open;
-  elements.skillsToggle.setAttribute("aria-expanded", String(open));
-  elements.settingSkillsOpen.checked = open;
+  persistedThemeMode = normalizeThemeMode(settingsState.ui.theme);
+  if (themeRevisionAtStart === themeSaveRevision) {
+    applyThemeMode(persistedThemeMode);
+  }
+  if (navigationRevisionAtStart === navigationChangeRevision) {
+    applySidebarWidth(settingsState.ui.sidebar_width);
+    setSidebarCollapsed(settingsState.ui.sidebar_collapsed, { persist: false });
+    selectHardwareSection(settingsState.ui.hardware_section, { persist: false });
+    selectDestination(settingsState.ui.primary_destination, { persist: false });
+  }
+  if (skillsRevisionAtStart === skillsChangeRevision) {
+    elements.settingSkillsOpen.checked = settingsState.ui.primary_destination === "skills";
+  }
+  elements.settingTheme.disabled = false;
+  elements.settingSkillsOpen.disabled = false;
   renderApprovedDirectories();
+  renderGpuProfileControls();
+}
+
+async function loadHardwareStatus() {
+  const response = await fetch("/api/hardware");
+  if (!response.ok) throw new Error("Unable to load hardware status");
+  const state = await response.json();
+  elements.hardwareStatus.textContent = `Preferred: ${state.preferred_backend} · last known good: ${state.last_known_good}`;
+  if (state.last_error) elements.hardwareStatus.textContent += ` · last failure: ${state.last_error}`;
+}
+
+function detectHardware() {
+  if (hardwareDetectionPromise) return hardwareDetectionPromise;
+  hardwareDetectionPromise = runHardwareDetection().finally(() => { hardwareDetectionPromise = null; });
+  return hardwareDetectionPromise;
+}
+
+async function runHardwareDetection() {
+  elements.hardwareDetect.disabled = true;
+  elements.hardwareCandidates.innerHTML = '<p class="meta">Detecting local runtimes…</p>';
+  try {
+    const [response, catalogResponse, environmentResponse] = await Promise.all([
+      fetch("/api/hardware/detect", { method: "POST" }),
+      fetch("/api/inference/catalog"),
+      fetch("/api/inference/environments"),
+    ]);
+    if (!response.ok) throw new Error(await responseErrorMessage(response, "Hardware detection failed"));
+    const candidates = await response.json();
+    leaderboardCandidateCache = candidates.map((candidate) => ({ ...candidate }));
+    const optimizedCatalog = catalogResponse.ok ? await catalogResponse.json() : [];
+    const providerEnvironments = environmentResponse.ok ? await environmentResponse.json() : [];
+    const compatibility = candidates.map((candidate) => ({
+      backend: candidate.id,
+      backend_name: candidate.name,
+      models: candidate.compatible_models || [],
+    }));
+    elements.hardwareModelCompatibility.replaceChildren();
+    if (!compatibility.length) {
+      elements.hardwareModelCompatibility.innerHTML = '<p class="meta">No model-specific compatibility results are available.</p>';
+    }
+    for (const group of compatibility) {
+      const row = document.createElement("div"); row.className = "dependency-row";
+      const label = document.createElement("div");
+      const name = document.createElement("strong"); name.textContent = group.backend_name || group.backend;
+      label.append(name);
+      for (const model of group.models || []) {
+        const line = document.createElement("p"); line.className = "meta";
+        const state = model.status === "accelerated" ? "Accelerated and verified" :
+          model.status === "candidate" ? "Compatible download candidate" :
+          model.status === "runnable" ? "Runnable · acceleration unverified" : model.status;
+        const agents = model.agent_compatibility;
+        const routeState = agents?.native_tools_verified
+          ? "native tool route verified"
+          : agents?.tool_route === "delegated_verified"
+            ? `delegated tool route verified via ${agents.effective_tool_model}`
+            : "agent tools unavailable or unverified";
+        const sessionState = agents?.continue_verified && agents?.aider_verified
+          ? "Continue verified · Aider verified"
+          : agents?.tool_route_verified
+            ? "Continue/Aider not verified on this profile"
+            : "Continue/Aider unavailable";
+        const agentState = `${routeState} · ${sessionState}`;
+        line.textContent = `${model.model} · ${state} · ${agentState}${model.reason ? ` · ${model.reason}` : ""}`;
+        label.append(line);
+      }
+      row.append(label); elements.hardwareModelCompatibility.append(row);
+    }
+    elements.hardwareBenchmarkBackend.replaceChildren();
+    const all = document.createElement("option"); all.value = "all"; all.textContent = "All detected and available";
+    elements.hardwareBenchmarkBackend.append(all);
+    for (const candidate of candidates) {
+      const option = document.createElement("option"); option.value = candidate.id;
+      option.textContent = `${candidate.name}${candidate.runnable && candidate.compatible ? "" : " — unavailable"}`;
+      option.disabled = !candidate.runnable || !candidate.compatible;
+      elements.hardwareBenchmarkBackend.append(option);
+    }
+    elements.hardwareCandidates.replaceChildren();
+    for (const candidate of candidates) {
+      const row = document.createElement("div"); row.className = "dependency-row";
+      const label = document.createElement("div");
+      const name = document.createElement("strong"); name.textContent = candidate.name;
+      const detail = document.createElement("p"); detail.className = "meta";
+      const catalogCount = optimizedCatalog.filter((model) => model.provider === candidate.id).length;
+      const stateDetails = candidate.hardware_detected !== undefined
+        ? `hardware ${candidate.hardware_detected ? "detected" : "not detected"} · runtime ${candidate.runtime_ready ? "ready" : "missing"} · ${catalogCount} catalog model${catalogCount === 1 ? "" : "s"}`
+        : null;
+      const readiness = candidate.readiness
+        ? `hardware ${candidate.readiness.hardware ? "ready" : "missing"} · driver ${candidate.readiness.driver ? "ready" : "missing"} · runtime ${candidate.readiness.runtime ? "ready" : "missing"} · model ${candidate.readiness.model ? "ready" : "missing"}`
+        : null;
+      detail.textContent = candidate.compatibility_reason || stateDetails || (candidate.verified ? `Verified · ${readiness}` : candidate.quarantine_reason ? `Quarantined: ${candidate.quarantine_reason}` : readiness || "Available for testing");
+      label.append(name, detail);
+      const compatibleModels = (candidate.compatible_models || []).filter((model) => model.status !== "unsupported");
+      const readyModels = compatibleModels.filter((model) => ["runnable", "accelerated"].includes(model.status));
+      let probeModel = elements.model.value || "qwen2.5-coder:0.5b";
+      if (compatibleModels.length) {
+        const modelDetails = document.createElement("details"); modelDetails.className = "runtime-models";
+        const modelSummary = document.createElement("summary");
+        modelSummary.textContent = `Compatible models (${compatibleModels.length}) · ${readyModels.length} ready`;
+        modelDetails.append(modelSummary);
+        for (const model of compatibleModels) {
+          const line = document.createElement("p"); line.className = "meta";
+          const state = model.status === "accelerated" ? "accelerated and verified" :
+            model.status === "runnable" ? "ready to test" :
+            model.status === "candidate" ? "available to download" : model.status;
+          const agents = model.agent_compatibility;
+          const routeState = agents?.native_tools_verified
+            ? "native tool route verified"
+            : agents?.tool_route === "delegated_verified"
+              ? `delegated tool route via ${agents.effective_tool_model}`
+              : "agent tools unverified";
+          const agentState = agents?.continue_verified && agents?.aider_verified
+            ? `${routeState} · Continue/Aider verified`
+            : `${routeState} · Continue/Aider not verified on this profile`;
+          line.textContent = `${model.model} · ${state} · ${agentState}${model.reason ? ` · ${model.reason}` : ""}`;
+          modelDetails.append(line);
+        }
+        label.append(modelDetails);
+      }
+      const probe = document.createElement("button"); probe.type = "button"; probe.className = "secondary"; probe.textContent = "Test and use";
+      if (candidate.runnable === false) { probe.disabled = true; probe.textContent = "Runtime unavailable"; }
+      const modelSelect = document.createElement("select"); modelSelect.className = "runtime-model-select";
+      modelSelect.setAttribute("aria-label", `${candidate.name} model to test`);
+      for (const model of readyModels) {
+        const option = document.createElement("option"); option.value = model.model; option.textContent = model.model;
+        modelSelect.append(option);
+      }
+      if (readyModels.length) {
+        probeModel = readyModels.some((model) => model.model === probeModel) ? probeModel : readyModels[0].model;
+        modelSelect.value = probeModel;
+        modelSelect.addEventListener("change", () => { probeModel = modelSelect.value; });
+      } else if (candidate.runnable !== false) {
+        probe.disabled = true;
+        probe.textContent = "No ready model";
+      }
+      probe.addEventListener("click", async () => {
+        probe.disabled = true; probe.textContent = "Testing…";
+        try {
+          const result = await fetch("/api/hardware/probe", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ backend: candidate.id, model: probeModel }),
+          });
+          const payload = await result.json();
+          if (!result.ok) throw new Error(payload.detail || "Backend probe failed");
+          await loadHardwareStatus(); await detectHardware();
+          if (candidate.id === "ollama_gpu" && payload.verified) {
+            elements.hardwareStatus.textContent += ` · GPU offload verified: ${payload.gpu_percent}% GPU · ${(payload.vram_bytes / 1048576).toFixed(0)} MiB VRAM`;
+          }
+          if (payload.restart_required) elements.hardwareStatus.textContent += " · restart Ollama to activate";
+        } catch (error) { showError(error.message); probe.disabled = false; probe.textContent = "Retest"; }
+      });
+      const probeControls = document.createElement("div"); probeControls.className = "runtime-probe-controls";
+      if (readyModels.length) probeControls.append(modelSelect);
+      probeControls.append(probe);
+      let control = probeControls;
+      if (candidate.installation?.automatic) {
+        const install = document.createElement("button"); install.type = "button"; install.className = "secondary"; install.textContent = "Review runtime install";
+        install.addEventListener("click", async () => {
+          try {
+            await ensureSession();
+            const response = await fetch(`/api/sessions/${sessionId}/hardware/${candidate.installation.provider}/install-proposal`, { method: "POST" });
+            const proposals = await response.json();
+            if (!response.ok) throw new Error(proposals.detail || "Unable to prepare runtime installation");
+            elements.empty.hidden = true; elements.result.hidden = false;
+            renderActions(proposals);
+            elements.actionReview.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          } catch (error) { showError(error.message); }
+        });
+        control = install;
+      } else if (candidate.installation) {
+        probe.disabled = true;
+        probe.textContent = candidate.installation.kind === "driver_guidance"
+          ? "Driver guidance"
+          : candidate.installation.kind === "runtime_guidance" ? "Runtime guidance" : "Model guidance";
+        probe.title = candidate.installation.guidance;
+      }
+      row.append(label, control); elements.hardwareCandidates.append(row);
+    }
+    for (const environment of providerEnvironments) {
+      const row = document.createElement("div"); row.className = "dependency-row";
+      const label = document.createElement("div");
+      const name = document.createElement("strong"); name.textContent = `${environment.provider} provider environment`;
+      const detail = document.createElement("p"); detail.className = "meta";
+      detail.textContent = environment.installed
+        ? `${environment.status} · Python ${environment.python_version || "unknown"} · isolated runtime`
+        : `not installed · ${environment.environment}`;
+      label.append(name, detail);
+      const install = document.createElement("button"); install.type = "button"; install.className = "secondary";
+      install.textContent = environment.installed && environment.compatible ? "Recheck installed runtime" : "Review runtime install";
+      install.addEventListener("click", async () => {
+        try {
+          await ensureSession();
+          const response = await fetch(`/api/sessions/${sessionId}/hardware/${environment.provider}/install-proposal`, { method: "POST" });
+          const proposals = await response.json();
+          if (!response.ok) throw new Error(proposals.detail || "Unable to prepare runtime installation");
+          elements.empty.hidden = true; elements.result.hidden = false;
+          renderActions(proposals);
+          elements.actionReview.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        } catch (error) { showError(error.message); }
+      });
+      row.append(label, install); elements.hardwareCandidates.append(row);
+    }
+    if (activeHardwareSection === "leaderboard" && leaderboardHistoryCache.length) renderBenchmarkLeaderboard();
+    return candidates;
+  } finally { elements.hardwareDetect.disabled = false; }
+}
+
+function renderCodingAgentTasks(tasks) {
+  if (!tasks.length) return;
+  elements.actionReview.hidden = false;
+  for (const task of tasks) {
+    const card = document.createElement("article"); card.className = "action-card";
+    const title = document.createElement("strong"); title.textContent = `Proposed ${task.tool} coding task`;
+    const prompt = document.createElement("p"); prompt.textContent = task.prompt;
+    const cwd = document.createElement("small"); cwd.textContent = `Project boundary: ${task.project_root}`;
+    const controls = document.createElement("div"); controls.className = "action-controls";
+    const review = document.createElement("button"); review.type = "button"; review.className = "primary"; review.textContent = "Review delegated task";
+    review.addEventListener("click", () => {
+      elements.codingAgentTool.value = task.tool;
+      elements.codingAgentProject.value = task.project_root;
+      elements.codingAgentMode.value = "delegated";
+      elements.prompt.value = task.prompt;
+      selectDestination("terminal");
+      elements.codingAgentLauncher.scrollIntoView({ behavior: "smooth", block: "center" });
+      elements.codingAgentStatus.textContent = "Review authorization, model, project, and task before launch.";
+    });
+    controls.append(review);
+    card.append(title, prompt, cwd, controls);
+    elements.actionList.append(card);
+  }
+}
+
+async function restoreCpuBackend() {
+  const response = await fetch("/api/hardware/restore-cpu", { method: "POST" });
+  if (!response.ok) throw new Error((await response.json()).detail || "Unable to restore CPU mode");
+  await loadHardwareStatus();
+  elements.hardwareStatus.textContent += " · restart Ollama to activate";
+}
+
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+
+function formatLeaderboardValue(value, unit = "", digits = 1) {
+  return Number.isFinite(value) ? `${value.toFixed(digits)}${unit}` : "Unavailable";
+}
+
+function replaceSelectOptions(select, values, allLabel) {
+  const previous = select.value;
+  select.replaceChildren();
+  const all = document.createElement("option"); all.value = "all"; all.textContent = allLabel; select.append(all);
+  for (const value of [...new Set(values.filter(Boolean))].sort()) {
+    const option = document.createElement("option"); option.value = value; option.textContent = value; select.append(option);
+  }
+  select.value = [...select.options].some((option) => option.value === previous) ? previous : "all";
+}
+
+function updateLeaderboardFilterOptions() {
+  replaceSelectOptions(elements.leaderboardModelFilter, leaderboardHistoryCache.map((item) => item.model), "All models");
+  replaceSelectOptions(elements.leaderboardSuiteFilter, leaderboardHistoryCache.map((item) => item.suite), "All suites");
+  const historyBackends = leaderboardHistoryCache.flatMap((item) => (item.results || []).map((result) => result.backend || result.runtime));
+  replaceSelectOptions(elements.leaderboardBackendFilter, [...leaderboardCandidateCache.map((item) => item.id), ...historyBackends], "All backends");
+}
+
+function selectLeaderboardSession(sessionId) {
+  const session = leaderboardHistoryCache.find((item) => item.id === sessionId) || leaderboardHistoryCache[0] || null;
+  selectedLeaderboardSessionId = session?.id || null;
+  selectedLeaderboardRowId = null;
+  if (session) {
+    elements.leaderboardModelFilter.value = [...elements.leaderboardModelFilter.options].some((option) => option.value === session.model) ? session.model : "all";
+    elements.leaderboardSuiteFilter.value = [...elements.leaderboardSuiteFilter.options].some((option) => option.value === session.suite) ? session.suite : "all";
+  }
+  renderBenchmarkLeaderboard();
+}
+
+function createKpi(label, value, detail) {
+  const card = document.createElement("div"); card.className = "leaderboard-kpi";
+  const name = document.createElement("span"); name.textContent = label;
+  const metric = document.createElement("strong"); metric.textContent = value;
+  const context = document.createElement("small"); context.className = "meta"; context.textContent = detail;
+  card.append(name, metric, context); return card;
+}
+
+function renderLeaderboardKpis(rows) {
+  elements.leaderboardKpis.replaceChildren();
+  const ranked = rows.filter((row) => row.eligible_rank);
+  const throughput = ranked.filter((row) => Number.isFinite(row.tokens_per_second)).sort((a, b) => b.tokens_per_second - a.tokens_per_second)[0];
+  const ttft = ranked.filter((row) => Number.isFinite(row.ttft_ms)).sort((a, b) => a.ttft_ms - b.ttft_ms)[0];
+  const vram = ranked.filter((row) => Number.isFinite(row.peak_vram_mb)).sort((a, b) => a.peak_vram_mb - b.peak_vram_mb)[0];
+  const duration = ranked.filter((row) => Number.isFinite(row.average_total_seconds)).sort((a, b) => a.average_total_seconds - b.average_total_seconds)[0];
+  const speedup = ranked.filter((row) => Number.isFinite(row.speedup_vs_cpu)).sort((a, b) => b.speedup_vs_cpu - a.speedup_vs_cpu)[0];
+  const tested = rows.filter((row) => row.tested);
+  const verified = tested.filter((row) => row.probe_verified).length;
+  elements.leaderboardKpis.append(
+    createKpi("Best throughput", throughput ? formatLeaderboardValue(throughput.tokens_per_second, " tok/s") : "—", throughput?.name || "No ranked result"),
+    createKpi("Lowest TTFT", ttft ? formatLeaderboardValue(ttft.ttft_ms, " ms", 0) : "—", ttft?.name || "No TTFT evidence"),
+    createKpi("Lowest peak VRAM", vram ? formatLeaderboardValue(vram.peak_vram_mb, " MiB", 0) : "—", vram?.name || "No VRAM evidence"),
+    createKpi("Lowest duration", duration ? formatLeaderboardValue(duration.average_total_seconds, " s") : "—", duration?.name || "No duration evidence"),
+    createKpi("Best CPU-relative speed", speedup ? formatLeaderboardValue(speedup.speedup_vs_cpu, "×") : "—", speedup?.name || "No CPU baseline evidence"),
+    createKpi("Probe verification", tested.length ? `${verified} / ${tested.length}` : "—", "Runtime probe verified results"),
+    createKpi("Conforming results", tested.length ? `${ranked.length} / ${tested.length}` : "—", `${rows.filter((row) => row.status === "not_tested").length} detected option(s) not tested`),
+  );
+}
+
+const LEADERBOARD_METRICS = {
+  holistic_capability: ["Holistic capability", "%"],
+  tokens_per_second: ["Throughput", " tok/s"],
+  ttft_ms: ["TTFT", " ms"],
+  average_total_seconds: ["Total time", " s"],
+  peak_vram_mb: ["Peak VRAM", " MiB"],
+  speedup_vs_cpu: ["CPU-relative speed", "×"],
+  performance_index: ["Performance index", ""],
+  integrity_overall: ["Integrity & comprehension", "%"],
+  combined_score: ["Combined quality + performance", ""],
+};
+
+function renderLeaderboardMetricComparison(rows) {
+  const metric = elements.leaderboardMetric.value;
+  const [label, unit] = LEADERBOARD_METRICS[metric] || [metric, ""];
+  const metricValue = (row) => metric === "holistic_capability" ? row.integrity_overall : row[metric];
+  const values = rows.map(metricValue).filter(Number.isFinite);
+  const maximum = Math.max(...values, 0);
+  const comparison = document.createElement("div"); comparison.className = "leaderboard-metric-comparison";
+  const heading = document.createElement("strong"); heading.textContent = `${label} by backend`; comparison.append(heading);
+  for (const row of rows) {
+    const item = document.createElement("button"); item.type = "button"; item.className = "leaderboard-metric-row";
+    const name = document.createElement("span"); name.textContent = row.name;
+    const value = document.createElement("span"); value.textContent = formatLeaderboardValue(metricValue(row), unit);
+    const bar = document.createElement("span"); bar.className = "leaderboard-metric-bar";
+    bar.style.setProperty("--metric-width", Number.isFinite(metricValue(row)) && maximum ? `${Math.max(3, metricValue(row) / maximum * 100)}%` : "0%");
+    item.setAttribute("aria-label", `${row.name}: ${value.textContent}; ${row.status === "not_tested" ? "not tested" : row.status}`);
+    item.addEventListener("click", () => { selectedLeaderboardRowId = row.id; renderBenchmarkLeaderboard(); });
+    item.append(name, value, bar); comparison.append(item);
+  }
+  elements.leaderboardBackendChart.append(comparison);
+}
+
+function svgNode(name, attributes = {}) {
+  const node = document.createElementNS(SVG_NAMESPACE, name);
+  for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, String(value));
+  return node;
+}
+
+function resetChart(figure, title) {
+  figure.replaceChildren();
+  const caption = document.createElement("figcaption"); caption.textContent = title; figure.append(caption);
+}
+
+function renderLeaderboardScatter(rows) {
+  resetChart(elements.leaderboardBackendChart, "Throughput versus responsiveness");
+  const eligible = rows.filter((row) => row.eligible_rank && Number.isFinite(row.tokens_per_second) && Number.isFinite(row.ttft_ms));
+  if (!eligible.length) {
+    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "No comparable TTFT and throughput evidence is available."; elements.leaderboardBackendChart.append(empty); renderLeaderboardMetricComparison(rows); return;
+  }
+  const points = window.JSONCodrLeaderboard.scalePoints(eligible.map((row) => ({ x: row.ttft_ms, y: row.tokens_per_second, row })), { width: 520, height: 240, padding: 34 });
+  const svg = svgNode("svg", { viewBox: "0 0 520 240", role: "img", "aria-label": "Higher and farther left indicates faster output and lower time to first token" });
+  for (const y of [34, 90, 146, 206]) svg.append(svgNode("line", { x1: 34, y1: y, x2: 486, y2: y, class: "chart-grid" }));
+  const xLabel = svgNode("text", { x: 414, y: 232, class: "chart-label" }); xLabel.textContent = "TTFT (ms)"; svg.append(xLabel);
+  const yLabel = svgNode("text", { x: 4, y: 16, class: "chart-label" }); yLabel.textContent = "tokens/s"; svg.append(yLabel);
+  for (const point of points) {
+    const circle = svgNode("circle", { cx: point.cx, cy: point.cy, r: 8, class: "chart-point", role: "button" });
+    circle.setAttribute("tabindex", "0");
+    circle.setAttribute("aria-label", `${point.row.name}: ${point.row.tokens_per_second.toFixed(2)} tokens per second, ${point.row.ttft_ms.toFixed(1)} milliseconds TTFT`);
+    const title = svgNode("title"); title.textContent = circle.getAttribute("aria-label"); circle.append(title);
+    const choose = () => { selectedLeaderboardRowId = point.row.id; renderBenchmarkLeaderboard(); };
+    circle.addEventListener("click", choose);
+    circle.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); choose(); } });
+    svg.append(circle);
+  }
+  elements.leaderboardBackendChart.append(svg);
+  const summary = document.createElement("p"); summary.className = "meta"; summary.textContent = eligible.map((row) => `${row.name}: ${row.tokens_per_second.toFixed(2)} tok/s at ${row.ttft_ms.toFixed(1)} ms`).join("; "); elements.leaderboardBackendChart.append(summary);
+  if (eligible.length === 1) {
+    const note = document.createElement("p"); note.className = "meta"; note.textContent = "Only one comparable result is available; at least two are required for comparison."; elements.leaderboardBackendChart.append(note);
+  }
+  renderLeaderboardMetricComparison(rows);
+}
+
+function renderLeaderboardTrend(row) {
+  resetChart(elements.leaderboardTrendChart, "Performance history");
+  if (!row || !row.tested) {
+    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "Select a tested backend to view its history."; elements.leaderboardTrendChart.append(empty); return;
+  }
+  const metric = elements.leaderboardMetric.value;
+  const [metricLabel, metricUnit] = LEADERBOARD_METRICS[metric] || [metric, ""];
+  if (metric === "holistic_capability" || metric === "integrity_overall" || metric === "combined_score") {
+    const note = document.createElement("p"); note.className = "meta";
+    note.textContent = "Quality ranks use the latest strict v2 integrity evaluation. Review its per-scenario history in Performance benchmarks.";
+    elements.leaderboardTrendChart.append(note); return;
+  }
+  const trend = window.JSONCodrLeaderboard.buildTrend(leaderboardHistoryCache, row, metric);
+  const validTrend = trend.filter((point) => point.eligible && Number.isFinite(point.value));
+  if (validTrend.length < 2) {
+    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = validTrend.length ? `One valid matching run is available (${formatLeaderboardValue(validTrend[0].value, metricUnit)}); run it again to establish a trend.` : "No valid matching historical runs are available."; elements.leaderboardTrendChart.append(empty); return;
+  }
+  const points = window.JSONCodrLeaderboard.scalePoints(validTrend.map((point) => ({ x: trend.indexOf(point), y: point.value, point })), { width: 520, height: 240, padding: 34 });
+  const pointsBySession = new Map(points.map((point) => [point.point.session_id, point]));
+  const svg = svgNode("svg", { viewBox: "0 0 520 240", role: "img", "aria-label": `${row.name} ${metricLabel} over time` });
+  for (const y of [34, 90, 146, 206]) svg.append(svgNode("line", { x1: 34, y1: y, x2: 486, y2: y, class: "chart-grid" }));
+  const xLabel = svgNode("text", { x: 430, y: 232, class: "chart-label" }); xLabel.textContent = "Run"; svg.append(xLabel);
+  const yLabel = svgNode("text", { x: 4, y: 16, class: "chart-label" }); yLabel.textContent = metricLabel; svg.append(yLabel);
+  let segment = [];
+  const appendSegment = () => { if (segment.length > 1) svg.append(svgNode("polyline", { points: segment.map((point) => `${point.cx},${point.cy}`).join(" "), fill: "none", stroke: "currentColor", "stroke-width": 3 })); segment = []; };
+  for (const trendPoint of trend) { const point = pointsBySession.get(trendPoint.session_id); if (point) segment.push(point); else appendSegment(); }
+  appendSegment();
+  for (const point of points) {
+    const circle = svgNode("circle", { cx: point.cx, cy: point.cy, r: 6, class: "chart-point", role: "img" });
+    circle.setAttribute("tabindex", "0"); circle.setAttribute("aria-label", `${new Date(point.point.created_at).toLocaleDateString()}: ${point.point.value.toFixed(2)}${metricUnit} ${metricLabel}`); svg.append(circle);
+    const title = svgNode("title"); title.textContent = circle.getAttribute("aria-label"); circle.append(title);
+  }
+  elements.leaderboardTrendChart.append(svg);
+  const summary = document.createElement("p"); summary.className = "meta"; summary.textContent = `${metricLabel}: ${trend.map((point) => `${new Date(point.created_at).toLocaleDateString()}: ${point.eligible ? `${point.value.toFixed(2)}${metricUnit}` : "invalid / unavailable gap"}`).join("; ")}`; elements.leaderboardTrendChart.append(summary);
+}
+
+function handoffUntestedBackend(row) {
+  if (!row.runnable || !row.compatible) { elements.leaderboardStatus.textContent = row.availability_reason || "This backend is not currently runnable."; return false; }
+  const modelOption = [...elements.hardwareBenchmarkModel.options].find((option) => option.value === row.model && !option.disabled);
+  if (!modelOption) { elements.leaderboardStatus.textContent = `Benchmark model ${row.model} is not available in the benchmark runner.`; return false; }
+  const suiteOption = [...elements.hardwareBenchmarkSuite.options].find((option) => option.value === row.suite && !option.disabled);
+  if (!suiteOption) { elements.leaderboardStatus.textContent = `Benchmark suite ${row.suite} is not available in the benchmark runner.`; return false; }
+  const backendOption = [...elements.hardwareBenchmarkBackend.options].find((option) => option.value === row.backend && !option.disabled);
+  if (!backendOption) { elements.leaderboardStatus.textContent = `Backend ${row.backend} is not available in the benchmark runner.`; return false; }
+  elements.hardwareBenchmarkModel.value = row.model;
+  elements.hardwareBenchmarkSuite.value = row.suite;
+  elements.hardwareBenchmarkBackend.value = row.backend;
+  selectHardwareSection("benchmarks");
+  return true;
+}
+
+function renderLeaderboardDetails(row) {
+  elements.leaderboardDetails.replaceChildren();
+  if (!row) { const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "No result matches the current filters."; elements.leaderboardDetails.append(empty); return; }
+  selectedLocalperfEvaluationId = row.evaluation_id;
+  elements.localperfExport.disabled = !selectedLocalperfEvaluationId;
+  const heading = document.createElement("h4"); heading.textContent = `${row.model} · ${row.name}`;
+  const conformanceLabel = row.conforming === true ? "valid" : row.conforming === false ? "invalid" : "unknown";
+  const description = document.createElement("p"); description.className = "meta"; description.textContent = `${row.suite} · ${row.workload_version} · ${row.status}${row.probe_verified ? " · runtime probe verified" : " · runtime probe unverified"} · Conformance: ${conformanceLabel}`;
+  elements.leaderboardDetails.append(heading, description);
+  if (row.status === "not_tested") {
+    const action = document.createElement("button"); action.type = "button"; action.className = "primary"; action.textContent = "Test this backend"; action.addEventListener("click", () => handoffUntestedBackend(row)); elements.leaderboardDetails.append(action); return;
+  }
+  if (row.availability_reason) { const reason = document.createElement("p"); reason.className = "meta"; reason.textContent = row.availability_reason; elements.leaderboardDetails.append(reason); }
+  const metrics = document.createElement("p"); metrics.textContent = `Performance index ${formatLeaderboardValue(row.performance_index, "", 0)} · ${formatLeaderboardValue(row.tokens_per_second, " tok/s")} · ${formatLeaderboardValue(row.ttft_ms, " ms")} TTFT · ${formatLeaderboardValue(row.peak_vram_mb, " MiB", 0)} peak VRAM`; elements.leaderboardDetails.append(metrics);
+  const quality = document.createElement("p"); quality.textContent = row.integrity_overall == null
+    ? "Integrity evaluation unavailable for this model."
+    : `Integrity ${formatLeaderboardValue(row.integrity_score, "%", 1)} · Comprehension ${formatLeaderboardValue(row.comprehension_score, "%", 1)} · Overall ${formatLeaderboardValue(row.integrity_overall, "%", 1)} · Combined ${formatLeaderboardValue(row.combined_score, "", 1)}`;
+  elements.leaderboardDetails.append(quality);
+  const metricNames = [["tokens_per_second", "Throughput"], ["ttft_ms", "TTFT"], ["total_seconds", "Duration"], ["peak_vram_mb", "Peak VRAM"]];
+  const stats = document.createElement("ul");
+  for (const [key, label] of metricNames) {
+    const values = row.tests.map((sample) => sample[key]); const summary = window.JSONCodrLeaderboard.percentiles(values);
+    const item = document.createElement("li"); item.textContent = `${label}: p50 ${formatLeaderboardValue(summary.p50)}, p90 ${formatLeaderboardValue(summary.p90)}, min ${formatLeaderboardValue(summary.min)}, max ${formatLeaderboardValue(summary.max)}`; stats.append(item);
+  }
+  elements.leaderboardDetails.append(stats);
+  const metadata = document.createElement("p"); metadata.className = "meta"; metadata.textContent = `Session ${row.session_id} · backend ${row.backend} · runtime ${row.runtime || "unavailable"} · kind ${row.kind || "unavailable"} · active ${row.active == null ? "unknown" : row.active ? "yes" : "no"} · evaluation ${row.evaluation_id || "unavailable"} · configuration hash ${row.configuration_hash || "unavailable"} · workload hash ${row.workload_hash || "unavailable"}`; elements.leaderboardDetails.append(metadata);
+  if (row.runtime_metadata) { const runtime = document.createElement("p"); runtime.className = "meta"; runtime.textContent = `Runtime metadata: ${JSON.stringify(row.runtime_metadata)}`; elements.leaderboardDetails.append(runtime); }
+  const validityReasons = [...(row.rejection_reasons || []), ...(row.conformance_reasons || []), ...(row.compatibility_reasons || []), row.quarantine_reason].filter(Boolean);
+  if (row.error || validityReasons.length) { const warning = document.createElement("p"); warning.className = "error"; warning.textContent = row.error || validityReasons.join("; "); elements.leaderboardDetails.append(warning); }
+  const samples = document.createElement("details"); const summary = document.createElement("summary"); summary.textContent = `Show ${row.tests.length} per-prompt samples`; samples.append(summary);
+  for (const sample of row.tests) { const line = document.createElement("p"); line.className = "meta"; line.textContent = `${sample.prompt_id || sample.test || "sample"} #${sample.repetition || 1}: ${formatLeaderboardValue(sample.tokens_per_second, " tok/s")} · ${formatLeaderboardValue(sample.ttft_ms, " ms")} TTFT · ${formatLeaderboardValue(sample.total_seconds, " s")} total`; samples.append(line); }
+  elements.leaderboardDetails.append(samples);
+}
+
+function renderBenchmarkLeaderboard() {
+  if (!leaderboardHistoryCache.length && !integrityHistoryCache.length) {
+    elements.leaderboardTable.replaceChildren(); const row = document.createElement("tr"); const cell = document.createElement("td"); cell.colSpan = 11; cell.className = "meta"; cell.textContent = "No benchmark history. Run Performance benchmarks first."; row.append(cell); elements.leaderboardTable.append(row);
+    elements.leaderboardKpis.replaceChildren(); elements.leaderboardStatus.textContent = "No saved benchmark results."; renderLeaderboardScatter([]); renderLeaderboardTrend(null); renderLeaderboardDetails(null); return;
+  }
+  const allRows = window.JSONCodrLeaderboard.joinIntegrity(window.JSONCodrLeaderboard.buildAllRows(leaderboardHistoryCache), integrityHistoryCache);
+  const rankedRows = window.JSONCodrLeaderboard.filterAndRank(allRows, {
+    search: elements.leaderboardSearch.value,
+    model: elements.leaderboardModelFilter.value,
+    backend: elements.leaderboardBackendFilter.value,
+    suite: elements.leaderboardSuiteFilter.value,
+    metric: elements.leaderboardMetric.value,
+  });
+  const rows = window.JSONCodrLeaderboard.sortRows(rankedRows, leaderboardSort);
+  const selected = window.JSONCodrLeaderboard.selectRow(rows, selectedLeaderboardRowId); selectedLeaderboardRowId = selected?.id || null;
+  elements.leaderboardStatus.textContent = `${rows.length} non-failed result(s) · sorted by ${leaderboardSort.key.replaceAll("_", " ")}`;
+  for (const button of elements.leaderboardSortButtons) {
+    if (button.dataset.sortKey === leaderboardSort.key) button.setAttribute("aria-sort", leaderboardSort.direction === "asc" ? "ascending" : "descending");
+    else button.removeAttribute("aria-sort");
+  }
+  renderLeaderboardKpis(rows); elements.leaderboardTable.replaceChildren();
+  for (const row of rows) {
+    const tableRow = document.createElement("tr"); tableRow.tabIndex = 0; tableRow.classList.toggle("is-selected", row.id === selectedLeaderboardRowId);
+    const evidenceStatus = row.status === "not_tested" ? "Not tested" : row.status === "completed" && row.conforming === true ? "Conforming" : row.status === "completed" && row.conforming === false ? "Nonconforming" : row.status === "completed" ? "Unverified evidence" : row.status;
+    const values = [row.rank || "—", `${row.model} · ${row.name}`, formatLeaderboardValue(row.performance_index, "", 0), formatLeaderboardValue(row.integrity_overall, "%", 1), formatLeaderboardValue(row.combined_score, "", 1), formatLeaderboardValue(row.tokens_per_second), formatLeaderboardValue(row.ttft_ms, " ms", 0), formatLeaderboardValue(row.average_total_seconds, " s"), formatLeaderboardValue(row.peak_vram_mb, " MiB", 0), formatLeaderboardValue(row.speedup_vs_cpu, "×"), evidenceStatus];
+    for (const value of values) { const cell = document.createElement("td"); cell.textContent = value; tableRow.append(cell); }
+    const choose = () => { selectedLeaderboardRowId = row.id; renderBenchmarkLeaderboard(); };
+    tableRow.addEventListener("click", choose); tableRow.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); choose(); } }); elements.leaderboardTable.append(tableRow);
+  }
+  renderLeaderboardScatter(rows); renderLeaderboardTrend(selected); renderLeaderboardDetails(selected);
+}
+
+async function loadBenchmarkLeaderboard() {
+  elements.leaderboardStatus.textContent = "Loading benchmark comparisons…";
+  const historyPromise = loadBenchmarkHistory();
+  const candidatesPromise = leaderboardCandidateCache.length ? Promise.resolve(leaderboardCandidateCache) : detectHardware();
+  await Promise.all([historyPromise, candidatesPromise, loadIntegrityBenchmarkHistory()]); updateLeaderboardFilterOptions(); renderBenchmarkLeaderboard();
+}
+
+function renderBenchmarkResults(benchmark) {
+  elements.hardwareBenchmarkResults.replaceChildren();
+  selectedLocalperfEvaluationId = null;
+  for (const result of benchmark.results) {
+    const row = document.createElement("div"); row.className = "dependency-row";
+    const label = document.createElement("div");
+    const name = document.createElement("strong"); name.textContent = result.name;
+    const metrics = document.createElement("p"); metrics.className = "meta";
+    let components = null;
+    if (result.status === "completed") {
+      const relative = result.speedup_vs_cpu == null ? "CPU baseline unavailable" : `${result.speedup_vs_cpu.toFixed(2)}× CPU`;
+      const gpu = result.gpu_percent > 0
+        ? ` · ${result.gpu_percent}% GPU · ${(result.vram_bytes / 1048576).toFixed(0)} MiB VRAM`
+        : "";
+      const eligibility = result.selected
+        ? " · Selected for compatibility and performance"
+        : result.eligible ? " · Eligible" : ` · Not eligible: ${(result.rejection_reasons || []).join("; ")}`;
+      metrics.textContent = `${result.tokens_per_second.toFixed(2)} tokens/s · ${result.average_total_seconds.toFixed(3)}s average · ${relative}${gpu}${eligibility}`;
+      if (result.localperf) {
+        if (!selectedLocalperfEvaluationId) selectedLocalperfEvaluationId = result.localperf.evaluation_id;
+        const conformance = result.localperf.conformance.conforming ? "conforming" : `non-conforming: ${result.localperf.conformance.reasons.join(", ")}`;
+        metrics.textContent += ` · LocalPerf ${conformance}`;
+      }
+      components = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = `${result.runtime} · ${result.kind} · ${result.verified ? "verified" : "not yet verified"}${result.active ? " · active" : ""}`;
+      components.append(summary);
+      for (const test of result.tests) {
+        const line = document.createElement("p"); line.className = "meta";
+        line.textContent = `${test.prompt_id || test.test} · ${test.test} #${test.repetition}: ${test.total_seconds.toFixed(3)}s · ${test.ttft_ms == null ? "TTFT unavailable" : `${test.ttft_ms.toFixed(1)} ms TTFT`} · ${test.peak_vram_mb == null ? "VRAM unavailable" : `${test.peak_vram_mb.toFixed(1)} MiB peak VRAM`} · ${test.tokens_per_second.toFixed(2)} tokens/s`;
+        components.append(line);
+      }
+    } else {
+      metrics.textContent = `${result.status}: ${result.error || "Backend is unavailable"}`;
+    }
+    label.append(name, metrics);
+    if (components) label.append(components);
+    row.append(label); elements.hardwareBenchmarkResults.append(row);
+  }
+  elements.localperfExport.disabled = !selectedLocalperfEvaluationId;
+}
+
+async function loadBenchmarkHistory() {
+  const response = await fetch("/api/hardware/benchmarks");
+  if (!response.ok) throw new Error("Unable to load benchmark history");
+  const history = await response.json();
+  leaderboardHistoryCache = history;
+  if (!history.some((benchmark) => benchmark.id === selectedLeaderboardSessionId)) selectedLeaderboardSessionId = history[0]?.id || null;
+  elements.hardwareBenchmarkHistory.replaceChildren();
+  if (!history.length) {
+    elements.hardwareBenchmarkHistory.innerHTML = '<p class="meta">No benchmark history.</p>';
+    return;
+  }
+  for (const benchmark of history) {
+    const button = document.createElement("button"); button.type = "button"; button.className = "secondary";
+    button.textContent = `${benchmark.suite} · ${benchmark.model} · ${new Date(benchmark.created_at).toLocaleString()}`;
+    button.addEventListener("click", () => { renderBenchmarkResults(benchmark); selectLeaderboardSession(benchmark.id); });
+    elements.hardwareBenchmarkHistory.append(button);
+  }
+  renderBenchmarkResults(history[0]);
+  if (activeHardwareSection === "leaderboard") { updateLeaderboardFilterOptions(); renderBenchmarkLeaderboard(); }
+  return history;
+}
+
+async function runHardwareBenchmark() {
+  elements.hardwareBenchmarkRun.disabled = true;
+  elements.hardwareBenchmarkStatus.textContent = "Running standardized benchmark…";
+  try {
+    const response = await fetch("/api/hardware/benchmarks", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ suite: elements.hardwareBenchmarkSuite.value, model: elements.hardwareBenchmarkModel.value, backend: elements.hardwareBenchmarkBackend.value }),
+    });
+    const benchmark = await response.json();
+    if (!response.ok) throw new Error(benchmark.detail || "Benchmark failed");
+    renderBenchmarkResults(benchmark);
+    selectedLeaderboardSessionId = benchmark.id;
+    await loadBenchmarkHistory();
+    elements.hardwareBenchmarkStatus.textContent = `Benchmark complete · selected ${benchmark.model} on ${benchmark.selected_backend}`;
+  } finally {
+    elements.hardwareBenchmarkRun.disabled = false;
+  }
+}
+
+async function clearHardwareBenchmarks() {
+  elements.hardwareBenchmarkClear.disabled = true;
+  try {
+    const response = await fetch("/api/hardware/benchmarks", { method: "DELETE" });
+    if (!response.ok) throw new Error("Unable to clear benchmark data");
+    await loadBenchmarkHistory();
+    selectedLeaderboardSessionId = null;
+    selectedLeaderboardRowId = null;
+    renderBenchmarkLeaderboard();
+    elements.hardwareBenchmarkResults.innerHTML = '<p class="meta">No benchmark selected.</p>';
+    elements.hardwareBenchmarkStatus.textContent = "Previous benchmark data cleared.";
+  } finally {
+    elements.hardwareBenchmarkClear.disabled = false;
+  }
+}
+
+function renderIntegrityBenchmark(benchmark) {
+  elements.integrityBenchmarkScores.replaceChildren();
+  elements.integrityBenchmarkResults.replaceChildren();
+  if (!benchmark?.scores || !Array.isArray(benchmark.scenarios)) {
+    elements.integrityBenchmarkResults.innerHTML = '<p class="meta">This saved evaluation is incomplete and cannot be displayed.</p>';
+    return;
+  }
+  const metadata = document.createElement("p");
+  metadata.className = "meta";
+  metadata.textContent = `${benchmark.suite_version || "Unknown suite"} · schema ${benchmark.schema_version || "unknown"} · ${benchmark.status || "unknown"} · ${benchmark.created_at ? new Date(benchmark.created_at).toLocaleString() : "unknown time"}`;
+  elements.integrityBenchmarkResults.append(metadata);
+  for (const [label, value] of [
+    ["Integrity", benchmark.scores.integrity],
+    ["Comprehension", benchmark.scores.comprehension],
+    ["Overall", benchmark.scores.overall],
+  ]) {
+    const card = document.createElement("article");
+    const caption = document.createElement("span");
+    caption.className = "meta";
+    caption.textContent = label;
+    const score = document.createElement("strong");
+    score.textContent = `${Number(value).toFixed(1)}%`;
+    card.append(caption, score);
+    elements.integrityBenchmarkScores.append(card);
+  }
+  for (const scenario of benchmark.scenarios) {
+    const details = document.createElement("details");
+    details.className = "dependency-row";
+    const summary = document.createElement("summary");
+    summary.textContent = `${scenario.passed ? "PASS" : "REVIEW"} · ${scenario.name} · ${Number(scenario.score).toFixed(1)}%`;
+    details.append(summary);
+    for (const evidence of (Array.isArray(scenario.evidence) ? scenario.evidence : []).filter((item) => item && typeof item === "object")) {
+      const line = document.createElement("p");
+      line.className = "meta integrity-evidence";
+      line.textContent = `Run ${evidence.repetition} · ${evidence.passed ? "pass" : "fail"} · ${evidence.evaluation_reason || "unclassified"} · ${evidence.error || evidence.output || "No output"}${evidence.truncated ? ` · truncated from ${evidence.output_length} characters` : ""}`;
+      details.append(line);
+    }
+    elements.integrityBenchmarkResults.append(details);
+  }
+}
+
+async function loadIntegrityBenchmarkHistory() {
+  const response = await fetch("/api/integrity-benchmarks");
+  if (!response.ok) throw new Error("Unable to load integrity benchmark history");
+  const payload = await response.json();
+  const history = Array.isArray(payload) ? payload.filter((benchmark) => benchmark?.scores && Array.isArray(benchmark.scenarios)) : [];
+  integrityHistoryCache = history;
+  elements.integrityBenchmarkHistory.replaceChildren();
+  if (!history.length) {
+    elements.integrityBenchmarkHistory.innerHTML = '<p class="meta">No integrity evaluation history.</p>';
+    return history;
+  }
+  for (const benchmark of history) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary";
+    button.textContent = `${benchmark.suite} · ${benchmark.model} · ${Number(benchmark.scores.overall).toFixed(1)}% · ${new Date(benchmark.created_at).toLocaleString()}`;
+    button.addEventListener("click", () => renderIntegrityBenchmark(benchmark));
+    elements.integrityBenchmarkHistory.append(button);
+  }
+  renderIntegrityBenchmark(history[0]);
+  return history;
+}
+
+async function runIntegrityBenchmark() {
+  elements.integrityBenchmarkRun.disabled = true;
+  elements.integrityBenchmarkStatus.textContent = "Running integrity and comprehension evaluation…";
+  try {
+    const response = await fetch("/api/integrity-benchmarks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        suite: elements.integrityBenchmarkSuite.value,
+        model: elements.integrityBenchmarkModel.value,
+      }),
+    });
+    const benchmark = await response.json();
+    if (!response.ok) throw new Error(benchmark.detail || "Integrity evaluation failed");
+    renderIntegrityBenchmark(benchmark);
+    await loadIntegrityBenchmarkHistory();
+    elements.integrityBenchmarkStatus.textContent = `Evaluation complete · ${Number(benchmark.scores.overall).toFixed(1)}% overall`;
+  } finally {
+    elements.integrityBenchmarkRun.disabled = false;
+  }
+}
+
+function exportLocalperfPackage() {
+  if (!selectedLocalperfEvaluationId) return;
+  const details = elements.localperfIncludeDetails.checked ? "true" : "false";
+  window.location.assign(`/api/localperf/packages/${encodeURIComponent(selectedLocalperfEvaluationId)}?include_system_details=${details}`);
+}
+
+async function previewLocalperfPackage(file) {
+  pendingLocalperfPackage = await file.arrayBuffer();
+  const response = await fetch("/api/localperf/packages/preview", {
+    method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: pendingLocalperfPackage,
+  });
+  const preview = await response.json();
+  if (!response.ok) throw new Error(preview.detail || "Package validation failed");
+  elements.localperfRetainDetails.disabled = !preview.contains_system_details;
+  elements.localperfRetainDetails.checked = false;
+  elements.localperfImport.disabled = false;
+  elements.localperfPackageStatus.textContent = preview.contains_system_details
+    ? "Valid package contains system details. Consent is required to retain them."
+    : "Valid sanitized package. Ready to import.";
+}
+
+async function importLocalperfPackage() {
+  if (!pendingLocalperfPackage) return;
+  const retain = elements.localperfRetainDetails.checked ? "true" : "false";
+  const response = await fetch(`/api/localperf/packages/import?retain_system_details=${retain}`, {
+    method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: pendingLocalperfPackage,
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.detail || "Package import failed");
+  elements.localperfPackageStatus.textContent = `Imported reference package ${result.package_id.slice(0, 12)} · local baseline disabled.`;
+  elements.localperfImport.disabled = true;
+}
+
+async function searchOptimizedModels() {
+  elements.optimizedModelSearchRun.disabled = true;
+  elements.optimizedModelSearchResults.innerHTML = '<p class="meta">Searching approved remote sources…</p>';
+  try {
+    const provider = encodeURIComponent(elements.optimizedModelSearchProvider.value);
+    const query = encodeURIComponent(elements.optimizedModelSearchQuery.value || "coder");
+    const response = await fetch(`/api/inference/models/search?provider=${provider}&q=${query}&limit=10`);
+    const models = await response.json();
+    if (!response.ok) throw new Error(models.detail || "Optimized-model search failed");
+    elements.optimizedModelSearchResults.replaceChildren();
+    if (!models.length) elements.optimizedModelSearchResults.innerHTML = '<p class="meta">No compatible candidates found.</p>';
+    for (const model of models) {
+      const row = document.createElement("div"); row.className = "dependency-row";
+      const label = document.createElement("div");
+      const name = document.createElement("strong"); name.textContent = model.repository;
+      const detail = document.createElement("p"); detail.className = "meta";
+      detail.textContent = `${model.provider} · ${model.device} · ${model.format} · ${model.license} · ${model.source}`;
+      const link = document.createElement("a"); link.className = "secondary file-button"; link.href = model.source_url;
+      link.target = "_blank"; link.rel = "noopener noreferrer"; link.textContent = "Review download source";
+      label.append(name, detail); row.append(label, link); elements.optimizedModelSearchResults.append(row);
+    }
+  } finally { elements.optimizedModelSearchRun.disabled = false; }
 }
 
 async function loadAttachments() {
@@ -309,6 +1823,82 @@ async function loadSkills() {
   elements.skillList.replaceChildren(content);
 }
 
+async function loadSkillsets() {
+  await ensureSession();
+  const [skillsetResponse, sessionResponse] = await Promise.all([
+    fetch("/api/skillsets"),
+    fetch(`/api/sessions/${sessionId}`),
+  ]);
+  const skillsets = await skillsetResponse.json();
+  const session = await sessionResponse.json();
+  if (!skillsetResponse.ok) throw new Error(skillsets.detail || "Unable to load Skillsets");
+  excludedSkillIds = session.excluded_skill_ids || [];
+  elements.autoAttachSkills.checked = session.auto_attach_skills !== false;
+  elements.skillsetList.replaceChildren();
+  for (const skillset of skillsets) {
+    const details = document.createElement("details"); details.className = "skillset-pack";
+    const summary = document.createElement("summary");
+    summary.textContent = `${skillset.name} · ${skillset.members.length} skills`;
+    const description = document.createElement("p"); description.textContent = skillset.summary;
+    const members = document.createElement("ul");
+    for (const member of skillset.members) {
+      const item = document.createElement("li"); item.textContent = member.name; members.append(item);
+    }
+    details.append(summary, description, members);
+    elements.skillsetList.append(details);
+  }
+  if (!skillsets.length) {
+    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "No Skillsets available.";
+    elements.skillsetList.append(empty);
+  }
+}
+
+function renderRecommendations(recommendations) {
+  elements.skillRecommendations.replaceChildren();
+  for (const recommendation of recommendations) {
+    const row = document.createElement("div"); row.className = "recommendation-row";
+    const explanation = document.createElement("span");
+    explanation.textContent = `${recommendation.name} · ${recommendation.reasons.join(" · ")}`;
+    row.append(explanation);
+    if (!recommendation.manual) {
+      const button = document.createElement("button"); button.type = "button"; button.className = "secondary"; button.textContent = "Dismiss";
+      button.addEventListener("click", async () => {
+        excludedSkillIds = [...new Set([...excludedSkillIds, recommendation.reference])];
+        const response = await fetch(`/api/sessions/${sessionId}/skill-routing`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ excluded_skill_ids: excludedSkillIds }),
+        });
+        if (!response.ok) return showError((await response.json()).detail || "Unable to dismiss recommendation");
+        row.remove();
+      });
+      row.append(button);
+    }
+    elements.skillRecommendations.append(row);
+  }
+}
+
+async function previewSkillRecommendations() {
+  const prompt = elements.prompt.value.trim();
+  if (!prompt) return renderRecommendations([]);
+  await ensureSession();
+  const response = await fetch(`/api/sessions/${sessionId}/skill-recommendations`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt }),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.detail || "Unable to preview skill recommendations");
+  renderRecommendations(payload.recommendations || []);
+}
+
+function renderAttachedSkills(skills) {
+  elements.attachedSkills.replaceChildren();
+  elements.attachedSkills.hidden = !skills.length;
+  for (const skill of skills) {
+    const chip = document.createElement("span"); chip.className = "attached-skill-chip";
+    chip.textContent = `${skill.name} · ${skill.reasons.join(" · ")}`;
+    elements.attachedSkills.append(chip);
+  }
+}
+
 async function loadDependencies() {
   await ensureSession();
   const response = await fetch(`/api/sessions/${sessionId}/dependencies`);
@@ -333,13 +1923,14 @@ async function loadDependencies() {
     send.className = "secondary";
     send.textContent = "Send to CLI";
     send.addEventListener("click", async () => {
-      if (elements.terminalPanel.hidden) elements.terminalToggle.click();
+      selectDestination("terminal");
       elements.terminalInput.value = suggestion.command;
       elements.terminalInput.focus();
       elements.terminalStatus.textContent = "Install command ready · review and press Run";
     });
     row.append(details, send);
     elements.dependencyList.append(row);
+    if (suggestion.automatic) dependencyInstallQueue.enqueue(suggestion.command);
   }
 }
 
@@ -379,6 +1970,52 @@ function renderSkillDiscoveries(payload) {
   }
 }
 
+async function previewGithubSkill() {
+  const url = elements.skillGithubUrl.value.trim();
+  if (!url) return showError("Enter a GitHub SKILL.md or skill-folder URL");
+  githubSkillPreviewId = null;
+  elements.skillGithubPreview.disabled = true;
+  elements.skillGithubInstall.disabled = true;
+  elements.skillGithubStatus.textContent = "Resolving GitHub repository and creating an immutable preview...";
+  try {
+    const response = await fetch("/api/skills/github/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || "Unable to preview GitHub skill");
+    githubSkillPreviewId = payload.preview_id;
+    const skills = payload.pack?.skills || [];
+    elements.skillEditor.value = skills.map((skill) => `# ${skill.name}\n${skill.content}`).join("\n\n---\n\n");
+    elements.skillEditor.disabled = false;
+    elements.skillGithubInstall.disabled = false;
+    elements.skillGithubStatus.textContent = `Resolved commit ${payload.revision.slice(0, 12)} · ${payload.repository}/${payload.source_path} · ${skills.length} skill(s) ready to install`;
+  } finally {
+    elements.skillGithubPreview.disabled = false;
+  }
+}
+
+async function installGithubSkill() {
+  if (!githubSkillPreviewId) return showError("Preview the GitHub skill before installing it");
+  elements.skillGithubInstall.disabled = true;
+  elements.skillGithubStatus.textContent = "Installing reviewed GitHub skill...";
+  const response = await fetch("/api/skills/github/install", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ preview_id: githubSkillPreviewId }),
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    elements.skillGithubInstall.disabled = false;
+    throw new Error(payload.detail || "Unable to install GitHub skill");
+  }
+  githubSkillPreviewId = null;
+  skillsChangeRevision += 1;
+  elements.skillGithubStatus.textContent = `Installed ${payload.name} with ${payload.skills.length} enabled skill(s)`;
+  await Promise.all([loadSkills(), loadSkillsets()]);
+}
+
 async function scanSkillDirectory(directory = elements.skillScanDirectory.value) {
   if (!directory.trim()) return showError("Enter a local skill directory to scan");
   elements.skillScanDirectory.value = directory;
@@ -388,7 +2025,7 @@ async function scanSkillDirectory(directory = elements.skillScanDirectory.value)
   const payload = await response.json();
   if (!response.ok) return showError(payload.detail || "Skill scan failed");
   renderSkillDiscoveries(payload);
-  await loadSettings();
+  await queueSettingsLoad();
 }
 
 async function uploadFiles(files) {
@@ -396,10 +2033,24 @@ async function uploadFiles(files) {
   for (const file of files) {
     const body = new FormData();
     body.append("file", file);
+    if (file.webkitRelativePath) body.append("relative_path", file.webkitRelativePath);
     const response = await fetch(`/api/sessions/${sessionId}/attachments`, { method: "POST", body });
     if (!response.ok) showError((await response.json()).detail || `Unable to import ${file.name}`);
   }
   await loadAttachments();
+}
+
+async function uploadSkillFolder(files) {
+  if (!files.length) return;
+  const body = new FormData();
+  for (const file of files) {
+    body.append("relative_paths", file.webkitRelativePath || file.name);
+    body.append("files", file, file.name);
+  }
+  const response = await fetch("/api/skills/scan-upload", { method: "POST", body });
+  const payload = await response.json();
+  if (!response.ok) return showError(payload.detail || "Skill folder scan failed");
+  renderSkillDiscoveries(payload);
 }
 
 function selectedModel() {
@@ -431,12 +2082,18 @@ async function loadApplication() {
       option.textContent = `${model.name}${model.installed ? "" : " — not installed"}`;
       option.disabled = !model.installed;
       elements.model.append(option);
+      if (model.installed) {
+        elements.hardwareBenchmarkModel.append(option.cloneNode(true));
+        elements.integrityBenchmarkModel.append(option.cloneNode(true));
+        elements.codingAgentModel.append(option.cloneNode(true));
+      }
     }
     const installed = models.filter((model) => model.installed).length;
     elements.modelCount.textContent = `${installed} of ${models.length} installed`;
     elements.model.disabled = installed === 0;
     elements.submit.disabled = installed === 0;
     updateModelDetail();
+    renderGpuProfileControls();
   } catch (error) {
     elements.health.className = "health error";
     elements.health.lastElementChild.textContent = "Service unavailable";
@@ -452,11 +2109,26 @@ function setPending(pending) {
   elements.requestStatus.textContent = pending ? "Model is working…" : "";
 }
 
+function markOllamaReady() {
+  elements.health.className = "health ready";
+  elements.health.lastElementChild.textContent = "Ollama ready";
+}
+
 function showError(message) {
   elements.empty.hidden = true;
   elements.result.hidden = true;
   elements.error.hidden = false;
   elements.error.textContent = message;
+}
+
+async function responseErrorMessage(response, fallback) {
+  const body = await response.text();
+  if (!body.trim()) return fallback;
+  try {
+    return JSON.parse(body).detail || fallback;
+  } catch (_error) {
+    return body.trim();
+  }
 }
 
 async function submitPrompt(event) {
@@ -477,14 +2149,19 @@ async function submitPrompt(event) {
       body: JSON.stringify({ model: elements.model.value, prompt, session_id: sessionId }),
       signal: activeRequest.signal,
     });
+    if (!response.ok) throw new Error(await responseErrorMessage(response, "The model request failed"));
     const payload = await response.json();
-    if (!response.ok) throw new Error(payload.detail || "The model request failed");
+    markOllamaReady();
     elements.empty.hidden = true;
     elements.error.hidden = true;
     elements.result.hidden = false;
     elements.responseModel.textContent = payload.model;
     elements.summary.textContent = payload.summary;
     elements.content.textContent = payload.content;
+    renderAttachedSkills(payload.attached_skills || []);
+    renderRecommendations(payload.skill_recommendations || []);
+    renderActions(payload.action_proposals || []);
+    renderCodingAgentTasks(payload.coding_agent_tasks || []);
     elements.artifactOutput.hidden = !payload.artifact;
     if (payload.artifact) {
       elements.artifactOutput.href = payload.artifact.url;
@@ -504,29 +2181,184 @@ elements.model.addEventListener("change", updateModelDetail);
 elements.prompt.addEventListener("keydown", (event) => {
   if (event.ctrlKey && event.key === "Enter") elements.form.requestSubmit();
 });
-elements.contextToggle.addEventListener("click", () => {
-  elements.contextPanel.hidden = !elements.contextPanel.hidden;
-  elements.contextToggle.setAttribute("aria-expanded", String(!elements.contextPanel.hidden));
-  localStorage.setItem("json_codr_context_open", String(!elements.contextPanel.hidden));
+let recommendationTimer = null;
+elements.prompt.addEventListener("input", () => {
+  clearTimeout(recommendationTimer);
+  recommendationTimer = setTimeout(() => previewSkillRecommendations().catch((error) => showError(error.message)), 300);
 });
-elements.skillsToggle.addEventListener("click", () => {
-  const open = elements.skillsPanel.hidden;
-  elements.skillsPanel.hidden = !open;
-  elements.skillsToggle.setAttribute("aria-expanded", String(open));
-  elements.settingSkillsOpen.checked = open;
-  saveSettings({ ui: { skill_catalog_open: open } }).catch((error) => showError(error.message));
+elements.autoAttachSkills.addEventListener("change", async () => {
+  const response = await fetch(`/api/sessions/${sessionId}/skill-routing`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ auto_attach_skills: elements.autoAttachSkills.checked }),
+  });
+  if (!response.ok) return showError((await response.json()).detail || "Unable to update automatic attachment");
+  await previewSkillRecommendations();
 });
-elements.settingsToggle.addEventListener("click", () => {
-  elements.settingsPanel.hidden = !elements.settingsPanel.hidden;
-  elements.settingsToggle.setAttribute("aria-expanded", String(!elements.settingsPanel.hidden));
+elements.destructiveSubmit.addEventListener("click", async () => {
+  if (!pendingDestructiveAction) return;
+  const { proposal, phrase, approveButton } = pendingDestructiveAction;
+  const enteredPhrase = elements.destructiveInput.value.trim().toUpperCase();
+  if (enteredPhrase !== phrase) return showError("Confirmation code does not match");
+  const response = await fetch(`/api/sessions/${sessionId}/action-proposals/${proposal.id}/confirm-destructive`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
+    body: JSON.stringify({ terminal_id: terminalId, phrase: enteredPhrase }),
+  });
+  const approval = await response.json();
+  if (!response.ok) return showError(approval.detail || "Unable to confirm destructive action");
+  pendingDestructiveAction = null;
+  elements.destructiveDialog.close();
+  try {
+    await sendApprovedAction(proposal, approval.token, approveButton);
+  } catch (error) {
+    showError(error.message);
+  }
 });
+elements.destructiveDialog.addEventListener("close", () => {
+  if (!pendingDestructiveAction) return;
+  const { approveButton } = pendingDestructiveAction;
+  approveButton.disabled = false;
+  approveButton.textContent = "Approve and run";
+  pendingDestructiveAction = null;
+});
+for (const button of elements.navigationButtons) {
+  button.addEventListener("click", () => selectDestination(button.dataset.destination));
+}
+for (const button of elements.hardwareSectionButtons) {
+  button.addEventListener("click", () => selectHardwareSection(button.dataset.hardwareSection));
+}
+elements.sidebarCollapse.addEventListener("click", () => {
+  setSidebarCollapsed(!document.body.classList.contains("sidebar-collapsed"));
+});
+elements.mobileNavigationToggle.addEventListener("click", () => {
+  if (document.body.classList.contains("navigation-open")) closeNavigationDrawer({ restoreFocus: true });
+  else openNavigationDrawer();
+});
+elements.navigationBackdrop.addEventListener("click", () => closeNavigationDrawer({ restoreFocus: true }));
+elements.sidebarResizeHandle.addEventListener("pointerdown", (event) => {
+  if (narrowNavigationQuery.matches) return;
+  event.preventDefault();
+  let pendingWidth = sidebarWidth;
+  let resizeFrame = null;
+  const renderResize = () => { resizeFrame = null; applySidebarWidth(pendingWidth); };
+  const onPointerMove = (moveEvent) => {
+    pendingWidth = boundedSidebarWidth(moveEvent.clientX);
+    if (resizeFrame === null) resizeFrame = requestAnimationFrame(renderResize);
+  };
+  const onPointerUp = () => {
+    window.removeEventListener("pointermove", onPointerMove);
+    if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
+    const width = applySidebarWidth(pendingWidth);
+    navigationChangeRevision += 1;
+    saveSettings({ ui: { sidebar_width: width } }).catch((error) => showError(error.message));
+  };
+  window.addEventListener("pointermove", onPointerMove);
+  window.addEventListener("pointerup", onPointerUp, { once: true });
+});
+elements.sidebarResizeHandle.addEventListener("keydown", (event) => {
+  const key = event.key;
+  const delta = key === "ArrowLeft" ? -10 : key === "ArrowRight" ? 10 : 0;
+  if (!delta) return;
+  event.preventDefault();
+  const width = applySidebarWidth(sidebarWidth + delta);
+  navigationChangeRevision += 1;
+  saveSettings({ ui: { sidebar_width: width } }).catch((error) => showError(error.message));
+});
+narrowNavigationQuery.addEventListener("change", () => closeNavigationDrawer());
+elements.hardwareDetect.addEventListener("click", () => detectHardware().catch((error) => showError(error.message)));
+elements.hardwareRestoreCpu.addEventListener("click", () => restoreCpuBackend().catch((error) => showError(error.message)));
+elements.hardwareBenchmarkRun.addEventListener("click", () => runHardwareBenchmark().catch((error) => {
+  elements.hardwareBenchmarkStatus.textContent = error.message;
+  showError(error.message);
+}));
+elements.hardwareBenchmarkClear.addEventListener("click", () => clearHardwareBenchmarks().catch((error) => {
+  elements.hardwareBenchmarkStatus.textContent = error.message;
+}));
+elements.integrityBenchmarkRun.addEventListener("click", () => runIntegrityBenchmark().catch((error) => {
+  elements.integrityBenchmarkStatus.textContent = error.message;
+  showError(error.message);
+}));
+elements.leaderboardSearch.addEventListener("input", renderBenchmarkLeaderboard);
+elements.leaderboardBackendFilter.addEventListener("change", renderBenchmarkLeaderboard);
+elements.leaderboardMetric.addEventListener("change", renderBenchmarkLeaderboard);
+for (const button of elements.leaderboardSortButtons) {
+  button.addEventListener("click", () => {
+    const key = button.dataset.sortKey;
+    leaderboardSort = leaderboardSort.key === key
+      ? { key, direction: leaderboardSort.direction === "asc" ? "desc" : "asc" }
+      : { key, direction: key === "rank" ? "asc" : "desc" };
+    renderBenchmarkLeaderboard();
+  });
+}
+elements.leaderboardModelFilter.addEventListener("change", () => {
+  const model = elements.leaderboardModelFilter.value;
+  const suite = elements.leaderboardSuiteFilter.value;
+  const session = window.JSONCodrLeaderboard.chooseSession(leaderboardHistoryCache, selectedLeaderboardSessionId, model, suite);
+  if (session) { selectedLeaderboardSessionId = session.id; selectedLeaderboardRowId = null; }
+  renderBenchmarkLeaderboard();
+});
+elements.leaderboardSuiteFilter.addEventListener("change", () => {
+  const model = elements.leaderboardModelFilter.value;
+  const suite = elements.leaderboardSuiteFilter.value;
+  const session = window.JSONCodrLeaderboard.chooseSession(leaderboardHistoryCache, selectedLeaderboardSessionId, model, suite);
+  if (session) { selectedLeaderboardSessionId = session.id; selectedLeaderboardRowId = null; }
+  renderBenchmarkLeaderboard();
+});
+elements.localperfExport.addEventListener("click", exportLocalperfPackage);
+elements.localperfImportInput.addEventListener("change", () => {
+  const file = elements.localperfImportInput.files[0];
+  if (file) previewLocalperfPackage(file).catch((error) => { elements.localperfPackageStatus.textContent = error.message; });
+});
+elements.localperfImport.addEventListener("click", () => importLocalperfPackage().catch((error) => {
+  elements.localperfPackageStatus.textContent = error.message;
+}));
+elements.optimizedModelSearchRun.addEventListener("click", () => searchOptimizedModels().catch((error) => {
+  elements.optimizedModelSearchResults.innerHTML = `<p class="meta">${escapeHtml(error.message)}</p>`;
+}));
+elements.hardwareProfileModel.addEventListener("change", renderGpuProfileControls);
+elements.hardwareProfileMode.addEventListener("change", () => {
+  elements.hardwareProfileAdvanced.hidden = elements.hardwareProfileMode.value !== "advanced";
+});
+elements.hardwareProfileSave.addEventListener("click", () => saveGpuProfile().catch((error) => {
+  elements.hardwareProfileStatus.textContent = error.message;
+  showError(error.message);
+}));
+elements.hardwareProfileReset.addEventListener("click", () => saveGpuProfile(true).catch((error) => {
+  elements.hardwareProfileStatus.textContent = error.message;
+  showError(error.message);
+}));
 elements.settingSkillsOpen.addEventListener("change", () => {
+  skillsChangeRevision += 1;
   const open = elements.settingSkillsOpen.checked;
-  elements.skillsPanel.hidden = !open;
-  elements.skillsToggle.setAttribute("aria-expanded", String(open));
-  saveSettings({ ui: { skill_catalog_open: open } }).catch((error) => showError(error.message));
+  selectDestination(open ? "skills" : "chat");
 });
-elements.attachmentInput.addEventListener("change", () => uploadFiles(elements.attachmentInput.files));
+elements.settingTheme.addEventListener("change", async () => {
+  const revision = ++themeSaveRevision;
+  const nextThemeMode = normalizeThemeMode(elements.settingTheme.value);
+  applyThemeMode(nextThemeMode);
+  try {
+    await saveSettings({ ui: { theme: nextThemeMode } });
+  } catch (error) {
+    if (revision === themeSaveRevision) {
+      applyThemeMode(persistedThemeMode || "dark");
+    }
+    showError(error.message);
+  }
+});
+elements.attachmentInput.addEventListener("change", async () => {
+  try {
+    await uploadFiles(elements.attachmentInput.files);
+  } finally {
+    elements.attachmentInput.value = "";
+  }
+});
+elements.attachmentFolderInput.addEventListener("change", async () => {
+  try {
+    await uploadFiles(elements.attachmentFolderInput.files);
+  } finally {
+    elements.attachmentFolderInput.value = "";
+  }
+});
 elements.pasteTextButton.addEventListener("click", async () => {
   await ensureSession();
   const text = await navigator.clipboard.readText();
@@ -536,6 +2368,23 @@ elements.pasteTextButton.addEventListener("click", async () => {
 });
 elements.scanDependencies.addEventListener("click", () => loadDependencies().catch((error) => showError(error.message)));
 elements.skillScan.addEventListener("click", () => scanSkillDirectory().catch((error) => showError(error.message)));
+elements.skillGithubPreview.addEventListener("click", () => previewGithubSkill().catch((error) => {
+  elements.skillGithubStatus.textContent = error.message;
+  showError(error.message);
+}));
+elements.skillGithubInstall.addEventListener("click", () => installGithubSkill().catch((error) => {
+  elements.skillGithubStatus.textContent = error.message;
+  showError(error.message);
+}));
+elements.skillFolderInput.addEventListener("change", async () => {
+  try {
+    await uploadSkillFolder(elements.skillFolderInput.files);
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    elements.skillFolderInput.value = "";
+  }
+});
 elements.skillScanKnown.addEventListener("click", async () => {
   if (!skillFallbackToken || !confirm("No skills were found. Scan known Claude, Codex, and JSON_CODR locations now?")) return;
   const response = await fetch("/api/skills/scan-known", {
@@ -590,10 +2439,8 @@ elements.skillSave.addEventListener("click", async () => {
     ? `Saved and applied ${editingSkill.name} to this session`
     : `Saved and disabled ${editingSkill.name}`;
   if (elements.skillsPanel.hidden) {
-    elements.skillsPanel.hidden = false;
-    elements.skillsToggle.setAttribute("aria-expanded", "true");
+    selectDestination("skills");
     elements.settingSkillsOpen.checked = true;
-    await saveSettings({ ui: { skill_catalog_open: true } });
   }
   await loadSkills();
   elements.skillSave.disabled = false;
@@ -610,33 +2457,66 @@ elements.skillRemovePack.addEventListener("click", async () => {
   elements.skillRemovePack.disabled = true;
   await loadSkills();
 });
-elements.terminalToggle.addEventListener("click", async () => {
-  elements.terminalPanel.hidden = !elements.terminalPanel.hidden;
-  elements.terminalToggle.setAttribute("aria-expanded", String(!elements.terminalPanel.hidden));
-  localStorage.setItem("json_codr_terminal_open", String(!elements.terminalPanel.hidden));
-  if (!elements.terminalPanel.hidden) {
-    try { await ensureTerminal(); elements.terminalInput.focus(); }
-    catch (error) { appendTerminalOutput(`Error: ${error.message}\n`); }
-  }
-});
 elements.terminalRun.addEventListener("click", () => runTerminalCommand().catch((error) => appendTerminalOutput(`Error: ${error.message}\n`)));
 elements.terminalInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") runTerminalCommand().catch((error) => appendTerminalOutput(`Error: ${error.message}\n`));
+  if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+    event.preventDefault();
+    elements.terminalInput.value = terminalKeyboardController?.navigateHistory(
+      event.key === "ArrowUp" ? -1 : 1,
+      elements.terminalInput.value,
+    ) || "";
+  }
 });
 elements.terminalStop.addEventListener("click", () => {
   if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type: "interrupt" }));
 });
+elements.terminalTabs.forEach((tab) => tab.addEventListener("click", async () => {
+  activeTerminalProfile = tab.dataset.terminalProfile;
+  elements.terminalTabs.forEach((candidate) => candidate.setAttribute(
+    "aria-selected", String(candidate === tab),
+  ));
+  const session = terminalSessions.get(activeTerminalProfile);
+  if (session?.terminal) {
+    await connectTerminalRecord(session.terminal);
+    return;
+  }
+  if (activeTerminalProfile === "powershell") {
+    await ensureTerminal();
+    return;
+  }
+  elements.codingAgentTool.value = activeTerminalProfile;
+  elements.codingAgentStatus.textContent = `Choose a model and project, then launch ${activeTerminalProfile}.`;
+  elements.codingAgentModel.focus();
+}));
 document.addEventListener("keydown", (event) => {
   if (event.ctrlKey && !event.altKey && event.key.toLowerCase() === "j") {
     event.preventDefault();
-    elements.terminalToggle.click();
+    selectDestination("terminal");
   }
   if (event.ctrlKey && event.altKey && event.key.toLowerCase() === "b") {
     event.preventDefault();
-    elements.contextToggle.click();
+    selectDestination("context");
+  }
+  if (event.key === "Escape" && document.body.classList.contains("navigation-open")) {
+    closeNavigationDrawer({ restoreFocus: true });
   }
 });
+elements.codingAgentLauncher.addEventListener("submit", (event) => {
+  if (elements.codingAgentMode.value === "delegated") {
+    const prompt = elements.prompt.value.trim();
+    if (!prompt) { event.preventDefault(); return showError("Enter the delegated task in the main prompt first"); }
+  }
+  launchCodingAgent(event).catch((error) => {
+    elements.codingAgentStatus.textContent = error.message;
+    showError(error.message);
+  });
+});
 
-loadApplication();
-loadSettings().catch((error) => showError(error.message));
+initializeXterm();
+window.addEventListener("beforeunload", persistTerminalSessions);
+restoreTerminalSessions().catch(() => localStorage.removeItem(TERMINAL_SESSIONS_KEY));
+loadApplication().then(() => queueSettingsLoad()).catch((error) => showError(error.message));
+loadHardwareStatus().catch((error) => showError(error.message));
 loadAttachments().catch((error) => showError(error.message));
+loadSkillsets().catch((error) => showError(error.message));
