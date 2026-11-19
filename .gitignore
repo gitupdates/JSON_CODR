@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 .superpowers/
+.worktrees/
 .plans/
 *.log
 local_model_inventory.json

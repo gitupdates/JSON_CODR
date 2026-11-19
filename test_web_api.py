@@ -1,3 +1,5 @@
+import asyncio
+import json
 import unittest
 import tempfile
 import io
@@ -7,8 +9,9 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from web_app.app import create_app
-from web_app.models import ChatResult, ConversionBundle, GeneratedFile
-from web_app.ollama_service import ModelOutputError, ModelTimeoutError, OllamaUnavailableError
+from cli import parse_response_content
+from web_app.models import ActionSuggestion, ChatResult, ConversionBundle, GeneratedFile
+from web_app.ollama_service import ModelOutputError, ModelTimeoutError, OllamaService, OllamaUnavailableError
 from web_app.workspace import WorkspaceService
 
 
@@ -19,6 +22,7 @@ class FakeService:
         self.last_prompt = None
         self.last_images = []
         self.vision = False
+        self.actions = []
 
     async def health(self):
         return {"ollama": self.available}
@@ -43,8 +47,27 @@ class FakeService:
             },
         ]
 
+    async def running_models(self):
+        return [{
+            "name": "qwen2.5-coder:0.5b",
+            "size": 398_000_000,
+            "size_vram": 398_000_000,
+            "processor": "100% GPU",
+        }]
+
     async def supports_vision(self, model):
         return self.vision
+
+    async def generate_deterministic(self, model, messages, temperature=0.0):
+        scenario = messages[0]["content"].split("SCENARIO_ID:", 1)[1].splitlines()[0].strip()
+        outputs = {
+            "anti-regression-memory": '{"wal":true,"timeout_seconds":30,"asyncio_lock":true,"semaphore_limit":25}',
+            "multi-hop-graph": '{"required_isolator":"Type-D Optical Coupler","ambient_c":47,"limit_c":42,"exceeds_limit":true}',
+            "sycophancy-resistance": '{"retain_lock":true,"gil_guarantees_atomicity":false}',
+            "structural-boundary": '{"status":"locked","items":[1,2]}',
+            "dimensional-proportion": '{"ratio":"16:9","is_4_3":false,"meets_16_9":true}',
+        }
+        return outputs[scenario]
 
     async def chat(self, model, prompt, images=None):
         self.last_prompt = prompt
@@ -57,6 +80,7 @@ class FakeService:
                 status="ready",
                 summary="Ready",
                 content=f"Answered: {prompt}",
+                actions=self.actions,
             )
         if model == "opencoder:8b":
             raise OllamaUnavailableError("Model is not installed")
@@ -73,12 +97,118 @@ class FakeService:
         )
 
 
+class FakeHardware:
+    def __init__(self):
+        self.probed = None
+        self.benchmarked = None
+        self.benchmark_error = None
+        self.probe_result = None
+        self.selected_benchmark = None
+
+    def status(self):
+        return {"preferred_backend": "cpu", "last_known_good": "cpu", "quarantined": {}, "last_error": None}
+
+    def detect(self):
+        return [{"id": "cpu", "name": "CPU", "compatible": True, "verified": True}]
+
+    async def probe(self, backend, model):
+        self.probed = (backend, model)
+        return self.probe_result or {**self.status(), "preferred_backend": backend, "restart_required": True}
+
+    def restore_cpu(self):
+        return self.status()
+
+    async def benchmark(self, suite, model, backend="all"):
+        if self.benchmark_error:
+            raise self.benchmark_error
+        self.benchmarked = (suite, model, backend)
+        return {"id": "run-1", "suite": suite, "model": model, "target_backend": backend, "selected_backend": "cpu", "results": []}
+
+    def apply_benchmark_selection(self, benchmark):
+        self.selected_benchmark = benchmark
+        return {"preferred_backend": benchmark["selected_backend"]}
+
+    def benchmark_history(self):
+        return [{"id": "run-0", "suite": "quick", "model": "model", "results": []}]
+
+    def gpu_telemetry(self):
+        return [{"index": 0, "name": "RTX 4060", "memory_total": 8188, "memory_free": 7956}]
+
+
+class FakeIntegrityBenchmark:
+    def __init__(self):
+        self.error = None
+        self.runs = []
+
+    async def run(self, suite, model):
+        if self.error:
+            raise self.error
+        result = {"id": "integrity-1", "suite": suite, "model": model, "scores": {"integrity": 100, "comprehension": 100, "overall": 100}, "scenarios": []}
+        self.runs.insert(0, result)
+        return result
+
+    def history(self):
+        return self.runs
+
+
 class WebApiTests(unittest.TestCase):
     def setUp(self):
         self.service = FakeService()
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.workspace = WorkspaceService(Path(self.temporary_directory.name))
         self.client = TestClient(create_app(self.service, self.workspace))
+
+    def test_optimized_connector_catalog_and_install_plans_are_additive(self):
+        client = TestClient(create_app(self.service, self.workspace, optimized=True))
+
+        models = client.get("/api/models").json()["models"]
+        self.assertTrue(any(item["name"].startswith("openvino/") and not item["installed"] for item in models))
+        catalog = client.get("/api/inference/catalog")
+        self.assertEqual(catalog.status_code, 200)
+        self.assertEqual({item["provider"] for item in catalog.json()}, {"openvino", "ryzen_ai"})
+        plan = client.get("/api/inference/install-plan/openvino")
+        self.assertEqual(plan.status_code, 200)
+        self.assertIn("openvino-genai", plan.json()["command"])
+        self.assertFalse(plan.json()["includes_driver"])
+
+    def test_hardware_runtime_install_creates_reviewable_cli_proposal_without_drivers(self):
+        client = TestClient(create_app(self.service, self.workspace, optimized=True))
+        session_id = client.post("/api/sessions").json()["id"]
+
+        response = client.post(f"/api/sessions/{session_id}/hardware/openvino/install-proposal")
+
+        self.assertEqual(response.status_code, 200)
+        proposal = response.json()[0]
+        self.assertIn("openvino-genai==2025.4", proposal["command"])
+        self.assertIn("isolated OpenVINO runtime", proposal["explanation"])
+        self.assertNotIn("driver", proposal["command"].casefold())
+
+    def test_provider_environment_statuses_are_exposed_independently(self):
+        client = TestClient(create_app(self.service, self.workspace, optimized=True))
+
+        response = client.get("/api/inference/environments")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            {item["provider"] for item in response.json()},
+            {"openvino", "ryzen_ai", "winml", "directml"},
+        )
+        self.assertTrue(all(item["status"] == "missing" for item in response.json()))
+
+    def test_hardware_detection_includes_compatible_installed_models_on_each_runtime(self):
+        response = self.client.post("/api/hardware/detect")
+
+        self.assertEqual(response.status_code, 200)
+        cpu = response.json()[0]
+        self.assertEqual(cpu["id"], "cpu")
+        self.assertEqual(
+            cpu["compatible_models"],
+            [{
+                "model": "qwen2.5-coder:7b-instruct-q4_K_M",
+                "status": "runnable",
+                "evidence": {"execution": "CPU"},
+            }],
+        )
 
     def tearDown(self):
         self.temporary_directory.cleanup()
@@ -90,7 +220,7 @@ class WebApiTests(unittest.TestCase):
 
         reopened = self.client.get(f"/api/sessions/{session_id}")
         self.assertEqual(reopened.status_code, 200)
-        self.assertEqual(reopened.json()["schema_version"], 1)
+        self.assertEqual(reopened.json()["schema_version"], 2)
 
         deleted = self.client.delete(f"/api/sessions/{session_id}")
         self.assertEqual(deleted.status_code, 204)
@@ -103,16 +233,238 @@ class WebApiTests(unittest.TestCase):
     def test_health_reports_ollama_readiness(self):
         self.assertEqual(
             self.client.get("/api/health").json(),
-            {"status": "ready", "ollama": True},
+            {"status": "ready", "ollama": True, "app_version": "V1.0.16"},
         )
+        self.assertEqual(self.client.app.version, "V1.0.16")
         self.service.available = False
         self.assertEqual(self.client.get("/api/health").json()["status"], "degraded")
+
+    def test_app_construction_does_not_require_optional_integrity_capability(self):
+        class MinimalService:
+            async def health(self):
+                return {"ollama": True}
+
+            async def list_models(self):
+                return []
+
+        client = TestClient(create_app(MinimalService(), self.workspace))
+
+        self.assertEqual(client.get("/").status_code, 200)
+        response = client.post("/api/integrity-benchmarks", json={"suite": "quick", "model": "model"})
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("unavailable", response.json()["detail"])
+        self.assertEqual(client.get("/api/integrity-benchmarks").json(), [])
+
+    def test_hardware_detection_probe_and_cpu_restore_are_exposed(self):
+        hardware = FakeHardware()
+        client = TestClient(create_app(self.service, self.workspace, hardware=hardware))
+
+        self.assertEqual(client.get("/api/hardware").json()["preferred_backend"], "cpu")
+        self.assertEqual(client.post("/api/hardware/detect").json()[0]["id"], "cpu")
+        response = client.post("/api/hardware/probe", json={"backend": "cpu", "model": "qwen2.5-coder:0.5b"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(hardware.probed, ("cpu", "qwen2.5-coder:0.5b"))
+        self.assertEqual(client.post("/api/hardware/restore-cpu").json()["preferred_backend"], "cpu")
+
+    def test_hardware_telemetry_combines_gpu_and_ollama_runtime_data(self):
+        hardware = FakeHardware()
+        client = TestClient(create_app(self.service, self.workspace, hardware=hardware))
+
+        payload = client.get("/api/hardware/telemetry").json()
+
+        self.assertEqual(payload["gpus"][0]["name"], "RTX 4060")
+        self.assertEqual(payload["models"][0]["processor"], "100% GPU")
+
+    def test_verified_ollama_gpu_probe_saves_gpu_preferred_model_profile(self):
+        hardware = FakeHardware()
+        hardware.probe_result = {
+            **hardware.status(),
+            "preferred_backend": "ollama_gpu",
+            "verified": True,
+            "gpu_percent": 100,
+            "vram_bytes": 398_000_000,
+            "evidence": "100% GPU",
+            "restart_required": False,
+        }
+        client = TestClient(create_app(self.service, self.workspace, hardware=hardware))
+
+        response = client.post(
+            "/api/hardware/probe",
+            json={"backend": "ollama_gpu", "model": "qwen2.5-coder:0.5b"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        profile = client.get("/api/settings").json()["gpu_optimization"]["model_profiles"]["qwen2.5-coder:0.5b"]
+        self.assertEqual(profile["mode"], "gpu_preferred")
+
+    def test_hardware_benchmark_execution_history_validation_and_busy_conflict(self):
+        hardware = FakeHardware()
+        client = TestClient(create_app(self.service, self.workspace, hardware=hardware))
+
+        response = client.post(
+            "/api/hardware/benchmarks",
+            json={"suite": "quick", "model": "qwen2.5-coder:0.5b", "backend": "cuda_v12"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id"], "run-1")
+        self.assertEqual(hardware.benchmarked, ("quick", "qwen2.5-coder:0.5b", "cuda_v12"))
+        self.assertEqual(hardware.selected_benchmark["selected_backend"], "cpu")
+        self.assertEqual(client.get("/api/hardware/benchmarks").json()[0]["id"], "run-0")
+
+        cleared = client.delete("/api/hardware/benchmarks")
+        self.assertEqual(cleared.status_code, 200)
+
+        invalid = client.post("/api/hardware/benchmarks", json={"suite": "overnight", "model": "model"})
+        self.assertEqual(invalid.status_code, 422)
+
+        hardware.benchmark_error = RuntimeError("A hardware benchmark is already running")
+        busy = client.post("/api/hardware/benchmarks", json={"suite": "quick", "model": "model"})
+        self.assertEqual(busy.status_code, 409)
+        self.assertIn("already running", busy.json()["detail"])
+
+    def test_integrity_benchmark_execution_history_and_validation(self):
+        response = self.client.post(
+            "/api/integrity-benchmarks",
+            json={"suite": "quick", "model": "qwen2.5-coder:7b-instruct-q4_K_M"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["scores"]["overall"], 100.0)
+        history = self.client.get("/api/integrity-benchmarks")
+        self.assertEqual(history.status_code, 200)
+        self.assertEqual(history.json()[0]["id"], response.json()["id"])
+        invalid = self.client.post(
+            "/api/integrity-benchmarks", json={"suite": "overnight", "model": "model"}
+        )
+        self.assertEqual(invalid.status_code, 422)
+
+    def test_integrity_benchmark_rejects_unavailable_model_and_busy_run(self):
+        unavailable = self.client.post(
+            "/api/integrity-benchmarks", json={"suite": "quick", "model": "opencoder:8b"}
+        )
+        self.assertEqual(unavailable.status_code, 409)
+        self.assertIn("not installed", unavailable.json()["detail"])
+
+        integrity = FakeIntegrityBenchmark()
+        integrity.error = RuntimeError("An integrity benchmark is already running")
+        client = TestClient(create_app(self.service, self.workspace, integrity=integrity))
+        busy = client.post(
+            "/api/integrity-benchmarks",
+            json={"suite": "quick", "model": "qwen2.5-coder:7b-instruct-q4_K_M"},
+        )
+        self.assertEqual(busy.status_code, 409)
+        self.assertIn("already running", busy.json()["detail"])
+
+    def test_integrity_benchmark_maps_model_roster_outage_without_saving_a_run(self):
+        class OfflineRosterService(FakeService):
+            async def list_models(self):
+                raise RuntimeError("Ollama offline")
+
+        client = TestClient(create_app(OfflineRosterService(), self.workspace))
+        response = client.post(
+            "/api/integrity-benchmarks",
+            json={"suite": "quick", "model": "qwen2.5-coder:7b-instruct-q4_K_M"},
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(client.get("/api/integrity-benchmarks").json(), [])
+
+    def test_localperf_package_export_preview_and_import_are_private_by_default(self):
+        from web_app.localperf.aggregate import aggregate_run
+        from web_app.localperf.models import SampleRecord
+        from web_app.localperf.storage import LocalPerfStorage
+
+        storage = LocalPerfStorage(self.workspace.data_root)
+        run = aggregate_run([SampleRecord(
+            prompt_id="lp-01", repetition=1, success=True, generation_tokens_per_second=2,
+            ttft_ms=5, peak_vram_mb=0, total_duration_ms=10, prompt_tokens=1,
+            generated_tokens=1, output="ok",
+        )], {"model":"model", "backend":"cpu", "hardware":{"serial":"secret"},
+             "software":{"application":"JSON_CODR", "version":"V1.0.10"}}, "quick", 1)
+        storage.save_run(run)
+        exported = self.client.get(f"/api/localperf/packages/{run.evaluation_id}")
+        self.assertEqual(exported.status_code, 200)
+        self.assertIn(".localperf.zip", exported.headers["content-disposition"])
+        preview = self.client.post("/api/localperf/packages/preview", content=exported.content,
+                                   headers={"content-type":"application/octet-stream"})
+        self.assertEqual(preview.status_code, 200)
+        self.assertFalse(preview.json()["contains_system_details"])
+        imported = self.client.post("/api/localperf/packages/import", content=exported.content,
+                                    headers={"content-type":"application/octet-stream"})
+        self.assertEqual(imported.status_code, 201)
+        self.assertFalse(imported.json()["retained_system_details"])
+
+    def test_model_compatibility_and_explicit_remote_search_endpoints(self):
+        client = TestClient(create_app(self.service, self.workspace, optimized=True))
+        compatibility = client.get("/api/hardware/model-compatibility")
+        self.assertEqual(compatibility.status_code, 200)
+        cpu = next(item for item in compatibility.json() if item["backend"] == "cpu")
+        self.assertTrue(any(model["model"] == "qwen2.5-coder:7b-instruct-q4_K_M" for model in cpu["models"]))
+        search = client.get("/api/inference/models/search", params={"provider":"openvino", "q":"Qwen", "limit":5})
+        self.assertEqual(search.status_code, 200)
+        self.assertLessEqual(len(search.json()), 5)
 
     def test_models_keep_missing_configured_entries_disabled(self):
         response = self.client.get("/api/models")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.json()["models"]), 2)
         self.assertFalse(response.json()["models"][1]["installed"])
+
+    def test_low_memory_coder_is_selectable_when_installed(self):
+        class LowMemoryClient:
+            async def list(self):
+                return {
+                    "models": [{
+                        "name": "qwen2.5-coder:0.5b",
+                        "size": 398_000_000,
+                        "details": {"quantization_level": "Q4_K_M"},
+                    }]
+                }
+
+        models = asyncio.run(OllamaService(client=LowMemoryClient()).list_models())
+        names = [model["name"] for model in models]
+
+        self.assertIn("qwen2.5-coder:0.5b", names)
+        low_memory = models[names.index("qwen2.5-coder:0.5b")]
+        self.assertTrue(low_memory["installed"])
+        self.assertEqual(low_memory["size"], 398_000_000)
+
+    def test_running_models_reports_gpu_offload_from_vram_share(self):
+        class RunningClient:
+            async def ps(self):
+                return {"models": [{
+                    "name": "qwen2.5-coder:0.5b",
+                    "size": 400_000_000,
+                    "size_vram": 300_000_000,
+                }]}
+
+        models = asyncio.run(OllamaService(client=RunningClient()).running_models())
+
+        self.assertEqual(models[0]["processor"], "75% GPU")
+        self.assertEqual(models[0]["size_vram"], 300_000_000)
+
+    def test_deterministic_generation_uses_zero_temperature_and_raw_text(self):
+        class DeterministicClient:
+            def __init__(self):
+                self.request = None
+
+            async def list(self):
+                return {"models": [{"name": "qwen2.5-coder:0.5b", "details": {}}]}
+
+            async def chat(self, **request):
+                self.request = request
+                return {"message": {"content": "raw benchmark evidence"}}
+
+        client = DeterministicClient()
+        service = OllamaService(client=client)
+
+        output = asyncio.run(service.generate_deterministic(
+            "qwen2.5-coder:0.5b", [{"role": "user", "content": "test"}], 0.0
+        ))
+
+        self.assertEqual(output, "raw benchmark evidence")
+        self.assertEqual(client.request["options"], {"temperature": 0.0, "num_predict": 512})
+        self.assertNotIn("format", client.request)
 
     def test_chat_accepts_exact_and_unique_shorthand_models(self):
         for model in ("qwen", "qwen2.5-coder:7b-instruct-q4_K_M"):
@@ -145,6 +497,78 @@ class WebApiTests(unittest.TestCase):
         restored = self.workspace.get_session(session.id)
         self.assertEqual([message.role for message in restored.messages], ["user", "assistant"])
         self.assertEqual(restored.messages[0].content, "Review the attachment")
+
+    def test_chat_recalculates_recommendations_and_returns_attachment_metadata(self):
+        from web_app.models import SkillPack, SkillRecord
+        from web_app.skills import SkillLibraryService
+
+        SkillLibraryService(self.workspace.data_root).install(SkillPack(
+            id="local", name="Local", source_format="generic", source_name="local.zip",
+            skills=[SkillRecord(
+                id="python-review", name="Python Review", description="Review Python code",
+                content="CAPABILITIES: python review\nCHECK PYTHON CAREFULLY",
+            )],
+        ))
+        self.client.close()
+        self.client = TestClient(create_app(self.service, self.workspace))
+        session = self.workspace.create_session()
+
+        response = self.client.post(
+            "/api/chat",
+            json={
+                "model": "qwen",
+                "prompt": "Review this Python code",
+                "session_id": session.id,
+                "skill_recommendations": [{"reference": "stale:missing", "score": 999}],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual([item["reference"] for item in body["attached_skills"]], ["local:python-review"])
+        self.assertEqual(body["skill_recommendations"][0]["reference"], "local:python-review")
+        self.assertIn("name: python", body["skill_recommendations"][0]["reasons"])
+        self.assertNotIn("stale:missing", self.service.last_prompt)
+        self.assertIn("CHECK PYTHON CAREFULLY", self.service.last_prompt)
+
+    def test_structured_actions_ignore_prose_commands_drop_invalid_entries_and_server_own_risk(self):
+        prose_only = parse_response_content(json.dumps({
+            "status": "ready",
+            "summary": "No action",
+            "content": "```powershell\nRemove-Item -Recurse C:\\\\temp\n```",
+        }))
+        self.assertEqual(prose_only.actions, [])
+
+        parsed = parse_response_content(json.dumps({
+            "status": "ready",
+            "summary": "Mixed",
+            "content": "Text remains available",
+            "actions": [
+                {"command": "git status", "cwd": ".", "explanation": "Inspect", "risk": "normal", "approved": True},
+                {"command": "bad\u0000command", "cwd": ".", "explanation": "Invalid"},
+                {"command": "git diff", "cwd": ".", "explanation": "Inspect changes"},
+            ],
+        }))
+        self.assertEqual(parsed.content, "Text remains available")
+        self.assertEqual([action.command for action in parsed.actions], ["git status", "git diff"])
+        self.assertNotIn("risk", parsed.actions[0].model_dump())
+        self.assertNotIn("approved", parsed.actions[0].model_dump())
+
+    def test_chat_creates_server_owned_action_proposals_only_for_structured_actions(self):
+        session = self.workspace.create_session()
+        self.service.actions = [ActionSuggestion(
+            command="git status", cwd=str(Path.cwd()), explanation="Inspect repository"
+        )]
+
+        response = self.client.post(
+            "/api/chat", json={"model": "qwen", "prompt": "Check status", "session_id": session.id}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        proposal = response.json()["action_proposals"][0]
+        self.assertEqual(proposal["command"], "git status")
+        self.assertEqual(proposal["risk"], "normal")
+        self.assertNotIn("token", proposal)
 
     def test_session_chat_sends_original_images_to_vision_models(self):
         import io
@@ -196,6 +620,9 @@ class WebApiTests(unittest.TestCase):
         self.assertTrue(Path(artifact["path"]).is_file())
         self.assertTrue(artifact["url"].startswith("http://testserver/api/sessions/"))
         self.assertTrue(original.is_file())
+        self.assertIn("attached_skills", response.json())
+        self.assertIn("attached_skillsets", response.json())
+        self.assertIn("skill_recommendations", response.json())
         download = self.client.get(artifact["url"])
         self.assertEqual(download.status_code, 200)
         self.assertEqual(download.headers["content-type"], "application/zip")
