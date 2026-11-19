@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from web_app.core.adapters import AdapterEvent, CapabilityCall, CapabilityExecutionError, ExecutionContext
+from web_app.core.model_tags import ModelTagRegistry
 from web_app.ollama_service import ModelOutputError, ModelTimeoutError, OllamaUnavailableError
 
 
@@ -14,28 +15,32 @@ class InferenceAdapter:
         backend,
         *,
         prepare_prompt: Callable[[CapabilityCall, str], tuple[str, Mapping[str, Any]]] | None = None,
+        model_registry: ModelTagRegistry | None = None,
     ) -> None:
         self._backend = backend
         self._prepare_prompt = prepare_prompt
+        self._model_registry = model_registry
 
     async def execute(self, call: CapabilityCall, context: ExecutionContext):
-        model = call.arguments.get("model")
+        requested_model = call.arguments.get("model")
         prompt = call.arguments.get("prompt")
         images = call.arguments.get("images", ())
-        if not isinstance(model, str) or not isinstance(prompt, str):
+        if not isinstance(requested_model, str) or not isinstance(prompt, str):
             raise ValueError("inference generation requires model and prompt")
+        model, model_options = await self._resolve_model(requested_model)
         metadata: Mapping[str, Any] = {}
         if self._prepare_prompt is not None:
             prompt, metadata = self._prepare_prompt(call, prompt)
         stream_chat = getattr(self._backend, "stream_chat", None)
         if callable(stream_chat):
             try:
-                async for delta in stream_chat(
-                    model,
-                    prompt,
-                    images=[Path(image) for image in images],
-                    public_reasoning=bool(call.arguments.get("public_reasoning", False)),
-                ):
+                stream_arguments = {
+                    "images": [Path(image) for image in images],
+                    "public_reasoning": bool(call.arguments.get("public_reasoning", False)),
+                }
+                if getattr(self._backend, "supports_model_options", False) and model_options:
+                    stream_arguments["model_options"] = dict(model_options)
+                async for delta in stream_chat(model, prompt, **stream_arguments):
                     event_type = str(delta.get("type", ""))
                     if event_type == "completed":
                         result = delta.get("result")
@@ -43,7 +48,7 @@ class InferenceAdapter:
                             raise ModelOutputError("Malformed streamed completion")
                         if metadata:
                             result = type(result).model_validate({**result.model_dump(mode="json"), **metadata})
-                        yield self._completed(model, result)
+                        yield self._completed(requested_model, result)
                     elif event_type == "reasoning":
                         yield AdapterEvent(
                             event_type="inference.reasoning.delta",
@@ -76,7 +81,19 @@ class InferenceAdapter:
             raise CapabilityExecutionError("invalid_request", str(error)) from error
         if metadata:
             result = type(result).model_validate({**result.model_dump(mode="json"), **metadata})
-        yield self._completed(model, result)
+        yield self._completed(requested_model, result)
+
+    async def _resolve_model(self, requested_model: str) -> tuple[str, Mapping[str, int | float]]:
+        if self._model_registry is None:
+            return requested_model, {}
+        models = await self._backend.list_models()
+        installed = {
+            str(item.get("name") or item.get("model"))
+            for item in models
+            if isinstance(item, Mapping) and (item.get("name") or item.get("model"))
+        }
+        route = self._model_registry.resolve(requested_model, installed)
+        return route.effective_model, route.options
 
     @staticmethod
     def _completed(model: str, result) -> AdapterEvent:

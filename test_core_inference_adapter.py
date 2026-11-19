@@ -32,6 +32,11 @@ class FailingStreamingBackend:
         raise RuntimeError("provider disconnected")
 
 
+class ResolvingStreamingBackend(StreamingBackend):
+    async def list_models(self):
+        return [{"name": "qwen3:4b"}]
+
+
 class InferenceAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_session_context_is_injected_and_reported_in_result(self):
         backend = RecordingBackend()
@@ -111,6 +116,26 @@ class InferenceAdapterTests(unittest.IsolatedAsyncioTestCase):
                 events.append(event)
 
         self.assertEqual([event.event_type for event in events], ["inference.content.delta"])
+
+    async def test_model_tag_resolution_reports_requested_and_effective_identity(self):
+        from web_app.core.model_tags import ModelTag, ModelTagRegistry
+
+        registry = ModelTagRegistry({"coding": ModelTag(("missing:70b", "qwen3:4b"), ())}, ("qwen3:4b",))
+        adapter = InferenceAdapter(ResolvingStreamingBackend(), model_registry=registry)
+        call = CapabilityCall(
+            capability_id="inference.generate",
+            operation="generate",
+            project_root=".",
+            arguments={"model": "coding", "prompt": "Explain"},
+        )
+        context = ExecutionContext(task_id="task-1", project_id="project-1", principal="user")
+
+        events = [event async for event in adapter.execute(call, context)]
+
+        completed = events[-1].payload
+        self.assertEqual(completed["requested_model_id"], "coding")
+        self.assertEqual(completed["effective_model_id"], "qwen3:4b")
+        self.assertTrue(completed["fallback_used"])
 
 
 if __name__ == "__main__":

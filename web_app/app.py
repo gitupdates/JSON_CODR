@@ -262,9 +262,21 @@ def create_app(
                     ],
                 }
 
+            from cli import load_config
+            from web_app.core.model_tags import ModelTagRegistry
+            from web_app.core.native_ollama import NativeOllamaTransport
+
+            model_registry = ModelTagRegistry.load(Path(__file__).resolve().parent.parent / "zero_layer_models.json")
+            native_config = load_config()
+            inference_backend = (
+                NativeOllamaTransport(str(native_config["host"]))
+                if isinstance(service, OllamaService)
+                else (inference_router or service)
+            )
             core_inference_adapter = InferenceAdapter(
-                inference_router or service,
+                inference_backend,
                 prepare_prompt=prepare_inference_prompt,
+                model_registry=model_registry if isinstance(service, OllamaService) else None,
             )
             core_git_adapter = GitExecutionAdapter(
                 git_broker,

@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "fallback_order": [
+    "qwen3:4b",
+    "qwen2.5-coder:7b",
+    "qwen2.5-coder:0.5b"
+  ],
+  "tags": {
+    "coding": {
+      "models": ["qwen3:4b", "qwen2.5-coder:7b", "qwen2.5-coder:0.5b"],
+      "skills": [],
+      "endpoint": "http://127.0.0.1:11434",
+      "num_ctx": 16384,
+      "temperature": 0.0
+    },
+    "reasoning": {
+      "models": ["qwen3.5:9b", "qwen3:8b", "qwen3:4b"],
+      "skills": [],
+      "endpoint": "http://127.0.0.1:11434",
+      "num_ctx": 32768,
+      "temperature": 0.1
+    }
+  }
+}
