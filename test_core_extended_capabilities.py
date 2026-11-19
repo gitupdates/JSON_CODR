@@ -143,7 +143,11 @@ class ExtendedCapabilityTests(unittest.IsolatedAsyncioTestCase):
             arguments={"tool": "inspect", "arguments": {"evidence": "real"}},
         ))
 
-        self.assertEqual(events[0].payload, {"tool": "inspect", "evidence": "real"})
+        self.assertEqual(events[0].payload["tool"], "inspect")
+        self.assertEqual(events[0].payload["evidence"], "real")
+        self.assertEqual(events[0].payload["execution_route"], "compatibility")
+        self.assertEqual(events[0].payload["adapter_id"], "mcp.rea")
+        self.assertEqual(events[0].payload["approval_state"], "approved")
 
 
 if __name__ == "__main__":

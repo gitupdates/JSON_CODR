@@ -109,6 +109,38 @@ class DurableSupervisionTests(unittest.TestCase):
         self.assertIn("runtime.supervisor_stopped", kinds)
         self.assertTrue(calls[0][1]["env"]["OLLAMA_NO_CLOUD"] == "1")
 
+    def test_watchdog_recovers_a_failed_child_without_recreating_tasks(self):
+        from supervisor import SupervisorWatchdog
+
+        class FakeProcess:
+            def __init__(self, pid, returncode):
+                self.pid = pid
+                self.returncode = returncode
+
+            def poll(self):
+                return self.returncode
+
+            def terminate(self):
+                self.returncode = 0
+
+            def wait(self, timeout=None):
+                return self.returncode
+
+        processes = [FakeProcess(101, 7), FakeProcess(102, None)]
+        self.store.create(_command("task-existing", "command-existing"))
+        watchdog = SupervisorWatchdog(
+            Path(self.temporary.name), self.store,
+            command=("python", "-m", "uvicorn"),
+            popen_factory=lambda *args, **kwargs: processes.pop(0),
+            max_restarts=1,
+        )
+        watchdog.start()
+        self.assertFalse(watchdog.poll_once())
+        self.assertTrue(watchdog.recover_once())
+        self.assertEqual(watchdog.process.pid, 102)
+        self.assertEqual(self.store.get("task-existing").events[0].causation_id, "command-existing")
+        self.assertIn("runtime.child_restarting", [item.kind for item in self.store.telemetry()])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,13 +20,16 @@ class SupervisorWatchdog:
         *,
         command: tuple[str, ...],
         popen_factory: Callable = subprocess.Popen,
+        max_restarts: int = 3,
     ) -> None:
         self.root_dir = root_dir.resolve()
         self.store = store
         self.command = command
         self._popen = popen_factory
+        self.max_restarts = max(0, int(max_restarts))
         self.process = None
         self._exit_recorded = False
+        self._restart_count = 0
 
     def start(self) -> None:
         if self.process is not None and self.process.poll() is None:
@@ -69,12 +72,34 @@ class SupervisorWatchdog:
                 self.process.wait()
         self.store.record_telemetry("runtime.supervisor_stopped", {})
 
+    def recover_once(self) -> bool:
+        if self.process is None or self.process.poll() is None:
+            return False
+        if self._restart_count >= self.max_restarts:
+            self.store.record_telemetry(
+                "runtime.recovery_exhausted",
+                {"restart_count": self._restart_count, "exit_code": int(self.process.returncode or 0)},
+            )
+            return False
+        previous_pid = int(self.process.pid)
+        self._restart_count += 1
+        self.store.record_telemetry(
+            "runtime.child_restarting",
+            {"previous_pid": previous_pid, "restart_count": self._restart_count},
+        )
+        self.process = None
+        self.start()
+        return True
+
     def run(self, interval_seconds: float = 5.0) -> int:
         self.start()
         try:
-            while self.poll_once():
-                time.sleep(interval_seconds)
-            return int(self.process.returncode or 0)
+            while True:
+                while self.poll_once():
+                    time.sleep(interval_seconds)
+                exit_code = int(self.process.returncode or 0)
+                if exit_code == 0 or not self.recover_once():
+                    return exit_code
         finally:
             self.stop()
 

@@ -22,7 +22,7 @@ class PolicyDecision(FrozenContract):
     reason: str = Field(min_length=1)
 
 
-_AUTOMATIC_OPERATIONS = {"read", "search", "test", "bounded_edit", "session", "interrupt", "close", "generate"}
+_AUTOMATIC_OPERATIONS = {"read", "search", "discover", "test", "bounded_edit", "session", "interrupt", "close", "generate"}
 _SENSITIVE_OPERATIONS = {"network", "install", "commit", "push", "destructive"}
 
 
