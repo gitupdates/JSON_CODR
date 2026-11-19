@@ -77,6 +77,11 @@ class AgentServicesTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(await InferencePlanner(done, model="local-model").plan(context))
 
+        async def fenced(_model, _prompt):
+            return '```json\n{"done": true}\n```'
+
+        self.assertIsNone(await InferencePlanner(fenced, model="local-model").plan(context))
+
         async def invalid(_model, _prompt):
             return "not-json"
 

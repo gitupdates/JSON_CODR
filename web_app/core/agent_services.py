@@ -48,7 +48,7 @@ class InferencePlanner:
         )
         raw = await self._generate(self._model, prompt)
         try:
-            value = json.loads(raw)
+            value = self._decode_object(raw)
         except (TypeError, json.JSONDecodeError) as error:
             raise ValueError("planner must return valid capability JSON") from error
         if not isinstance(value, dict):
@@ -73,6 +73,21 @@ class InferencePlanner:
             if isinstance(root, str) and root:
                 return root
         raise ValueError("trusted project snapshot is unavailable")
+
+    @staticmethod
+    def _decode_object(raw: str) -> object:
+        text = raw.strip()
+        if text.startswith("```") and text.endswith("```"):
+            lines = text.splitlines()
+            text = "\n".join(lines[1:-1]).strip()
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            start = text.find("{")
+            end = text.rfind("}")
+            if start < 0 or end <= start:
+                raise
+            return json.loads(text[start:end + 1])
 
 
 class EventEvidenceVerifier:
