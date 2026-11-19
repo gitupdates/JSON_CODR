@@ -9,7 +9,7 @@ $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $HostAddress = '127.0.0.1'
 $Port = 8765
 $Url = "http://${HostAddress}:$Port"
-$Version = 'V1.0.18-alpha.13'
+$Version = 'V1.0.18-alpha.14'
 $Python = (Get-Command python -ErrorAction Stop).Source
 $OllamaCommand = Get-Command ollama -ErrorAction SilentlyContinue
 if ($OllamaCommand) {
