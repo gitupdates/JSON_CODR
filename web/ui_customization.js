@@ -59,6 +59,10 @@
     }
 
     function begin() {
+      const persisted = parseStored(safeLoad(catalog.STORAGE_KEY));
+      if (persisted && typeof persisted === "object" && persisted.schema === 1) {
+        savedState = catalog.normalizeState(persisted);
+      }
       snapshot = clone(savedState);
       draftState = clone(savedState);
       return applyDraft();

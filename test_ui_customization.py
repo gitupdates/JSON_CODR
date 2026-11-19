@@ -160,6 +160,24 @@ assert.ok(applied.length >= 4);
 '''
         self.run_node(source, CATALOG_MODULE, [CONTROLLER_MODULE])
 
+    def test_controller_reloads_persisted_interface_when_settings_reopens(self):
+        source = r'''
+const assert = require("assert");
+const catalog = require(process.argv[1]);
+const createController = require(process.argv[2]);
+let stored = {schema: 1, preset: "noc-light", mode: "light", components: {}};
+const controller = createController({
+  catalog,
+  load: key => key === catalog.STORAGE_KEY ? stored : null,
+});
+assert.strictEqual(controller.getState().preset, "noc-light");
+stored = {schema: 1, preset: "terminal-focus", mode: "dark", components: {}};
+const reopened = controller.begin();
+assert.strictEqual(reopened.preset, "terminal-focus");
+assert.strictEqual(controller.getState().preset, "terminal-focus");
+'''
+        self.run_node(source, CATALOG_MODULE, [CONTROLLER_MODULE])
+
     def test_controller_validates_mutations_and_persists_navigation_override(self):
         source = r'''
 const assert = require("assert");
@@ -255,11 +273,11 @@ assert.strictEqual(root.dataset.theme, "dark");
 
     def test_index_loads_ui_bootstrap_before_styles_and_controller_before_application(self):
         html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
-        catalog = '/static/ui_catalog.js?v=1.0.18-alpha.15'
-        bootstrap = '/static/ui_bootstrap.js?v=1.0.18-alpha.15'
-        stylesheet = '/static/app.css?v=1.0.18-alpha.15'
-        controller = '/static/ui_customization.js?v=1.0.18-alpha.15'
-        application = '/static/app.js?v=1.0.18-alpha.15'
+        catalog = '/static/ui_catalog.js?v=1.0.18-alpha.16'
+        bootstrap = '/static/ui_bootstrap.js?v=1.0.18-alpha.16'
+        stylesheet = '/static/app.css?v=1.0.18-alpha.16'
+        controller = '/static/ui_customization.js?v=1.0.18-alpha.16'
+        application = '/static/app.js?v=1.0.18-alpha.16'
         self.assertIn(catalog, html)
         self.assertIn(bootstrap, html)
         self.assertIn(controller, html)
@@ -317,9 +335,9 @@ console.log(JSON.stringify({presets: Object.keys(catalog.PRESETS), components: c
         self.assertIn("SHA-256", notice)
         self.assertFalse(any("ibm-plex" in name.lower() for name in actual))
         html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
-        app_css = '/static/app.css?v=1.0.18-alpha.15'
-        fonts_css = '/static/fonts/fonts.css?v=1.0.18-alpha.15'
-        gamma_css = '/static/gamma.css?v=1.0.18-alpha.15'
+        app_css = '/static/app.css?v=1.0.18-alpha.16'
+        fonts_css = '/static/fonts/fonts.css?v=1.0.18-alpha.16'
+        gamma_css = '/static/gamma.css?v=1.0.18-alpha.16'
         self.assertLess(html.index(app_css), html.index(fonts_css))
         self.assertLess(html.index(fonts_css), html.index(gamma_css))
 
