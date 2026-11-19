@@ -124,6 +124,18 @@ class CoreApiTests(unittest.TestCase):
         task = self.client.get("/api/tasks/task-1")
         self.assertEqual(task.status_code, 200)
 
+    def test_runtime_telemetry_and_heartbeat_are_read_only(self):
+        self.tasks.record_telemetry("runtime.started", {"pid": 42})
+        self.tasks.record_heartbeat("web", 42, "ready")
+
+        telemetry = self.client.get("/api/runtime/telemetry")
+        heartbeats = self.client.get("/api/runtime/heartbeats")
+
+        self.assertEqual(telemetry.status_code, 200)
+        self.assertEqual(telemetry.json()[0]["kind"], "runtime.started")
+        self.assertEqual(heartbeats.status_code, 200)
+        self.assertEqual(heartbeats.json()[0]["runtime_id"], "web")
+
 
 if __name__ == "__main__":
     unittest.main()

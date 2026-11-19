@@ -18,6 +18,8 @@ from web_app.core.contracts import (
     TaskEventDraft,
     TaskRecord,
     TaskStatus,
+    RuntimeHeartbeat,
+    TelemetryRecord,
 )
 
 
@@ -113,14 +115,148 @@ class TaskStore:
                 PRIMARY KEY(task_id, effect_id),
                 UNIQUE(task_id, event_sequence)
             );
+            CREATE TABLE IF NOT EXISTS task_dependencies (
+                task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+                depends_on_task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+                PRIMARY KEY(task_id, depends_on_task_id),
+                CHECK(task_id <> depends_on_task_id)
+            );
+            CREATE TABLE IF NOT EXISTS telemetry (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                telemetry_id TEXT NOT NULL UNIQUE,
+                kind TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                observed_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS runtime_heartbeats (
+                runtime_id TEXT PRIMARY KEY,
+                pid INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                observed_at TEXT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS tasks_parent_idx ON tasks(parent_task_id, task_id);
             CREATE INDEX IF NOT EXISTS effects_state_idx ON effects(task_id, json_extract(effect_json, '$.state'));
+            CREATE INDEX IF NOT EXISTS task_dependencies_ready_idx ON task_dependencies(task_id, depends_on_task_id);
             """
         )
         self._migrate_event_order()
 
     def close(self) -> None:
         self._connection.close()
+
+    def set_dependencies(self, task_id: str, dependencies: tuple[str, ...]) -> None:
+        if task_id in dependencies or len(dependencies) != len(set(dependencies)):
+            raise ValueError("task dependencies must be unique and cannot reference self")
+        with self._transaction():
+            self._get_unlocked(task_id)
+            for dependency in dependencies:
+                self._get_unlocked(dependency)
+            self._connection.execute("DELETE FROM task_dependencies WHERE task_id = ?", (task_id,))
+            self._connection.executemany(
+                "INSERT INTO task_dependencies VALUES (?, ?)",
+                ((task_id, dependency) for dependency in dependencies),
+            )
+
+    def ready_tasks(self) -> tuple[TaskRecord, ...]:
+        with self._transaction():
+            rows = self._connection.execute(
+                """SELECT task_id FROM tasks candidate
+                   WHERE status = ?
+                   AND NOT EXISTS (
+                       SELECT 1 FROM task_dependencies dependency
+                       JOIN tasks required ON required.task_id = dependency.depends_on_task_id
+                       WHERE dependency.task_id = candidate.task_id AND required.status <> ?
+                   )
+                   ORDER BY rowid""",
+                (TaskStatus.pending.value, TaskStatus.completed.value),
+            ).fetchall()
+            return tuple(self._get_unlocked(row["task_id"]) for row in rows)
+
+    def record_telemetry(self, kind: str, payload: dict) -> TelemetryRecord:
+        if not kind:
+            raise ValueError("telemetry kind is required")
+        with self._transaction():
+            telemetry_id = f"telemetry:{uuid7()}"
+            observed_at = datetime.now(UTC)
+            cursor = self._connection.execute(
+                "INSERT INTO telemetry(telemetry_id, kind, payload_json, observed_at) VALUES (?, ?, ?, ?)",
+                (telemetry_id, kind, json.dumps(payload, separators=(",", ":"), sort_keys=True), observed_at.isoformat()),
+            )
+            return TelemetryRecord(
+                telemetry_id=telemetry_id,
+                sequence=int(cursor.lastrowid),
+                kind=kind,
+                payload=payload,
+                observed_at=observed_at,
+            )
+
+    def telemetry(self, after_sequence: int = 0) -> tuple[TelemetryRecord, ...]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM telemetry WHERE sequence > ? ORDER BY sequence", (after_sequence,)
+            ).fetchall()
+            return tuple(TelemetryRecord(
+                telemetry_id=row["telemetry_id"],
+                sequence=int(row["sequence"]),
+                kind=row["kind"],
+                payload=json.loads(row["payload_json"]),
+                observed_at=datetime.fromisoformat(row["observed_at"]),
+            ) for row in rows)
+
+    def record_heartbeat(self, runtime_id: str, pid: int, status: str) -> RuntimeHeartbeat:
+        observed_at = datetime.now(UTC)
+        heartbeat = RuntimeHeartbeat(
+            runtime_id=runtime_id,
+            pid=pid,
+            status=status,
+            observed_at=observed_at,
+        )
+        with self._transaction():
+            self._connection.execute(
+                """INSERT INTO runtime_heartbeats VALUES (?, ?, ?, ?)
+                   ON CONFLICT(runtime_id) DO UPDATE SET
+                   pid=excluded.pid, status=excluded.status, observed_at=excluded.observed_at""",
+                (runtime_id, pid, status, observed_at.isoformat()),
+            )
+        return heartbeat
+
+    def runtime_heartbeat(
+        self,
+        runtime_id: str,
+        *,
+        now: datetime | None = None,
+        stale_after: timedelta = timedelta(seconds=60),
+    ) -> RuntimeHeartbeat:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM runtime_heartbeats WHERE runtime_id = ?", (runtime_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(runtime_id)
+        observed_at = datetime.fromisoformat(row["observed_at"])
+        stale = (now or datetime.now(UTC)) - observed_at > stale_after
+        return RuntimeHeartbeat(
+            runtime_id=row["runtime_id"],
+            pid=int(row["pid"]),
+            status=row["status"],
+            observed_at=observed_at,
+            stale=stale,
+        )
+
+    def runtime_heartbeats(
+        self,
+        *,
+        now: datetime | None = None,
+        stale_after: timedelta = timedelta(seconds=60),
+    ) -> tuple[RuntimeHeartbeat, ...]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT runtime_id FROM runtime_heartbeats ORDER BY runtime_id"
+            ).fetchall()
+        return tuple(
+            self.runtime_heartbeat(row["runtime_id"], now=now, stale_after=stale_after)
+            for row in rows
+        )
 
     def create(self, command: TaskCommand) -> TaskRecord:
         with self._transaction():

@@ -82,6 +82,22 @@ class FrozenContract(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
 
+class TelemetryRecord(FrozenContract):
+    telemetry_id: Identifier
+    sequence: int = Field(ge=1)
+    kind: str = Field(min_length=1, max_length=256)
+    payload: Mapping[str, JsonValue] = Field(default_factory=dict)
+    observed_at: datetime
+
+
+class RuntimeHeartbeat(FrozenContract):
+    runtime_id: Identifier
+    pid: int = Field(ge=0)
+    status: str = Field(min_length=1, max_length=128)
+    observed_at: datetime
+    stale: bool = False
+
+
 class VersionedContract(FrozenContract):
     schema_version: Literal["1"] = "1"
 

@@ -31,6 +31,8 @@ class RunWebTests(unittest.TestCase):
         self.assertEqual(payload["version"], "V1.0.18-alpha.11")
         self.assertTrue(payload["python"])
         self.assertTrue(payload["ollama"])
+        self.assertTrue(payload["supervised"])
+        self.assertTrue(payload["ollamaNoCloud"])
 
     def test_launcher_is_valid_powershell(self):
         command = (

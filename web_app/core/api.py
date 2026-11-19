@@ -159,6 +159,14 @@ def create_core_router(
     def list_capabilities():
         return capabilities()
 
+    @router.get("/api/runtime/telemetry")
+    def runtime_telemetry(after_sequence: int = 0):
+        return runtime()[1].telemetry(after_sequence)
+
+    @router.get("/api/runtime/heartbeats")
+    def runtime_heartbeats():
+        return runtime()[1].runtime_heartbeats()
+
     @router.get("/api/tasks/{task_id}/artifacts/{artifact_id}")
     def download_artifact(task_id: str, artifact_id: str):
         if artifact_store is None:

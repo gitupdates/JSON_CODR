@@ -1,6 +1,7 @@
 param(
   [switch]$NoBrowser,
-  [switch]$ValidateOnly
+  [switch]$ValidateOnly,
+  [switch]$Direct
 )
 
 $ErrorActionPreference = 'Stop'
@@ -29,12 +30,15 @@ if ($ValidateOnly) {
     python = $Python
     ollama = $Ollama
     modelStore = $env:JSON_CODR_MODELS
+    supervised = -not $Direct
+    ollamaNoCloud = $true
   } | ConvertTo-Json
   exit 0
 }
 
 $env:PYTHONUTF8 = '1'
 $env:PYTHONIOENCODING = 'utf-8'
+$env:OLLAMA_NO_CLOUD = '1'
 if ($env:JSON_CODR_MODELS) {
   $env:OLLAMA_MODELS = $env:JSON_CODR_MODELS
 }
@@ -58,9 +62,12 @@ try {
     }
   }
 
-  $WebProcess = Start-Process -FilePath $Python -ArgumentList @(
-    '-m', 'uvicorn', 'web_app.app:app', '--host', $HostAddress, '--port', $Port
-  ) -WorkingDirectory $Root -WindowStyle Hidden -PassThru
+  if ($Direct) {
+    $WebArguments = @('-m', 'uvicorn', 'web_app.app:app', '--host', $HostAddress, '--port', $Port)
+  } else {
+    $WebArguments = @('supervisor.py', '--host', $HostAddress, '--port', $Port)
+  }
+  $WebProcess = Start-Process -FilePath $Python -ArgumentList $WebArguments -WorkingDirectory $Root -WindowStyle Hidden -PassThru
 
   for ($Attempt = 0; $Attempt -lt 30; $Attempt++) {
     Start-Sleep -Milliseconds 300
