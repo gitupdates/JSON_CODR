@@ -19,6 +19,7 @@ from web_app.core.contracts import (
     VerificationReport,
 )
 from web_app.core.project_intelligence import ProjectReader
+from web_app.core.project_registry import ProjectRegistry
 
 
 def planner_output_schema(capability_ids: tuple[str, ...] = ()) -> dict:
@@ -48,13 +49,20 @@ def select_agent_planner_model(config: Mapping[str, object]) -> str:
 
 
 class ProjectContextResolver:
-    def __init__(self, project_roots: Mapping[str, str | Path]) -> None:
-        self._roots = {project_id: Path(root).resolve() for project_id, root in project_roots.items()}
+    def __init__(self, project_roots: Mapping[str, str | Path] | ProjectRegistry) -> None:
+        self._registry = project_roots if isinstance(project_roots, ProjectRegistry) else None
+        self._roots = (
+            {} if self._registry is not None
+            else {project_id: Path(root).resolve() for project_id, root in project_roots.items()}
+        )
 
     def resolve(self, command: TaskCommand) -> tuple[ProjectReader, str]:
-        root = self._roots.get(command.project_id)
-        if root is None:
-            raise KeyError("project is not registered")
+        if self._registry is not None:
+            root = self._registry.resolve(command.project_id)
+        else:
+            root = self._roots.get(command.project_id)
+            if root is None:
+                raise KeyError("project is not registered")
         target = command.payload.get("target_path", ".")
         return ProjectReader(root), target if isinstance(target, str) else "."
 

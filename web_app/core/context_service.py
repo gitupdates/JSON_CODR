@@ -7,7 +7,7 @@ from uuid import uuid7
 
 from web_app.core.canonical import canonical_digest
 from web_app.core.contracts import FrozenContract
-from web_app.core.project_intelligence import ProjectFile, ProjectInstruction, ProjectReader
+from web_app.core.project_intelligence import ProjectFile, ProjectInstruction, ProjectOmission, ProjectReader
 
 
 class ContextSource(FrozenContract):
@@ -17,6 +17,7 @@ class ContextSource(FrozenContract):
     event_type: str | None = None
     global_sequence: int | None = None
     mandatory: bool = False
+    trust: str = "trusted_runtime"
 
 
 class ContextBundle(FrozenContract):
@@ -46,6 +47,7 @@ class ProjectContextSnapshot(FrozenContract):
     through_global_sequence: int
     instructions: tuple[ProjectInstruction, ...] = ()
     files: tuple[ProjectFile, ...] = ()
+    omissions: tuple[ProjectOmission, ...] = ()
 
 
 class ContextOverflow(RuntimeError):
@@ -127,7 +129,7 @@ class ContextService:
         events = self._tasks.thread_events(thread_id)
         through = max((event.global_sequence for event in events), default=-1)
         instructions = reader.instructions_for(target_path)
-        files = reader.files()
+        files, omissions = reader.scan()
         instruction_paths = {item.relative_path for item in instructions}
         files = tuple(item for item in files if item.relative_path not in instruction_paths)
         material = {
@@ -141,6 +143,7 @@ class ContextService:
                 {"relative_path": item.relative_path, "digest": item.digest, "size": item.size}
                 for item in files
             ],
+            "omissions": [item.model_dump(mode="json") for item in omissions],
         }
         snapshot_id = canonical_digest(material)
         for record in self._memory.list(thread_id):
@@ -159,6 +162,7 @@ class ContextService:
             through_global_sequence=through,
             instructions=instructions,
             files=files,
+            omissions=omissions,
         )
         self._memory.replace_kind(
             thread_id,
@@ -230,6 +234,7 @@ class ContextService:
                             content=instruction.content,
                             global_sequence=snapshot.through_global_sequence,
                             mandatory=True,
+                            trust="untrusted_project",
                         )
                 for project_file in snapshot.files:
                     source_ref = f"{snapshot_ref}:file:{project_file.relative_path}"
@@ -239,6 +244,17 @@ class ContextService:
                             source_ref=source_ref,
                             content=project_file.content,
                             global_sequence=snapshot.through_global_sequence,
+                            trust="untrusted_project",
+                        )
+                for omission in snapshot.omissions:
+                    source_ref = f"{snapshot_ref}:omission:{omission.relative_path}"
+                    if source_ref not in compacted_refs:
+                        yield ContextSource(
+                            kind="project_omission",
+                            source_ref=source_ref,
+                            content=json.dumps(omission.model_dump(mode="json"), sort_keys=True),
+                            global_sequence=snapshot.through_global_sequence,
+                            trust="trusted_runtime_metadata",
                         )
                 continue
             yield ContextSource(kind=record.kind, source_ref=record.source_ref, content=record.content)

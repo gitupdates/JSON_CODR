@@ -28,6 +28,12 @@ class ProjectInstruction(FrozenContract):
     digest: str
 
 
+class ProjectOmission(FrozenContract):
+    relative_path: str
+    reason: str
+    size: int = Field(ge=0)
+
+
 class IndexGeneration(FrozenContract):
     generation: int = Field(ge=1)
     project_root: str
@@ -58,6 +64,12 @@ class ProjectReader:
     DEFAULT_IGNORED_DIRECTORIES = frozenset({
         ".git", ".runtime", ".venv", "__pycache__", "node_modules", "dist", "build",
     })
+    SENSITIVE_NAMES = frozenset({
+        ".env", ".env.local", ".env.production", ".npmrc", ".pypirc",
+        "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "credentials",
+        "credentials.json", "service-account.json", "terraform.tfstate",
+    })
+    SENSITIVE_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".jks", ".keystore")
 
     def __init__(
         self,
@@ -75,7 +87,11 @@ class ProjectReader:
         self.ignored_directories = ignored_directories or self.DEFAULT_IGNORED_DIRECTORIES
 
     def files(self) -> tuple[ProjectFile, ...]:
+        return self.scan()[0]
+
+    def scan(self) -> tuple[tuple[ProjectFile, ...], tuple[ProjectOmission, ...]]:
         result: list[ProjectFile] = []
+        omissions: list[ProjectOmission] = []
         total = 0
         for path in sorted(self.root.rglob("*"), key=lambda item: item.as_posix().casefold()):
             if not path.is_file() or path.is_symlink():
@@ -84,14 +100,23 @@ class ProjectReader:
             if any(part in self.ignored_directories for part in relative.parts[:-1]):
                 continue
             size = path.stat().st_size
-            if size > self.max_file_bytes or total + size > self.max_total_bytes:
+            if self._is_sensitive(relative):
+                omissions.append(ProjectOmission(relative_path=relative.as_posix(), reason="sensitive_path", size=size))
+                continue
+            if size > self.max_file_bytes:
+                omissions.append(ProjectOmission(relative_path=relative.as_posix(), reason="oversized", size=size))
+                continue
+            if total + size > self.max_total_bytes:
+                omissions.append(ProjectOmission(relative_path=relative.as_posix(), reason="total_budget", size=size))
                 continue
             content_bytes = path.read_bytes()
             if b"\x00" in content_bytes:
+                omissions.append(ProjectOmission(relative_path=relative.as_posix(), reason="binary", size=size))
                 continue
             try:
                 content = content_bytes.decode("utf-8")
             except UnicodeDecodeError:
+                omissions.append(ProjectOmission(relative_path=relative.as_posix(), reason="non_utf8", size=size))
                 continue
             total += size
             result.append(ProjectFile(
@@ -100,7 +125,21 @@ class ProjectReader:
                 size=size,
                 content=content,
             ))
-        return tuple(result)
+        return tuple(result), tuple(omissions)
+
+    @classmethod
+    def _is_sensitive(cls, relative: Path) -> bool:
+        name = relative.name.casefold()
+        parts = {part.casefold() for part in relative.parts}
+        return (
+            name in cls.SENSITIVE_NAMES
+            or name.startswith(".env.")
+            or name.endswith(cls.SENSITIVE_SUFFIXES)
+            or ".aws" in parts
+            or ".azure" in parts
+            or ".kube" in parts
+            or ".ssh" in parts
+        )
 
     def fingerprint(self, files: tuple[ProjectFile, ...] | None = None) -> str:
         digest = hashlib.sha256()
@@ -135,7 +174,10 @@ class ProjectReader:
                 relative_path=candidate.relative_to(self.root).as_posix(),
                 scope=scope.relative_to(self.root).as_posix(),
                 precedence=precedence,
-                trust="project" if scope == self.root else "scoped_project",
+                trust=(
+                    "untrusted_project_instruction" if scope == self.root
+                    else "untrusted_scoped_project_instruction"
+                ),
                 content=content,
                 digest=f"sha256:{hashlib.sha256(content_bytes).hexdigest()}",
             ))

@@ -45,6 +45,22 @@ class ProjectIntelligenceTests(unittest.TestCase):
         if symlink is not None:
             self.assertNotIn("outside-link.txt", paths)
 
+    def test_reader_excludes_secrets_and_records_bounded_omissions(self):
+        (self.root / ".env").write_text("TOKEN=do-not-read", encoding="utf-8")
+        (self.root / "id_rsa").write_text("PRIVATE KEY", encoding="utf-8")
+        (self.root / "large.txt").write_text("x" * 100, encoding="utf-8")
+        reader = ProjectReader(self.root, max_file_bytes=50)
+
+        files, omissions = reader.scan()
+
+        self.assertNotIn(".env", {item.relative_path for item in files})
+        self.assertNotIn("id_rsa", {item.relative_path for item in files})
+        reasons = {item.relative_path: item.reason for item in omissions}
+        self.assertEqual(reasons[".env"], "sensitive_path")
+        self.assertEqual(reasons["id_rsa"], "sensitive_path")
+        self.assertEqual(reasons["large.txt"], "oversized")
+        self.assertEqual(reasons["binary.bin"], "binary")
+
     def test_nested_instruction_precedence_is_deterministic(self):
         reader = ProjectReader(self.root)
 
@@ -52,8 +68,8 @@ class ProjectIntelligenceTests(unittest.TestCase):
 
         self.assertEqual([item.relative_path for item in instructions], ["AGENTS.md", "src/AGENTS.md"])
         self.assertLess(instructions[0].precedence, instructions[1].precedence)
-        self.assertEqual(instructions[0].trust, "project")
-        self.assertEqual(instructions[1].trust, "scoped_project")
+        self.assertEqual(instructions[0].trust, "untrusted_project_instruction")
+        self.assertEqual(instructions[1].trust, "untrusted_scoped_project_instruction")
 
     def test_repository_index_searches_real_content_and_rejects_stale_generation(self):
         reader = ProjectReader(self.root)

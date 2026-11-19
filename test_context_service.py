@@ -93,8 +93,24 @@ class ContextServiceTests(unittest.TestCase):
             if source.kind == "project_file" and source.source_ref.endswith(":file:app.py")
         )
         self.assertTrue(instruction.mandatory)
+        self.assertEqual(instruction.trust, "untrusted_project")
+        self.assertEqual(project_file.trust, "untrusted_project")
         self.assertIn("focused tests", instruction.content)
         self.assertIn("return 42", project_file.content)
+
+    def test_snapshot_reports_omissions_without_exposing_secret_content(self):
+        project = Path(self.temporary.name) / "secret-project"
+        project.mkdir()
+        (project / ".env").write_text("PASSWORD=never-leak", encoding="utf-8")
+        (project / "app.py").write_text("value = 1", encoding="utf-8")
+        self.context.capture_project("thread-1", "parent", ProjectReader(project))
+
+        bundle = self.context.assemble("thread-1", "parent", 20_000)
+
+        omission = next(source for source in bundle.sources if source.kind == "project_omission")
+        self.assertEqual(omission.trust, "trusted_runtime_metadata")
+        self.assertIn("sensitive_path", omission.content)
+        self.assertNotIn("never-leak", bundle.text)
 
     def test_compaction_retains_large_mandatory_project_instructions_after_reopen(self):
         project = Path(self.temporary.name) / "large-project"

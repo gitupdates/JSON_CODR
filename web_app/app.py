@@ -55,6 +55,7 @@ from web_app.core.mcp_stdio_backend import build_mcp_adapters
 from web_app.core.policy import PolicyService
 from web_app.core.project_adapter import ProjectAdapter
 from web_app.core.project_intelligence import ProjectReader
+from web_app.core.project_registry import ProjectRegistry
 from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
 from web_app.core.component_manager import ComponentManager
@@ -222,6 +223,7 @@ def create_app(
     core_runtime = None
     core_memory = None
     core_approvals = None
+    core_projects = None
     core_artifacts = None
     core_capabilities = ()
     core_mcp_backends = []
@@ -248,7 +250,7 @@ def create_app(
         raise ValueError("Unsupported skill source")
 
     def get_core_runtime():
-        nonlocal core_runtime, core_capabilities, core_memory, core_approvals
+        nonlocal core_runtime, core_capabilities, core_memory, core_approvals, core_projects
         if core_runtime is None:
             core_root = workspace.data_root / "core"
             core_tasks = TaskStore(core_root / "tasks.sqlite")
@@ -340,6 +342,10 @@ def create_app(
                 return await agent_runtime.run(task_id)
 
             project_root = Path(__file__).resolve().parent.parent
+            core_projects = ProjectRegistry(core_root / "projects.sqlite")
+            registered_project = core_projects.register(project_root, project_id="legacy")
+            application.state.core_project_registry = core_projects
+            application.state.core_default_project_id = registered_project.project_id
 
             def agent_project_fingerprint(root: str | None) -> str:
                 reader = ProjectReader(root or project_root)
@@ -353,6 +359,7 @@ def create_app(
                 return reader.fingerprint(files)
 
             core_approvals = ApprovalStore(core_root / "approvals.sqlite")
+            application.state.core_approval_store = core_approvals
             core_service = CoreService(
                 core_tasks,
                 core_policy,
@@ -362,7 +369,7 @@ def create_app(
                 approval_store=core_approvals,
                 project_fingerprint=agent_project_fingerprint,
             )
-            resolver = ProjectContextResolver({"legacy": project_root})
+            resolver = ProjectContextResolver(core_projects)
             core_memory = MemoryStore(core_root / "memory.sqlite")
             application.state.core_memory = core_memory
 
@@ -422,6 +429,8 @@ def create_app(
             core_tasks.close()
             if core_approvals is not None:
                 core_approvals.close()
+            if core_projects is not None:
+                core_projects.close()
             if core_memory is not None:
                 core_memory.close()
 

@@ -792,12 +792,18 @@ class WebApiTests(unittest.TestCase):
             policy = getattr(client.app.state, "core_policy", None)
             task_store = getattr(client.app.state, "core_task_store", None)
             memory = getattr(client.app.state, "core_memory", None)
+            approvals = getattr(client.app.state, "core_approval_store", None)
+            projects = getattr(client.app.state, "core_project_registry", None)
             if policy is not None:
                 policy.close()
             if task_store is not None:
                 task_store.close()
             if memory is not None:
                 memory.close()
+            if approvals is not None:
+                approvals.close()
+            if projects is not None:
+                projects.close()
         self.temporary_directory.cleanup()
 
     def test_sessions_create_reopen_and_delete(self):
