@@ -33,6 +33,7 @@ const elements = {
   contextPanel: document.querySelector("#context-panel"),
   skillsPanel: document.querySelector("#skills-panel"),
   settingsPanel: document.querySelector("#settings-panel"),
+  runtimeDiagnostics: document.querySelector("#runtime-diagnostics"),
   contextCount: document.querySelector("#context-count"),
   attachmentInput: document.querySelector("#attachment-input"),
   attachmentFolderInput: document.querySelector("#attachment-folder-input"),
@@ -377,6 +378,36 @@ function renderWorkspaceActivityNotice(message = "Ready", status = "idle") {
   }
 }
 
+async function loadRuntimeDiagnostics() {
+  if (!elements.runtimeDiagnostics) return;
+  elements.runtimeDiagnostics.innerHTML = '<p class="meta">Reading local runtime evidence…</p>';
+  try {
+    const response = await fetch("/api/runtime/status");
+    if (!response.ok) throw new Error(await responseErrorMessage(response, "Runtime diagnostics failed"));
+    const status = await response.json();
+    elements.runtimeDiagnostics.replaceChildren();
+    const locality = document.createElement("p"); locality.className = "meta";
+    locality.textContent = `${status.local_only ? "Local only" : "External routes enabled"} · ${status.health}`;
+    elements.runtimeDiagnostics.append(locality);
+    for (const heartbeat of status.heartbeats || []) {
+      const row = document.createElement("article"); row.className = "dependency-item";
+      const title = document.createElement("strong"); title.textContent = heartbeat.runtime_id;
+      const detail = document.createElement("p"); detail.className = "meta";
+      detail.textContent = heartbeat.stale ? "Heartbeat stale · restart or inspect the supervisor" : `${heartbeat.status} · PID ${heartbeat.pid}`;
+      row.append(title, detail); elements.runtimeDiagnostics.append(row);
+    }
+    for (const item of (status.telemetry || []).slice(-20).reverse()) {
+      const row = document.createElement("article"); row.className = "dependency-item";
+      const title = document.createElement("strong"); title.textContent = item.kind;
+      const detail = document.createElement("p"); detail.className = "meta";
+      detail.textContent = JSON.stringify(item.payload);
+      row.append(title, detail); elements.runtimeDiagnostics.append(row);
+    }
+  } catch (error) {
+    elements.runtimeDiagnostics.innerHTML = `<p class="error">${error.message}</p>`;
+  }
+}
+
 function workspaceRegionForPanel(state, panelId) {
   return ["left", "right", "bottom"].find((region) => state.regions[region].includes(panelId)) || null;
 }
@@ -579,7 +610,10 @@ function selectDestination(destination, { persist = true, focus = false } = {}) 
   for (const view of elements.destinationViews) view.hidden = view.dataset.view !== destination;
   elements.hardwareSubnavigation.hidden = destination !== "hardware";
   if (destination === "hardware") selectHardwareSection(activeHardwareSection, { persist: false });
-  if (destination === "settings") uiCustomizationEditor.begin();
+  if (destination === "settings") {
+    uiCustomizationEditor.begin();
+    loadRuntimeDiagnostics();
+  }
   if (destination === "terminal") {
     initializeXterm();
     if (!terminalId) elements.terminalStatus.textContent = "PowerShell is ready to start";

@@ -136,6 +136,12 @@ class CoreApiTests(unittest.TestCase):
         self.assertEqual(heartbeats.status_code, 200)
         self.assertEqual(heartbeats.json()[0]["runtime_id"], "web")
 
+        status = self.client.get("/api/runtime/status")
+        self.assertEqual(status.status_code, 200)
+        self.assertTrue(status.json()["local_only"])
+        self.assertEqual(status.json()["health"], "healthy")
+        self.assertEqual(status.json()["telemetry"][0]["kind"], "runtime.started")
+
 
 if __name__ == "__main__":
     unittest.main()

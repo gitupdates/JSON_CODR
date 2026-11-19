@@ -64,6 +64,24 @@ class CoreWebContractTests(unittest.TestCase):
         self.assertIn("/conversation", conversation)
         self.assertIn("conversationView.apply", self.app)
 
+    def test_hybrid_execution_evidence_stays_in_existing_activity_and_settings(self):
+        for field in (
+            "execution_route", "requested_model_id", "effective_model_id",
+            "primitive_id", "adapter_id", "approval_state", "verification_status",
+            "retry_count", "rollback_status",
+        ):
+            self.assertIn(field, self.view)
+        self.assertIn('id="runtime-diagnostics"', self.html)
+        self.assertIn("/api/runtime/status", self.app)
+        self.assertIn("local_only", self.app)
+        self.assertNotIn('data-destination="runtime"', self.html)
+
+    def test_runtime_failures_and_stale_heartbeats_are_actionable(self):
+        self.assertIn("heartbeat", self.app)
+        self.assertIn("stale", self.app)
+        self.assertIn("recommended_action", self.view)
+        self.assertIn("repair", self.view)
+
 
 if __name__ == "__main__":
     unittest.main()

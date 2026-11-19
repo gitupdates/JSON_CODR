@@ -61,6 +61,45 @@ class CoreCliTests(unittest.TestCase):
         self.assertEqual([line["event_type"] for line in lines], ["task.output", "task.completed"])
         self.assertNotIn("secret", output.getvalue())
 
+    def test_text_output_reports_truthful_hybrid_execution_evidence(self):
+        output = io.StringIO()
+        result = {
+            "task_id": "task-1",
+            "status": "completed",
+            "events": [{
+                "event_type": "capability.completed",
+                "payload": {
+                    "text": "done",
+                    "execution_route": "compatibility",
+                    "adapter_id": "rea",
+                    "requested_model_id": "legacy:7b",
+                    "effective_model_id": "qwen3:4b",
+                    "approval_state": "approved",
+                    "verification_status": "passed",
+                    "retry_count": 1,
+                    "rollback_status": "not_required",
+                },
+            }],
+        }
+        self.assertEqual(run_cli(["run", "--project", ".", "inspect"], submit=lambda _: result, stdout=output), 0)
+        rendered = output.getvalue()
+        self.assertIn("compatibility · rea", rendered)
+        self.assertIn("legacy:7b → qwen3:4b", rendered)
+        self.assertIn("verified passed", rendered)
+
+    def test_status_command_reports_local_only_and_degraded_runtime(self):
+        output = io.StringIO()
+        status = {
+            "local_only": True,
+            "health": "degraded",
+            "heartbeats": [{"runtime_id": "web", "status": "running", "stale": True}],
+            "telemetry": [],
+        }
+        code = run_cli(["status"], submit=lambda _: status, stdout=output)
+        self.assertEqual(code, 1)
+        self.assertIn("LOCAL ONLY", output.getvalue())
+        self.assertIn("web · stale", output.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

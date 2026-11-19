@@ -193,6 +193,14 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("async function responseErrorMessage", script)
         self.assertIn('responseErrorMessage(response, "Hardware detection failed")', script)
 
+    def test_runtime_observability_is_progressive_not_a_new_destination(self):
+        html = self.client.get("/").text
+        script = self.client.get("/static/app.js").text
+        self.assertIn('id="runtime-diagnostics"', html)
+        self.assertIn('id="workspace-activity-panel"', html)
+        self.assertIn('/api/runtime/status', script)
+        self.assertNotIn('data-destination="runtime"', html)
+
     def test_new_terminal_process_resets_the_replay_cursor(self):
         script = self.client.get("/static/app.js").text
 

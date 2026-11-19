@@ -167,6 +167,19 @@ def create_core_router(
     def runtime_heartbeats():
         return runtime()[1].runtime_heartbeats()
 
+    @router.get("/api/runtime/status")
+    def runtime_status():
+        store = runtime()[1]
+        heartbeats = store.runtime_heartbeats()
+        telemetry = store.telemetry()
+        degraded = any(item.stale or item.status not in {"running", "ready", "healthy"} for item in heartbeats)
+        return {
+            "local_only": True,
+            "health": "degraded" if degraded else "healthy",
+            "heartbeats": heartbeats,
+            "telemetry": telemetry[-100:],
+        }
+
     @router.get("/api/tasks/{task_id}/artifacts/{artifact_id}")
     def download_artifact(task_id: str, artifact_id: str):
         if artifact_store is None:
