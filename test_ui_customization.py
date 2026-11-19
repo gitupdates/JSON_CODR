@@ -255,11 +255,11 @@ assert.strictEqual(root.dataset.theme, "dark");
 
     def test_index_loads_ui_bootstrap_before_styles_and_controller_before_application(self):
         html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
-        catalog = '/static/ui_catalog.js?v=1.0.18-alpha.12'
-        bootstrap = '/static/ui_bootstrap.js?v=1.0.18-alpha.12'
-        stylesheet = '/static/app.css?v=1.0.18-alpha.12'
-        controller = '/static/ui_customization.js?v=1.0.18-alpha.12'
-        application = '/static/app.js?v=1.0.18-alpha.12'
+        catalog = '/static/ui_catalog.js?v=1.0.18-alpha.13'
+        bootstrap = '/static/ui_bootstrap.js?v=1.0.18-alpha.13'
+        stylesheet = '/static/app.css?v=1.0.18-alpha.13'
+        controller = '/static/ui_customization.js?v=1.0.18-alpha.13'
+        application = '/static/app.js?v=1.0.18-alpha.13'
         self.assertIn(catalog, html)
         self.assertIn(bootstrap, html)
         self.assertIn(controller, html)
@@ -317,9 +317,9 @@ console.log(JSON.stringify({presets: Object.keys(catalog.PRESETS), components: c
         self.assertIn("SHA-256", notice)
         self.assertFalse(any("ibm-plex" in name.lower() for name in actual))
         html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
-        app_css = '/static/app.css?v=1.0.18-alpha.12'
-        fonts_css = '/static/fonts/fonts.css?v=1.0.18-alpha.12'
-        gamma_css = '/static/gamma.css?v=1.0.18-alpha.12'
+        app_css = '/static/app.css?v=1.0.18-alpha.13'
+        fonts_css = '/static/fonts/fonts.css?v=1.0.18-alpha.13'
+        gamma_css = '/static/gamma.css?v=1.0.18-alpha.13'
         self.assertLess(html.index(app_css), html.index(fonts_css))
         self.assertLess(html.index(fonts_css), html.index(gamma_css))
 
