@@ -135,9 +135,16 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             CapabilityCall(capability_id="project.patch", operation="bounded_edit", project_root=str(self.root)),
             CapabilityCall(capability_id="test.run", operation="test", project_root=str(self.root)),
         ]
+        class VerifyAfterThreeActions(DeterministicVerifier):
+            async def verify(inner_self, goal, task, context):
+                inner_self.satisfied = sum(
+                    event.event_type == "agent.action_completed" for event in task.events
+                ) >= 3
+                return await super().verify(goal, task, context)
+
         runtime = AgentRuntime(
             self.tasks, core, ContextService(self.tasks, self.memory), DeterministicPlanner(calls),
-            DeterministicVerifier(), lambda _root: "sha256:" + "1" * 64,
+            VerifyAfterThreeActions(), lambda _root: "sha256:" + "1" * 64,
         )
         task_id = self.create_root_task()
 
@@ -157,6 +164,38 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 "agent.phase_changed", "agent.verification_completed", "agent.verified",
             ],
         )
+
+    async def test_satisfied_verification_stops_without_second_planner_call(self):
+        adapter = RecordingAdapter()
+        call = CapabilityCall(
+            capability_id="project.read", operation="read", project_root=str(self.root)
+        )
+
+        class OneShotPlanner:
+            def __init__(self):
+                self.calls = 0
+
+            async def plan(inner_self, _context):
+                inner_self.calls += 1
+                if inner_self.calls > 1:
+                    raise AssertionError("planner ran after the goal was already verified")
+                return call
+
+        planner = OneShotPlanner()
+        runtime = AgentRuntime(
+            self.tasks,
+            CoreService(self.tasks, self.policy, {"project.read": adapter}),
+            ContextService(self.tasks, self.memory),
+            planner,
+            DeterministicVerifier(),
+            lambda _root: "sha256:" + "1" * 64,
+        )
+        task_id = self.create_root_task()
+
+        result = await runtime.run(task_id)
+
+        self.assertEqual(result.status, TaskStatus.completed)
+        self.assertEqual(planner.calls, 1)
 
     async def test_steering_is_durable_and_visible_to_the_next_plan(self):
         adapter = RecordingAdapter()

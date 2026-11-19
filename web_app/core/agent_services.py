@@ -21,6 +21,32 @@ from web_app.core.contracts import (
 from web_app.core.project_intelligence import ProjectReader
 
 
+def planner_output_schema(capability_ids: tuple[str, ...] = ()) -> dict:
+    capability_schema: dict[str, object] = {"type": "string", "minLength": 1}
+    if capability_ids:
+        capability_schema["enum"] = list(capability_ids)
+    return {
+        "type": "object",
+        "properties": {
+            "done": {"type": "boolean"},
+            "capability_id": capability_schema,
+            "operation": {"type": "string", "minLength": 1},
+            "target_path": {"type": "string"},
+            "arguments": {"type": "object"},
+        },
+        "required": ["done", "capability_id", "operation", "target_path", "arguments"],
+    }
+
+
+def select_agent_planner_model(config: Mapping[str, object]) -> str:
+    primary = str(config["model"])
+    fallback = str(config.get("tool_fallback_model") or "")
+    verified = config.get("verified_tool_models")
+    if fallback and isinstance(verified, (list, tuple)) and fallback in verified:
+        return fallback
+    return primary
+
+
 class ProjectContextResolver:
     def __init__(self, project_roots: Mapping[str, str | Path]) -> None:
         self._roots = {project_id: Path(root).resolve() for project_id, root in project_roots.items()}
@@ -40,11 +66,19 @@ class InferencePlanner:
 
     async def plan(self, context: ContextBundle) -> CapabilityCall | None:
         project_root = self._project_root(context)
+        current_goal = next(
+            (
+                source.content for source in reversed(context.sources)
+                if source.event_type == "agent.goal_registered"
+            ),
+            "",
+        )
         prompt = (
             "Act as a local coding planner. Return one capability call as a JSON object with "
             "capability_id, operation, target_path when needed, and arguments. Return "
             '{"done":true} only when the supplied evidence proves the task is complete. '
             "Do not include markdown or prose.\n\nCONTEXT:\n" + context.text
+            + "\n\nAUTHORITATIVE CURRENT GOAL:\n" + current_goal
         )
         raw = await self._generate(self._model, prompt)
         try:
@@ -53,10 +87,14 @@ class InferencePlanner:
             raise ValueError("planner must return valid capability JSON") from error
         if not isinstance(value, dict):
             raise ValueError("planner must return valid capability JSON")
-        if value.get("done") is True:
+        has_completed_action = any(
+            source.event_type == "agent.action_completed" for source in context.sources
+        )
+        if value.get("done") is True and has_completed_action:
             return None
         try:
-            return CapabilityCall.model_validate({**value, "project_root": project_root})
+            call_value = {key: item for key, item in value.items() if key != "done"}
+            return CapabilityCall.model_validate({**call_value, "project_root": project_root})
         except ValidationError as error:
             raise ValueError("planner must return valid capability JSON") from error
 

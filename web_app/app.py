@@ -34,7 +34,13 @@ from web_app.git_broker import GitBrokerService
 from web_app.git_adapter import GitActionAdapter
 from web_app.core.adapters import CapabilityCall
 from web_app.core.agent_runtime import AgentRuntime
-from web_app.core.agent_services import EventEvidenceVerifier, InferencePlanner, ProjectContextResolver
+from web_app.core.agent_services import (
+    EventEvidenceVerifier,
+    InferencePlanner,
+    ProjectContextResolver,
+    planner_output_schema,
+    select_agent_planner_model,
+)
 from web_app.core.api import create_core_router
 from web_app.core.artifact_store import ArtifactStore
 from web_app.core.assimilation import AssimilationService, FunctionalProbeResult, SkillInstallAdapter
@@ -345,16 +351,11 @@ def create_app(
             async def generate_agent_plan(model: str, prompt: str) -> str:
                 json_chat = getattr(inference_backend, "json_chat", None)
                 if callable(json_chat):
-                    return await json_chat(model, prompt, {
-                        "type": "object",
-                        "properties": {
-                            "done": {"type": "boolean"},
-                            "capability_id": {"type": "string"},
-                            "operation": {"type": "string"},
-                            "target_path": {"type": "string"},
-                            "arguments": {"type": "object"},
-                        },
-                    })
+                    return await json_chat(
+                        model,
+                        prompt,
+                        planner_output_schema(tuple(sorted(adapters))),
+                    )
                 stream_chat = getattr(inference_backend, "stream_chat", None)
                 if callable(stream_chat):
                     async for event in stream_chat(model, prompt):
@@ -374,7 +375,10 @@ def create_app(
                 )
                 return reader.fingerprint(files)
 
-            planner = InferencePlanner(generate_agent_plan, model=str(native_config["model"]))
+            planner = InferencePlanner(
+                generate_agent_plan,
+                model=select_agent_planner_model(native_config),
+            )
             agent_runtime = AgentRuntime(
                 core_tasks,
                 core_service,

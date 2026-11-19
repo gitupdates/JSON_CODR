@@ -67,52 +67,10 @@ class AgentRuntime:
                 self._tasks.append(task_id, TaskEventDraft(event_type="task.cancelled"))
                 return self._tasks.get(task_id)
             if call is None:
-                self._tasks.append(
-                    task_id,
-                    TaskEventDraft(event_type="agent.phase_changed", payload={"phase": "verifying"}),
+                completed = await self._complete_if_verified(
+                    task_id, goal, root_command, context, record_failure=True
                 )
-                report = await self._verifier.verify(goal, self._tasks.get(task_id), context)
-                try:
-                    self._evidence.validate(
-                        report,
-                        goal,
-                        root_command,
-                        current_project_fingerprint=self._project_fingerprint(None),
-                    )
-                except StaleEvidence as error:
-                    self._tasks.append(
-                        task_id,
-                        TaskEventDraft(
-                            event_type="agent.verification_failed",
-                            payload={"reason": str(error), "report_id": report.report_id},
-                        ),
-                    )
-                    return self._tasks.get(task_id)
-                if not report.satisfied:
-                    self._tasks.append(
-                        task_id,
-                        TaskEventDraft(
-                            event_type="agent.verification_failed",
-                            payload=report.model_dump(mode="json"),
-                        ),
-                    )
-                    return self._tasks.get(task_id)
-                self._tasks.append(
-                    task_id,
-                    TaskEventDraft(
-                        event_type="agent.verification_completed",
-                        payload=report.model_dump(mode="json"),
-                    ),
-                )
-                self._tasks.append(
-                    task_id,
-                    TaskEventDraft(
-                        event_type="agent.verified",
-                        payload={"report_id": report.report_id, "goal_revision": goal.revision},
-                    ),
-                )
-                self._tasks.append(task_id, TaskEventDraft(event_type="task.completed"))
-                return self._tasks.get(task_id)
+                return completed or self._tasks.get(task_id)
             call_digest = canonical_digest(call.model_dump(mode="json"))
             project_fingerprint = self._project_fingerprint(call.project_root)
             prior_failures = [
@@ -257,6 +215,64 @@ class AgentRuntime:
                     reader,
                     target_path=target_path if isinstance(target_path, str) else ".",
                 )
+            refreshed_context = self.context.assemble(root.thread_id, task_id, 32_000)
+            completed = await self._complete_if_verified(
+                task_id, goal, root_command, refreshed_context, record_failure=False
+            )
+            if completed is not None:
+                return completed
+
+    async def _complete_if_verified(
+        self, task_id, goal, root_command, context, *, record_failure: bool
+    ):
+        report = await self._verifier.verify(goal, self._tasks.get(task_id), context)
+        try:
+            self._evidence.validate(
+                report,
+                goal,
+                root_command,
+                current_project_fingerprint=self._project_fingerprint(None),
+            )
+        except StaleEvidence as error:
+            if record_failure:
+                self._tasks.append(
+                    task_id,
+                    TaskEventDraft(
+                        event_type="agent.verification_failed",
+                        payload={"reason": str(error), "report_id": report.report_id},
+                    ),
+                )
+            return None
+        if not report.satisfied:
+            if record_failure:
+                self._tasks.append(
+                    task_id,
+                    TaskEventDraft(
+                        event_type="agent.verification_failed",
+                        payload=report.model_dump(mode="json"),
+                    ),
+                )
+            return None
+        self._tasks.append(
+            task_id,
+            TaskEventDraft(event_type="agent.phase_changed", payload={"phase": "verifying"}),
+        )
+        self._tasks.append(
+            task_id,
+            TaskEventDraft(
+                event_type="agent.verification_completed",
+                payload=report.model_dump(mode="json"),
+            ),
+        )
+        self._tasks.append(
+            task_id,
+            TaskEventDraft(
+                event_type="agent.verified",
+                payload={"report_id": report.report_id, "goal_revision": goal.revision},
+            ),
+        )
+        self._tasks.append(task_id, TaskEventDraft(event_type="task.completed"))
+        return self._tasks.get(task_id)
 
     def steer(self, task_id: str, user_input: str):
         return self._tasks.append(task_id, TaskEventDraft(event_type="task.steered", payload={"input": user_input}))
