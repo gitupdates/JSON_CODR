@@ -773,6 +773,16 @@ class WebApiTests(unittest.TestCase):
         self.service.available = False
         self.assertEqual(self.client.get("/api/health").json()["status"], "degraded")
 
+    def test_ollama_health_allows_the_same_slow_local_response_as_model_discovery(self):
+        class SlowLocalClient:
+            async def list(self):
+                await asyncio.sleep(2.1)
+                return {"models": []}
+
+        result = asyncio.run(OllamaService(client=SlowLocalClient()).health())
+
+        self.assertEqual(result, {"ollama": True})
+
     def test_app_construction_does_not_require_optional_integrity_capability(self):
         class MinimalService:
             async def health(self):

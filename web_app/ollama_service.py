@@ -58,7 +58,7 @@ class OllamaService:
 
     async def health(self) -> Dict[str, bool]:
         try:
-            await asyncio.wait_for(self.client.list(), timeout=2)
+            await asyncio.wait_for(self.client.list(), timeout=5)
             return {"ollama": True}
         except Exception:
             return {"ollama": False}
