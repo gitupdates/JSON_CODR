@@ -96,7 +96,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.tasks.close()
         self.temporary.cleanup()
 
-    def create_root_task(self, *, accepted=True):
+    def create_root_task(self, *, accepted=True, project_root=None):
         task_id = str(uuid7())
         goal = GoalSpec(
             goal_id="goal-1", revision=1, objective="Complete the requested coding task",
@@ -106,9 +106,12 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             ),),
             accepted=accepted,
         )
+        payload = {"goal_spec": goal.model_dump(mode="json")}
+        if project_root is not None:
+            payload["project_root"] = str(project_root)
         command = TaskCommand(
             command_id=str(uuid7()), task_id=task_id, thread_id="thread-1", project_id="project-1",
-            command_type="agent.run", payload={"goal_spec": goal.model_dump(mode="json")},
+            command_type="agent.run", payload=payload,
         )
         self.tasks.create(command)
         return task_id
@@ -159,6 +162,30 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("inspect configuration first", context.text)
         self.assertTrue(any(source.kind == "task_event" for source in context.sources))
+
+    async def test_runtime_captures_trusted_project_context_before_planning(self):
+        project = self.root / "project"
+        project.mkdir()
+        (project / "AGENTS.md").write_text("Use project evidence.", encoding="utf-8")
+        (project / "module.py").write_text("PROJECT_FACT = 42\n", encoding="utf-8")
+        verifier = DeterministicVerifier()
+        runtime = AgentRuntime(
+            self.tasks,
+            CoreService(self.tasks, self.policy, {}),
+            ContextService(self.tasks, self.memory),
+            DeterministicPlanner([]),
+            verifier,
+            lambda _root: "sha256:" + "1" * 64,
+        )
+        task_id = self.create_root_task(project_root=project)
+
+        result = await runtime.run(task_id)
+
+        self.assertEqual(result.status, TaskStatus.completed)
+        planned_context = verifier.calls[0][2]
+        self.assertIn("Use project evidence.", planned_context.text)
+        self.assertIn("PROJECT_FACT = 42", planned_context.text)
+        self.assertTrue(any(source.kind == "project_snapshot" for source in planned_context.sources))
 
     async def test_planner_silence_cannot_complete_when_verification_fails(self):
         runtime = AgentRuntime(

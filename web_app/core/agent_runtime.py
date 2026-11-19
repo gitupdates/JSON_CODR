@@ -5,6 +5,7 @@ from uuid import NAMESPACE_URL, uuid5
 from web_app.core.agent_verification import EvidenceResolver, FailureNormalizer, StaleEvidence
 from web_app.core.canonical import canonical_digest
 from web_app.core.contracts import GoalSpec, TaskCommand, TaskEventDraft, TaskStatus
+from web_app.core.project_intelligence import ProjectReader
 
 
 class AgentRuntime:
@@ -43,6 +44,15 @@ class AgentRuntime:
             self._tasks.append(
                 task_id,
                 TaskEventDraft(event_type="agent.phase_changed", payload={"phase": "planning"}),
+            )
+        project_root = root_command.payload.get("project_root")
+        if isinstance(project_root, str) and project_root:
+            target_path = root_command.payload.get("target_path", ".")
+            self.context.capture_project(
+                root.thread_id,
+                task_id,
+                ProjectReader(project_root),
+                target_path=target_path if isinstance(target_path, str) else ".",
             )
         while True:
             root = self._tasks.get(task_id)

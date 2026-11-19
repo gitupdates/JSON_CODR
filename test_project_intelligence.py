@@ -1,6 +1,8 @@
 import os
+import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from web_app.core.project_intelligence import ProjectReader, RepositoryIndex, StaleIndex
@@ -67,6 +69,30 @@ class ProjectIntelligenceTests(unittest.TestCase):
                 index.search(reader, "NotesSearch")
         finally:
             index.close()
+
+    def test_index_records_parser_generation_and_rebuilds_tampered_derived_data(self):
+        database = Path(self.temporary.name) / "repairable-index.sqlite"
+        reader = ProjectReader(self.root)
+        index = RepositoryIndex(database, parser_generation="symbols-v7")
+        first = index.rebuild(reader)
+        index.close()
+        with closing(sqlite3.connect(database)) as connection:
+            connection.execute(
+                "UPDATE repository_files SET content = ? WHERE relative_path = ?",
+                ("tampered derived content", "src/feature/module.py"),
+            )
+            connection.commit()
+        reopened = RepositoryIndex(database, parser_generation="symbols-v7")
+        try:
+            results = reopened.search_rebuilding(reader, "NotesSearch")
+            latest = reopened.latest_generation(reader)
+
+            self.assertEqual(first.parser_generation, "symbols-v7")
+            self.assertEqual(results[0].relative_path, "src/feature/module.py")
+            self.assertGreater(latest.generation, first.generation)
+            self.assertEqual(latest.parser_generation, "symbols-v7")
+        finally:
+            reopened.close()
 
 
 if __name__ == "__main__":

@@ -32,6 +32,7 @@ class IndexGeneration(FrozenContract):
     generation: int = Field(ge=1)
     project_root: str
     project_fingerprint: str
+    parser_generation: str
     created_at: datetime
 
 
@@ -44,6 +45,10 @@ class IndexResult(FrozenContract):
 
 
 class StaleIndex(RuntimeError):
+    pass
+
+
+class CorruptIndex(RuntimeError):
     pass
 
 
@@ -136,12 +141,13 @@ class ProjectReader:
 
 
 class RepositoryIndex:
-    def __init__(self, database: str | Path) -> None:
+    def __init__(self, database: str | Path, *, parser_generation: str = "regex-symbols-v1") -> None:
         path = Path(database)
         path.parent.mkdir(parents=True, exist_ok=True)
         self._connection = sqlite3.connect(path, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
         self._lock = threading.RLock()
+        self.parser_generation = parser_generation
         self._connection.execute("PRAGMA journal_mode = WAL")
         self._connection.executescript(
             """
@@ -149,6 +155,7 @@ class RepositoryIndex:
                 generation INTEGER PRIMARY KEY,
                 project_root TEXT NOT NULL,
                 project_fingerprint TEXT NOT NULL,
+                parser_generation TEXT NOT NULL DEFAULT 'regex-symbols-v1',
                 created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS repository_files (
@@ -161,6 +168,13 @@ class RepositoryIndex:
             );
             """
         )
+        columns = {
+            row["name"] for row in self._connection.execute("PRAGMA table_info(repository_generations)")
+        }
+        if "parser_generation" not in columns:
+            self._connection.execute(
+                "ALTER TABLE repository_generations ADD COLUMN parser_generation TEXT NOT NULL DEFAULT 'regex-symbols-v1'"
+            )
 
     def close(self) -> None:
         self._connection.close()
@@ -177,13 +191,15 @@ class RepositoryIndex:
                 generation=generation_number,
                 project_root=str(reader.root),
                 project_fingerprint=fingerprint,
+                parser_generation=self.parser_generation,
                 created_at=datetime.now(UTC),
             )
             self._connection.execute(
-                "INSERT INTO repository_generations VALUES (?, ?, ?, ?)",
+                "INSERT INTO repository_generations(generation, project_root, project_fingerprint, parser_generation, created_at) VALUES (?, ?, ?, ?, ?)",
                 (
                     generation.generation, generation.project_root,
-                    generation.project_fingerprint, generation.created_at.isoformat(),
+                    generation.project_fingerprint, generation.parser_generation,
+                    generation.created_at.isoformat(),
                 ),
             )
             for item in files:
@@ -201,11 +217,13 @@ class RepositoryIndex:
         if not query.strip():
             return ()
         with self._lock:
-            generation = self._latest_generation()
+            generation = self.latest_generation(reader)
             if generation is None:
                 return ()
-            if generation.project_root != str(reader.root) or generation.project_fingerprint != reader.fingerprint():
+            if generation.project_fingerprint != reader.fingerprint():
                 raise StaleIndex("repository index does not match the current project snapshot")
+            if generation.parser_generation != self.parser_generation:
+                raise StaleIndex("repository index was built by another parser generation")
             rows = self._connection.execute(
                 "SELECT * FROM repository_files WHERE generation = ?",
                 (generation.generation,),
@@ -213,6 +231,9 @@ class RepositoryIndex:
         needle = query.casefold()
         results = []
         for row in rows:
+            actual_digest = f"sha256:{hashlib.sha256(row['content'].encode('utf-8')).hexdigest()}"
+            if actual_digest != row["digest"]:
+                raise CorruptIndex(f"repository index content digest mismatch for {row['relative_path']}")
             haystack = f"{row['relative_path']}\n{row['symbols']}\n{row['content']}".casefold()
             score = haystack.count(needle)
             if score == 0:
@@ -231,14 +252,23 @@ class RepositoryIndex:
         results.sort(key=lambda item: (-item.score, item.relative_path))
         return tuple(results[:limit])
 
-    def _latest_generation(self) -> IndexGeneration | None:
+    def search_rebuilding(self, reader: ProjectReader, query: str, limit: int = 20) -> tuple[IndexResult, ...]:
+        try:
+            return self.search(reader, query, limit)
+        except (CorruptIndex, StaleIndex, sqlite3.DatabaseError):
+            self.rebuild(reader)
+            return self.search(reader, query, limit)
+
+    def latest_generation(self, reader: ProjectReader) -> IndexGeneration | None:
         row = self._connection.execute(
-            "SELECT * FROM repository_generations ORDER BY generation DESC LIMIT 1"
+            "SELECT * FROM repository_generations WHERE project_root = ? ORDER BY generation DESC LIMIT 1",
+            (str(reader.root),),
         ).fetchone()
         if row is None:
             return None
         return IndexGeneration(
             generation=row["generation"], project_root=row["project_root"],
             project_fingerprint=row["project_fingerprint"],
+            parser_generation=row["parser_generation"],
             created_at=datetime.fromisoformat(row["created_at"]),
         )

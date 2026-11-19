@@ -5,6 +5,7 @@ from pathlib import Path
 from web_app.core.context_service import ContextOverflow, ContextService
 from web_app.core.contracts import TaskCommand, TaskEventDraft
 from web_app.core.memory import MemoryStore
+from web_app.core.project_intelligence import ProjectReader
 from web_app.core.store import TaskStore
 
 
@@ -61,6 +62,37 @@ class ContextServiceTests(unittest.TestCase):
 
         with self.assertRaises(ContextOverflow):
             self.context.assemble("thread-1", "parent", 10)
+
+    def test_project_snapshot_is_durable_mandatory_and_deduplicated(self):
+        project = Path(self.temporary.name) / "project"
+        project.mkdir()
+        (project / "AGENTS.md").write_text("Always run the focused tests.", encoding="utf-8")
+        (project / "app.py").write_text("def answer():\n    return 42\n", encoding="utf-8")
+        event = self.tasks.append(
+            "parent",
+            TaskEventDraft(event_type="task.steered", payload={"input": "inspect the project"}),
+        )
+        reader = ProjectReader(project)
+
+        first = self.context.capture_project("thread-1", "parent", reader, target_path="app.py")
+        second = self.context.capture_project("thread-1", "parent", reader, target_path="app.py")
+        reopened = ContextService(self.tasks, self.memory)
+        bundle = reopened.assemble("thread-1", "parent", 20_000)
+
+        self.assertEqual(first.snapshot_id, second.snapshot_id)
+        self.assertEqual(first.through_global_sequence, event.global_sequence)
+        self.assertEqual(
+            len([record for record in self.memory.list("thread-1") if record.kind == "project_context_snapshot"]),
+            1,
+        )
+        instruction = next(source for source in bundle.sources if source.kind == "project_instruction")
+        project_file = next(
+            source for source in bundle.sources
+            if source.kind == "project_file" and source.source_ref.endswith(":file:app.py")
+        )
+        self.assertTrue(instruction.mandatory)
+        self.assertIn("focused tests", instruction.content)
+        self.assertIn("return 42", project_file.content)
 
 
 if __name__ == "__main__":

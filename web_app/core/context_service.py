@@ -5,7 +5,9 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from uuid import uuid7
 
+from web_app.core.canonical import canonical_digest
 from web_app.core.contracts import FrozenContract
+from web_app.core.project_intelligence import ProjectFile, ProjectInstruction, ProjectReader
 
 
 class ContextSource(FrozenContract):
@@ -31,6 +33,18 @@ class CompactionRecord(FrozenContract):
     through_global_sequence: int
     source_refs: tuple[str, ...] = ()
     created_at: datetime
+
+
+class ProjectContextSnapshot(FrozenContract):
+    snapshot_id: str
+    thread_id: str
+    task_id: str
+    project_root: str
+    project_fingerprint: str
+    target_path: str
+    through_global_sequence: int
+    instructions: tuple[ProjectInstruction, ...] = ()
+    files: tuple[ProjectFile, ...] = ()
 
 
 class ContextOverflow(RuntimeError):
@@ -98,6 +112,57 @@ class ContextService:
         )
         return record
 
+    def capture_project(
+        self,
+        thread_id: str,
+        task_id: str,
+        reader: ProjectReader,
+        *,
+        target_path: str = ".",
+    ) -> ProjectContextSnapshot:
+        events = self._tasks.thread_events(thread_id)
+        through = max((event.global_sequence for event in events), default=-1)
+        instructions = reader.instructions_for(target_path)
+        files = reader.files()
+        material = {
+            "thread_id": thread_id,
+            "task_id": task_id,
+            "project_root": str(reader.root),
+            "project_fingerprint": reader.fingerprint(),
+            "target_path": target_path,
+            "through_global_sequence": through,
+            "instructions": [item.model_dump(mode="json") for item in instructions],
+            "files": [
+                {"relative_path": item.relative_path, "digest": item.digest, "size": item.size}
+                for item in files
+            ],
+        }
+        snapshot_id = canonical_digest(material)
+        for record in self._memory.list(thread_id):
+            if record.kind != "project_context_snapshot":
+                continue
+            existing = ProjectContextSnapshot.model_validate_json(record.content)
+            if existing.snapshot_id == snapshot_id:
+                return existing
+        snapshot = ProjectContextSnapshot(
+            snapshot_id=snapshot_id,
+            thread_id=thread_id,
+            task_id=task_id,
+            project_root=str(reader.root),
+            project_fingerprint=material["project_fingerprint"],
+            target_path=target_path,
+            through_global_sequence=through,
+            instructions=instructions,
+            files=files,
+        )
+        self._memory.add(
+            thread_id,
+            "project_context_snapshot",
+            snapshot.model_dump_json(),
+            source_ref=f"project-snapshot:{snapshot.snapshot_id}",
+        )
+        return snapshot
+
     def _sources(self, thread_id: str) -> Iterable[ContextSource]:
         compaction = self._latest_compaction(thread_id)
         compacted_refs = set() if compaction is None else set(compaction.source_refs)
@@ -131,6 +196,44 @@ class ContextService:
                 )
         for record in self._memory.list(thread_id):
             if record.kind == "context_compaction" or record.source_ref in compacted_refs:
+                continue
+            if record.kind == "project_context_snapshot":
+                snapshot = ProjectContextSnapshot.model_validate_json(record.content)
+                snapshot_ref = f"project-snapshot:{snapshot.snapshot_id}"
+                if snapshot_ref not in compacted_refs:
+                    yield ContextSource(
+                        kind="project_snapshot",
+                        source_ref=snapshot_ref,
+                        content=json.dumps(
+                            {
+                                "project_root": snapshot.project_root,
+                                "project_fingerprint": snapshot.project_fingerprint,
+                                "through_global_sequence": snapshot.through_global_sequence,
+                            },
+                            sort_keys=True,
+                        ),
+                        global_sequence=snapshot.through_global_sequence,
+                        mandatory=True,
+                    )
+                for instruction in snapshot.instructions:
+                    source_ref = f"{snapshot_ref}:instruction:{instruction.relative_path}"
+                    if source_ref not in compacted_refs:
+                        yield ContextSource(
+                            kind="project_instruction",
+                            source_ref=source_ref,
+                            content=instruction.content,
+                            global_sequence=snapshot.through_global_sequence,
+                            mandatory=True,
+                        )
+                for project_file in snapshot.files:
+                    source_ref = f"{snapshot_ref}:file:{project_file.relative_path}"
+                    if source_ref not in compacted_refs:
+                        yield ContextSource(
+                            kind="project_file",
+                            source_ref=source_ref,
+                            content=project_file.content,
+                            global_sequence=snapshot.through_global_sequence,
+                        )
                 continue
             yield ContextSource(kind=record.kind, source_ref=record.source_ref, content=record.content)
 
