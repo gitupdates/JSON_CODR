@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 
 from web_app.core.adapters import AdapterEvent, CapabilityAdapter, CapabilityCall, CapabilityExecutionError, ExecutionContext
 from web_app.core.contracts import JsonValue, TaskCommand, TaskEvent, TaskEventDraft, TaskRecord, TaskStatus
@@ -21,11 +21,13 @@ class CoreService:
         adapters: Mapping[str, CapabilityAdapter],
         *,
         restore_checkpoint: Callable[[str], object] | None = None,
+        agent_runner: Callable[[str], Awaitable[TaskRecord]] | None = None,
     ) -> None:
         self._tasks = task_store
         self._policy = policy
         self._adapters = dict(adapters)
         self._restore_checkpoint = restore_checkpoint
+        self._agent_runner = agent_runner
         self._submission_lock = asyncio.Lock()
         self._runs: dict[str, asyncio.Task[None]] = {}
         self._event_signals: dict[str, asyncio.Event] = {}
@@ -46,6 +48,20 @@ class CoreService:
             record = self._tasks.create(command)
             if record.status is not TaskStatus.pending or len(record.events) > 1:
                 return record
+            if command.command_type == "agent.run":
+                if self._agent_runner is None:
+                    self._append(
+                        command.task_id,
+                        TaskEventDraft(event_type="task.failed", payload={"reason": "agent runtime unavailable"}),
+                    )
+                    return self._tasks.get(command.task_id)
+                self._append(command.task_id, TaskEventDraft(event_type="task.started"))
+                run = asyncio.create_task(
+                    self._execute_agent(command.task_id), name=f"json-codr-agent-{command.task_id}"
+                )
+                self._runs[command.task_id] = run
+                run.add_done_callback(lambda _task, task_id=command.task_id: self._runs.pop(task_id, None))
+                return self._tasks.get(command.task_id)
             try:
                 call = CapabilityCall.model_validate(command.model_dump(mode="json")["payload"])
                 decision = self._policy.evaluate(principal, command.project_id, call)
@@ -95,6 +111,19 @@ class CoreService:
                     TaskEventDraft(event_type="task.failed", payload={"reason": "capability execution failed"}),
                 )
             return self._tasks.get(command.task_id)
+
+    async def _execute_agent(self, task_id: str) -> None:
+        try:
+            await self._agent_runner(task_id)
+        except Exception:
+            logger.exception("Agent execution failed", extra={"task_id": task_id})
+            if self._tasks.get(task_id).status not in {
+                TaskStatus.completed, TaskStatus.failed, TaskStatus.cancelled, TaskStatus.interrupted,
+            }:
+                self._append(
+                    task_id,
+                    TaskEventDraft(event_type="task.failed", payload={"reason": "agent execution failed"}),
+                )
 
     async def _execute(self, task_id: str, adapter, call: CapabilityCall, context: ExecutionContext) -> None:
         try:

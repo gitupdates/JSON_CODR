@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 
 from web_app.core.adapters import AdapterEvent, CapabilityCall, ExecutionContext
-from web_app.core.contracts import TaskCommand, TaskStatus
+from web_app.core.contracts import TaskCommand, TaskEventDraft, TaskStatus
 from web_app.core.policy import PolicyEffect, PolicyService
 from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
@@ -122,6 +122,44 @@ class CoreServiceTests(unittest.IsolatedAsyncioTestCase):
                 "credential_refs": ["credential:github"],
             },
         )
+
+    def agent_command(self, task_id: str = "agent-task", command_id: str = "agent-command") -> TaskCommand:
+        return TaskCommand(
+            task_id=task_id,
+            command_id=command_id,
+            thread_id="thread-1",
+            project_id="project-1",
+            command_type="agent.run",
+            payload={"goal_spec": {}},
+        )
+
+    async def test_agent_command_uses_runner_once_and_replay_is_idempotent(self):
+        calls = []
+
+        async def run_agent(task_id):
+            calls.append(task_id)
+            self.store.append(task_id, TaskEventDraft(event_type="task.completed"))
+            return self.store.get(task_id)
+
+        service = CoreService(self.store, self.policy, {}, agent_runner=run_agent)
+
+        first = await service.submit(self.agent_command())
+        second = await service.submit(self.agent_command())
+
+        self.assertEqual(first.status, TaskStatus.completed)
+        self.assertEqual(second.status, TaskStatus.completed)
+        self.assertEqual(calls, ["agent-task"])
+
+    async def test_missing_agent_runner_fails_only_agent_task(self):
+        adapter = RecordingAdapter()
+        service = CoreService(self.store, self.policy, {"project.read": adapter})
+
+        agent = await service.submit(self.agent_command())
+        direct = await service.submit(self.command(task_id="direct-task", command_id="direct-command"))
+
+        self.assertEqual(agent.status, TaskStatus.failed)
+        self.assertEqual(agent.events[-1].payload.get("reason"), "agent runtime unavailable")
+        self.assertEqual(direct.status, TaskStatus.completed)
 
     async def test_submit_executes_once_per_idempotency_key_and_redacts_credentials(self):
         adapter = RecordingAdapter()
