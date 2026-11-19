@@ -223,6 +223,7 @@ class PlannedStep(VersionedContract):
     capability_id: str = Field(pattern=r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
     operation: str = Field(min_length=1, max_length=256)
     arguments: Mapping[str, JsonValue] = Field(default_factory=dict)
+    depends_on: tuple[Identifier, ...] = ()
 
     @field_validator("arguments", mode="after")
     @classmethod
@@ -249,6 +250,14 @@ class PlanRevision(VersionedContract):
             raise ValueError("step identifiers must be unique")
         if any(item.plan_id != self.plan_id or item.plan_revision != self.revision for item in self.steps):
             raise ValueError("steps must belong to this plan revision")
+        positions = {item.step_id: index for index, item in enumerate(self.steps)}
+        for index, item in enumerate(self.steps):
+            if item.step_id in item.depends_on:
+                raise ValueError("step cannot depend on itself")
+            if any(dependency not in positions for dependency in item.depends_on):
+                raise ValueError("step dependency is missing from the plan")
+            if any(positions[dependency] >= index for dependency in item.depends_on):
+                raise ValueError("step dependencies must refer to earlier ordered steps")
         return self
 
 

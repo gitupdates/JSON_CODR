@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping, Sequence
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from web_app.core.artifact_store import ArtifactStore
-from web_app.core.contracts import TaskCommand, TaskStatus
+from web_app.core.contracts import PlanRevision, PlannedStep, TaskCommand, TaskEventDraft, TaskStatus
+from web_app.core.store import ConcurrencyConflict
 from web_app.core.policy import PolicyService
 from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
@@ -40,6 +41,22 @@ class TaskApprovalRequest(BaseModel):
 class ComponentInstallApproval(BaseModel):
     model_config = ConfigDict(extra="forbid")
     approved_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
+class PlanRevisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int | None = Field(default=None, ge=1)
+    action: Literal["approve", "edit", "revise", "reject", "request_changes"]
+    plan: PlanRevision | None = None
+    reason: str | None = Field(default=None, max_length=4096)
+
+
+class StepRevisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+    action: Literal["approve", "edit", "revise", "reject", "request_changes"]
+    step: PlannedStep | None = None
+    reason: str | None = Field(default=None, max_length=4096)
 
 
 def create_core_router(
@@ -116,6 +133,65 @@ def create_core_router(
             return runtime()[0].subscribe(task_id, after_sequence)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="task not found") from error
+
+    @router.get("/api/tasks/{task_id}/plans/{plan_id}")
+    def get_plan_revisions(task_id: str, plan_id: str):
+        return runtime()[1].plan_revisions(task_id, plan_id)
+
+    @router.post("/api/tasks/{task_id}/plans/{plan_id}/revise")
+    def revise_plan(task_id: str, plan_id: str, request: PlanRevisionRequest):
+        store = runtime()[1]
+        if request.action in {"reject", "request_changes"}:
+            return store.append(task_id, TaskEventDraft(
+                event_type=f"agent.plan_{request.action}",
+                payload={"plan_id": plan_id, "expected_revision": request.expected_revision, "reason": request.reason},
+            ))
+        if request.plan is None or request.plan.plan_id != plan_id:
+            raise HTTPException(status_code=422, detail="matching plan revision is required")
+        try:
+            saved = store.save_plan_revision(task_id, request.plan, expected_revision=request.expected_revision)
+        except ConcurrencyConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        store.append(task_id, TaskEventDraft(
+            event_type=f"agent.plan_{request.action}",
+            payload={"plan_id": plan_id, "revision": saved.revision},
+        ))
+        return saved
+
+    @router.post("/api/tasks/{task_id}/plans/{plan_id}/steps/{step_id}/revise")
+    def revise_step(task_id: str, plan_id: str, step_id: str, request: StepRevisionRequest):
+        store = runtime()[1]
+        current = store.latest_plan(task_id, plan_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="plan not found")
+        if current.revision != request.expected_revision:
+            raise HTTPException(status_code=409, detail="plan revision is stale")
+        if request.action in {"reject", "request_changes"}:
+            return store.append(task_id, TaskEventDraft(
+                event_type=f"agent.step_{request.action}",
+                payload={"plan_id": plan_id, "step_id": step_id, "revision": current.revision, "reason": request.reason},
+            ))
+        if request.step is None or request.step.step_id != step_id:
+            raise HTTPException(status_code=422, detail="matching step revision is required")
+        next_revision = current.revision + 1
+        replacement = request.step.model_copy(update={"plan_id": plan_id, "plan_revision": next_revision})
+        steps = tuple(
+            replacement if item.step_id == step_id else item.model_copy(update={"plan_revision": next_revision})
+            for item in current.steps
+        )
+        if not any(item.step_id == step_id for item in current.steps):
+            raise HTTPException(status_code=404, detail="step not found")
+        revised = PlanRevision(
+            plan_id=plan_id, revision=next_revision, goal_id=current.goal_id,
+            goal_revision=current.goal_revision, steps=steps,
+        )
+        store.save_plan_revision(task_id, revised, expected_revision=current.revision)
+        store.append(task_id, TaskEventDraft(
+            event_type=f"agent.step_{request.action}",
+            payload={"plan_id": plan_id, "step_id": step_id, "revision": next_revision,
+                     "invalidated_steps": [item.step_id for item in steps if step_id in item.depends_on]},
+        ))
+        return revised
 
     @router.post("/api/tasks/{task_id}/steer")
     def steer_task(task_id: str, request: SteeringRequest):

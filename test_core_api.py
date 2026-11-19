@@ -172,6 +172,37 @@ class CoreApiTests(unittest.TestCase):
         self.assertEqual(status.json()["health"], "healthy")
         self.assertEqual(status.json()["telemetry"][0]["kind"], "runtime.started")
 
+    def test_plan_and_step_revisions_are_editable_rejectable_and_stale_safe(self):
+        self.client.post("/api/tasks", json=self.command())
+        plan = {
+            "schema_version": "1", "plan_id": "plan-1", "revision": 1,
+            "goal_id": "goal-1", "goal_revision": 1,
+            "steps": [{
+                "schema_version": "1", "step_id": "step-1", "plan_id": "plan-1",
+                "plan_revision": 1, "criterion_ids": ["criterion-1"],
+                "capability_id": "project.read", "operation": "read", "arguments": {},
+                "depends_on": [],
+            }],
+        }
+        created = self.client.post(
+            "/api/tasks/task-1/plans/plan-1/revise",
+            json={"expected_revision": None, "action": "edit", "plan": plan},
+        )
+        step = {**plan["steps"][0], "operation": "search"}
+        revised = self.client.post(
+            "/api/tasks/task-1/plans/plan-1/steps/step-1/revise",
+            json={"expected_revision": 1, "action": "edit", "step": step},
+        )
+        stale = self.client.post(
+            "/api/tasks/task-1/plans/plan-1/steps/step-1/revise",
+            json={"expected_revision": 1, "action": "reject", "reason": "change it"},
+        )
+        self.assertEqual(created.status_code, 200)
+        self.assertEqual(revised.json()["revision"], 2)
+        self.assertEqual(revised.json()["steps"][0]["operation"], "search")
+        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(len(self.client.get("/api/tasks/task-1/plans/plan-1").json()), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,6 +13,7 @@ from web_app.core.contracts import (
     EffectIntent,
     EffectIntentDraft,
     EffectState,
+    PlanRevision,
     TaskCommand,
     TaskEvent,
     TaskEventDraft,
@@ -105,6 +106,14 @@ class TaskStore:
                 child_command_id TEXT NOT NULL,
                 step_event_sequence INTEGER NOT NULL,
                 PRIMARY KEY(parent_task_id, plan_id, plan_revision, step_id)
+            );
+            CREATE TABLE IF NOT EXISTS plan_revisions (
+                parent_task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+                plan_id TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                plan_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(parent_task_id, plan_id, revision)
             );
             CREATE TABLE IF NOT EXISTS effects (
                 task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
@@ -261,6 +270,43 @@ class TaskStore:
     def create(self, command: TaskCommand) -> TaskRecord:
         with self._transaction():
             return self._create_unlocked(command)
+
+    def save_plan_revision(
+        self,
+        parent_task_id: str,
+        plan: PlanRevision,
+        *,
+        expected_revision: int | None = None,
+    ) -> PlanRevision:
+        with self._transaction():
+            self._get_unlocked(parent_task_id)
+            row = self._connection.execute(
+                "SELECT MAX(revision) AS revision FROM plan_revisions WHERE parent_task_id = ? AND plan_id = ?",
+                (parent_task_id, plan.plan_id),
+            ).fetchone()
+            current = None if row is None or row["revision"] is None else int(row["revision"])
+            if expected_revision != current:
+                raise ConcurrencyConflict(f"expected plan revision {expected_revision}, found {current}")
+            expected_next = 1 if current is None else current + 1
+            if plan.revision != expected_next:
+                raise ValueError(f"next plan revision must be {expected_next}")
+            self._connection.execute(
+                "INSERT INTO plan_revisions VALUES (?, ?, ?, ?, ?)",
+                (parent_task_id, plan.plan_id, plan.revision, plan.model_dump_json(), datetime.now(UTC).isoformat()),
+            )
+        return plan
+
+    def plan_revisions(self, parent_task_id: str, plan_id: str) -> tuple[PlanRevision, ...]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT plan_json FROM plan_revisions WHERE parent_task_id = ? AND plan_id = ? ORDER BY revision",
+                (parent_task_id, plan_id),
+            ).fetchall()
+        return tuple(PlanRevision.model_validate_json(row["plan_json"]) for row in rows)
+
+    def latest_plan(self, parent_task_id: str, plan_id: str) -> PlanRevision | None:
+        revisions = self.plan_revisions(parent_task_id, plan_id)
+        return None if not revisions else revisions[-1]
 
     def plan_step_and_create_child(
         self,
