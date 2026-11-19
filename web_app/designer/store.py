@@ -14,7 +14,8 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict
 
 from web_app.core.canonical import canonical_digest
-from web_app.designer.contracts import DesignDocument, DesignNode, DesignPage
+from web_app.designer.contracts import DesignDocument
+from web_app.designer.templates import create_template
 
 
 _PROJECT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
@@ -48,14 +49,7 @@ class DesignerStore:
         self._replace_file = replace_file
 
     def create_project(self, template_id: str, name: str) -> DesignDocument:
-        project_id = f"design-{uuid4().hex}"
-        document = DesignDocument(
-            project_id=project_id,
-            name=name,
-            pages=(DesignPage(page_id="home", slug="home", root_node_id="root"),),
-            nodes=(DesignNode(node_id="root", component_type="container"),),
-            metadata={"template_id": template_id},
-        )
+        document = create_template(template_id, name)
         self._initialize_project(document)
         return document
 

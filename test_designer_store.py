@@ -35,6 +35,12 @@ class DesignerStoreTests(unittest.TestCase):
             (self.root / "designer" / "projects").resolve(),
         )
 
+    def test_create_uses_the_requested_registered_template(self):
+        created = self.store.create_project("dashboard", "Operations")
+
+        self.assertEqual(created.metadata["template_id"], "dashboard")
+        self.assertIn("table", {node.component_type for node in created.nodes})
+
     def test_revision_is_parent_linked_immutable_and_requires_current_digest(self):
         created = self.store.create_project("blank", "First")
         first_revision = self.store.list_revisions(created.project_id)[0]
