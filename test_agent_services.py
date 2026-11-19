@@ -1,0 +1,87 @@
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from web_app.core.agent_services import InferencePlanner, ProjectContextResolver
+from web_app.core.context_service import ContextBundle, ContextSource
+from web_app.core.contracts import TaskCommand
+
+
+class AgentServicesTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name) / "project"
+        self.root.mkdir()
+        (self.root / "app.py").write_text("answer = 42\n", encoding="utf-8")
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def command(self, project_id="project-1", payload=None):
+        return TaskCommand(
+            command_id="command-1", task_id="task-1", thread_id="thread-1",
+            project_id=project_id, command_type="agent.run", payload=payload or {},
+        )
+
+    def test_project_resolver_uses_registered_root_and_ignores_payload_root(self):
+        attacker = Path(self.temporary.name) / "attacker"
+        attacker.mkdir()
+        resolver = ProjectContextResolver({"project-1": self.root})
+
+        reader, target = resolver.resolve(self.command(payload={"project_root": str(attacker), "target_path": "app.py"}))
+
+        self.assertEqual(reader.root, self.root.resolve())
+        self.assertEqual(target, "app.py")
+
+    def test_project_resolver_rejects_unknown_project(self):
+        resolver = ProjectContextResolver({"project-1": self.root})
+
+        with self.assertRaisesRegex(KeyError, "project is not registered"):
+            resolver.resolve(self.command(project_id="missing"))
+
+    async def test_planner_validates_model_json_and_overrides_project_root(self):
+        async def generate(model, prompt):
+            self.assertEqual(model, "local-model")
+            self.assertIn("Return one capability call", prompt)
+            return json.dumps({
+                "capability_id": "project.read", "operation": "read",
+                "project_root": "C:/untrusted", "target_path": "app.py",
+            })
+
+        planner = InferencePlanner(generate, model="local-model")
+        context = ContextBundle(
+            thread_id="thread-1", task_id="task-1", text="inspect app.py",
+            sources=(ContextSource(
+                kind="project_snapshot", source_ref="snapshot", mandatory=True,
+                content=json.dumps({"project_root": str(self.root.resolve())}),
+            ),),
+        )
+
+        call = await planner.plan(context)
+
+        self.assertEqual(call.project_root, str(self.root.resolve()))
+        self.assertEqual(call.capability_id, "project.read")
+
+    async def test_planner_returns_none_for_done_and_rejects_invalid_output(self):
+        async def done(_model, _prompt):
+            return json.dumps({"done": True})
+
+        context = ContextBundle(
+            thread_id="thread-1", task_id="task-1", text="done",
+            sources=(ContextSource(
+                kind="project_snapshot", source_ref="snapshot", mandatory=True,
+                content=json.dumps({"project_root": str(self.root.resolve())}),
+            ),),
+        )
+        self.assertIsNone(await InferencePlanner(done, model="local-model").plan(context))
+
+        async def invalid(_model, _prompt):
+            return "not-json"
+
+        with self.assertRaisesRegex(ValueError, "valid capability JSON"):
+            await InferencePlanner(invalid, model="local-model").plan(context)
+
+
+if __name__ == "__main__":
+    unittest.main()
