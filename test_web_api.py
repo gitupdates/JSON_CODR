@@ -252,7 +252,10 @@ class WebApiTests(unittest.TestCase):
             with TestClient(create_app(FakeService(), workspace)) as client:
                 capabilities = client.get("/api/capabilities").json()
 
-            self.assertIn({"capability_id": "mcp.rea"}, capabilities)
+            self.assertTrue(any(
+                item["capability_id"] == "mcp.rea" and item["available"]
+                for item in capabilities
+            ))
 
     def test_local_analysis_tools_are_loaded_for_sandbox_sessions(self):
         tools = self.workspace.data_root / "tools"

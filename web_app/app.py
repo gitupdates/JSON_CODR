@@ -61,6 +61,9 @@ from web_app.core.store import TaskStore
 from web_app.core.component_manager import ComponentManager
 from web_app.core.component_catalog import active_component_command
 from web_app.core.component_adapter import LazyComponentExecutionAdapter
+from web_app.core.capability_catalog import CapabilityCatalog, CapabilityDefinition, lifecycle_definitions
+from web_app.core.capability_discovery import discover_project_profile
+from web_app.core.canonical import canonical_digest
 from web_app.core.terminal_adapter import TerminalAdapter
 from web_app.dependencies import DependencyService
 from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
@@ -403,7 +406,26 @@ def create_app(
                 project_reader_resolver=resolver.resolve,
             )
             application.state.agent_runtime = agent_runtime
-            core_capabilities = tuple({"capability_id": capability_id} for capability_id in sorted(adapters))
+            definitions = list(lifecycle_definitions())
+            defined_ids = {item.capability_id for item in definitions}
+            for capability_id in sorted(set(adapters) - defined_ids):
+                definitions.append(CapabilityDefinition(
+                    capability_id=capability_id, version="1",
+                    description=f"Extension capability {capability_id}",
+                    input_schema={"type": "object"}, effect_class="extension",
+                    approval_class="exact", rollback_class="adapter",
+                    adapter_id=capability_id,
+                    adapter_digest=canonical_digest({"adapter": capability_id, "version": "1"}),
+                ))
+            capability_catalog = CapabilityCatalog(definitions, probed_adapters=set(adapters))
+            project_profile = discover_project_profile(project_root)
+            application.state.core_capability_catalog = capability_catalog
+            application.state.core_project_profile = project_profile
+            core_capabilities = tuple({
+                **item.definition.model_dump(mode="json"),
+                "available": item.available,
+                "reasons": item.reasons,
+            } for item in capability_catalog.list_for_project(set(project_profile.kinds)))
             core_runtime = (core_service, core_tasks, core_policy)
             application.state.core_service = core_service
             application.state.core_task_store = core_tasks
