@@ -2,13 +2,22 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid7
 
 from pydantic import ValidationError
 
 from web_app.core.adapters import CapabilityCall
 from web_app.core.context_service import ContextBundle
-from web_app.core.contracts import TaskCommand
+from web_app.core.contracts import (
+    CriterionStatus,
+    EvidenceRef,
+    GoalSpec,
+    TaskCommand,
+    TaskRecord,
+    VerificationReport,
+)
 from web_app.core.project_intelligence import ProjectReader
 
 
@@ -64,3 +73,51 @@ class InferencePlanner:
             if isinstance(root, str) and root:
                 return root
         raise ValueError("trusted project snapshot is unavailable")
+
+
+class EventEvidenceVerifier:
+    async def verify(
+        self, goal: GoalSpec, task: TaskRecord, context: ContextBundle
+    ) -> VerificationReport:
+        fingerprint = self._project_fingerprint(context)
+        completed = [event for event in task.events if event.event_type == "agent.action_completed"]
+        passed = bool(completed)
+        results = {
+            criterion.criterion_id: CriterionStatus.passed if passed else CriterionStatus.failed
+            for criterion in goal.criteria
+        }
+        evidence = ()
+        if passed:
+            source = completed[-1]
+            child = source.payload.get("child_task_id", "unknown")
+            observed_at = datetime.now(UTC)
+            evidence = tuple(
+                EvidenceRef(
+                    evidence_id=str(uuid7()), task_id=task.task_id, project_id=task.project_id,
+                    goal_id=goal.goal_id, goal_revision=goal.revision,
+                    criterion_id=criterion.criterion_id,
+                    source_ref=f"task:{task.task_id}:child:{child}",
+                    project_fingerprint=fingerprint, observed_at=observed_at,
+                )
+                for criterion in goal.criteria
+            )
+        return VerificationReport(
+            report_id=str(uuid7()), task_id=task.task_id, project_id=task.project_id,
+            goal_id=goal.goal_id, goal_revision=goal.revision,
+            expected_criterion_ids=tuple(item.criterion_id for item in goal.criteria),
+            results=results, evidence=evidence, verified_at=datetime.now(UTC),
+        )
+
+    @staticmethod
+    def _project_fingerprint(context: ContextBundle) -> str:
+        for source in reversed(context.sources):
+            if source.kind != "project_snapshot":
+                continue
+            try:
+                value = json.loads(source.content)
+            except json.JSONDecodeError:
+                continue
+            fingerprint = value.get("project_fingerprint") if isinstance(value, dict) else None
+            if isinstance(fingerprint, str) and fingerprint:
+                return fingerprint
+        raise ValueError("trusted project fingerprint is unavailable")

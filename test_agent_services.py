@@ -3,9 +3,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_app.core.agent_services import InferencePlanner, ProjectContextResolver
+from web_app.core.agent_services import EventEvidenceVerifier, InferencePlanner, ProjectContextResolver
 from web_app.core.context_service import ContextBundle, ContextSource
-from web_app.core.contracts import TaskCommand
+from web_app.core.contracts import CompletionCriterion, CriterionKind, GoalSpec, TaskCommand, TaskEventDraft
+from web_app.core.store import TaskStore
 
 
 class AgentServicesTests(unittest.IsolatedAsyncioTestCase):
@@ -81,6 +82,41 @@ class AgentServicesTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(ValueError, "valid capability JSON"):
             await InferencePlanner(invalid, model="local-model").plan(context)
+
+    async def test_verifier_uses_persisted_action_evidence_not_model_claims(self):
+        store = TaskStore(Path(self.temporary.name) / "tasks.sqlite")
+        try:
+            command = self.command()
+            store.create(command)
+            store.append("task-1", TaskEventDraft(event_type="task.started"))
+            store.append("task-1", TaskEventDraft(
+                event_type="agent.action_completed", payload={"child_task_id": "child-1"},
+            ))
+            goal = GoalSpec(
+                goal_id="goal-1", revision=1, objective="inspect project", accepted=True,
+                criteria=(CompletionCriterion(
+                    criterion_id="criterion-1", kind=CriterionKind.project_state,
+                    description="project action completed",
+                ),),
+            )
+            context = ContextBundle(
+                thread_id="thread-1", task_id="task-1", text="evidence",
+                sources=(ContextSource(
+                    kind="project_snapshot", source_ref="snapshot", mandatory=True,
+                    content=json.dumps({
+                        "project_root": str(self.root.resolve()),
+                        "project_fingerprint": "sha256:" + "1" * 64,
+                    }),
+                ),),
+            )
+
+            report = await EventEvidenceVerifier().verify(goal, store.get("task-1"), context)
+
+            self.assertTrue(report.satisfied)
+            self.assertEqual(report.evidence[0].source_ref, "task:task-1:child:child-1")
+            self.assertEqual(report.evidence[0].project_fingerprint, "sha256:" + "1" * 64)
+        finally:
+            store.close()
 
 
 if __name__ == "__main__":

@@ -33,15 +33,20 @@ from web_app.coding_agents import CodingAgentService
 from web_app.git_broker import GitBrokerService
 from web_app.git_adapter import GitActionAdapter
 from web_app.core.adapters import CapabilityCall
+from web_app.core.agent_runtime import AgentRuntime
+from web_app.core.agent_services import EventEvidenceVerifier, InferencePlanner, ProjectContextResolver
 from web_app.core.api import create_core_router
 from web_app.core.artifact_store import ArtifactStore
 from web_app.core.assimilation import AssimilationService, FunctionalProbeResult, SkillInstallAdapter
 from web_app.core.contracts import TaskCommand, TaskStatus
 from web_app.core.git_adapter import GitExecutionAdapter
 from web_app.core.inference_adapter import InferenceAdapter
+from web_app.core.context_service import ContextService
+from web_app.core.memory import MemoryStore
 from web_app.core.mcp_stdio_backend import build_mcp_adapters
 from web_app.core.policy import PolicyService
 from web_app.core.project_adapter import ProjectAdapter
+from web_app.core.project_intelligence import ProjectReader
 from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
 from web_app.core.component_manager import ComponentManager
@@ -207,6 +212,7 @@ def create_app(
     git_adapter = GitActionAdapter(verification_checks=git_broker.verification_checks)
     git_broker.recover_interrupted_tasks()
     core_runtime = None
+    core_memory = None
     core_artifacts = None
     core_capabilities = ()
     core_mcp_backends = []
@@ -233,7 +239,7 @@ def create_app(
         raise ValueError("Unsupported skill source")
 
     def get_core_runtime():
-        nonlocal core_runtime, core_capabilities
+        nonlocal core_runtime, core_capabilities, core_memory
         if core_runtime is None:
             core_root = workspace.data_root / "core"
             core_tasks = TaskStore(core_root / "tasks.sqlite")
@@ -317,12 +323,39 @@ def create_app(
             )
             adapters.update(mcp_adapters)
             core_mcp_backends.extend(mcp_backends)
+            agent_runtime = None
+
+            async def run_agent(task_id: str):
+                if agent_runtime is None:
+                    raise RuntimeError("agent runtime is not initialized")
+                return await agent_runtime.run(task_id)
+
             core_service = CoreService(
                 core_tasks,
                 core_policy,
                 adapters,
                 restore_checkpoint=core_project_adapter.restore,
+                agent_runner=run_agent,
             )
+            project_root = Path(__file__).resolve().parent.parent
+            resolver = ProjectContextResolver({"legacy": project_root})
+            core_memory = MemoryStore(core_root / "memory.sqlite")
+            application.state.core_memory = core_memory
+
+            async def generate_agent_plan(model: str, prompt: str) -> str:
+                return (await service.chat(model, prompt)).content
+
+            planner = InferencePlanner(generate_agent_plan, model=str(native_config["model"]))
+            agent_runtime = AgentRuntime(
+                core_tasks,
+                core_service,
+                ContextService(core_tasks, core_memory),
+                planner,
+                EventEvidenceVerifier(),
+                lambda root: ProjectReader(root or project_root).fingerprint(),
+                project_reader_resolver=resolver.resolve,
+            )
+            application.state.agent_runtime = agent_runtime
             core_capabilities = tuple({"capability_id": capability_id} for capability_id in sorted(adapters))
             core_runtime = (core_service, core_tasks, core_policy)
             application.state.core_service = core_service
@@ -346,6 +379,8 @@ def create_app(
                 core_artifacts.close()
             core_policy.close()
             core_tasks.close()
+            if core_memory is not None:
+                core_memory.close()
 
     application.router.add_event_handler("shutdown", close_core_runtime)
     application.include_router(

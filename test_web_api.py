@@ -741,10 +741,13 @@ class WebApiTests(unittest.TestCase):
         for client in self._core_clients:
             policy = getattr(client.app.state, "core_policy", None)
             task_store = getattr(client.app.state, "core_task_store", None)
+            memory = getattr(client.app.state, "core_memory", None)
             if policy is not None:
                 policy.close()
             if task_store is not None:
                 task_store.close()
+            if memory is not None:
+                memory.close()
         self.temporary_directory.cleanup()
 
     def test_sessions_create_reopen_and_delete(self):
@@ -1116,6 +1119,47 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("ACTIVE SKILLS AND REFERENCE CONTEXT:", self.service.last_prompt)
         self.assertIn("old-evidence.txt", self.service.last_prompt)
         self.assertIn("Keep facts from supplied context distinct", self.service.last_prompt)
+
+    def test_production_agent_run_uses_core_service_and_verified_project_action(self):
+        class PlannerService(FakeService):
+            def __init__(self):
+                super().__init__()
+                self.plans = 0
+
+            async def chat(self, model, prompt, images=None):
+                if "Return one capability call" not in prompt:
+                    return await super().chat(model, prompt, images)
+                self.plans += 1
+                content = (
+                    json.dumps({
+                        "capability_id": "project.read", "operation": "read",
+                        "project_root": "C:/untrusted", "target_path": "README.md",
+                    })
+                    if self.plans == 1 else json.dumps({"done": True})
+                )
+                return ChatResult(model=model, status="success", summary="plan", content=content)
+
+        client = self.track_core_client(TestClient(create_app(PlannerService(), self.workspace)))
+        response = client.post("/api/tasks", json={
+            "schema_version": "1", "command_id": "agent-command", "task_id": "agent-task",
+            "thread_id": "agent-thread", "project_id": "legacy", "command_type": "agent.run",
+            "payload": {"goal_spec": {
+                "schema_version": "1", "goal_id": "goal-1", "revision": 1,
+                "objective": "Read the project README", "accepted": True,
+                "criteria": [{
+                    "schema_version": "1", "criterion_id": "read-completed",
+                    "kind": "project_state", "description": "README was read through the project adapter",
+                    "parameters": {},
+                }],
+            }},
+        })
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "completed")
+        event_types = [event["event_type"] for event in body["events"]]
+        self.assertIn("agent.action_completed", event_types)
+        self.assertIn("agent.verified", event_types)
 
     def test_chat_recalculates_recommendations_and_returns_attachment_metadata(self):
         from web_app.models import SkillPack, SkillRecord
