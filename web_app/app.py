@@ -51,6 +51,7 @@ from web_app.core.git_adapter import GitExecutionAdapter
 from web_app.core.inference_adapter import InferenceAdapter
 from web_app.core.context_service import ContextService
 from web_app.core.memory import MemoryStore
+from web_app.core.model_conformance import ModelConformanceStore
 from web_app.core.mcp_stdio_backend import build_mcp_adapters
 from web_app.core.policy import PolicyService
 from web_app.core.project_adapter import ProjectAdapter
@@ -227,6 +228,7 @@ def create_app(
     core_memory = None
     core_approvals = None
     core_projects = None
+    core_conformance = None
     core_artifacts = None
     core_capabilities = ()
     core_mcp_backends = []
@@ -253,9 +255,11 @@ def create_app(
         raise ValueError("Unsupported skill source")
 
     def get_core_runtime():
-        nonlocal core_runtime, core_capabilities, core_memory, core_approvals, core_projects
+        nonlocal core_runtime, core_capabilities, core_memory, core_approvals, core_projects, core_conformance
         if core_runtime is None:
             core_root = workspace.data_root / "core"
+            core_conformance = ModelConformanceStore(core_root / "model-conformance.sqlite")
+            application.state.core_model_conformance = core_conformance
             core_tasks = TaskStore(core_root / "tasks.sqlite")
             core_policy = PolicyService(core_root / "policy.sqlite")
             core_terminal_adapter = TerminalAdapter(terminals)
@@ -337,6 +341,22 @@ def create_app(
             )
             adapters.update(mcp_adapters)
             core_mcp_backends.extend(mcp_backends)
+            project_root = Path(__file__).resolve().parent.parent
+            definitions = list(lifecycle_definitions())
+            defined_ids = {item.capability_id for item in definitions}
+            for capability_id in sorted(set(adapters) - defined_ids):
+                definitions.append(CapabilityDefinition(
+                    capability_id=capability_id, version="1",
+                    description=f"Extension capability {capability_id}",
+                    input_schema={"type": "object"}, effect_class="extension",
+                    approval_class="exact", rollback_class="adapter",
+                    adapter_id=capability_id,
+                    adapter_digest=canonical_digest({"adapter": capability_id, "version": "1"}),
+                ))
+            capability_catalog = CapabilityCatalog(definitions, probed_adapters=set(adapters))
+            project_profile = discover_project_profile(project_root)
+            application.state.core_capability_catalog = capability_catalog
+            application.state.core_project_profile = project_profile
             agent_runtime = None
 
             async def run_agent(task_id: str):
@@ -344,7 +364,6 @@ def create_app(
                     raise RuntimeError("agent runtime is not initialized")
                 return await agent_runtime.run(task_id)
 
-            project_root = Path(__file__).resolve().parent.parent
             core_projects = ProjectRegistry(core_root / "projects.sqlite")
             registered_project = core_projects.register(project_root, project_id="legacy")
             application.state.core_project_registry = core_projects
@@ -382,7 +401,7 @@ def create_app(
                     return await json_chat(
                         model,
                         prompt,
-                        planner_output_schema(tuple(sorted(adapters))),
+                        capability_catalog.planner_schema(set(project_profile.kinds)),
                     )
                 stream_chat = getattr(inference_backend, "stream_chat", None)
                 if callable(stream_chat):
@@ -406,21 +425,6 @@ def create_app(
                 project_reader_resolver=resolver.resolve,
             )
             application.state.agent_runtime = agent_runtime
-            definitions = list(lifecycle_definitions())
-            defined_ids = {item.capability_id for item in definitions}
-            for capability_id in sorted(set(adapters) - defined_ids):
-                definitions.append(CapabilityDefinition(
-                    capability_id=capability_id, version="1",
-                    description=f"Extension capability {capability_id}",
-                    input_schema={"type": "object"}, effect_class="extension",
-                    approval_class="exact", rollback_class="adapter",
-                    adapter_id=capability_id,
-                    adapter_digest=canonical_digest({"adapter": capability_id, "version": "1"}),
-                ))
-            capability_catalog = CapabilityCatalog(definitions, probed_adapters=set(adapters))
-            project_profile = discover_project_profile(project_root)
-            application.state.core_capability_catalog = capability_catalog
-            application.state.core_project_profile = project_profile
             core_capabilities = tuple({
                 **item.definition.model_dump(mode="json"),
                 "available": item.available,
@@ -453,6 +457,8 @@ def create_app(
                 core_approvals.close()
             if core_projects is not None:
                 core_projects.close()
+            if core_conformance is not None:
+                core_conformance.close()
             if core_memory is not None:
                 core_memory.close()
 

@@ -95,10 +95,15 @@ class InferencePlanner:
             raise ValueError("planner must return valid capability JSON") from error
         if not isinstance(value, dict):
             raise ValueError("planner must return valid capability JSON")
+        expected = {"done", "capability_id", "operation", "target_path", "arguments"}
+        if set(value) != expected:
+            raise ValueError("planner response must match the exact capability envelope")
         has_completed_action = any(
             source.event_type == "agent.action_completed" for source in context.sources
         )
-        if value.get("done") is True and has_completed_action:
+        if value.get("done") is True:
+            if not has_completed_action:
+                raise ValueError("planner cannot finish without persisted action evidence")
             return None
         try:
             call_value = {key: item for key, item in value.items() if key != "done"}
@@ -122,18 +127,24 @@ class InferencePlanner:
 
     @staticmethod
     def _decode_object(raw: str) -> object:
+        if len(raw) > 65_536:
+            raise ValueError("planner output exceeds the maximum size")
         text = raw.strip()
-        if text.startswith("```") and text.endswith("```"):
+        if text.startswith("```"):
             lines = text.splitlines()
+            if len(lines) < 3 or lines[-1].strip() != "```" or any(
+                line.strip().startswith("```") for line in lines[1:-1]
+            ):
+                raise ValueError("planner output must contain one JSON object")
             text = "\n".join(lines[1:-1]).strip()
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            start = text.find("{")
-            end = text.rfind("}")
-            if start < 0 or end <= start:
-                raise
-            return json.loads(text[start:end + 1])
+        def no_duplicates(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError(f"duplicate JSON key: {key}")
+                result[key] = value
+            return result
+        return json.loads(text, object_pairs_hook=no_duplicates)
 
 
 class EventEvidenceVerifier:

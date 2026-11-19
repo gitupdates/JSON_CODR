@@ -797,6 +797,7 @@ class WebApiTests(unittest.TestCase):
             memory = getattr(client.app.state, "core_memory", None)
             approvals = getattr(client.app.state, "core_approval_store", None)
             projects = getattr(client.app.state, "core_project_registry", None)
+            conformance = getattr(client.app.state, "core_model_conformance", None)
             if policy is not None:
                 policy.close()
             if task_store is not None:
@@ -807,6 +808,8 @@ class WebApiTests(unittest.TestCase):
                 approvals.close()
             if projects is not None:
                 projects.close()
+            if conformance is not None:
+                conformance.close()
         self.temporary_directory.cleanup()
 
     def test_sessions_create_reopen_and_delete(self):
@@ -1191,10 +1194,13 @@ class WebApiTests(unittest.TestCase):
                 self.plans += 1
                 content = (
                     json.dumps({
-                        "capability_id": "project.read", "operation": "read",
-                        "project_root": "C:/untrusted", "target_path": "README.md",
+                        "done": False, "capability_id": "project.read", "operation": "read",
+                        "target_path": "README.md", "arguments": {},
                     })
-                    if self.plans == 1 else json.dumps({"done": True})
+                    if self.plans == 1 else json.dumps({
+                        "done": True, "capability_id": "project.read", "operation": "read",
+                        "target_path": "README.md", "arguments": {},
+                    })
                 )
                 return ChatResult(model=model, status="success", summary="plan", content=content)
 

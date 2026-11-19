@@ -120,14 +120,14 @@ class OllamaService:
 
     async def supports_tools(self, model: str) -> bool:
         resolved = self._resolve(model)
-        verified = self.config.get("verified_tool_models")
-        if isinstance(verified, list):
-            return resolved in verified
         try:
             response = await asyncio.wait_for(self.client.show(resolved), timeout=5)
         except Exception:
             return False
         payload = response.model_dump() if hasattr(response, "model_dump") else response
+        verified = self.config.get("verified_tool_models")
+        if isinstance(verified, list):
+            return resolved in verified and "tools" in payload.get("capabilities", [])
         return "tools" in payload.get("capabilities", [])
 
     async def tool_compatibility(self, model: str) -> dict:
@@ -141,12 +141,20 @@ class OllamaService:
 
         verified = self.config.get("verified_tool_models")
         verified_models = verified if isinstance(verified, list) else []
-        if resolved in verified_models:
+        if resolved in verified_models and advertised:
             route = "native_verified"
             effective_model = resolved
         else:
             fallback = str(self.config.get("tool_fallback_model", "")).strip()
-            effective_model = fallback if fallback in verified_models else None
+            fallback_installed = False
+            if fallback in verified_models:
+                try:
+                    fallback_response = await asyncio.wait_for(self.client.show(fallback), timeout=5)
+                    fallback_payload = fallback_response.model_dump() if hasattr(fallback_response, "model_dump") else fallback_response
+                    fallback_installed = "tools" in fallback_payload.get("capabilities", [])
+                except Exception:
+                    fallback_installed = False
+            effective_model = fallback if fallback_installed else None
             route = "delegated_verified" if effective_model else "unavailable"
         return {
             "requested_model": resolved,

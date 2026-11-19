@@ -57,7 +57,7 @@ class AgentServicesTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(KeyError, "project is not registered"):
             resolver.resolve(self.command(project_id="missing"))
 
-    async def test_planner_validates_model_json_and_overrides_project_root(self):
+    async def test_planner_rejects_model_project_root_injection(self):
         async def generate(model, prompt):
             self.assertEqual(model, "local-model")
             self.assertIn("Return one capability call", prompt)
@@ -75,10 +75,8 @@ class AgentServicesTests(unittest.IsolatedAsyncioTestCase):
             ),),
         )
 
-        call = await planner.plan(context)
-
-        self.assertEqual(call.project_root, str(self.root.resolve()))
-        self.assertEqual(call.capability_id, "project.read")
+        with self.assertRaisesRegex(ValueError, "exact capability envelope"):
+            await planner.plan(context)
 
     async def test_planner_repeats_authoritative_goal_after_project_context(self):
         captured = {}
@@ -149,7 +147,7 @@ class AgentServicesTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "valid capability JSON"):
             await InferencePlanner(invalid, model="local-model").plan(context)
 
-    async def test_planner_executes_valid_call_when_model_claims_done_without_evidence(self):
+    async def test_planner_rejects_done_without_persisted_evidence(self):
         async def generate(_model, _prompt):
             return json.dumps({
                 "done": True,
@@ -167,10 +165,29 @@ class AgentServicesTests(unittest.IsolatedAsyncioTestCase):
             ),),
         )
 
-        call = await InferencePlanner(generate, model="local-model").plan(context)
+        with self.assertRaisesRegex(ValueError, "without persisted action evidence"):
+            await InferencePlanner(generate, model="local-model").plan(context)
 
-        self.assertEqual(call.capability_id, "project.read")
-        self.assertEqual(call.target_path, "README.md")
+    async def test_planner_rejects_prose_duplicate_keys_and_multiple_fences(self):
+        context = ContextBundle(
+            thread_id="thread-1", task_id="task-1", text="read",
+            sources=(ContextSource(
+                kind="project_snapshot", source_ref="snapshot", mandatory=True,
+                content=json.dumps({"project_root": str(self.root.resolve())}),
+            ),),
+        )
+        invalid = (
+            'prose {"done":false,"capability_id":"project.read","operation":"read",'
+            '"target_path":"app.py","arguments":{}}',
+            '{"done":false,"done":true,"capability_id":"project.read","operation":"read",'
+            '"target_path":"app.py","arguments":{}}',
+            '```json\n{}\n```\n```json\n{}\n```',
+        )
+        for output in invalid:
+            async def generate(_model, _prompt, value=output):
+                return value
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                await InferencePlanner(generate, model="local-model").plan(context)
 
     def test_planner_model_prefers_verified_tool_fallback(self):
         from web_app.core.agent_services import select_agent_planner_model
