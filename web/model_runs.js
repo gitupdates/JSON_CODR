@@ -80,6 +80,15 @@
     pollInFlight = true;
     try {
       const response = await fetch(`/api/model-runs/${encodeURIComponent(activeRunId)}`);
+      if (response.status === 404) {
+        activeRunId = null;
+        latestRun = null;
+        localStorage.removeItem(activeRunStorageKey);
+        elements["all-model-status"].textContent = "Saved run is no longer available. Start a new run.";
+        elements["all-model-start"].disabled = false;
+        elements["all-model-cancel"].disabled = true;
+        return;
+      }
       if (!response.ok) throw new Error(`Polling failed (${response.status})`);
       render(await response.json());
     } catch (error) {
