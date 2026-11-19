@@ -22,4 +22,7 @@ class McpAdapter:
             if not isinstance(arguments, Mapping):
                 raise ValueError("MCP tool arguments must be an object")
             result = await self._backend.invoke(tool, dict(arguments))
-        yield AdapterEvent(event_type=f"mcp.{operation}.completed", payload=result)
+        yield AdapterEvent(
+            event_type=f"mcp.{operation}.completed",
+            payload={**result, "route": "compatibility", "adapter": call.capability_id},
+        )

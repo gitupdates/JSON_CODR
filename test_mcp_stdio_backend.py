@@ -211,6 +211,7 @@ class StdioMcpBackendTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(set(adapters), {"mcp.rea"})
             self.assertIsInstance(backends[0], LeasedReaBackend)
+            self.assertIsNone(backends[0]._backend)
 
     def test_active_craft_component_registers_clean_room_and_deep_mcp_adapters(self):
         with tempfile.TemporaryDirectory() as directory:
