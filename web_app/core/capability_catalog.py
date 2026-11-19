@@ -122,6 +122,20 @@ _LIFECYCLE_CAPABILITIES = {
     "deployment.health": ("read_network", "exact", (), "none"),
     "deployment.logs": ("read_network", "exact", (), "none"),
     "deployment.rollback": ("deployment", "strong_exact", (), "deployment_rollback"),
+    "terraform.preview": ("network", "exact", ("terraform",), "none"),
+    "terraform.apply": ("infrastructure", "strong_exact", ("terraform",), "provider_rollback"),
+    "bicep.preview": ("network", "exact", ("bicep",), "none"),
+    "bicep.apply": ("infrastructure", "strong_exact", ("bicep",), "provider_rollback"),
+    "cloudformation.preview": ("network", "exact", ("cloudformation",), "none"),
+    "cloudformation.apply": ("infrastructure", "strong_exact", ("cloudformation",), "provider_rollback"),
+    "kubernetes.preview": ("network", "exact", ("kubernetes",), "none"),
+    "kubernetes.apply": ("deployment", "strong_exact", ("kubernetes",), "provider_rollback"),
+    "helm.preview": ("network", "exact", ("helm",), "none"),
+    "helm.apply": ("deployment", "strong_exact", ("helm",), "provider_rollback"),
+    "docker.preview": ("command", "exact", ("containers",), "container"),
+    "docker.apply": ("external_effect", "strong_exact", ("containers",), "container"),
+    "database.preview": ("network", "exact", ("database",), "backup"),
+    "database.apply": ("external_effect", "strong_exact", ("database",), "backup"),
 }
 
 
