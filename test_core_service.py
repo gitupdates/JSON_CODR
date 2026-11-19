@@ -54,15 +54,22 @@ class PolicyServiceTests(unittest.TestCase):
         values.update(updates)
         return CapabilityCall(**values)
 
-    def test_local_read_search_test_and_bounded_edit_are_automatic(self):
+    def test_only_read_only_local_operations_are_automatic(self):
         for capability, operation in (
             ("project.read", "read"),
             ("project.search", "search"),
-            ("project.test", "test"),
-            ("project.patch", "bounded_edit"),
+            ("project.discover", "discover"),
+            ("inference.generate", "generate"),
         ):
             decision = self.policy.evaluate("user", "project", self.call(capability, operation))
             self.assertEqual(decision.effect, PolicyEffect.allow)
+        for capability, operation in (
+            ("project.test", "test"), ("project.patch", "bounded_edit"),
+            ("terminal.session", "session"), ("terminal.interrupt", "interrupt"),
+            ("terminal.close", "close"),
+        ):
+            decision = self.policy.evaluate("user", "project", self.call(capability, operation))
+            self.assertEqual(decision.effect, PolicyEffect.require_approval)
 
     def test_escape_is_denied_and_sensitive_actions_require_approval(self):
         escaped = self.policy.evaluate(

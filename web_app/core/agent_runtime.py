@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from uuid import NAMESPACE_URL, uuid5
 
+from web_app.core.adapters import CapabilityCall
 from web_app.core.agent_verification import EvidenceResolver, FailureNormalizer, StaleEvidence
 from web_app.core.canonical import canonical_digest
 from web_app.core.contracts import GoalSpec, TaskCommand, TaskEventDraft, TaskStatus
@@ -30,6 +32,18 @@ class AgentRuntime:
                 task_id,
                 TaskEventDraft(event_type="agent.goal_registered", payload=goal.model_dump(mode="json")),
             )
+        if not any(event.event_type == "agent.model_route" for event in root.events):
+            requested_model = root_command.payload.get("requested_model")
+            effective_model = root_command.payload.get("effective_model")
+            if isinstance(effective_model, str) and effective_model:
+                self._tasks.append(
+                    task_id,
+                    TaskEventDraft(event_type="agent.model_route", payload={
+                        "requested_model": requested_model,
+                        "effective_model": effective_model,
+                        "route": root_command.payload.get("route", "broker_verified"),
+                    }),
+                )
         if not goal.accepted:
             if not any(event.event_type == "agent.goal_acceptance_required" for event in root.events):
                 self._tasks.append(
@@ -55,6 +69,39 @@ class AgentRuntime:
                 reader,
                 target_path=target_path if isinstance(target_path, str) else ".",
             )
+        root = self._tasks.get(task_id)
+        for approval in (
+            event for event in root.events if event.event_type == "agent.approval_required"
+        ):
+            child_task_id = approval.payload.get("child_task_id")
+            step_id = approval.payload.get("step_id")
+            if not isinstance(child_task_id, str) or not isinstance(step_id, str):
+                continue
+            if any(
+                event.event_type == "agent.action_completed" and event.payload.get("step_id") == step_id
+                for event in root.events
+            ):
+                continue
+            child = self._tasks.get(child_task_id)
+            if child.status is not TaskStatus.completed:
+                continue
+            child_call = CapabilityCall.model_validate(self._tasks.command(child_task_id).payload)
+            self._tasks.append(task_id, TaskEventDraft(
+                event_type="agent.action_completed",
+                payload={
+                    "capability_id": child_call.capability_id,
+                    "operation": child_call.operation,
+                    "child_task_id": child_task_id,
+                    "step_id": step_id,
+                    "project_fingerprint": self._project_fingerprint(child_call.project_root),
+                },
+            ))
+            if resolved is not None:
+                reader, target_path = resolved
+                self.context.capture_project(
+                    root.thread_id, task_id, reader,
+                    target_path=target_path if isinstance(target_path, str) else ".",
+                )
         while True:
             root = self._tasks.get(task_id)
             if root.status is TaskStatus.cancel_requested:
@@ -155,11 +202,20 @@ class AgentRuntime:
                 return self._tasks.get(task_id)
             if child.status is not TaskStatus.completed:
                 if any(event.event_type == "task.permission_required" for event in child.events):
+                    permission = next(
+                        event for event in reversed(child.events)
+                        if event.event_type == "task.permission_required"
+                    )
                     self._tasks.append(
                         task_id,
                         TaskEventDraft(
                             event_type="agent.approval_required",
-                            payload={"child_task_id": child_id, "step_id": step_id},
+                            payload={
+                                "child_task_id": child_id, "step_id": step_id,
+                                "proposal_id": permission.payload.get("proposal_id"),
+                                "call_digest": permission.payload.get("call_digest"),
+                                "expires_at": permission.payload.get("expires_at"),
+                            },
                         ),
                     )
                     return self._tasks.get(task_id)
@@ -215,23 +271,29 @@ class AgentRuntime:
                     reader,
                     target_path=target_path if isinstance(target_path, str) else ".",
                 )
-            refreshed_context = self.context.assemble(root.thread_id, task_id, 32_000)
-            completed = await self._complete_if_verified(
-                task_id, goal, root_command, refreshed_context, record_failure=False
-            )
-            if completed is not None:
-                return completed
+            # A successful action is evidence, not completion. The planner must observe the
+            # persisted result and explicitly return done before the verifier can finish.
 
     async def _complete_if_verified(
         self, task_id, goal, root_command, context, *, record_failure: bool
     ):
         report = await self._verifier.verify(goal, self._tasks.get(task_id), context)
+        project_root = None
+        for source in reversed(context.sources):
+            if source.kind != "project_snapshot":
+                continue
+            try:
+                project_root = json.loads(source.content).get("project_root")
+            except (json.JSONDecodeError, AttributeError):
+                project_root = None
+            if isinstance(project_root, str) and project_root:
+                break
         try:
             self._evidence.validate(
                 report,
                 goal,
                 root_command,
-                current_project_fingerprint=self._project_fingerprint(None),
+                current_project_fingerprint=self._project_fingerprint(project_root),
             )
         except StaleEvidence as error:
             if record_failure:

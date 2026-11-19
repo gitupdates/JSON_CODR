@@ -5,6 +5,7 @@
   "synthesizer_model": "qwen2.5-coder:0.5b",
   "tool_fallback_model": "qwen3:4b",
   "verified_tool_models": [
+    "qwen2.5-coder:7b-instruct-q4_K_M",
     "qwen3:4b",
     "qwen3:8b",
     "qwen3.5:9b"

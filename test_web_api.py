@@ -543,6 +543,10 @@ class WebApiTests(unittest.TestCase):
 
     def test_project_workspace_read_only_run_does_not_create_persistent_broker_grant(self):
         class WorkspaceModelService(FakeService):
+            def __init__(self):
+                super().__init__()
+                self.planner_calls = 0
+
             async def chat(self, model, prompt, images=None):
                 baseline = prompt.split("baseline_fingerprint='", 1)[1].split("'", 1)[0]
                 project_root = prompt.split("project_root='", 1)[1].split("';", 1)[0]
@@ -654,6 +658,10 @@ class WebApiTests(unittest.TestCase):
 
     def test_workspace_task_routes_explicit_auto_and_multi_model_selections(self):
         class WorkspaceModelService(FakeService):
+            def __init__(self):
+                super().__init__()
+                self.planner_calls = 0
+
             async def list_models(self):
                 return [*await super().list_models(), {
                     "name": "deepseek-coder:6.7b-instruct", "installed": True, "size": 1,
@@ -665,6 +673,19 @@ class WebApiTests(unittest.TestCase):
 
             async def chat(self, model, prompt, images=None):
                 self.last_prompt = prompt
+                if "Return one capability call" in prompt:
+                    self.planner_calls += 1
+                    if "agent.action_completed" not in prompt:
+                        content = {
+                            "done": False, "capability_id": "project.read", "operation": "read",
+                            "target_path": "README.md", "arguments": {},
+                        }
+                    else:
+                        content = {
+                            "done": True, "capability_id": "project.read", "operation": "read",
+                            "target_path": "README.md", "arguments": {},
+                        }
+                    return ChatResult(model=model, status="ready", summary="Plan", content=json.dumps(content))
                 baseline = prompt.split("baseline_fingerprint='", 1)[1].split("'", 1)[0]
                 project_root = prompt.split("project_root='", 1)[1].split("';", 1)[0]
                 return ChatResult(model=model, status="ready", summary="Ready", content=json.dumps({

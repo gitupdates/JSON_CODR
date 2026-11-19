@@ -147,6 +147,8 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             VerifyAfterThreeActions(), lambda _root: "sha256:" + "1" * 64,
         )
         task_id = self.create_root_task()
+        for call in calls[1:]:
+            self.policy.grant("user", "project-1", call, scope="project")
 
         result = await runtime.run(task_id)
 
@@ -165,7 +167,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-    async def test_satisfied_verification_stops_without_second_planner_call(self):
+    async def test_satisfied_verification_requires_planner_done_after_evidence(self):
         adapter = RecordingAdapter()
         call = CapabilityCall(
             capability_id="project.read", operation="read", project_root=str(self.root)
@@ -177,9 +179,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
             async def plan(inner_self, _context):
                 inner_self.calls += 1
-                if inner_self.calls > 1:
-                    raise AssertionError("planner ran after the goal was already verified")
-                return call
+                return call if inner_self.calls == 1 else None
 
         planner = OneShotPlanner()
         runtime = AgentRuntime(
@@ -195,7 +195,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         result = await runtime.run(task_id)
 
         self.assertEqual(result.status, TaskStatus.completed)
-        self.assertEqual(planner.calls, 1)
+        self.assertEqual(planner.calls, 2)
 
     async def test_steering_is_durable_and_visible_to_the_next_plan(self):
         adapter = RecordingAdapter()
@@ -301,7 +301,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         core = CoreService(self.tasks, self.policy, {"project.read": adapter})
         runtime = AgentRuntime(
             self.tasks, core, ContextService(self.tasks, self.memory),
-            DeterministicPlanner([call, call]), DeterministicVerifier(),
+            DeterministicPlanner([call]), DeterministicVerifier(),
             lambda _root: "sha256:" + "1" * 64,
         )
         task_id = self.create_root_task()
@@ -382,6 +382,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             DeterministicVerifier(), lambda _root: "sha256:" + "1" * 64,
         )
         task_id = self.create_root_task()
+        self.policy.grant("user", "project-1", call, scope="project")
 
         result = await runtime.run(task_id)
 

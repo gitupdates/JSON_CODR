@@ -42,7 +42,10 @@ class ProjectRegistry:
     def register(self, root: str | Path, *, project_id: str | None = None) -> RegisteredProject:
         supplied = Path(root).absolute()
         self._reject_links(supplied)
-        resolved = supplied.resolve(strict=True)
+        try:
+            resolved = supplied.resolve(strict=True)
+        except OSError as error:
+            raise ValueError("project root must be an existing directory") from error
         if not resolved.is_dir():
             raise ValueError("project root must be an existing directory")
         normalized = os.path.normcase(str(resolved))

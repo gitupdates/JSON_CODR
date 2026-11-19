@@ -22,7 +22,7 @@ class PolicyDecision(FrozenContract):
     reason: str = Field(min_length=1)
 
 
-_AUTOMATIC_OPERATIONS = {"read", "search", "discover", "test", "bounded_edit", "session", "interrupt", "close", "generate"}
+_AUTOMATIC_OPERATIONS = {"read", "search", "discover", "generate"}
 _SENSITIVE_OPERATIONS = {"network", "install", "commit", "push", "destructive"}
 
 
@@ -49,8 +49,11 @@ class PolicyService:
 
     def evaluate(self, principal: str, project_id: str, call: CapabilityCall) -> PolicyDecision:
         root = Path(call.project_root).resolve()
-        if call.target_path is not None and not Path(call.target_path).resolve().is_relative_to(root):
-            return PolicyDecision(effect=PolicyEffect.deny, reason="target escapes the approved project root")
+        if call.target_path is not None:
+            target = Path(call.target_path)
+            resolved_target = target.resolve() if target.is_absolute() else (root / target).resolve()
+            if not resolved_target.is_relative_to(root):
+                return PolicyDecision(effect=PolicyEffect.deny, reason="target escapes the approved project root")
         if call.mode.value == "brokered" and (
             call.privacy_boundary != call.approved_privacy_boundary
             or call.cost_boundary != call.approved_cost_boundary

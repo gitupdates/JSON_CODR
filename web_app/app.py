@@ -46,7 +46,7 @@ from web_app.core.agent_services import (
 from web_app.core.api import create_core_router
 from web_app.core.artifact_store import ArtifactStore
 from web_app.core.assimilation import AssimilationService, FunctionalProbeResult, SkillInstallAdapter
-from web_app.core.contracts import TaskCommand, TaskStatus
+from web_app.core.contracts import CompletionCriterion, CriterionKind, GoalSpec, TaskCommand, TaskStatus
 from web_app.core.git_adapter import GitExecutionAdapter
 from web_app.core.inference_adapter import InferenceAdapter
 from web_app.core.context_service import ContextService
@@ -1455,12 +1455,43 @@ def create_app(
                 warnings.append(f"Verified tool execution uses {effective_model}; requested model remains {selected_model}")
             recommendation = recommendations.recommend(session, request.prompt)
             assembled = context_assembler.build(session, request.prompt, recommendation)
-            executed = await execute_project_workspace(request.project_root, effective_model, assembled.prompt)
+            core_service, _, _ = get_core_runtime()
+            if core_projects is None:
+                raise RuntimeError("project registry is unavailable")
+            registered = core_projects.register(request.project_root)
+            task_id = str(uuid7())
+            route = compatibility.get("route") or "broker_verified"
+            goal = GoalSpec(
+                goal_id=f"goal:{task_id}", revision=1, objective=assembled.prompt,
+                criteria=(CompletionCriterion(
+                    criterion_id=f"criterion:{task_id}", kind=CriterionKind.project_state,
+                    description="Complete the requested project work with fresh persisted evidence",
+                ),), accepted=True,
+            )
+            record = await core_service.submit(TaskCommand(
+                command_id=str(uuid7()), task_id=task_id,
+                thread_id=f"workspace:{request.session_id}:{task_id}",
+                project_id=registered.project_id, command_type="agent.run",
+                payload={
+                    "goal_spec": goal.model_dump(mode="json"), "target_path": ".",
+                    "requested_model": selected_model, "effective_model": effective_model,
+                    "route": route, "context_references": request.context_references,
+                },
+            ))
+            awaiting_approval = any(
+                event.event_type == "agent.approval_required" for event in record.events
+            )
+            status = "approval_required" if awaiting_approval else record.status.value
+            if status not in {"completed", "failed", "cancelled"}:
+                response.status_code = 202
             return WorkspaceTaskResponse(
-                task_id=str(uuid7()), requested_engine=request.engine_id, effective_engine="borg",
-                requested_model=requested_model, effective_model=executed["effective_model"],
-                route=executed["route"], status="completed", warnings=warnings,
-                result=executed["result"], artifact_references=[],
+                task_id=task_id, requested_engine=request.engine_id, effective_engine="borg",
+                requested_model=requested_model, effective_model=effective_model,
+                route=route, status=status, warnings=warnings,
+                result={
+                    "project_id": registered.project_id,
+                    "task": record.model_dump(mode="json"),
+                }, artifact_references=[],
             )
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Session not found") from error

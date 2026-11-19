@@ -43,7 +43,11 @@ def select_agent_planner_model(config: Mapping[str, object]) -> str:
     primary = str(config["model"])
     fallback = str(config.get("tool_fallback_model") or "")
     verified = config.get("verified_tool_models")
-    if fallback and isinstance(verified, (list, tuple)) and fallback in verified:
+    installed = config.get("installed_models")
+    if (
+        fallback and isinstance(verified, (list, tuple)) and fallback in verified
+        and isinstance(installed, (list, tuple)) and fallback in installed
+    ):
         return fallback
     return primary
 
@@ -88,7 +92,19 @@ class InferencePlanner:
             "Do not include markdown or prose.\n\nCONTEXT:\n" + context.text
             + "\n\nAUTHORITATIVE CURRENT GOAL:\n" + current_goal
         )
-        raw = await self._generate(self._model, prompt)
+        model = self._model
+        for source in reversed(context.sources):
+            if source.event_type != "agent.model_route":
+                continue
+            try:
+                route = json.loads(source.content)
+                candidate = route.get("payload", {}).get("effective_model")
+            except (json.JSONDecodeError, AttributeError):
+                candidate = None
+            if isinstance(candidate, str) and candidate:
+                model = candidate
+                break
+        raw = await self._generate(model, prompt)
         try:
             value = self._decode_object(raw)
         except (TypeError, json.JSONDecodeError) as error:

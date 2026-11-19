@@ -142,7 +142,7 @@ class OllamaService:
         verified = self.config.get("verified_tool_models")
         verified_models = verified if isinstance(verified, list) else []
         if resolved in verified_models and advertised:
-            route = "native_verified"
+            route = "broker_verified"
             effective_model = resolved
         else:
             fallback = str(self.config.get("tool_fallback_model", "")).strip()

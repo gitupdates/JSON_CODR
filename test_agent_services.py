@@ -196,7 +196,13 @@ class AgentServicesTests(unittest.IsolatedAsyncioTestCase):
             "model": "qwen2.5-coder:0.5b",
             "tool_fallback_model": "qwen3:4b",
             "verified_tool_models": ["qwen3:4b"],
+            "installed_models": ["qwen3:4b"],
         }), "qwen3:4b")
+        self.assertEqual(select_agent_planner_model({
+            "model": "qwen2.5-coder:0.5b",
+            "tool_fallback_model": "missing:4b",
+            "verified_tool_models": ["missing:4b"],
+        }), "qwen2.5-coder:0.5b")
 
     async def test_verifier_uses_persisted_action_evidence_not_model_claims(self):
         store = TaskStore(Path(self.temporary.name) / "tasks.sqlite")
