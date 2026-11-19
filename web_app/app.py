@@ -343,6 +343,12 @@ def create_app(
             application.state.core_memory = core_memory
 
             async def generate_agent_plan(model: str, prompt: str) -> str:
+                stream_chat = getattr(inference_backend, "stream_chat", None)
+                if callable(stream_chat):
+                    async for event in stream_chat(model, prompt):
+                        if event.get("type") == "completed":
+                            return event["result"].content
+                    raise ValueError("planner model returned no completed result")
                 return (await service.chat(model, prompt)).content
 
             def agent_project_fingerprint(root: str | None) -> str:
