@@ -9,7 +9,7 @@ from web_app.core.project_intelligence import ProjectReader
 
 
 class AgentRuntime:
-    def __init__(self, task_store, core_service, context, planner, verifier, project_fingerprint) -> None:
+    def __init__(self, task_store, core_service, context, planner, verifier, project_fingerprint, project_reader_resolver=None) -> None:
         self._tasks = task_store
         self._core = core_service
         self.context = context
@@ -17,6 +17,7 @@ class AgentRuntime:
         self._verifier = verifier
         self._project_fingerprint = project_fingerprint
         self._evidence = EvidenceResolver()
+        self._project_reader_resolver = project_reader_resolver
 
     async def run(self, task_id: str):
         root = self._tasks.get(task_id)
@@ -45,13 +46,13 @@ class AgentRuntime:
                 task_id,
                 TaskEventDraft(event_type="agent.phase_changed", payload={"phase": "planning"}),
             )
-        project_root = root_command.payload.get("project_root")
-        if isinstance(project_root, str) and project_root:
-            target_path = root_command.payload.get("target_path", ".")
+        resolved = None if self._project_reader_resolver is None else self._project_reader_resolver(root_command)
+        if resolved is not None:
+            reader, target_path = resolved
             self.context.capture_project(
                 root.thread_id,
                 task_id,
-                ProjectReader(project_root),
+                reader,
                 target_path=target_path if isinstance(target_path, str) else ".",
             )
         while True:

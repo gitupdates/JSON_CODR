@@ -94,6 +94,25 @@ class ProjectIntelligenceTests(unittest.TestCase):
         finally:
             reopened.close()
 
+    def test_index_rebuilds_when_symbols_are_tampered(self):
+        database = Path(self.temporary.name) / "manifest-index.sqlite"
+        reader = ProjectReader(self.root)
+        index = RepositoryIndex(database)
+        first = index.rebuild(reader)
+        index.close()
+        with closing(sqlite3.connect(database)) as connection:
+            connection.execute(
+                "UPDATE repository_files SET symbols = 'forged' WHERE generation = ? AND relative_path = ?",
+                (first.generation, "app.py"),
+            )
+            connection.commit()
+        reopened = RepositoryIndex(database)
+        try:
+            reopened.search_rebuilding(reader, "search_notes")
+            self.assertGreater(reopened.latest_generation(reader).generation, first.generation)
+        finally:
+            reopened.close()
+
 
 if __name__ == "__main__":
     unittest.main()

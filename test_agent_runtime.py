@@ -22,6 +22,7 @@ from web_app.core.contracts import (
 )
 from web_app.core.memory import MemoryStore
 from web_app.core.policy import PolicyService
+from web_app.core.project_intelligence import ProjectReader
 from web_app.core.router import ExecutionCandidate, ExecutionRouter, RouteConsentRequired
 from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
@@ -176,6 +177,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             DeterministicPlanner([]),
             verifier,
             lambda _root: "sha256:" + "1" * 64,
+            project_reader_resolver=lambda command: (ProjectReader(project), "."),
         )
         task_id = self.create_root_task(project_root=project)
 

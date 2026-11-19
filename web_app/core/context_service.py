@@ -32,6 +32,7 @@ class CompactionRecord(FrozenContract):
     summary: str
     through_global_sequence: int
     source_refs: tuple[str, ...] = ()
+    mandatory_sources: tuple[ContextSource, ...] = ()
     created_at: datetime
 
 
@@ -83,7 +84,9 @@ class ContextService:
 
     def compact(self, thread_id: str) -> CompactionRecord:
         sources = tuple(self._sources(thread_id))
-        summary = "\n".join(f"[{item.source_ref}] {item.content}" for item in sources)
+        mandatory_sources = tuple(item for item in sources if item.mandatory)
+        optional_sources = tuple(item for item in sources if not item.mandatory and item.kind != "context_compaction")
+        summary = "\n".join(f"[{item.source_ref}] {item.content}" for item in optional_sources)
         if len(summary) > 8_000:
             summary = summary[:7_997] + "..."
         prior = self._latest_compaction(thread_id)
@@ -102,6 +105,7 @@ class ContextService:
             summary=summary,
             through_global_sequence=through,
             source_refs=tuple(source_refs),
+            mandatory_sources=mandatory_sources,
             created_at=datetime.now(UTC),
         )
         self._memory.add(
@@ -124,13 +128,14 @@ class ContextService:
         through = max((event.global_sequence for event in events), default=-1)
         instructions = reader.instructions_for(target_path)
         files = reader.files()
+        instruction_paths = {item.relative_path for item in instructions}
+        files = tuple(item for item in files if item.relative_path not in instruction_paths)
         material = {
             "thread_id": thread_id,
             "task_id": task_id,
             "project_root": str(reader.root),
-            "project_fingerprint": reader.fingerprint(),
+            "project_fingerprint": reader.fingerprint(files),
             "target_path": target_path,
-            "through_global_sequence": through,
             "instructions": [item.model_dump(mode="json") for item in instructions],
             "files": [
                 {"relative_path": item.relative_path, "digest": item.digest, "size": item.size}
@@ -155,7 +160,7 @@ class ContextService:
             instructions=instructions,
             files=files,
         )
-        self._memory.add(
+        self._memory.replace_kind(
             thread_id,
             "project_context_snapshot",
             snapshot.model_dump_json(),
@@ -174,6 +179,7 @@ class ContextService:
                 global_sequence=compaction.through_global_sequence,
                 mandatory=True,
             )
+            yield from compaction.mandatory_sources
         cursor = -1 if compaction is None else compaction.through_global_sequence
         for event in self._tasks.thread_events(thread_id, cursor):
             payload = event.model_dump(mode="json")["payload"]

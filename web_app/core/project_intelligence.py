@@ -33,6 +33,8 @@ class IndexGeneration(FrozenContract):
     project_root: str
     project_fingerprint: str
     parser_generation: str
+    row_count: int = Field(ge=0)
+    generation_digest: str
     created_at: datetime
 
 
@@ -100,9 +102,9 @@ class ProjectReader:
             ))
         return tuple(result)
 
-    def fingerprint(self) -> str:
+    def fingerprint(self, files: tuple[ProjectFile, ...] | None = None) -> str:
         digest = hashlib.sha256()
-        for item in self.files():
+        for item in self.files() if files is None else files:
             digest.update(f"{item.relative_path}\0{item.digest}\0{item.size}\n".encode("utf-8"))
         return f"sha256:{digest.hexdigest()}"
 
@@ -156,6 +158,8 @@ class RepositoryIndex:
                 project_root TEXT NOT NULL,
                 project_fingerprint TEXT NOT NULL,
                 parser_generation TEXT NOT NULL DEFAULT 'regex-symbols-v1',
+                row_count INTEGER NOT NULL DEFAULT 0,
+                generation_digest TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS repository_files (
@@ -175,13 +179,26 @@ class RepositoryIndex:
             self._connection.execute(
                 "ALTER TABLE repository_generations ADD COLUMN parser_generation TEXT NOT NULL DEFAULT 'regex-symbols-v1'"
             )
+        if "row_count" not in columns:
+            self._connection.execute("ALTER TABLE repository_generations ADD COLUMN row_count INTEGER NOT NULL DEFAULT 0")
+        if "generation_digest" not in columns:
+            self._connection.execute("ALTER TABLE repository_generations ADD COLUMN generation_digest TEXT NOT NULL DEFAULT ''")
 
     def close(self) -> None:
         self._connection.close()
 
     def rebuild(self, reader: ProjectReader) -> IndexGeneration:
         files = reader.files()
-        fingerprint = reader.fingerprint()
+        fingerprint = reader.fingerprint(files)
+        indexed = []
+        for item in files:
+            symbols = "\n".join(re.findall(
+                r"(?m)^\s*(?:async\s+def|def|class|function|interface|type)\s+([A-Za-z_$][\w$]*)",
+                item.content,
+            ))
+            indexed.append((item, symbols))
+        manifest = "\n".join(f"{item.relative_path}\0{item.digest}\0{symbols}" for item, symbols in indexed)
+        generation_digest = f"sha256:{hashlib.sha256((self.parser_generation + '\n' + manifest).encode()).hexdigest()}"
         with self._lock, self._connection:
             row = self._connection.execute(
                 "SELECT COALESCE(MAX(generation), 0) + 1 AS generation FROM repository_generations"
@@ -192,21 +209,19 @@ class RepositoryIndex:
                 project_root=str(reader.root),
                 project_fingerprint=fingerprint,
                 parser_generation=self.parser_generation,
+                row_count=len(indexed), generation_digest=generation_digest,
                 created_at=datetime.now(UTC),
             )
             self._connection.execute(
-                "INSERT INTO repository_generations(generation, project_root, project_fingerprint, parser_generation, created_at) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO repository_generations(generation, project_root, project_fingerprint, parser_generation, row_count, generation_digest, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     generation.generation, generation.project_root,
                     generation.project_fingerprint, generation.parser_generation,
+                    generation.row_count, generation.generation_digest,
                     generation.created_at.isoformat(),
                 ),
             )
-            for item in files:
-                symbols = "\n".join(re.findall(
-                    r"(?m)^\s*(?:async\s+def|def|class|function|interface|type)\s+([A-Za-z_$][\w$]*)",
-                    item.content,
-                ))
+            for item, symbols in indexed:
                 self._connection.execute(
                     "INSERT INTO repository_files VALUES (?, ?, ?, ?, ?)",
                     (generation.generation, item.relative_path, item.digest, item.content, symbols),
@@ -228,6 +243,10 @@ class RepositoryIndex:
                 "SELECT * FROM repository_files WHERE generation = ?",
                 (generation.generation,),
             ).fetchall()
+            manifest = "\n".join(f"{row['relative_path']}\0{row['digest']}\0{row['symbols']}" for row in rows)
+            actual_manifest = f"sha256:{hashlib.sha256((generation.parser_generation + chr(10) + manifest).encode()).hexdigest()}"
+            if len(rows) != generation.row_count or actual_manifest != generation.generation_digest:
+                raise CorruptIndex("repository index generation manifest mismatch")
         needle = query.casefold()
         results = []
         for row in rows:
@@ -270,5 +289,6 @@ class RepositoryIndex:
             generation=row["generation"], project_root=row["project_root"],
             project_fingerprint=row["project_fingerprint"],
             parser_generation=row["parser_generation"],
+            row_count=row["row_count"], generation_digest=row["generation_digest"],
             created_at=datetime.fromisoformat(row["created_at"]),
         )

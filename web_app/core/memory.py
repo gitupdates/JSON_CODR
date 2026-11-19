@@ -56,6 +56,30 @@ class MemoryStore:
             )
         return record
 
+    def replace_kind(self, thread_id: str, kind: str, content: str, *, source_ref: str) -> MemoryRecord:
+        record = MemoryRecord(
+            record_id=str(uuid7()), thread_id=thread_id, kind=kind, content=content, source_ref=source_ref
+        )
+        with self._lock, self._connection:
+            rows = self._connection.execute(
+                "SELECT record_id FROM memory_records WHERE thread_id = ? AND kind = ?",
+                (thread_id, kind),
+            ).fetchall()
+            for row in rows:
+                self._connection.execute("DELETE FROM memory_fts WHERE record_id = ?", (row["record_id"],))
+            self._connection.execute(
+                "DELETE FROM memory_records WHERE thread_id = ? AND kind = ?", (thread_id, kind)
+            )
+            self._connection.execute(
+                "INSERT INTO memory_records VALUES (?, ?, ?, ?, ?)",
+                (record.record_id, record.thread_id, record.kind, record.content, record.source_ref),
+            )
+            self._connection.execute(
+                "INSERT INTO memory_fts VALUES (?, ?, ?)",
+                (record.record_id, record.thread_id, record.content),
+            )
+        return record
+
     def list(self, thread_id: str) -> tuple[MemoryRecord, ...]:
         with self._lock:
             rows = self._connection.execute(

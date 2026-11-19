@@ -51,7 +51,9 @@ class ContextServiceTests(unittest.TestCase):
         self.assertEqual(record.through_global_sequence, old.global_sequence)
         self.assertIn(f"event:{old.event_id}", record.source_refs)
         self.assertIn(f"event:{new.event_id}", [source.source_ref for source in bundle.sources])
-        self.assertNotIn(f"event:{old.event_id}", [source.source_ref for source in bundle.sources])
+        self.assertEqual(
+            [source.source_ref for source in bundle.sources].count(f"event:{old.event_id}"), 1
+        )
         self.assertEqual(sum(source.kind == "context_compaction" for source in bundle.sources), 1)
 
     def test_mandatory_context_overflow_is_visible(self):
@@ -93,6 +95,34 @@ class ContextServiceTests(unittest.TestCase):
         self.assertTrue(instruction.mandatory)
         self.assertIn("focused tests", instruction.content)
         self.assertIn("return 42", project_file.content)
+
+    def test_compaction_retains_large_mandatory_project_instructions_after_reopen(self):
+        project = Path(self.temporary.name) / "large-project"
+        project.mkdir()
+        instruction = "MANDATORY-INSTRUCTION\n" + ("x" * 9_000)
+        (project / "AGENTS.md").write_text(instruction, encoding="utf-8")
+        self.context.capture_project("thread-1", "parent", ProjectReader(project))
+
+        self.context.compact("thread-1")
+        bundle = ContextService(self.tasks, self.memory).assemble("thread-1", "parent", 20_000)
+
+        matching = [source for source in bundle.sources if "MANDATORY-INSTRUCTION" in source.content]
+        self.assertEqual(len(matching), 1)
+        self.assertTrue(matching[0].mandatory)
+
+    def test_new_project_snapshot_replaces_previous_snapshot_for_thread(self):
+        project = Path(self.temporary.name) / "changing-project"
+        project.mkdir()
+        path = project / "app.py"
+        path.write_text("value = 1\n", encoding="utf-8")
+        first = self.context.capture_project("thread-1", "parent", ProjectReader(project))
+        path.write_text("value = 2\n", encoding="utf-8")
+
+        second = self.context.capture_project("thread-1", "parent", ProjectReader(project))
+
+        self.assertNotEqual(first.snapshot_id, second.snapshot_id)
+        snapshots = [record for record in self.memory.list("thread-1") if record.kind == "project_context_snapshot"]
+        self.assertEqual(len(snapshots), 1)
 
 
 if __name__ == "__main__":
