@@ -343,6 +343,18 @@ def create_app(
             application.state.core_memory = core_memory
 
             async def generate_agent_plan(model: str, prompt: str) -> str:
+                json_chat = getattr(inference_backend, "json_chat", None)
+                if callable(json_chat):
+                    return await json_chat(model, prompt, {
+                        "type": "object",
+                        "properties": {
+                            "done": {"type": "boolean"},
+                            "capability_id": {"type": "string"},
+                            "operation": {"type": "string"},
+                            "target_path": {"type": "string"},
+                            "arguments": {"type": "object"},
+                        },
+                    })
                 stream_chat = getattr(inference_backend, "stream_chat", None)
                 if callable(stream_chat):
                     async for event in stream_chat(model, prompt):

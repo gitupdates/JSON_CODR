@@ -39,6 +39,19 @@ class NativeOllamaTransport:
             raise ModelOutputError("Ollama returned a malformed model list")
         return [item for item in models if isinstance(item, dict)]
 
+    async def json_chat(self, model: str, prompt: str, schema: dict) -> str:
+        payload = await self._post_json("/api/chat", {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "format": schema,
+            "stream": False,
+            "options": {"temperature": 0.0},
+        })
+        message = payload.get("message")
+        if not isinstance(message, dict) or not isinstance(message.get("content"), str):
+            raise ModelOutputError("Ollama returned malformed JSON chat output")
+        return message["content"]
+
     async def stream_chat(
         self,
         model: str,
@@ -108,6 +121,22 @@ class NativeOllamaTransport:
             if not isinstance(payload, dict):
                 raise ModelOutputError("Ollama returned malformed JSON")
             return payload
+
+        return await self._run_request(perform)
+
+    async def _post_json(self, path: str, payload: dict) -> dict:
+        def perform() -> dict:
+            request = Request(
+                f"{self.endpoint}{path}",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                result = json.loads(response.read())
+            if not isinstance(result, dict):
+                raise ModelOutputError("Ollama returned malformed JSON")
+            return result
 
         return await self._run_request(perform)
 

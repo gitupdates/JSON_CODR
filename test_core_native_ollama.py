@@ -83,6 +83,24 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1]["result"].model, "qwen3:4b")
         self.assertEqual(events[-1]["result"].content, "Verified answer.")
 
+    async def test_json_chat_requests_schema_constrained_local_output(self):
+        from web_app.core.native_ollama import NativeOllamaTransport
+
+        captured = {}
+
+        def fake_urlopen(request, timeout):
+            captured["payload"] = json.loads(request.data)
+            return _Response(json.dumps({"message": {"content": '{"done":true}'}}).encode())
+
+        transport = NativeOllamaTransport("http://localhost:11434")
+        schema = {"type": "object", "properties": {"done": {"type": "boolean"}}}
+        with patch("web_app.core.native_ollama.urlopen", side_effect=fake_urlopen):
+            content = await transport.json_chat("qwen3:4b", "Plan", schema)
+
+        self.assertEqual(content, '{"done":true}')
+        self.assertEqual(captured["payload"]["format"], schema)
+        self.assertFalse(captured["payload"]["stream"])
+
 
 if __name__ == "__main__":
     unittest.main()
