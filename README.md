@@ -1,68 +1,34 @@
 # JSON_CODR
 
-JSON_CODR V1.0.17-beta.5 is a localhost-only web and CLI interface for structured responses from local Ollama coding models.
+JSON_CODR V1.0.18-alpha.11 is a localhost-only, unified project agent for local Ollama models.
 
-V1.0.17-beta.5 adds pinned GitHub skill previews and installation through the existing provider-neutral skill envelope. It retains browser-managed local imports, truthful native-versus-delegated tool compatibility reporting, project-scoped Continue CLI and Aider sessions, and direct Ollama chat fallback.
+## Unified project workflow
 
-## Beta coding agents: Continue CLI and Aider
+Choose a model, describe the outcome in **Chat**, and run it. JSON_CODR creates one durable task for the conversation and routes all model, project, terminal, Git, browser, skill, and optional-provider work through that task. Users do not select an internal executor.
 
-### Project Git broker
+The response panel shows live activity and the requested and effective model identities. Use **Steer** by entering more direction while a task is active, **Stop** to request cancellation, **Retry** to create a linked retry, and **Undo** when the task produced a checkpoint. Execution details stay collapsed until needed. The **Live CLI** is the terminal view of the same local system, with command history, clipboard support, resize/reconnect, and the Ctrl+X then Ctrl+C interrupt chord.
 
-The **Coding sandbox** (the Git broker profile) is the compatible default execution profile. It lets every selected model inspect and review project files, create/edit/delete through validated unified patches, run bounded allowlisted Python/Node test, lint, build, compile, and Git diff checks, then commit, synchronize, and push only the files changed by that task. A persistent grant remains active across restarts until **Revoke** is selected. The broker refuses unexpected local changes, serializes model mutations, preserves the user's configured Git identity, records model attribution in commit trailers, and rechecks the exact project grant between execution stages. Models such as Yi-Coder that reject native tool schemas use the **broker adapter** instead of exposing the provider's raw 400 response.
+V1.0.18-alpha.11 provides one responsive **Workspace** for chat, task context, skills, activity, files, and the persistent ConPTY terminal. NOC Light is the default appearance, with five selectable themes, collapsible navigation, licensed OpenDyslexic assets, and developer-editable component mappings. The Agent and Model controls use one canonical task route with explicit automatic, multi-model, and exact-model selections; fallback routing is reported rather than hidden. Layout presets and dock placement persist locally while narrow screens preserve the active task and terminal session. Verified global components with an MCP server can now contribute mode-specific agent capabilities; Craft Anything 0.6.1 is available independently in Clean Room and Deep/Ghidra modes when installed through the component registry.
 
-The **Unrestricted shell** profile is optional and non-sandboxed. Its project directory is the starting directory, not a filesystem security boundary. Continue and Aider remain separately authorized alternatives, and ordinary Chat continues to call Ollama directly when any coding profile is unavailable.
+Local reads, searches, tests, bounded edits, and inference can run automatically inside the selected project boundary. Network access, installation, Git publication, destructive changes, and budget overrides require policy approval. Persistent grants remain project-scoped and can be revoked. A model without native tool calling may use a verified brokered route; JSON_CODR always displays the requested and effective model and never labels that route as native.
 
-Open **Live CLI** from the global navigation. The **Beta coding agents** launcher appears above the existing PowerShell terminal; the original terminal remains available unchanged.
+Attachments and folders can be selected or dropped into the page. Skills, MCP resources, browser automation, REA/Ghidra analysis, language intelligence, schedules, hooks, and child tasks use the same capability and policy path. Imported components are staged, probed, provenance-recorded, and either activated or quarantined. Optional provider failure leaves the base Ollama/CPU path available.
 
-### Requirements and status
+Remote PyPI and npm components require exact coordinates such as `cowsay==6.1` or `cowsay@1.6.0`. Before approval, BORG displays extracted identity, dependencies, hashes, entry points, blocked build behavior, and every required compatibility alteration. Installation preserves the acquired package, records observed native launchers separately from effective normalized commands, and activates only after a real probe succeeds. Local, Git, and archive sources cannot claim trusted registry provenance merely by including manifest filenames.
 
-1. Keep Ollama running at `http://127.0.0.1:11434` and install the model you want to use.
-2. Install at least one supported coding CLI and make it available on `PATH`:
-   - Continue CLI: verify with `cn --version`.
-   - Aider: verify with `aider --version`.
-3. `GET /api/coding-agents/status` reports whether each executable is detected and lists saved grants. A missing CLI does not affect ordinary JSON_CODR chat.
+### Headless use
 
-### Start an interactive coding session
+Submit through the neutral task API or CLI:
 
-1. Select **Continue CLI** or **Aider**.
-2. Select any installed Ollama model. Interactive mode permits every installed model, although smaller models may not reliably produce edits.
-3. Enter the absolute root of the project the agent may inspect and edit.
-4. Leave **Full persistent authorization** enabled to save an explicit grant for this project and this agent.
-5. Select **Interactive**, then press **Launch agent**.
-6. JSON_CODR opens the agent in the embedded terminal. Use the **PowerShell**, **Continue**, and **Aider** tabs to switch sessions without stopping them. Terminal output and keyboard input stay in the page, and a page reload reconnects to running sessions.
+```powershell
+python -m web_app.core.cli run --project D:\path\to\project --output text "Inspect, edit, and test this project"
+```
 
-Continue launches with a generated local configuration that selects Ollama and the exact installed model. Aider launches with `aider --model ollama_chat/<model>` and receives `OLLAMA_API_BASE=http://127.0.0.1:11434` only in its child-process environment. On Windows, JSON_CODR uses ConPTY through pywinpty; the previous pipe or native-console launch remains a compatibility fallback when ConPTY is unavailable.
+`json`, `text`, and `stream-json` outputs are supported. Exit code `0` means completed, `1` means failed, and `2` means permission is required.
 
-### Run a delegated task
+### Migrating beta data
 
-1. Write the task in the main Chat prompt, including the intended files and expected outcome.
-2. Open **Live CLI**, choose the tool, model, and project root, then select **Delegated**.
-3. Press **Launch agent**. JSON_CODR sends the prompt to the chosen CLI only after a matching persistent grant exists.
-
-Continue headless mode is limited to read, write, and edit tools and explicitly excludes shell execution. Aider runs with subtree-only editing, shell-command suggestions disabled, and automatic commits disabled. This authorization applies only to the canonical project root and selected tool; an Aider grant cannot authorize Continue, and another project needs its own grant.
-
-The selected LLM can also return a structured `coding_agent_tasks` proposal. JSON_CODR displays that proposal in **Review actions**. Select **Review delegated task** to copy its tool, project boundary, and prompt into the launcher, then review the model, persistent authorization, and task before starting it. A model proposal never launches a process by itself.
-
-### Authorization and safety boundaries
-
-- Grants are stored locally in `%LOCALAPPDATA%\JSON_CODR\coding-agent-grants.json` using atomic replacement.
-- A grant is bound to one canonical project root, one tool, and the `full` scope.
-- Nested folders under that project are allowed. Missing projects, junctions/reparse points, and paths outside the approved root are rejected.
-- Delegated agents may inspect and edit files inside the granted project but cannot run shell commands, install dependencies, create automatic commits, or publish remotely through this profile.
-- Interactive sessions are user-operated CLIs embedded in JSON_CODR. JSON_CODR validates the project/tool grant before launch, but commands entered or approved inside the agent are governed by that CLI rather than JSON_CODR's PowerShell action-confirmation system.
-- Disable a grant with `DELETE /api/coding-agents/grants/<grant-id>`. A settings-based grant manager is planned for a later beta.
-
-### Direct Ollama fallback
-
-The normal **Chat** page continues to call Ollama directly. It does not route through Continue or Aider. If either CLI is missing, its configuration is invalid, authorization is absent, or launch fails, return to Chat and run the selected local model normally. Coding-agent failures do not change the active model, Ollama hardware profile, skills, attachments, or benchmark data.
-
-### Troubleshooting
-
-- **`cn is not installed` / `aider is not installed`:** install the CLI, confirm its version in a new PowerShell session, and restart JSON_CODR so the updated `PATH` is inherited.
-- **Persistent authorization required:** enable the authorization checkbox for the exact project/tool pair and launch again.
-- **Invalid model name:** choose an installed model from the selector; manually injected shell characters are rejected.
-- **Model runs but cannot edit reliably:** select a stronger coder model. Availability does not imply autonomous-editing capability.
-- **Ollama connection error:** confirm `http://127.0.0.1:11434/api/tags` responds, then use normal Chat to verify the base model before retrying the coding agent.
+The alpha migration is copy-on-write: the beta data root is hashed and never modified. General settings, project permissions, skills, benchmark history, imported resources, and valid conversations are copied; secrets are excluded. Older executor-specific configuration is archived as inactive evidence. Malformed records are reported, and the new destination can be rolled back without touching the source.
 
 ## Skill catalog and settings
 

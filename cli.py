@@ -5,7 +5,12 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
-from web_app.models import ActionSuggestion, CodingAgentSuggestion
+from web_app.models import (
+    ActionSuggestion,
+    CodingAgentSuggestion,
+    ReasoningEntry,
+    ReasoningTrace,
+)
 
 
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "jury_config.json")
@@ -17,6 +22,7 @@ class StructuredCLIResponse(BaseModel):
     content: str = Field(description="Detailed response content")
     actions: list[ActionSuggestion] = Field(default_factory=list, max_length=5)
     coding_agent_tasks: list[CodingAgentSuggestion] = Field(default_factory=list, max_length=3)
+    reasoning: ReasoningTrace = Field(default_factory=ReasoningTrace)
 
     @field_validator("actions", mode="before")
     @classmethod
@@ -67,6 +73,11 @@ def parse_response_content(raw_content: str) -> StructuredCLIResponse:
         return StructuredCLIResponse.model_validate_json(raw_content)
     except Exception:
         pass
+    public_reasoning = [
+        text.strip()
+        for text in re.findall(r"<think>(.*?)</think>", raw_content, flags=re.DOTALL)
+        if text.strip()
+    ]
     cleaned = re.sub(r"<think>.*?</think>", "", raw_content, flags=re.DOTALL).strip()
     match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
     if match:
@@ -74,4 +85,17 @@ def parse_response_content(raw_content: str) -> StructuredCLIResponse:
     else:
         match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
         cleaned = match.group(1) if match else cleaned
-    return StructuredCLIResponse.model_validate_json(cleaned)
+    parsed = StructuredCLIResponse.model_validate_json(cleaned)
+    if public_reasoning and not parsed.reasoning.entries:
+        parsed.reasoning = ReasoningTrace(
+            entries=[
+                ReasoningEntry(
+                    sequence=index,
+                    kind="analysis",
+                    provenance="provider_tag",
+                    text=text,
+                )
+                for index, text in enumerate(public_reasoning, start=1)
+            ]
+        )
+    return parsed

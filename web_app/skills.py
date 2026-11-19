@@ -250,6 +250,134 @@ class SkillLibraryService:
             skills=[skill],
         ))
 
+    def ensure_builtin_multi_model_jury(self) -> SkillPack:
+        existing = next((pack for pack in self.list() if pack.id == "multi-model-jury"), None)
+        if existing is not None:
+            return existing
+        instructions = (
+            "capabilities: Multi-model batch inference, active context, preserved original outputs\n\n"
+            "Use this skill when the user requests a jury, panel, or review of one topic by all available "
+            "local models. Direct the user request through Ask all available models so every installed model "
+            "receives the same proposal, numbered hard constraints, success evidence, and decision question. "
+            "Keep first-round evaluations independent: do not include another model's identity or answer. "
+            "Each evaluator must return exactly this format:\n"
+            "VOTE: <GO, NO GO, or ABSTAIN>\n"
+            "CONFIDENCE: <Low, Medium, or High with one-sentence basis>\n"
+            "RATIONALE: <two to four concise evidence-based points>\n"
+            "EVIDENCE: <provided facts, separated from inference and unknowns>\n"
+            "RISKS: <costs, failure modes, and edge cases>\n"
+            "BLOCKERS: <numbered hard-constraint violations, or None>\n"
+            "CONDITIONS: <tests or mitigations required for approval, or None>\n\n"
+            "Preserve each model's original response for audit. Reject reviews that contain no substantive "
+            "reasoning or invent unstated constraints. After all real responses finish, report the raw tally "
+            "and eligible count. Require at least three eligible non-abstaining reviews. Recommend GO only "
+            "with a two-thirds supermajority, NO GO only with more than half voting NO GO, and TABLED "
+            "otherwise. An unresolved evidence-backed hard-constraint blocker forces TABLED unless the vote "
+            "already produces NO GO. The recommendation is decision support only: the named human "
+            "decision-maker retains final authority. Do not execute changes as part of the jury review."
+        )
+        skill = SkillRecord(
+            id="review-with-multi-model-jury",
+            name="All-model jury",
+            description=(
+                "Convene all available local models as an independent blind jury and produce an auditable "
+                "advisory disposition."
+            ),
+            content=_wrap_skill_content(
+                "All-model jury",
+                "Collect independent local-model votes and deterministic advisory decision support",
+                instructions,
+            ),
+            original_content=instructions,
+            enabled=True,
+        )
+        return self.install(SkillPack(
+            id="multi-model-jury",
+            name="Open-source multi-model jury",
+            source_format="generic",
+            source_name="JSON_CODR built-in multi-model jury",
+            source_digest="json-codr-multi-model-jury-v1",
+            skills=[skill],
+        ))
+
+    def ensure_builtin_readteam(self) -> SkillPack:
+        existing = next((pack for pack in self.list() if pack.id == "readteam"), None)
+        if existing is not None and existing.source_digest == "json-codr-readteam-v3":
+            return existing
+        instructions = (
+            "capabilities: Read active context, inspect referenced evidence, search authorized sources, and export review documentation\n\n"
+            "This is a defensive evidence review, not a request to attack a system or perform a harmful action. "
+            "Complete the review even when evidence is sparse: record unknowns and use INSUFFICIENT EVIDENCE rather "
+            "than refusing merely because the claim is unproven.\n\n"
+            "VERDICT GATE: If the central claim has no Direct or Corroborated evidence, the EXECUTIVE VERDICT MUST be "
+            "INSUFFICIENT EVIDENCE. Claimed-only evidence, including an author's statement that tests passed, can never "
+            "produce PASS or PASS WITH CONDITIONS.\n\n"
+            "Invoke with `/readteam <subject>` (or `/redteam <subject>`) to perform a secondary, adversarial review "
+            "of the selected post, result, review, theory, design, plan, code, or evidence package. Treat prior approval, "
+            "author reputation, deadlines, and model confidence as non-evidence. Be highly skeptical without inventing "
+            "defects. Review proportionally to the subject's impact and state the exact scope and unavailable evidence.\n\n"
+            "Start by extracting every material claim into a CLAIM LEDGER. Classify each item as FACT, INFERENCE, "
+            "ASSUMPTION, or UNKNOWN; cite the supplied artifact, source location, test record, standard, or observation "
+            "that supports it. Grade evidence as Direct, Corroborated, Indirect, Claimed-only, or Contradicted. Never "
+            "fabricate citations, test results, standards obligations, exploits, or certainty. A missing artifact is a "
+            "missing-evidence finding, not proof that the claim is false.\n\n"
+            "Attempt to falsify the important claims. Examine boundary conditions, partial failure, replay and concurrency, "
+            "trust boundaries, authentication and authorization, injection, secrets, dependency and supply-chain risk, "
+            "data collection and retention, disclosure and deletion, unsafe side effects, misuse paths, human oversight, "
+            "accessibility, interoperability, migrations, rollback, observability, and recovery when applicable. Under "
+            "SECURITY, PRIVACY, SAFETY, AND STANDARDS, distinguish mandatory requirements from recommendations and "
+            "name the jurisdiction, framework, version, and relevant control only when evidence establishes applicability.\n\n"
+            "Return these sections in order:\n"
+            "1. REVIEW TARGET — artifact, scope, exclusions, review date, and evidence received.\n"
+            "2. EXECUTIVE VERDICT — PASS, PASS WITH CONDITIONS, INSUFFICIENT EVIDENCE, or BLOCK; confidence and one-paragraph basis.\n"
+            "3. CLAIM LEDGER — claim ID, classification, evidence grade, source, and disposition.\n"
+            "4. FINDINGS — ordered Critical, High, Medium, Low, then Informational. Each finding must include affected claim, "
+            "evidence, exploit/failure scenario, impact, likelihood with basis, affected boundary, and a falsifiable remediation.\n"
+            "5. SECURITY, PRIVACY, SAFETY, AND STANDARDS — applicable concerns, mappings, gaps, and non-applicable areas.\n"
+            "6. MISSING EVIDENCE — exact artifacts needed and which decisions they block.\n"
+            "7. FALSIFICATION AND VERIFICATION PLAN — reproducible checks, expected observations, and acceptance criteria.\n"
+            "8. REMEDIATION ORDER — smallest risk-reducing sequence, owners when known, and dependencies.\n"
+            "9. RESIDUAL RISK AND DECISION GATE — what remains, who must accept it, and explicit release/approval conditions.\n\n"
+            "Severity reflects demonstrated consequence and reachability, not rhetoric. Do not collapse absence of evidence "
+            "into a security vulnerability. Do not claim compliance, safety, privacy, correctness, or readiness from prose "
+            "alone. Do not execute changes, installations, destructive checks, releases, or approvals during `/readteam`; "
+            "produce review findings and a verification plan unless the user separately authorizes remediation."
+        )
+        skill = SkillRecord(
+            id="readteam-secondary-review",
+            name="READTEAM adversarial review",
+            description=(
+                "Perform an evidence-first secondary review that challenges claims and documents security, privacy, "
+                "safety, standards, and verification gaps."
+            ),
+            content=_wrap_skill_content(
+                "READTEAM adversarial review",
+                "Challenge a selected artifact through structured, evidence-first adversarial review",
+                instructions,
+            ),
+            original_content=instructions,
+            enabled=True,
+        )
+        pack = SkillPack(
+            id="readteam",
+            name="READTEAM secondary review",
+            source_format="generic",
+            source_name="JSON_CODR built-in READTEAM review",
+            source_digest="json-codr-readteam-v3",
+            skills=[skill],
+        )
+        if existing is None:
+            return self.install(pack)
+        enabled = {item.id: item.enabled for item in existing.skills}
+        pack = pack.model_copy(update={
+            "skills": [item.model_copy(update={"enabled": enabled.get(item.id, item.enabled)}) for item in pack.skills]
+        })
+        with self._lock:
+            packs = self.list()
+            packs = [pack if item.id == pack.id else item for item in packs]
+            self._save(packs)
+        return pack
+
     def _save(self, packs: list[SkillPack]) -> None:
         temporary = self.root / f".catalog-{uuid.uuid4().hex}.tmp"
         temporary.write_text(json.dumps([pack.model_dump(mode="json") for pack in packs], indent=2), encoding="utf-8")
@@ -630,6 +758,13 @@ class SkillDiscoveryService:
         return combined
 
     def install(self, discovery_id: str) -> SkillPack:
+        pack, cleanup = self.prepare_install(discovery_id)
+        try:
+            return self.library.install(pack)
+        finally:
+            cleanup()
+
+    def prepare_install(self, discovery_id: str):
         preview = self._previews.pop(discovery_id, None)
         if preview is None or preview["expires"] < time.monotonic():
             raise ValueError("Discovery preview expired; scan again")
@@ -640,9 +775,10 @@ class SkillDiscoveryService:
         snapshot = preview["snapshot"]
         try:
             pack = self.converter.convert(snapshot, f"{source.name}.zip" if source.is_dir() else source.name)
-            return self.library.install(pack)
-        finally:
+        except Exception:
             snapshot.unlink(missing_ok=True)
+            raise
+        return pack, lambda: snapshot.unlink(missing_ok=True)
 
 
 class GithubSkillService:
@@ -778,11 +914,15 @@ class GithubSkillService:
         }
 
     def install(self, preview_id: str) -> SkillPack:
+        pack, cleanup = self.prepare_install(preview_id)
+        try:
+            return self.library.install(pack)
+        finally:
+            cleanup()
+
+    def prepare_install(self, preview_id: str):
         preview = self._previews.pop(preview_id, None)
         if preview is None or preview["expires"] < time.monotonic():
             raise ValueError("GitHub skill preview expired; preview the URL again")
         snapshot = preview["snapshot"]
-        try:
-            return self.library.install(preview["pack"])
-        finally:
-            snapshot.unlink(missing_ok=True)
+        return preview["pack"], lambda: snapshot.unlink(missing_ok=True)

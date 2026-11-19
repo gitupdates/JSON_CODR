@@ -1,11 +1,14 @@
 import asyncio
 import json
+import sqlite3
+import sys
 import unittest
 import tempfile
 import io
 import os
 import zipfile
 import subprocess
+from contextlib import closing
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -173,6 +176,84 @@ class FakeIntegrityBenchmark:
 
 
 class WebApiTests(unittest.TestCase):
+    def test_all_model_run_routes_create_poll_cancel_export_search_and_protect_originals(self):
+        session = self.workspace.create_session()
+        created = self.client.post("/api/model-runs", json={
+            "session_id": session.id,
+            "prompt": "Compare implementations",
+            "profile": "general",
+            "request_key": "api-run-1",
+        })
+        self.assertEqual(created.status_code, 201)
+        run_id = created.json()["run_id"]
+        self.assertEqual(created.json()["roster"], ["qwen2.5-coder:7b-instruct-q4_K_M"])
+        self.assertEqual(created.json()["unavailable_models"], ["opencoder:8b"])
+
+        polled = self.client.get(f"/api/model-runs/{run_id}")
+        self.assertEqual(polled.status_code, 200)
+        result_id = polled.json()["results"][0]["result_id"]
+        denied = self.client.get(f"/api/model-runs/{run_id}/results/{result_id}/original")
+        self.assertEqual(denied.status_code, 403)
+        allowed = self.client.get(
+            f"/api/model-runs/{run_id}/results/{result_id}/original",
+            headers={"X-JSON-CODR": "1"},
+        )
+        self.assertEqual(allowed.status_code, 200)
+        self.assertIn("USER TASK (authoritative):\nCompare implementations", allowed.json()["content"])
+        self.assertEqual(allowed.json()["provider_events"], [])
+        for format_name, content_type in (("json", "application/json"), ("markdown", "text/markdown"), ("csv", "text/csv")):
+            exported = self.client.get(f"/api/model-runs/{run_id}/export", params={"format": format_name})
+            self.assertEqual(exported.status_code, 200)
+            self.assertIn(content_type, exported.headers["content-type"])
+        searched = self.client.get(f"/api/model-runs/{run_id}/search", params={"q": "Compare"})
+        self.assertEqual(searched.status_code, 200)
+        self.assertEqual(searched.json()[0]["source"], "original")
+        cancelled = self.client.post(f"/api/model-runs/{run_id}/cancel")
+        self.assertEqual(cancelled.status_code, 200)
+
+    def test_model_run_idempotency_conflict_and_code_jury_profile(self):
+        session = self.workspace.create_session()
+        payload = {"session_id": session.id, "prompt": "Review", "profile": "code_jury", "request_key": "same"}
+        first = self.client.post("/api/model-runs", json=payload)
+        replay = self.client.post("/api/model-runs", json=payload)
+        conflict = self.client.post("/api/model-runs", json={**payload, "prompt": "Changed"})
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(replay.json()["run_id"], first.json()["run_id"])
+        self.assertEqual(first.json()["profile"], "code_jury")
+        self.assertEqual(conflict.status_code, 409)
+
+    def test_existing_chat_shape_adds_canonical_run_link(self):
+        session = self.workspace.create_session()
+        response = self.client.post("/api/chat", json={
+            "model": "qwen",
+            "prompt": "hello",
+            "session_id": session.id,
+        })
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertIn("USER TASK (authoritative):\nhello", body["content"])
+        self.assertEqual(body["summary"], "Ready")
+        self.assertRegex(body["run_id"], r"^[0-9a-f]{32}$")
+        self.assertEqual(self.client.get(f"/api/model-runs/{body['run_id']}").status_code, 200)
+
+    def test_manual_mcp_registration_is_exposed_through_core_capabilities(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = WorkspaceService(Path(directory))
+            (workspace.data_root / "mcp_servers.json").write_text(json.dumps({
+                "mcpServers": {
+                    "rea": {
+                        "transport": "stdio",
+                        "command": sys.executable,
+                        "args": ["D:/tools/rea.mjs", "mcp"],
+                        "allowedTools": ["*"],
+                    }
+                }
+            }), encoding="utf-8")
+            with TestClient(create_app(FakeService(), workspace)) as client:
+                capabilities = client.get("/api/capabilities").json()
+
+            self.assertIn({"capability_id": "mcp.rea"}, capabilities)
+
     def test_local_analysis_tools_are_loaded_for_sandbox_sessions(self):
         tools = self.workspace.data_root / "tools"
         ghidra = tools / "ghidra_12.1.4_PUBLIC"
@@ -192,6 +273,11 @@ class WebApiTests(unittest.TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.workspace = WorkspaceService(Path(self.temporary_directory.name))
         self.client = TestClient(create_app(self.service, self.workspace))
+        self._core_clients = [self.client]
+
+    def track_core_client(self, client):
+        self._core_clients.append(client)
+        return client
 
     def test_coding_agent_grant_launch_and_failure_leave_direct_chat_available(self):
         class FakeTerminals:
@@ -212,7 +298,9 @@ class WebApiTests(unittest.TestCase):
             self.workspace.data_root,
             executable_finder=lambda name: f"C:/tools/{name}.exe" if name == "aider" else None,
         )
-        client = TestClient(create_app(self.service, self.workspace, terminals=terminals, coding_agents=agents))
+        client = self.track_core_client(
+            TestClient(create_app(self.service, self.workspace, terminals=terminals, coding_agents=agents))
+        )
         headers = {"X-JSON-CODR": "1"}
 
         status = client.get("/api/coding-agents/status").json()
@@ -245,7 +333,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(failed.status_code, 403)
         direct = client.post("/api/chat", json={"model": "qwen2.5-coder:7b-instruct-q4_K_M", "prompt": "fallback"})
         self.assertEqual(direct.status_code, 200)
-        self.assertEqual(direct.json()["content"], "Answered: fallback")
+        self.assertIn("USER TASK (authoritative):\nfallback", direct.json()["content"])
 
     def test_broker_status_grant_execute_and_revoke_are_project_scoped(self):
         project = Path(self.temporary_directory.name) / "broker-project"
@@ -258,7 +346,9 @@ class WebApiTests(unittest.TestCase):
         subprocess.run(["git", "commit", "-m", "initial"], cwd=project, check=True, capture_output=True)
         agents = CodingAgentService(self.workspace.data_root, executable_finder=lambda name: None)
         broker = GitBrokerService(self.workspace.data_root)
-        client = TestClient(create_app(self.service, self.workspace, coding_agents=agents, git_broker=broker))
+        client = self.track_core_client(
+            TestClient(create_app(self.service, self.workspace, coding_agents=agents, git_broker=broker))
+        )
         headers = {"X-JSON-CODR": "1"}
 
         denied = client.post("/api/git-broker/grants", json={"project_root": str(project), "profile": "broker"})
@@ -277,6 +367,11 @@ class WebApiTests(unittest.TestCase):
         })
         self.assertEqual(executed.status_code, 201)
         self.assertEqual(executed.json()["status"], "completed")
+        with closing(sqlite3.connect(self.workspace.data_root / "core" / "tasks.sqlite")) as database:
+            durable_tasks = database.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+            durable_events = database.execute("SELECT COUNT(*) FROM task_events").fetchone()[0]
+        self.assertEqual(durable_tasks, 1)
+        self.assertGreaterEqual(durable_events, 3)
         revoked = client.delete(f"/api/git-broker/grants/{grant['id']}", headers=headers)
         self.assertEqual(revoked.status_code, 200)
         rejected = client.post("/api/git-broker/tasks", headers=headers, json={
@@ -285,6 +380,123 @@ class WebApiTests(unittest.TestCase):
                         "baseline_fingerprint": baseline, "actions": [{"kind": "status"}]},
         })
         self.assertEqual(rejected.status_code, 403)
+
+    def test_terminal_creation_is_recorded_by_core_service(self):
+        class FakeTerminals:
+            def create(self, shell, cwd):
+                return type("Record", (), {
+                    "id": "terminal-1", "pid": 123, "shell": shell, "cwd": str(cwd),
+                    "status": "running", "external": False, "backend": "pipe",
+                })()
+
+            def close_all(self):
+                pass
+
+        project = Path(self.temporary_directory.name) / "terminal-project"
+        project.mkdir()
+        client = self.track_core_client(TestClient(create_app(self.service, self.workspace, terminals=FakeTerminals())))
+
+        response = client.post(
+            "/api/terminals",
+            headers={"X-JSON-CODR": "1"},
+            json={"shell": "powershell", "cwd": str(project)},
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["id"], "terminal-1")
+        with closing(sqlite3.connect(self.workspace.data_root / "core" / "tasks.sqlite")) as database:
+            command = database.execute("SELECT command_json FROM tasks").fetchone()[0]
+        self.assertIn('"command_type":"terminal.session"', command)
+
+    def test_terminal_interrupt_and_close_are_recorded_by_core_service(self):
+        class FakeTerminals:
+            def __init__(self):
+                self.interrupted = []
+                self.closed = []
+
+            def create(self, shell, cwd):
+                return type("Record", (), {
+                    "id": "terminal-1", "pid": 123, "shell": shell, "cwd": str(cwd),
+                    "status": "running", "external": False, "backend": "pipe",
+                })()
+
+            def interrupt(self, terminal_id):
+                self.interrupted.append(terminal_id)
+
+            def close(self, terminal_id):
+                self.closed.append(terminal_id)
+
+            def close_all(self):
+                pass
+
+        project = Path(self.temporary_directory.name) / "terminal-lifecycle-project"
+        project.mkdir()
+        terminals = FakeTerminals()
+        client = self.track_core_client(TestClient(create_app(self.service, self.workspace, terminals=terminals)))
+        headers = {"X-JSON-CODR": "1"}
+        created = client.post("/api/terminals", headers=headers, json={"cwd": str(project)})
+
+        interrupted = client.post("/api/terminals/terminal-1/interrupt", headers=headers)
+        closed = client.delete("/api/terminals/terminal-1", headers=headers)
+
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(interrupted.status_code, 204)
+        self.assertEqual(closed.status_code, 204)
+        self.assertEqual(terminals.interrupted, ["terminal-1"])
+        self.assertEqual(terminals.closed, ["terminal-1"])
+        with closing(sqlite3.connect(self.workspace.data_root / "core" / "tasks.sqlite")) as database:
+            commands = [row[0] for row in database.execute("SELECT command_json FROM tasks ORDER BY rowid")]
+        self.assertEqual(len(commands), 3)
+        self.assertIn('"command_type":"terminal.interrupt"', commands[1])
+        self.assertIn('"command_type":"terminal.close"', commands[2])
+
+    def test_ordinary_chat_generation_is_recorded_by_core_service(self):
+        response = self.client.post("/api/chat", json={"model": "qwen", "prompt": "hello"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("USER TASK (authoritative):\nhello", response.json()["content"])
+        with closing(sqlite3.connect(self.workspace.data_root / "core" / "tasks.sqlite")) as database:
+            command = database.execute("SELECT command_json FROM tasks").fetchone()[0]
+            event_types = [
+                json.loads(row[0])["event_type"]
+                for row in database.execute("SELECT event_json FROM task_events ORDER BY sequence")
+            ]
+        self.assertIn('"command_type":"inference.generate"', command)
+        self.assertIn("inference.completed", event_types)
+
+    def test_unified_task_submission_uses_real_session_skill_context(self):
+        session_id = self.client.post("/api/sessions").json()["id"]
+        task_id = "task-skill-context"
+        response = self.client.post("/api/tasks", json={
+            "schema_version": "1",
+            "command_id": "command-skill-context",
+            "task_id": task_id,
+            "thread_id": f"thread-{session_id}",
+            "project_id": f"project-{session_id}",
+            "command_type": "capability.execute",
+            "payload": {
+                "capability_id": "inference.generate",
+                "operation": "generate",
+                "project_root": str(self.workspace.data_root),
+                "mode": "native",
+                "arguments": {
+                    "model": "qwen2.5-coder:7b-instruct-q4_K_M",
+                    "prompt": "Plan an evidence-driven reverse-engineering workflow for an existing application.",
+                    "session_id": session_id,
+                    "attachments": [],
+                },
+            },
+        })
+
+        self.assertEqual(response.status_code, 200)
+        completed = next(
+            event for event in response.json()["events"] if event["event_type"] == "inference.completed"
+        )
+        result = completed["payload"]["result"]
+        self.assertIn("USER TASK (authoritative):\nPlan an evidence-driven", self.service.last_prompt)
+        self.assertIn("ATTACHED SKILL rea-agents:reverse-engineer-anything", self.service.last_prompt)
+        self.assertEqual(result["attached_skillsets"], ["planning"])
+        self.assertEqual(result["attached_skills"][0]["reference"], "rea-agents:reverse-engineer-anything")
 
     def test_broker_adapter_runs_non_tool_model_without_native_tool_schema(self):
         class BrokerModelService(FakeService):
@@ -306,7 +518,7 @@ class WebApiTests(unittest.TestCase):
         subprocess.run(["git", "add", "README.md"], cwd=project, check=True)
         subprocess.run(["git", "commit", "-m", "initial"], cwd=project, check=True, capture_output=True)
         agents = CodingAgentService(self.workspace.data_root, executable_finder=lambda name: None)
-        client = TestClient(create_app(BrokerModelService(), self.workspace, coding_agents=agents))
+        client = self.track_core_client(TestClient(create_app(BrokerModelService(), self.workspace, coding_agents=agents)))
         headers = {"X-JSON-CODR": "1"}
         grant = client.post("/api/git-broker/grants", headers=headers, json={
             "project_root": str(project), "profile": "broker"
@@ -321,9 +533,146 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(response.json()["compatibility"], "broker_adapter")
         self.assertEqual(response.json()["result"]["status"], "completed")
         self.assertNotIn("does not support tools", response.text)
+        with closing(sqlite3.connect(self.workspace.data_root / "core" / "tasks.sqlite")) as database:
+            commands = [row[0] for row in database.execute("SELECT command_json FROM tasks")]
+        self.assertEqual(len(commands), 1)
+        self.assertIn('"command_type":"git.execute"', commands[0])
+
+    def test_project_workspace_reuses_project_grant_and_returns_verified_result(self):
+        class WorkspaceModelService(FakeService):
+            async def chat(self, model, prompt, images=None):
+                baseline = prompt.split("baseline_fingerprint='", 1)[1].split("'", 1)[0]
+                project_root = prompt.split("project_root='", 1)[1].split("';", 1)[0]
+                return ChatResult(
+                    model=model,
+                    status="ready",
+                    summary="Workspace action ready",
+                    content=json.dumps({
+                        "schema_version": 1,
+                        "project_root": project_root,
+                        "baseline_fingerprint": baseline,
+                        "actions": [{"kind": "status"}],
+                    }),
+                )
+
+        project = Path(self.temporary_directory.name) / "workspace-project"
+        project.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=project, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=project, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project, check=True)
+        (project / "README.md").write_text("test\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=project, check=True)
+        subprocess.run(["git", "commit", "-m", "initial"], cwd=project, check=True, capture_output=True)
+        agents = CodingAgentService(self.workspace.data_root, executable_finder=lambda name: None)
+        client = self.track_core_client(TestClient(create_app(
+            WorkspaceModelService(), self.workspace, coding_agents=agents,
+        )))
+        request = {
+            "project_root": str(project),
+            "model": "yi-coder:9b-chat",
+            "outcome": "Inspect the repository and report its current status",
+        }
+
+        first = client.post("/api/project-workspace/run", headers={"X-JSON-CODR": "1"}, json=request)
+        second = client.post("/api/project-workspace/run", headers={"X-JSON-CODR": "1"}, json=request)
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(first.json()["route"], "broker_adapter")
+        self.assertEqual(first.json()["requested_model"], "yi-coder:9b-chat")
+        self.assertEqual(first.json()["effective_model"], "yi-coder:9b-chat")
+        self.assertEqual(first.json()["result"]["status"], "completed")
+        self.assertEqual(second.status_code, 201)
+        grants = [item for item in agents.status()["grants"] if item["profile"] == "broker"]
+        self.assertEqual(len(grants), 1)
+
+    def test_project_workspace_rejects_missing_project_before_model_execution(self):
+        response = self.client.post(
+            "/api/project-workspace/run",
+            headers={"X-JSON-CODR": "1"},
+            json={
+                "project_root": str(Path(self.temporary_directory.name) / "missing"),
+                "model": "qwen3:4b",
+                "outcome": "Inspect the project",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("existing directory", response.json()["detail"])
+
+    def test_workspace_task_routes_explicit_auto_and_multi_model_selections(self):
+        class WorkspaceModelService(FakeService):
+            async def list_models(self):
+                return [*await super().list_models(), {
+                    "name": "deepseek-coder:6.7b-instruct", "installed": True, "size": 1,
+                    "quantization": "Q4", "context_length": 4096, "capabilities": ["completion"],
+                }]
+
+            async def supports_tools(self, model):
+                return model == "qwen2.5-coder:7b-instruct-q4_K_M"
+
+            async def chat(self, model, prompt, images=None):
+                self.last_prompt = prompt
+                baseline = prompt.split("baseline_fingerprint='", 1)[1].split("'", 1)[0]
+                project_root = prompt.split("project_root='", 1)[1].split("';", 1)[0]
+                return ChatResult(model=model, status="ready", summary="Ready", content=json.dumps({
+                    "schema_version": 1,
+                    "project_root": project_root,
+                    "baseline_fingerprint": baseline,
+                    "actions": [{"kind": "status"}],
+                }))
+
+        project = Path(self.temporary_directory.name) / "canonical-workspace"
+        project.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=project, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=project, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project, check=True)
+        (project / "README.md").write_text("test\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=project, check=True)
+        subprocess.run(["git", "commit", "-m", "initial"], cwd=project, check=True, capture_output=True)
+        model_service = WorkspaceModelService()
+        client = self.track_core_client(TestClient(create_app(model_service, self.workspace)))
+        session = self.workspace.create_session()
+        from web_app.attachments import AttachmentService
+        AttachmentService(self.workspace).import_text(session.id, "workspace context evidence")
+        base = {
+            "project_root": str(project), "session_id": session.id,
+            "engine_id": "borg", "prompt": "Inspect the repository",
+        }
+
+        explicit = client.post("/api/workspace/tasks", json={**base, "model_selection": "qwen2.5-coder:7b-instruct-q4_K_M"})
+        automatic = client.post("/api/workspace/tasks", json={**base, "model_selection": "auto"})
+        multiple = client.post("/api/workspace/tasks", json={**base, "model_selection": "multi-model"})
+        bad_engine = client.post("/api/workspace/tasks", json={**base, "engine_id": "missing", "model_selection": "auto"})
+        bad_model = client.post("/api/workspace/tasks", json={**base, "model_selection": "opencoder:8b"})
+        fallback = client.post("/api/workspace/tasks", json={**base, "model_selection": "deepseek-coder:6.7b-instruct"})
+        missing_project = client.post("/api/workspace/tasks", json={
+            **base, "project_root": str(project / "missing"), "model_selection": "auto",
+        })
+
+        self.assertEqual(explicit.status_code, 201)
+        self.assertEqual(explicit.json()["requested_model"], "qwen2.5-coder:7b-instruct-q4_K_M")
+        self.assertEqual(explicit.json()["effective_model"], "qwen2.5-coder:7b-instruct-q4_K_M")
+        self.assertEqual(explicit.json()["requested_engine"], "borg")
+        self.assertEqual(explicit.json()["effective_engine"], "borg")
+        self.assertEqual(automatic.status_code, 201)
+        self.assertEqual(automatic.json()["requested_model"], "auto")
+        self.assertTrue(automatic.json()["warnings"])
+        self.assertEqual(multiple.status_code, 202)
+        self.assertEqual(multiple.json()["requested_model"], "multi-model")
+        self.assertEqual(multiple.json()["route"], "multi-model")
+        self.assertEqual(bad_engine.status_code, 409)
+        self.assertEqual(bad_model.status_code, 409)
+        self.assertEqual(fallback.status_code, 201)
+        self.assertEqual(fallback.json()["requested_model"], "deepseek-coder:6.7b-instruct")
+        self.assertEqual(fallback.json()["effective_model"], "qwen3:4b")
+        self.assertTrue(fallback.json()["warnings"])
+        self.assertIn("workspace context evidence", model_service.last_prompt)
+        self.assertEqual(missing_project.status_code, 400)
 
     def test_optimized_connector_catalog_and_install_plans_are_additive(self):
         client = TestClient(create_app(self.service, self.workspace, optimized=True))
+
+        self.assertEqual(type(client.app.state.model_runs.inference).__name__, "InferenceRouter")
 
         models = client.get("/api/models").json()["models"]
         self.assertTrue(any(item["name"].startswith("openvino/") and not item["installed"] for item in models))
@@ -389,6 +738,13 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(response.json()[0]["model_compatibility_error"], "Ollama is unavailable")
 
     def tearDown(self):
+        for client in self._core_clients:
+            policy = getattr(client.app.state, "core_policy", None)
+            task_store = getattr(client.app.state, "core_task_store", None)
+            if policy is not None:
+                policy.close()
+            if task_store is not None:
+                task_store.close()
         self.temporary_directory.cleanup()
 
     def test_sessions_create_reopen_and_delete(self):
@@ -411,11 +767,21 @@ class WebApiTests(unittest.TestCase):
     def test_health_reports_ollama_readiness(self):
         self.assertEqual(
             self.client.get("/api/health").json(),
-            {"status": "ready", "ollama": True, "app_version": "V1.0.17-beta.5"},
+                {"status": "ready", "ollama": True, "app_version": "V1.0.18-alpha.11"},
         )
-        self.assertEqual(self.client.app.version, "V1.0.17-beta.5")
+        self.assertEqual(self.client.app.version, "V1.0.18-alpha.11")
         self.service.available = False
         self.assertEqual(self.client.get("/api/health").json()["status"], "degraded")
+
+    def test_ollama_health_allows_the_same_slow_local_response_as_model_discovery(self):
+        class SlowLocalClient:
+            async def list(self):
+                await asyncio.sleep(2.1)
+                return {"models": []}
+
+        result = asyncio.run(OllamaService(client=SlowLocalClient()).health())
+
+        self.assertEqual(result, {"ollama": True})
 
     def test_app_construction_does_not_require_optional_integrity_capability(self):
         class MinimalService:
@@ -730,6 +1096,27 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual([message.role for message in restored.messages], ["user", "assistant"])
         self.assertEqual(restored.messages[0].content, "Review the attachment")
 
+    def test_direct_chat_uses_the_same_authoritative_task_boundary_as_batch_runs(self):
+        from web_app.attachments import AttachmentService
+
+        session = self.workspace.create_session()
+        AttachmentService(self.workspace).import_text(
+            session.id,
+            "This is stale test context and must not redefine current system capabilities.",
+            "old-evidence.txt",
+        )
+
+        response = self.client.post(
+            "/api/chat",
+            json={"model": "qwen", "prompt": "Report current capabilities", "session_id": session.id},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("USER TASK (authoritative):\nReport current capabilities", self.service.last_prompt)
+        self.assertIn("ACTIVE SKILLS AND REFERENCE CONTEXT:", self.service.last_prompt)
+        self.assertIn("old-evidence.txt", self.service.last_prompt)
+        self.assertIn("Keep facts from supplied context distinct", self.service.last_prompt)
+
     def test_chat_recalculates_recommendations_and_returns_attachment_metadata(self):
         from web_app.models import SkillPack, SkillRecord
         from web_app.skills import SkillLibraryService
@@ -742,7 +1129,7 @@ class WebApiTests(unittest.TestCase):
             )],
         ))
         self.client.close()
-        self.client = TestClient(create_app(self.service, self.workspace))
+        self.client = self.track_core_client(TestClient(create_app(self.service, self.workspace)))
         session = self.workspace.create_session()
 
         response = self.client.post(
@@ -785,6 +1172,24 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual([action.command for action in parsed.actions], ["git status", "git diff"])
         self.assertNotIn("risk", parsed.actions[0].model_dump())
         self.assertNotIn("approved", parsed.actions[0].model_dump())
+
+    def test_legacy_response_preserves_explicit_public_reasoning(self):
+        parsed = parse_response_content(
+            '<think>Check the repository evidence before answering.</think>'
+            + json.dumps({
+                "status": "ready",
+                "summary": "Evidence checked",
+                "content": "The public answer remains separate.",
+            })
+        )
+
+        self.assertEqual(parsed.content, "The public answer remains separate.")
+        self.assertEqual(len(parsed.reasoning.entries), 1)
+        self.assertEqual(parsed.reasoning.entries[0].provenance, "provider_tag")
+        self.assertEqual(
+            parsed.reasoning.entries[0].text,
+            "Check the repository evidence before answering.",
+        )
 
     def test_structured_coding_agent_task_is_validated_for_user_review(self):
         parsed = parse_response_content(json.dumps({

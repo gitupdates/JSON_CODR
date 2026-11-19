@@ -76,6 +76,37 @@ class RecommendationTests(unittest.TestCase):
         self.session.auto_attach_skills = False
         self.assertEqual(self.service.recommend(self.session, "python").recommendations, [])
 
+    def test_skill_catalog_question_uses_real_enabled_skill_records(self):
+        result = self.service.recommend(
+            self.session,
+            "List the enabled skills available to this task and their required capabilities.",
+        )
+
+        self.assertEqual(
+            [item.reference for item in result.recommendations],
+            ["tools:cloud-release", "tools:generic", "tools:python-review", "tools:react-ui"],
+        )
+        self.assertTrue(all(item.reasons == ["explicit skill catalog query"] for item in result.recommendations))
+
+    def test_readteam_slash_command_selects_builtin_review(self):
+        self.library.ensure_builtin_readteam()
+
+        result = self.service.recommend(self.session, "/readteam review this release claim")
+
+        selected = next(item for item in result.recommendations if item.reference == "readteam:readteam-secondary-review")
+        self.assertEqual(selected.score, 1000)
+        self.assertEqual(selected.reasons, ["explicit slash command: /readteam"])
+
+    def test_readteam_does_not_auto_attach_to_ordinary_review_prompts(self):
+        self.library.ensure_builtin_readteam()
+
+        result = self.service.recommend(self.session, "Review this Python code using evidence")
+
+        self.assertNotIn(
+            "readteam:readteam-secondary-review",
+            [item.reference for item in result.recommendations],
+        )
+
     def test_api_previews_reasons_updates_session_controls_and_rejects_unknown_exclusions(self):
         client = TestClient(create_app(FakeService(), self.workspace))
 

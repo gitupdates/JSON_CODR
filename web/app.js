@@ -2,6 +2,7 @@ const elements = {
   form: document.querySelector("#chat-form"),
   health: document.querySelector("#health-status"),
   model: document.querySelector("#model-select"),
+  workspaceAgentSelect: document.querySelector("#workspace-agent-select"),
   modelCount: document.querySelector("#model-count"),
   modelDetail: document.querySelector("#model-detail"),
   prompt: document.querySelector("#prompt-input"),
@@ -15,6 +16,10 @@ const elements = {
   content: document.querySelector("#content-output"),
   artifactOutput: document.querySelector("#artifact-output"),
   error: document.querySelector("#error-output"),
+  conversationTimeline: document.querySelector("#conversation-timeline"),
+  conversationExportMarkdown: document.querySelector("#conversation-export-markdown"),
+  conversationExportJson: document.querySelector("#conversation-export-json"),
+  conversationExportZip: document.querySelector("#conversation-export-zip"),
   appSidebar: document.querySelector("#app-sidebar"),
   sidebarCollapse: document.querySelector("#sidebar-collapse"),
   sidebarResizeHandle: document.querySelector("#sidebar-resize-handle"),
@@ -70,7 +75,19 @@ const elements = {
   destructiveInput: document.querySelector("#destructive-confirmation-input"),
   destructiveSubmit: document.querySelector("#destructive-confirmation-submit"),
   settingSkillsOpen: document.querySelector("#setting-skills-open"),
-  settingTheme: document.querySelector("#setting-theme"),
+  uiPreset: document.querySelector("#ui-preset"),
+  uiPresetDetails: document.querySelector("#ui-preset-details"),
+  uiMode: document.querySelector("#ui-mode"),
+  uiModeHelp: document.querySelector("#ui-mode-help"),
+  uiDensity: document.querySelector("#ui-density"),
+  uiTypography: document.querySelector("#ui-typography"),
+  uiComponentOverrides: document.querySelector("#ui-component-overrides"),
+  uiOverrideSummary: document.querySelector("#ui-override-summary"),
+  uiPreviewStatus: document.querySelector("#ui-preview-status"),
+  uiSave: document.querySelector("#ui-save"),
+  uiCancel: document.querySelector("#ui-cancel"),
+  uiResetPreset: document.querySelector("#ui-reset-preset"),
+  uiRestoreDefaults: document.querySelector("#ui-restore-defaults"),
   approvedSkillDirectories: document.querySelector("#approved-skill-directories"),
   hardwareStatus: document.querySelector("#hardware-status"),
   hardwareDetect: document.querySelector("#hardware-detect"),
@@ -126,27 +143,53 @@ const elements = {
   optimizedModelSearchRun: document.querySelector("#optimized-model-search-run"),
   optimizedModelSearchResults: document.querySelector("#optimized-model-search-results"),
   terminalPanel: document.querySelector("#terminal-panel"),
+  workspaceShell: document.querySelector(".workspace-shell"),
+  workspaceAnnouncer: document.querySelector("#workspace-announcer"),
+  workspaceLeftDock: document.querySelector("#workspace-left-dock"),
+  workspaceRightDock: document.querySelector("#workspace-right-dock"),
+  workspaceBottomDock: document.querySelector("#workspace-bottom-dock"),
+  workspaceSeparators: [...document.querySelectorAll(".workspace-separator")],
+  workspaceLayoutMenu: document.querySelector("#workspace-layout-menu"),
+  workspaceLayoutPopover: document.querySelector("#workspace-layout-popover"),
+  workspaceFilesPanel: document.querySelector("#workspace-files-panel"),
+  workspaceFilesList: document.querySelector("#workspace-files-list"),
+  workspaceFilesAttach: document.querySelector("#workspace-files-attach"),
+  workspaceSkillsPanel: document.querySelector("#workspace-skills-panel"),
+  workspaceSkillsList: document.querySelector("#workspace-skills-list"),
+  workspaceActivityPanel: document.querySelector("#workspace-activity-panel"),
+  workspaceActivityNotice: document.querySelector("#workspace-activity-notice"),
+  workspacePersistentNotice: document.querySelector("#workspace-persistent-notice"),
+  workspaceActivityStop: document.querySelector("#workspace-activity-stop"),
+  disabledComponents: document.querySelector("#disabled-components"),
+  workspaceTabs: [...document.querySelectorAll("[data-workspace-mode]")],
+  workspaceViews: [...document.querySelectorAll("[data-workspace-view]")],
+  workspaceAgentForm: document.querySelector("#workspace-agent-form"),
+  workspaceProjectRoot: document.querySelector("#workspace-project-root"),
+  workspaceModel: document.querySelector("#workspace-model"),
+  workspaceOutcome: document.querySelector("#workspace-outcome"),
+  workspaceAgentRun: document.querySelector("#workspace-agent-run"),
+  workspaceAgentStatus: document.querySelector("#workspace-agent-status"),
+  workspaceAgentResult: document.querySelector("#workspace-agent-result"),
   terminalXterm: document.querySelector("#terminal-xterm"),
-  terminalTabs: [...document.querySelectorAll("[data-terminal-profile]")],
   terminalOutput: document.querySelector("#terminal-output"),
   terminalInput: document.querySelector("#terminal-input"),
   terminalRun: document.querySelector("#terminal-run"),
   terminalStop: document.querySelector("#terminal-stop"),
   terminalStatus: document.querySelector("#terminal-status"),
-  codingAgentLauncher: document.querySelector("#coding-agent-launcher"),
-  codingAgentTool: document.querySelector("#coding-agent-tool"),
-  codingAgentModel: document.querySelector("#coding-agent-model"),
-  codingAgentProject: document.querySelector("#coding-agent-project"),
-  codingAgentMode: document.querySelector("#coding-agent-mode"),
-  codingAgentPersistent: document.querySelector("#coding-agent-persistent"),
-  codingAgentStatus: document.querySelector("#coding-agent-status"),
-  codingAgentGrants: document.querySelector("#coding-agent-grants"),
+  taskActivity: document.querySelector("#task-activity"),
+  taskSteer: document.querySelector("#task-steer"),
+  taskStop: document.querySelector("#task-stop"),
+  taskRetry: document.querySelector("#task-retry"),
+  taskUndo: document.querySelector("#task-undo"),
+  taskExecutionDetails: document.querySelector("#task-execution-details"),
+  taskRequestedModel: document.querySelector("#task-requested-model"),
+  taskEffectiveModel: document.querySelector("#task-effective-model"),
 };
 
 const VALID_THEME_MODES = new Set(["light", "dark", "system"]);
 const TERMINAL_SESSIONS_KEY = "json_codr_terminal_sessions";
 const TERMINAL_COMMAND_HISTORY_KEY = "json_codr_terminal_command_history";
-const NAVIGATION_DESTINATIONS = new Set(["chat", "terminal", "context", "skills", "hardware", "settings"]);
+const NAVIGATION_DESTINATIONS = new Set(["workspace", "context", "skills", "hardware", "settings"]);
 const HARDWARE_SECTIONS = new Set(["overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "leaderboard", "history", "localperf"]);
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 const narrowNavigationQuery = window.matchMedia("(max-width: 700px)");
@@ -164,6 +207,7 @@ let terminalFitAddon = null;
 let terminalKeyboardController = null;
 let lastTerminalSequence = 0;
 let activeTerminalProfile = "powershell";
+let activeWorkspaceMode = "shell";
 const terminalSessions = new Map();
 let terminalPersistenceTimer = null;
 let skillAttachmentId = null;
@@ -176,10 +220,9 @@ let settingsSaveQueue = Promise.resolve();
 let themeSaveRevision = 0;
 let skillsChangeRevision = 0;
 let navigationChangeRevision = 0;
-let activeDestination = "chat";
+let activeDestination = "workspace";
 let activeHardwareSection = "overview";
 let sidebarWidth = 260;
-let currentThemeMode = normalizeThemeMode(localStorage.getItem("json_codr_theme"));
 let persistedThemeMode = null;
 let excludedSkillIds = [];
 let pendingDestructiveAction = null;
@@ -188,13 +231,235 @@ let hardwareDetectionPromise = null;
 let leaderboardHistoryCache = [];
 let integrityHistoryCache = [];
 let leaderboardCandidateCache = [];
+const coreClient = new window.JSONCodrCoreClient();
+const taskView = window.JSONCodrTaskView({
+  activity: elements.taskActivity,
+  steer: elements.taskSteer,
+  stop: elements.taskStop,
+  retry: elements.taskRetry,
+  undo: elements.taskUndo,
+  details: elements.taskExecutionDetails,
+  requested: elements.taskRequestedModel,
+  effective: elements.taskEffectiveModel,
+});
+let activeCoreTaskId = null;
+let activeWorkspaceRoute = null;
+const conversationView = new window.JSONCodrConversationView({ timeline: elements.conversationTimeline });
+let restoredConversationSessionId = null;
+function handleCoreRecord(record) {
+  if (record.task_id !== activeCoreTaskId) return;
+  taskView.render(record);
+  const latestEvent = (record.events || []).at(-1);
+  renderWorkspaceActivityNotice(latestEvent?.event_type || record.status, record.status);
+  const message = conversationView.apply(record);
+  const completion = [...(record.events || [])].reverse().find((item) => item.event_type === "inference.completed");
+  if (completion) {
+    const payload = completion.payload.result;
+    markOllamaReady();
+    elements.responseModel.textContent = completion.payload.effective_model_id || payload.model;
+    renderAttachedSkills(payload.attached_skills || []);
+    renderRecommendations(payload.skill_recommendations || []);
+    renderActions(payload.action_proposals || []);
+    elements.artifactOutput.hidden = !payload.artifact;
+    if (payload.artifact) {
+      elements.artifactOutput.href = payload.artifact.url;
+      elements.artifactOutput.textContent = `Download ${payload.artifact.filename}`;
+    }
+  }
+  if (["completed", "failed", "cancelled", "interrupted"].includes(record.status)) {
+    conversationView.persistCompleted(record.task_id).catch((error) => showError(error.message));
+    setPending(false);
+    if (!completion && message?.error) elements.requestStatus.textContent = message.error;
+  }
+}
+coreClient.subscribe(handleCoreRecord);
 let selectedLeaderboardSessionId = null;
 let selectedLeaderboardRowId = null;
 let leaderboardSort = { key: "rank", direction: "asc" };
 const actionButtons = new Map();
+const workspacePanels = new Map();
+const workspaceHosts = {
+  left: elements.workspaceLeftDock,
+  right: elements.workspaceRightDock,
+  bottom: elements.workspaceBottomDock,
+};
+const workspaceLayout = window.createWorkspaceLayoutController({
+  availablePanels: ["files", "skills", "activity", "terminal"],
+  panelPlacements: {
+    files: ["left", "right", "bottom"],
+    skills: ["left", "right", "bottom"],
+    activity: ["right", "left", "bottom"],
+    terminal: ["bottom", "left", "right"],
+  },
+});
+
+function registerWorkspacePanel({ id, element, allowedPlacements, managementDestination = null, onShown = null }) {
+  if (!id || !element || workspacePanels.has(id)) return false;
+  workspacePanels.set(id, { id, element, allowedPlacements, managementDestination, onShown });
+  return true;
+}
+
+function getActiveWorkspacePanels(components) {
+  const disabled = new Set(
+    components.filter((component) => component.available === false).map((component) => component.workspacePanel).filter(Boolean),
+  );
+  return ["files", "skills", "activity", "terminal"].filter((panelId) => !disabled.has(panelId));
+}
+
+function renderDisabledComponents(components) {
+  if (!elements.disabledComponents) return;
+  const disabled = components.filter((component) => component.available === false);
+  elements.disabledComponents.replaceChildren();
+  if (!disabled.length) {
+    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "No disabled components.";
+    elements.disabledComponents.append(empty); return;
+  }
+  for (const component of disabled) {
+    const unavailableReason = component.reason || "Required runtime or installation was not verified.";
+    const statusSource = component.statusSource || "component registry";
+    const row = document.createElement("article"); row.className = "dependency-item";
+    const title = document.createElement("strong"); title.textContent = component.name || component.component_id;
+    const detail = document.createElement("p"); detail.className = "meta";
+    detail.textContent = `${unavailableReason} · Status source: ${statusSource}`;
+    const enable = document.createElement("button"); enable.type = "button"; enable.className = "secondary";
+    enable.textContent = "Enable or configure";
+    enable.addEventListener("click", () => selectDestination(component.destination || "settings"));
+    row.append(title, detail, enable); elements.disabledComponents.append(row);
+  }
+}
+
+function renderWorkspaceFiles(attachments) {
+  if (!elements.workspaceFilesList) return;
+  elements.workspaceFilesList.replaceChildren();
+  if (!attachments.length) {
+    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "No files attached.";
+    elements.workspaceFilesList.append(empty); return;
+  }
+  for (const attachment of attachments) {
+    const row = document.createElement("div"); row.className = "workspace-quick-row";
+    const name = document.createElement("span"); name.textContent = attachment.display_name;
+    const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "Remove";
+    remove.addEventListener("click", async () => {
+      await fetch(`/api/sessions/${sessionId}/attachments/${attachment.id}`, { method: "DELETE" });
+      await loadAttachments();
+    });
+    row.append(name, remove); elements.workspaceFilesList.append(row);
+  }
+}
+
+function renderWorkspaceSkills(packs, selected) {
+  if (!elements.workspaceSkillsList) return;
+  elements.workspaceSkillsList.replaceChildren();
+  const skills = packs.flatMap((pack) => pack.skills.map((skill) => ({ pack, skill })));
+  if (!skills.length) {
+    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "No skills installed.";
+    elements.workspaceSkillsList.append(empty); return;
+  }
+  for (const { pack, skill } of skills) {
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input"); checkbox.type = "checkbox";
+    checkbox.value = `${pack.id}:${skill.id}`; checkbox.checked = selected.has(checkbox.value); checkbox.disabled = !skill.enabled;
+    checkbox.addEventListener("change", async () => {
+      const selected = [...elements.workspaceSkillsList.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
+      await saveSkillSelection(selected); await loadSkills();
+    });
+    label.append(checkbox, document.createTextNode(` ${skill.name}`)); elements.workspaceSkillsList.append(label);
+  }
+}
+
+function renderWorkspaceActivityNotice(message = "Ready", status = "idle") {
+  const text = status === "running" ? `${message} · Stop is available in Activity` : message;
+  if (elements.workspaceActivityNotice) elements.workspaceActivityNotice.textContent = text;
+  if (elements.workspacePersistentNotice) elements.workspacePersistentNotice.textContent = text;
+  if (elements.workspaceActivityStop) elements.workspaceActivityStop.hidden = status !== "running";
+  if (["completed", "failed", "approval_required"].includes(status) && elements.workspaceAnnouncer) {
+    elements.workspaceAnnouncer.textContent = `${status.replace("_", " ")}: ${message}`;
+  }
+}
+
+function workspaceRegionForPanel(state, panelId) {
+  return ["left", "right", "bottom"].find((region) => state.regions[region].includes(panelId)) || null;
+}
+
+function renderWorkspaceLayout(state = workspaceLayout.getState()) {
+  elements.workspaceShell.setAttribute("data-workspace-mode", state.mode || "wide");
+  for (const [region, host] of Object.entries(workspaceHosts)) {
+    const panelIds = state.regions[region].filter((id) => workspacePanels.has(id));
+    for (const panelId of panelIds) {
+      const panel = workspacePanels.get(panelId);
+      if (panel.element.parentElement !== host) host.append(panel.element);
+      panel.element.hidden = state.collapsed[region];
+      panel.element.dataset.workspacePanel = panelId;
+      if (!state.collapsed[region]) panel.onShown?.();
+    }
+    host.hidden = panelIds.length === 0 || state.collapsed[region];
+    elements.workspaceShell.style.setProperty(`--workspace-${region}-size`, `${state.sizes[region]}px`);
+    const separator = elements.workspaceSeparators.find((item) => item.classList.contains(`workspace-separator-${region}`));
+    if (separator) {
+      separator.hidden = host.hidden;
+      separator.setAttribute("aria-valuenow", String(state.sizes[region]));
+      separator.setAttribute("aria-valuetext", `${state.sizes[region]} pixels`);
+    }
+  }
+}
+
+function openWorkspacePanel(id, placement = null) {
+  const panel = workspacePanels.get(id);
+  if (!panel) return false;
+  const current = workspaceRegionForPanel(workspaceLayout.getState(), id);
+  const target = panel.allowedPlacements.includes(placement) ? placement : current || panel.allowedPlacements[0];
+  renderWorkspaceLayout(workspaceLayout.open(id, target));
+  panel.element.focus?.({ preventScroll: true });
+  return true;
+}
+
+function focusWorkspaceRegion(region) {
+  const state = workspaceLayout.getState();
+  const id = state.regions[region]?.at(-1);
+  if (!id) return false;
+  renderWorkspaceLayout(workspaceLayout.focus(id));
+  workspacePanels.get(id)?.element.focus?.({ preventScroll: true });
+  return true;
+}
+
+function bindWorkspaceSeparator(separator) {
+  const region = ["left", "right", "bottom"].find((name) => separator.classList.contains(`workspace-separator-${name}`));
+  if (!region) return;
+  const commitSize = (value) => renderWorkspaceLayout(workspaceLayout.resize(region, value));
+  separator.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    separator.setPointerCapture(event.pointerId);
+    const start = region === "bottom" ? event.clientY : event.clientX;
+    const initial = workspaceLayout.getState().sizes[region];
+    let pending = initial;
+    let frame = null;
+    const onMove = (moveEvent) => {
+      const current = region === "bottom" ? moveEvent.clientY : moveEvent.clientX;
+      const direction = region === "right" || region === "bottom" ? -1 : 1;
+      pending = initial + ((current - start) * direction);
+      if (frame === null) frame = requestAnimationFrame(() => { frame = null; commitSize(pending); });
+    };
+    const onUp = () => {
+      separator.removeEventListener("pointermove", onMove);
+      if (frame !== null) cancelAnimationFrame(frame);
+      commitSize(pending);
+    };
+    separator.addEventListener("pointermove", onMove);
+    separator.addEventListener("pointerup", onUp, { once: true });
+  });
+  separator.addEventListener("keydown", (event) => {
+    const delta = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -10
+      : event.key === "ArrowRight" || event.key === "ArrowDown" ? 10 : 0;
+    if (!delta) return;
+    event.preventDefault();
+    commitSize(workspaceLayout.getState().sizes[region] + delta);
+  });
+  separator.addEventListener("dblclick", () => commitSize(region === "left" ? 260 : region === "right" ? 300 : 260));
+}
 
 const dependencyInstallQueue = createDependencyInstallQueue(async (command) => {
-  selectDestination("terminal");
+  openWorkspacePanel("terminal", "bottom");
+  selectDestination("workspace");
   elements.terminalStatus.textContent = "Installing prerequisites...";
   appendTerminalOutput(`Installing prerequisites: ${command}\n`);
   try {
@@ -209,21 +474,39 @@ function normalizeThemeMode(mode) {
   return VALID_THEME_MODES.has(mode) ? mode : "dark";
 }
 
-function applyThemeMode(mode, { cache = true } = {}) {
-  const normalized = normalizeThemeMode(mode);
-  const effective = normalized === "system" ? (systemThemeQuery.matches ? "dark" : "light") : normalized;
-  currentThemeMode = normalized;
-  document.documentElement.dataset.theme = effective;
-  document.documentElement.style.colorScheme = effective;
-  if (cache) localStorage.setItem("json_codr_theme", normalized);
-  if (elements.settingTheme) elements.settingTheme.value = normalized;
-  return effective;
+function applyAppearanceState(effective) {
+  document.documentElement.dataset.theme = effective.effectiveMode;
+  document.documentElement.style.colorScheme = effective.effectiveMode;
+  document.documentElement.dataset.uiPreset = effective.preset;
+  document.documentElement.dataset.uiDensity = effective.density;
+  document.documentElement.dataset.uiTypography = effective.typography;
+  for (const [family, variant] of Object.entries(effective.components)) {
+    document.documentElement.dataset[`ui${family[0].toUpperCase()}${family.slice(1)}`] = variant;
+  }
 }
 
-systemThemeQuery.addEventListener("change", () => {
-  if (currentThemeMode === "system") applyThemeMode("system", { cache: false });
+const uiCustomizationController = window.createUICustomizationController({
+  catalog: window.JSONCodrUICatalog,
+  apply: applyAppearanceState,
+  announce: (message) => { if (elements.uiPreviewStatus) elements.uiPreviewStatus.textContent = message; },
 });
-applyThemeMode(currentThemeMode);
+const uiCustomizationEditor = window.bindUICustomizationEditor({
+  controller: uiCustomizationController,
+  catalog: window.JSONCodrUICatalog,
+  elements: {
+    preset: elements.uiPreset, presetDetails: elements.uiPresetDetails, mode: elements.uiMode, modeHelp: elements.uiModeHelp,
+    density: elements.uiDensity, typography: elements.uiTypography,
+    components: elements.uiComponentOverrides, summary: elements.uiOverrideSummary,
+    status: elements.uiPreviewStatus, save: elements.uiSave, cancel: elements.uiCancel,
+    resetPreset: elements.uiResetPreset, restoreDefaults: elements.uiRestoreDefaults,
+  },
+});
+
+systemThemeQuery.addEventListener("change", () => {
+  if (uiCustomizationController.getDraft().mode === "system") {
+    applyAppearanceState(uiCustomizationController.getEffectiveState());
+  }
+});
 
 function boundedSidebarWidth(value) {
   return Math.max(220, Math.min(380, Math.round(Number(value) || 260)));
@@ -281,7 +564,11 @@ function selectHardwareSection(section, { persist = true, focus = false } = {}) 
 }
 
 function selectDestination(destination, { persist = true, focus = false } = {}) {
-  if (!NAVIGATION_DESTINATIONS.has(destination)) destination = "chat";
+  if (destination === "terminal") {
+    openWorkspacePanel("terminal", "bottom");
+    destination = "workspace";
+  }
+  if (!NAVIGATION_DESTINATIONS.has(destination)) destination = "workspace";
   activeDestination = destination;
   for (const button of elements.navigationButtons) {
     const selected = button.dataset.destination === destination;
@@ -292,9 +579,10 @@ function selectDestination(destination, { persist = true, focus = false } = {}) 
   for (const view of elements.destinationViews) view.hidden = view.dataset.view !== destination;
   elements.hardwareSubnavigation.hidden = destination !== "hardware";
   if (destination === "hardware") selectHardwareSection(activeHardwareSection, { persist: false });
+  if (destination === "settings") uiCustomizationEditor.begin();
   if (destination === "terminal") {
     initializeXterm();
-    if (!terminalId) elements.terminalStatus.textContent = "Choose PowerShell, Continue, or Aider";
+    if (!terminalId) elements.terminalStatus.textContent = "PowerShell is ready to start";
   }
   if (focus) elements.destinationViews.find((view) => view.dataset.view === destination)?.querySelector("h1, h2, h3")?.focus({ preventScroll: true });
   if (narrowNavigationQuery.matches) closeNavigationDrawer();
@@ -545,108 +833,6 @@ async function connectTerminalRecord(terminal, profile = activeTerminalProfile) 
   });
 }
 
-async function launchCodingAgent(event) {
-  event.preventDefault();
-  const payload = {
-    tool: elements.codingAgentTool.value,
-    model: elements.codingAgentModel.value,
-    project_root: elements.codingAgentProject.value,
-    mode: elements.codingAgentMode.value,
-    prompt: elements.codingAgentMode.value === "delegated" ? elements.prompt.value.trim() : null,
-  };
-  elements.codingAgentStatus.textContent = "Validating authorization…";
-  if (payload.tool === "broker" || payload.tool === "shell") {
-    const grantResponse = await fetch("/api/git-broker/grants", {
-      method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
-      body: JSON.stringify({ profile: payload.tool, project_root: payload.project_root }),
-    });
-    if (!grantResponse.ok) throw new Error(await responseErrorMessage(grantResponse, "Unable to save execution authorization"));
-    const grant = await grantResponse.json();
-    await renderExecutionGrant(grant, payload);
-    if (payload.tool === "broker") {
-      const statusResponse = await fetch(`/api/git-broker/status?project_root=${encodeURIComponent(payload.project_root)}`);
-      if (!statusResponse.ok) throw new Error(await responseErrorMessage(statusResponse, "Unable to inspect project"));
-      const status = await statusResponse.json();
-      const repository = status.repository;
-      if (payload.mode === "delegated") {
-        elements.codingAgentStatus.textContent = `Broker adapter running ${payload.model}…`;
-        const executionResponse = await fetch("/api/git-broker/adapter", {
-          method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
-          body: JSON.stringify({ model: payload.model, grant_id: grant.id, project_root: payload.project_root, prompt: payload.prompt }),
-        });
-        if (!executionResponse.ok) throw new Error(await responseErrorMessage(executionResponse, "Broker adapter task failed"));
-        const execution = await executionResponse.json();
-        const result = execution.result;
-        elements.codingAgentStatus.textContent = `Broker adapter ${result.status} · ${result.branch || repository.branch || "detached HEAD"}${result.commit ? ` · ${result.commit.slice(0, 10)}` : ""}`;
-        return;
-      }
-      elements.codingAgentStatus.textContent = `Broker adapter ready · ${repository.branch || "detached HEAD"} · ${repository.clean ? "in sync" : "local changes detected"}`;
-      return;
-    }
-    const terminalResponse = await fetch("/api/terminals", {
-      method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
-      body: JSON.stringify({ shell: "powershell", cwd: payload.project_root }),
-    });
-    if (!terminalResponse.ok) throw new Error(await responseErrorMessage(terminalResponse, "Unable to launch non-sandboxed shell"));
-    await connectTerminalRecord(await terminalResponse.json(), "powershell");
-    elements.codingAgentStatus.textContent = "Unrestricted non-sandboxed shell launched for the authorized project.";
-    return;
-  }
-  if (elements.codingAgentPersistent.checked) {
-    const grant = await fetch("/api/coding-agents/grants", {
-      method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
-      body: JSON.stringify({ tool: payload.tool, project_root: payload.project_root }),
-    });
-    if (!grant.ok) throw new Error(await responseErrorMessage(grant, "Unable to save coding-agent authorization"));
-  }
-  const response = await fetch("/api/coding-agents/launch", {
-    method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" }, body: JSON.stringify(payload),
-  });
-  if (!response.ok) throw new Error(await responseErrorMessage(response, "Unable to launch coding agent"));
-  const terminal = await response.json();
-  const effectiveModel = terminal.effective_model || payload.model;
-  const compatibility = terminal.tool_compatibility;
-  const modelStatus = compatibility?.route === "delegated_verified"
-    ? `${effectiveModel} · delegated verified tools for ${payload.model} · native tools not verified`
-    : compatibility?.route === "native_verified"
-      ? `${effectiveModel} · native tools verified`
-      : terminal.tool_fallback_used
-        ? `${effectiveModel} (verified tool fallback for ${payload.model})`
-        : effectiveModel;
-  activeTerminalProfile = payload.tool;
-  elements.terminalTabs.forEach((tab) => tab.setAttribute("aria-selected", String(tab.dataset.terminalProfile === activeTerminalProfile)));
-  elements.terminalOutput.textContent = "";
-  if (terminal.external) {
-    await closeActiveTerminal();
-    elements.terminalStatus.textContent = `${terminal.shell} launched`;
-    elements.codingAgentStatus.textContent = `${payload.tool} opened in Windows Terminal with ${modelStatus}`;
-    return;
-  }
-  await connectTerminalRecord(terminal, payload.tool);
-  elements.codingAgentStatus.textContent = `${payload.tool} launched with ${modelStatus}`;
-}
-
-async function renderExecutionGrant(grant, payload) {
-  elements.codingAgentGrants.replaceChildren();
-  const label = document.createElement("span");
-  label.className = "meta";
-  const support = payload.tool === "broker" ? "broker adapter" : "non-sandboxed shell";
-  label.textContent = `${payload.model} · ${support} · ${payload.project_root}`;
-  const revoke = document.createElement("button");
-  revoke.type = "button";
-  revoke.className = "secondary";
-  revoke.textContent = "Revoke";
-  revoke.addEventListener("click", async () => {
-    const response = await fetch(`/api/git-broker/grants/${encodeURIComponent(grant.id)}`, {
-      method: "DELETE", headers: { "X-JSON-CODR": "1" },
-    });
-    if (!response.ok) throw new Error(await responseErrorMessage(response, "Unable to revoke authorization"));
-    elements.codingAgentGrants.replaceChildren();
-    elements.codingAgentStatus.textContent = `${payload.tool} authorization revoked.`;
-  });
-  elements.codingAgentGrants.append(label, revoke);
-}
-
 async function sendApprovedAction(proposal, token, approveButton) {
   await ensureTerminal();
   if (terminalSocket.readyState !== WebSocket.OPEN) {
@@ -765,11 +951,64 @@ async function runTerminalCommand(command = null) {
 }
 
 async function ensureSession() {
-  if (sessionId && (await fetch(`/api/sessions/${sessionId}`)).ok) return sessionId;
-  const session = await fetch("/api/sessions", { method: "POST" }).then((response) => response.json());
-  sessionId = session.id;
-  localStorage.setItem("json_codr_session", sessionId);
+  if (!sessionId || !(await fetch(`/api/sessions/${sessionId}`)).ok) {
+    const session = await fetch("/api/sessions", { method: "POST" }).then((response) => response.json());
+    sessionId = session.id;
+    localStorage.setItem("json_codr_session", sessionId);
+  }
+  if (restoredConversationSessionId !== sessionId) {
+    await conversationView.restore(sessionId);
+    restoredConversationSessionId = sessionId;
+    elements.empty.hidden = conversationView.messages.length > 0;
+  }
+  const base = `/api/sessions/${encodeURIComponent(sessionId)}/conversation/export`;
+  elements.conversationExportMarkdown.href = `${base}?format=markdown`;
+  elements.conversationExportJson.href = `${base}?format=json`;
+  elements.conversationExportZip.href = `${base}?format=zip&include_binaries=true`;
   return sessionId;
+}
+
+function selectWorkspaceMode(mode) {
+  activeWorkspaceMode = mode === "agent" ? "agent" : "shell";
+  for (const tab of elements.workspaceTabs) {
+    tab.setAttribute("aria-selected", String(tab.dataset.workspaceMode === activeWorkspaceMode));
+  }
+  for (const view of elements.workspaceViews) view.hidden = view.dataset.workspaceView !== activeWorkspaceMode;
+  if (activeWorkspaceMode === "shell") {
+    initializeXterm();
+    terminalFitAddon?.fit();
+  }
+}
+
+async function runWorkspaceAgent() {
+  const projectRoot = elements.workspaceProjectRoot.value.trim();
+  const model = elements.workspaceModel.value;
+  const outcome = elements.workspaceOutcome.value.trim();
+  if (!projectRoot || !model || !outcome) return;
+  elements.workspaceAgentRun.disabled = true;
+  elements.workspaceAgentStatus.textContent = "BORG is inspecting the project and executing the verified action plan…";
+  elements.workspaceAgentResult.textContent = "Task running…";
+  localStorage.setItem("json_codr_workspace_project_root", projectRoot);
+  try {
+    await ensureSession();
+    const response = await fetch("/api/workspace/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        project_root: projectRoot, session_id: sessionId, engine_id: "borg",
+        model_selection: model, prompt: outcome,
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || "Project task failed");
+    elements.workspaceAgentStatus.textContent = `${payload.route} · requested ${payload.requested_model} · effective ${payload.effective_model || "all installed models"}`;
+    elements.workspaceAgentResult.textContent = JSON.stringify(payload.result, null, 2);
+  } catch (error) {
+    elements.workspaceAgentStatus.textContent = "Agent task failed";
+    elements.workspaceAgentResult.textContent = error.message;
+  } finally {
+    elements.workspaceAgentRun.disabled = false;
+  }
 }
 
 async function persistSettings(update) {
@@ -912,8 +1151,9 @@ async function loadSettings() {
   if (!response.ok) throw new Error("Unable to load settings");
   settingsState = await response.json();
   persistedThemeMode = normalizeThemeMode(settingsState.ui.theme);
-  if (themeRevisionAtStart === themeSaveRevision) {
-    applyThemeMode(persistedThemeMode);
+  if (themeRevisionAtStart === themeSaveRevision && !localStorage.getItem(window.JSONCodrUICatalog.STORAGE_KEY)) {
+    uiCustomizationController.seedLegacyMode(persistedThemeMode);
+    uiCustomizationEditor.render();
   }
   if (navigationRevisionAtStart === navigationChangeRevision) {
     applySidebarWidth(settingsState.ui.sidebar_width);
@@ -924,7 +1164,6 @@ async function loadSettings() {
   if (skillsRevisionAtStart === skillsChangeRevision) {
     elements.settingSkillsOpen.checked = settingsState.ui.primary_destination === "skills";
   }
-  elements.settingTheme.disabled = false;
   elements.settingSkillsOpen.disabled = false;
   renderApprovedDirectories();
   renderGpuProfileControls();
@@ -984,10 +1223,10 @@ async function runHardwareDetection() {
             ? `delegated tool route verified via ${agents.effective_tool_model}`
             : "agent tools unavailable or unverified";
         const sessionState = agents?.continue_verified && agents?.aider_verified
-          ? "Continue verified · Aider verified"
+          ? "Coding workflow verified"
           : agents?.tool_route_verified
-            ? "Continue/Aider not verified on this profile"
-            : "Continue/Aider unavailable";
+            ? "Coding workflow not verified on this profile"
+            : "Coding workflow unavailable";
         const agentState = `${routeState} · ${sessionState}`;
         line.textContent = `${model.model} · ${state} · ${agentState}${model.reason ? ` · ${model.reason}` : ""}`;
         label.append(line);
@@ -1038,8 +1277,8 @@ async function runHardwareDetection() {
               ? `delegated tool route via ${agents.effective_tool_model}`
               : "agent tools unverified";
           const agentState = agents?.continue_verified && agents?.aider_verified
-            ? `${routeState} · Continue/Aider verified`
-            : `${routeState} · Continue/Aider not verified on this profile`;
+            ? `${routeState} · coding workflow verified`
+            : `${routeState} · coding workflow not verified on this profile`;
           line.textContent = `${model.model} · ${state} · ${agentState}${model.reason ? ` · ${model.reason}` : ""}`;
           modelDetails.append(line);
         }
@@ -1131,31 +1370,6 @@ async function runHardwareDetection() {
     if (activeHardwareSection === "leaderboard" && leaderboardHistoryCache.length) renderBenchmarkLeaderboard();
     return candidates;
   } finally { elements.hardwareDetect.disabled = false; }
-}
-
-function renderCodingAgentTasks(tasks) {
-  if (!tasks.length) return;
-  elements.actionReview.hidden = false;
-  for (const task of tasks) {
-    const card = document.createElement("article"); card.className = "action-card";
-    const title = document.createElement("strong"); title.textContent = `Proposed ${task.tool} coding task`;
-    const prompt = document.createElement("p"); prompt.textContent = task.prompt;
-    const cwd = document.createElement("small"); cwd.textContent = `Project boundary: ${task.project_root}`;
-    const controls = document.createElement("div"); controls.className = "action-controls";
-    const review = document.createElement("button"); review.type = "button"; review.className = "primary"; review.textContent = "Review delegated task";
-    review.addEventListener("click", () => {
-      elements.codingAgentTool.value = task.tool;
-      elements.codingAgentProject.value = task.project_root;
-      elements.codingAgentMode.value = "delegated";
-      elements.prompt.value = task.prompt;
-      selectDestination("terminal");
-      elements.codingAgentLauncher.scrollIntoView({ behavior: "smooth", block: "center" });
-      elements.codingAgentStatus.textContent = "Review authorization, model, project, and task before launch.";
-    });
-    controls.append(review);
-    card.append(title, prompt, cwd, controls);
-    elements.actionList.append(card);
-  }
 }
 
 async function restoreCpuBackend() {
@@ -1671,6 +1885,7 @@ async function loadAttachments() {
   await ensureSession();
   elements.exportArchive.href = `/api/sessions/${sessionId}/archive.zip`;
   const attachments = await fetch(`/api/sessions/${sessionId}/attachments`).then((response) => response.json());
+  renderWorkspaceFiles(attachments);
   elements.contextCount.textContent = `${attachments.length} item${attachments.length === 1 ? "" : "s"}`;
   elements.attachmentList.replaceChildren();
   if (!attachments.length) elements.attachmentList.innerHTML = '<p class="meta">No context attached.</p>';
@@ -1723,8 +1938,8 @@ async function loadAttachments() {
   await loadSkills();
 }
 
-async function saveSkillSelection() {
-  const selected = [...elements.skillList.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
+async function saveSkillSelection(selected = null) {
+  selected = selected || [...elements.skillList.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
   const response = await fetch(`/api/sessions/${sessionId}/skills`, {
     method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ selected }),
   });
@@ -1760,6 +1975,7 @@ async function loadSkills() {
   ]);
   if (generation !== skillLoadGeneration) return;
   const selected = new Set(session.selected_skill_ids || []);
+  renderWorkspaceSkills(packs, selected);
   const content = document.createDocumentFragment();
   if (!packs.length) {
     const empty = document.createElement("p");
@@ -2059,7 +2275,12 @@ function selectedModel() {
 
 function updateModelDetail() {
   const model = selectedModel();
-  if (!model) return;
+  if (!model) {
+    elements.modelDetail.textContent = elements.model.value === "multi-model"
+      ? "Runs one durable, normalized result for every installed model."
+      : "Automatically selects a compatible installed local model.";
+    return;
+  }
   const size = model.size ? `${(model.size / 1e9).toFixed(1)} GB` : "size unavailable";
   const context = model.context_length ? `${model.context_length.toLocaleString()} ctx` : "context unavailable";
   const capabilities = model.capabilities.length ? model.capabilities.join(" · ") : "completion";
@@ -2075,7 +2296,8 @@ async function loadApplication() {
     models = payload.models;
     elements.health.className = `health ${health.ollama ? "ready" : "error"}`;
     elements.health.lastElementChild.textContent = health.ollama ? "Ollama ready" : "Ollama offline";
-    elements.model.innerHTML = "";
+    elements.model.innerHTML = '<option value="auto">Auto</option><option value="multi-model">Multi-model</option>';
+    elements.workspaceModel.innerHTML = "";
     for (const model of models) {
       const option = document.createElement("option");
       option.value = model.name;
@@ -2083,9 +2305,9 @@ async function loadApplication() {
       option.disabled = !model.installed;
       elements.model.append(option);
       if (model.installed) {
+        elements.workspaceModel.append(option.cloneNode(true));
         elements.hardwareBenchmarkModel.append(option.cloneNode(true));
         elements.integrityBenchmarkModel.append(option.cloneNode(true));
-        elements.codingAgentModel.append(option.cloneNode(true));
       }
     }
     const installed = models.filter((model) => model.installed).length;
@@ -2139,47 +2361,99 @@ async function submitPrompt(event) {
     elements.prompt.focus();
     return;
   }
-  activeRequest = new AbortController();
+  await ensureSession();
   setPending(true);
   elements.error.hidden = true;
   try {
-    const response = await fetch("/api/chat", {
+    const attachmentIds = [...elements.attachmentList.querySelectorAll("[data-attachment-id]")].map((item) => item.dataset.attachmentId);
+    const userMessage = await conversationView.appendUser(prompt, attachmentIds);
+    elements.empty.hidden = true;
+    elements.prompt.value = "";
+    const response = await fetch("/api/workspace/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: elements.model.value, prompt, session_id: sessionId }),
-      signal: activeRequest.signal,
+      body: JSON.stringify({
+        project_root: elements.workspaceProjectRoot.value || ".",
+        session_id: sessionId,
+        engine_id: elements.workspaceAgentSelect.value,
+        model_selection: elements.model.value,
+        prompt,
+        context_references: attachmentIds,
+      }),
     });
-    if (!response.ok) throw new Error(await responseErrorMessage(response, "The model request failed"));
     const payload = await response.json();
-    markOllamaReady();
-    elements.empty.hidden = true;
-    elements.error.hidden = true;
+    if (!response.ok) throw new Error(payload.detail || "Workspace task failed");
+    activeCoreTaskId = payload.task_id;
+    activeWorkspaceRoute = payload.route;
+    elements.taskRequestedModel.textContent = payload.requested_model;
+    elements.taskEffectiveModel.textContent = payload.effective_model || "All installed models";
+    elements.responseModel.textContent = payload.effective_model || payload.route;
+    elements.summary.textContent = payload.status === "running" ? "Multi-model run started" : "Workspace task completed";
+    elements.content.textContent = JSON.stringify({
+      requested_engine: payload.requested_engine,
+      effective_engine: payload.effective_engine,
+      requested_model: payload.requested_model,
+      effective_model: payload.effective_model,
+      route: payload.route,
+      warnings: payload.warnings,
+      result: payload.result,
+    }, null, 2);
     elements.result.hidden = false;
-    elements.responseModel.textContent = payload.model;
-    elements.summary.textContent = payload.summary;
-    elements.content.textContent = payload.content;
-    renderAttachedSkills(payload.attached_skills || []);
-    renderRecommendations(payload.skill_recommendations || []);
-    renderActions(payload.action_proposals || []);
-    renderCodingAgentTasks(payload.coding_agent_tasks || []);
-    elements.artifactOutput.hidden = !payload.artifact;
-    if (payload.artifact) {
-      elements.artifactOutput.href = payload.artifact.url;
-      elements.artifactOutput.textContent = `Download ${payload.artifact.filename}`;
-    }
+    renderWorkspaceActivityNotice(`${payload.route} · ${payload.status}`, payload.status);
+    if (payload.route === "multi-model") localStorage.setItem("json_codr_active_model_run", payload.task_id);
+    void userMessage;
+    setPending(false);
+    elements.cancel.hidden = payload.route !== "multi-model";
   } catch (error) {
-    showError(error.name === "AbortError" ? "Request cancelled." : error.message);
-  } finally {
-    activeRequest = null;
+    showError(error.message);
     setPending(false);
   }
 }
 
 elements.form.addEventListener("submit", submitPrompt);
-elements.cancel.addEventListener("click", () => activeRequest?.abort());
+elements.cancel.addEventListener("click", () => {
+  if (!activeCoreTaskId) return;
+  if (activeWorkspaceRoute === "multi-model") {
+    fetch(`/api/model-runs/${encodeURIComponent(activeCoreTaskId)}/cancel`, { method: "POST" })
+      .then((response) => { if (!response.ok) throw new Error("Unable to cancel multi-model run"); elements.cancel.hidden = true; })
+      .catch((error) => showError(error.message));
+    return;
+  }
+  coreClient.cancel(activeCoreTaskId).catch((error) => showError(error.message));
+});
 elements.model.addEventListener("change", updateModelDetail);
 elements.prompt.addEventListener("keydown", (event) => {
   if (event.ctrlKey && event.key === "Enter") elements.form.requestSubmit();
+});
+elements.form.addEventListener("dragover", (event) => event.preventDefault());
+elements.form.addEventListener("drop", (event) => {
+  event.preventDefault();
+  if (event.dataTransfer?.files?.length) uploadFiles(event.dataTransfer.files).catch((error) => showError(error.message));
+});
+elements.taskSteer.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || !activeCoreTaskId || !elements.taskSteer.value.trim()) return;
+  event.preventDefault();
+  const input = elements.taskSteer.value.trim();
+  elements.taskSteer.value = "";
+  coreClient.steer(activeCoreTaskId, input).catch((error) => showError(error.message));
+});
+elements.taskStop.addEventListener("click", () => {
+  if (activeCoreTaskId) coreClient.cancel(activeCoreTaskId).catch((error) => showError(error.message));
+});
+elements.taskRetry.addEventListener("click", async () => {
+  if (!activeCoreTaskId) return;
+  try {
+    const record = await coreClient.retry(activeCoreTaskId);
+    activeCoreTaskId = record.task_id;
+    taskView.render(record);
+  } catch (error) { showError(error.message); }
+});
+elements.taskUndo.addEventListener("click", () => {
+  if (!activeCoreTaskId) return;
+  const record = coreClient.tasks.get(activeCoreTaskId)?.record;
+  const checkpoint = [...(record?.events || [])].reverse().find((event) => event.payload?.checkpoint_id)?.payload.checkpoint_id;
+  if (!checkpoint) return showError("No checkpoint is available for this task.");
+  coreClient.restore(activeCoreTaskId, checkpoint).catch((error) => showError(error.message));
 });
 let recommendationTimer = null;
 elements.prompt.addEventListener("input", () => {
@@ -2224,6 +2498,34 @@ elements.destructiveDialog.addEventListener("close", () => {
 for (const button of elements.navigationButtons) {
   button.addEventListener("click", () => selectDestination(button.dataset.destination));
 }
+elements.workspaceLayoutMenu.addEventListener("click", () => {
+  const opening = elements.workspaceLayoutPopover.hidden;
+  elements.workspaceLayoutPopover.hidden = !opening;
+  elements.workspaceLayoutMenu.setAttribute("aria-expanded", String(opening));
+  if (opening) elements.workspaceLayoutPopover.querySelector("button")?.focus();
+});
+elements.workspaceLayoutPopover.addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  const state = button.dataset.workspaceAction === "reset"
+    ? workspaceLayout.reset()
+    : workspaceLayout.applyPreset(button.dataset.workspacePreset);
+  renderWorkspaceLayout(state);
+  elements.workspaceLayoutPopover.hidden = true;
+  elements.workspaceLayoutMenu.setAttribute("aria-expanded", "false");
+  elements.workspaceLayoutMenu.focus();
+});
+for (const separator of elements.workspaceSeparators) bindWorkspaceSeparator(separator);
+const applyWorkspaceViewport = () => renderWorkspaceLayout(workspaceLayout.applyViewport(window.innerWidth));
+window.addEventListener("resize", applyWorkspaceViewport);
+document.addEventListener("keydown", (event) => {
+  if (!event.altKey || event.ctrlKey || event.metaKey) return;
+  const region = event.key === "1" ? "left" : event.key === "2" ? "bottom" : event.key === "3" ? "right" : null;
+  if (!region) return;
+  event.preventDefault();
+  focusWorkspaceRegion(region);
+});
+// Discoverable labels for the direct region shortcuts: Alt+1, Alt+2, Alt+3.
 for (const button of elements.hardwareSectionButtons) {
   button.addEventListener("click", () => selectHardwareSection(button.dataset.hardwareSection));
 }
@@ -2332,15 +2634,14 @@ elements.settingSkillsOpen.addEventListener("change", () => {
   const open = elements.settingSkillsOpen.checked;
   selectDestination(open ? "skills" : "chat");
 });
-elements.settingTheme.addEventListener("change", async () => {
+elements.uiSave.addEventListener("click", async () => {
   const revision = ++themeSaveRevision;
-  const nextThemeMode = normalizeThemeMode(elements.settingTheme.value);
-  applyThemeMode(nextThemeMode);
+  const nextThemeMode = uiCustomizationController.getState().mode;
   try {
     await saveSettings({ ui: { theme: nextThemeMode } });
   } catch (error) {
     if (revision === themeSaveRevision) {
-      applyThemeMode(persistedThemeMode || "dark");
+      elements.uiPreviewStatus.textContent = "Appearance saved locally; server preference could not be updated.";
     }
     showError(error.message);
   }
@@ -2471,28 +2772,22 @@ elements.terminalInput.addEventListener("keydown", (event) => {
 elements.terminalStop.addEventListener("click", () => {
   if (terminalSocket?.readyState === WebSocket.OPEN) terminalSocket.send(JSON.stringify({ type: "interrupt" }));
 });
-elements.terminalTabs.forEach((tab) => tab.addEventListener("click", async () => {
-  activeTerminalProfile = tab.dataset.terminalProfile;
-  elements.terminalTabs.forEach((candidate) => candidate.setAttribute(
-    "aria-selected", String(candidate === tab),
-  ));
+elements.workspaceTabs.forEach((tab) => tab.addEventListener("click", async () => {
+  selectWorkspaceMode(tab.dataset.workspaceMode);
+  if (activeWorkspaceMode !== "shell") return;
   const session = terminalSessions.get(activeTerminalProfile);
-  if (session?.terminal) {
-    await connectTerminalRecord(session.terminal);
-    return;
-  }
-  if (activeTerminalProfile === "powershell") {
-    await ensureTerminal();
-    return;
-  }
-  elements.codingAgentTool.value = activeTerminalProfile;
-  elements.codingAgentStatus.textContent = `Choose a model and project, then launch ${activeTerminalProfile}.`;
-  elements.codingAgentModel.focus();
+  if (session?.terminal) await connectTerminalRecord(session.terminal);
+  else await ensureTerminal();
 }));
+elements.workspaceAgentForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  runWorkspaceAgent();
+});
 document.addEventListener("keydown", (event) => {
   if (event.ctrlKey && !event.altKey && event.key.toLowerCase() === "j") {
     event.preventDefault();
-    selectDestination("terminal");
+    selectDestination("workspace");
+    openWorkspacePanel("terminal", "bottom");
   }
   if (event.ctrlKey && event.altKey && event.key.toLowerCase() === "b") {
     event.preventDefault();
@@ -2502,21 +2797,99 @@ document.addEventListener("keydown", (event) => {
     closeNavigationDrawer({ restoreFocus: true });
   }
 });
-elements.codingAgentLauncher.addEventListener("submit", (event) => {
-  if (elements.codingAgentMode.value === "delegated") {
-    const prompt = elements.prompt.value.trim();
-    if (!prompt) { event.preventDefault(); return showError("Enter the delegated task in the main prompt first"); }
-  }
-  launchCodingAgent(event).catch((error) => {
-    elements.codingAgentStatus.textContent = error.message;
-    showError(error.message);
-  });
+registerWorkspacePanel({
+  id: "files",
+  element: elements.workspaceFilesPanel,
+  allowedPlacements: ["left", "right", "bottom"],
+  managementDestination: "context",
 });
-
+registerWorkspacePanel({
+  id: "skills",
+  element: elements.workspaceSkillsPanel,
+  allowedPlacements: ["left", "right", "bottom"],
+  managementDestination: "skills",
+});
+registerWorkspacePanel({
+  id: "activity",
+  element: elements.workspaceActivityPanel,
+  allowedPlacements: ["right", "left", "bottom"],
+});
+registerWorkspacePanel({
+  id: "terminal",
+  element: elements.terminalPanel,
+  allowedPlacements: ["bottom", "left", "right"],
+  onShown: () => {
+    initializeXterm();
+    requestAnimationFrame(() => terminalFitAddon?.fit());
+  },
+});
+elements.workspaceFilesAttach?.addEventListener("click", () => elements.attachmentInput.click());
+for (const button of document.querySelectorAll("[data-manage-destination]")) {
+  button.addEventListener("click", () => selectDestination(button.dataset.manageDestination));
+}
+applyWorkspaceViewport();
 initializeXterm();
+elements.workspaceProjectRoot.value = localStorage.getItem("json_codr_workspace_project_root") || ".";
 window.addEventListener("beforeunload", persistTerminalSessions);
 restoreTerminalSessions().catch(() => localStorage.removeItem(TERMINAL_SESSIONS_KEY));
-loadApplication().then(() => queueSettingsLoad()).catch((error) => showError(error.message));
+loadApplication().then(() => queueSettingsLoad()).then(() => loadComponents()).catch((error) => showError(error.message));
 loadHardwareStatus().catch((error) => showError(error.message));
 loadAttachments().catch((error) => showError(error.message));
 loadSkillsets().catch((error) => showError(error.message));
+
+let pendingComponentPlan = null;
+async function loadComponents() {
+  const container = document.querySelector("#component-list");
+  if (!container) return;
+  const installedComponents = await coreClient.listComponents("");
+  const unavailableModels = models.filter((model) => !model.installed).map((model) => ({
+    component_id: model.name,
+    name: model.name,
+    available: false,
+    reason: "Model is configured but not installed in Ollama.",
+    statusSource: "Ollama model roster",
+    destination: "hardware",
+  }));
+  const components = [
+    ...installedComponents.map((component) => ({ ...component, available: component.state !== "quarantined", statusSource: "BORG component registry" })),
+    ...unavailableModels,
+  ];
+  renderDisabledComponents(components);
+  const activePanels = new Set(getActiveWorkspacePanels(components));
+  for (const [panelId, panel] of workspacePanels) {
+    if (!activePanels.has(panelId)) panel.element.hidden = true;
+  }
+  container.replaceChildren();
+  if (!installedComponents.length) {
+    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "No verified components loaded."; container.append(empty); return;
+  }
+  installedComponents.forEach((component) => {
+    const row = document.createElement("article"); row.className = "dependency-item";
+    const title = document.createElement("strong"); title.textContent = component.component_id;
+    const detail = document.createElement("p"); detail.className = "meta"; detail.textContent = `${component.runtime_kind} · generation ${component.generation} · verified brokered capability`;
+    row.append(title, detail); container.append(row);
+  });
+}
+const componentPlanButton = document.querySelector("#component-plan");
+const componentInstallButton = document.querySelector("#component-install");
+componentPlanButton?.addEventListener("click", async () => {
+  const source = document.querySelector("#component-source").value.trim();
+  const scope = document.querySelector("#component-scope").value;
+  if (!source) return showError("Enter a component source first");
+  pendingComponentPlan = await coreClient.planComponent({
+    source_kind: document.querySelector("#component-source-kind").value, source, scope,
+    project_id: scope === "project" ? `project-${sessionId}` : null, activation: true,
+  });
+  const details = document.querySelector("#component-plan-details"); details.hidden = false;
+  details.textContent = JSON.stringify({ component_id: pendingComponentPlan.component_id, runtime: pendingComponentPlan.runtime_kind, executable: pendingComponentPlan.executable, entry_points: pendingComponentPlan.entry_points, effects: pendingComponentPlan.effects, normalization: pendingComponentPlan.normalization }, null, 2);
+  componentInstallButton.disabled = false;
+});
+componentInstallButton?.addEventListener("click", async () => {
+  if (!pendingComponentPlan) return;
+  componentInstallButton.disabled = true;
+  const result = await coreClient.installComponent(pendingComponentPlan.plan_id, pendingComponentPlan.approval_digest);
+  document.querySelector("#component-plan-details").textContent = JSON.stringify(result, null, 2);
+  pendingComponentPlan = null;
+  await loadComponents();
+});
+elements.workspaceActivityStop?.addEventListener("click", () => elements.taskStop.click());

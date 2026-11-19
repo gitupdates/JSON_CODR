@@ -287,3 +287,20 @@ class GitBrokerService:
             root=str(project), head=head, branch=branch, upstream=upstream,
             remote_head=remote_head or None, dirty_fingerprint=fingerprint, clean=not bool(status),
         )
+
+    def create_worktree(self, project_root: Path | str, worktree_root: Path | str, branch: str) -> dict[str, str]:
+        project = self._project(project_root)
+        worktree = Path(worktree_root).resolve()
+        base_commit = self._git(project, "rev-parse", "HEAD")
+        self._git(project, "worktree", "add", "-b", branch, str(worktree), base_commit)
+        return {
+            "repository_root": str(project),
+            "worktree_root": str(worktree),
+            "branch": branch,
+            "base_commit": base_commit,
+        }
+
+    def merge_worktree_branch(self, project_root: Path | str, branch: str) -> dict[str, str]:
+        project = self._project(project_root)
+        output = self._git(project, "merge", "--no-ff", branch, "-m", f"Merge {branch}")
+        return {"branch": branch, "commit": self._git(project, "rev-parse", "HEAD"), "output": output}

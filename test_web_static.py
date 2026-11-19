@@ -30,41 +30,168 @@ class IdCollector(HTMLParser):
 
 
 class WebStaticTests(unittest.TestCase):
-    def test_coding_agent_profiles_default_to_broker_and_explain_shell_risk(self):
+    def test_all_model_search_is_additive_and_exposes_jury_controls(self):
+        html = Path("web/index.html").read_text(encoding="utf-8")
+        runtime = Path("web/model_runs.js").read_text(encoding="utf-8") if Path("web/model_runs.js").exists() else ""
+        for identifier in (
+            "chat-form", "model-select", "all-model-form", "all-model-prompt", "all-model-profile",
+            "all-model-start", "all-model-cancel", "all-model-status", "all-model-filter",
+            "all-model-results", "all-model-consensus", "all-model-export-json",
+            "all-model-export-markdown", "all-model-export-csv",
+        ):
+            self.assertIn(f'id="{identifier}"', html)
+        self.assertIn("General search", html)
+        self.assertIn("Code jury", html)
+        self.assertIn("/api/model-runs", runtime)
+        self.assertIn("original", runtime)
+        self.assertIn("setTimeout", runtime)
+        self.assertIn("pollInFlight", runtime)
+        self.assertIn("data-result-id", runtime)
+        self.assertIn("terminalStatuses", runtime)
+        self.assertIn('"X-JSON-CODR": "1"', runtime)
+        self.assertIn("preventDefault", runtime)
+        self.assertIn("json_codr_active_model_run", runtime)
+        self.assertIn("original-output-raw", runtime)
+
+    def test_unified_runtime_replaces_executor_specific_profiles(self):
         html = Path("web/index.html").read_text(encoding="utf-8")
         script = Path("web/app.js").read_text(encoding="utf-8")
 
-        self.assertIn('<option value="broker" selected>Coding sandbox', html)
-        self.assertIn('<option value="shell">Unrestricted shell', html)
-        self.assertIn("non-sandboxed", html)
-        self.assertIn('/api/git-broker/grants', script)
-        self.assertIn('/api/git-broker/status', script)
-        self.assertIn('/api/git-broker/adapter', script)
-        self.assertIn("broker adapter", script.casefold())
-        self.assertIn("Revoke", script)
+        self.assertNotIn('id="coding-agent-tool"', html)
+        self.assertNotIn('/api/git-broker/adapter', script)
+        self.assertIn("JSONCodrCoreClient", script)
         self.assertIn("normalizeTerminalOutput", script)
-        self.assertIn("uses the JSON_CODR broker adapter", script)
-    def test_coding_agent_launcher_is_additive_to_live_cli(self):
+    def test_unified_task_view_is_additive_to_live_cli(self):
         html = self.client.get("/").text
-        self.assertIn('id="coding-agent-tool"', html)
-        self.assertIn('id="coding-agent-model"', html)
-        self.assertIn('id="coding-agent-project"', html)
-        self.assertIn('id="coding-agent-persistent"', html)
-        self.assertIn('id="coding-agent-launch"', html)
+        self.assertIn('id="task-activity"', html)
         self.assertIn('id="terminal-input"', html)
         script = self.client.get("/static/app.js").text
         self.assertIn("closeActiveTerminal", script)
         self.assertIn('method: "DELETE"', script)
         self.assertIn("terminal.external", script)
-        self.assertIn("renderCodingAgentTasks", script)
+        self.assertIn("JSONCodrTaskView", script)
+
+    def test_project_workspace_exposes_shell_and_agent_without_provider_tabs(self):
+        html = self.client.get("/").text
+        script = self.client.get("/static/app.js").text
+        parser = IdCollector()
+        parser.feed(html)
+
+        self.assertTrue({
+            "workspace-shell", "workspace-agent", "workspace-project-root",
+            "workspace-model", "workspace-outcome", "workspace-agent-run",
+            "workspace-agent-status", "workspace-agent-result",
+        }.issubset(parser.ids))
+        self.assertIn('data-workspace-mode="shell"', html)
+        self.assertIn('data-workspace-mode="agent"', html)
+        self.assertNotIn('data-workspace-mode="codex"', html)
+        self.assertIn("function selectWorkspaceMode", script)
+        self.assertIn('fetch("/api/workspace/tasks"', script)
+        self.assertIn('"X-JSON-CODR": "1"', script)
+        self.assertIn("requested_model", script)
+        self.assertIn("effective_model", script)
+
+    def test_unified_workspace_exposes_semantic_regions_and_primary_controls(self):
+        html = self.client.get("/").text
+        parser = IdCollector()
+        parser.feed(html)
+
+        self.assertTrue({
+            "workspace-header", "workspace-left-dock", "workspace-task-canvas",
+            "workspace-right-dock", "workspace-bottom-dock", "workspace-statusbar",
+            "workspace-agent-select", "model-select", "workspace-layout-menu",
+            "workspace-attach", "submit-button",
+        }.issubset(parser.ids))
+        self.assertIn('role="tablist" aria-label="Task views"', html)
+        self.assertGreaterEqual(html.count('role="separator"'), 3)
+        self.assertIn('aria-orientation="vertical"', html)
+        self.assertIn('aria-orientation="horizontal"', html)
+        self.assertIn('aria-label="Attach files"', html)
+        self.assertIn('<span>Run</span>', html)
+        self.assertNotIn('Agent Activity', html)
+
+    def test_workspace_panel_registry_uses_single_instance_layout_transitions(self):
+        script = self.client.get("/static/app.js").text
+        html = self.client.get("/").text
+
+        for contract in (
+            "workspacePanels = new Map", "registerWorkspacePanel", "renderWorkspaceLayout",
+            "openWorkspacePanel", "focusWorkspaceRegion", "setPointerCapture",
+            "workspaceLayout.resize", "workspaceLayout.reset",
+        ):
+            self.assertIn(contract, script)
+        self.assertIn("workspacePanels.has(id)", script)
+        self.assertIn("host.append(panel.element)", script)
+        self.assertIn('id="workspace-layout-popover"', html)
+        self.assertIn('data-workspace-preset="focus"', html)
+        self.assertIn('data-workspace-action="reset"', html)
+
+    def test_terminal_is_registered_once_as_a_persistent_workspace_panel(self):
+        html = self.client.get("/").text
+        script = self.client.get("/static/app.js").text
+
+        self.assertEqual(html.count('id="terminal-panel"'), 1)
+        self.assertIn('id="terminal-panel" class="terminal-panel"', html)
+        self.assertIn('registerWorkspacePanel({', script)
+        self.assertIn('id: "terminal"', script)
+        self.assertIn('onShown: () =>', script)
+        self.assertIn('openWorkspacePanel("terminal", "bottom")', script)
+
+    def test_task_context_panels_reuse_existing_state_and_link_to_management(self):
+        html = self.client.get("/").text
+        script = self.client.get("/static/app.js").text
+
+        for identifier in (
+            "workspace-files-panel", "workspace-files-list", "workspace-files-attach",
+            "workspace-skills-panel", "workspace-skills-list",
+            "workspace-activity-panel", "workspace-activity-notice",
+        ):
+            self.assertIn(f'id="{identifier}"', html)
+        self.assertIn('data-manage-destination="context"', html)
+        self.assertIn('data-manage-destination="skills"', html)
+        for panel_id in ("files", "skills", "activity"):
+            self.assertIn(f'id: "{panel_id}"', script)
+        self.assertIn("renderWorkspaceFiles", script)
+        self.assertIn("renderWorkspaceSkills", script)
+        self.assertIn("saveSkillSelection(selected)", script)
+        self.assertIn("renderWorkspaceActivityNotice", script)
+        self.assertNotIn('onShown: () => loadAttachments()', script)
+        self.assertNotIn('onShown: () => loadSkills()', script)
+
+    def test_disabled_components_are_settings_only_and_workspace_panels_are_filtered(self):
+        html = self.client.get("/").text
+        script = self.client.get("/static/app.js").text
+
+        self.assertIn('id="disabled-components"', html)
+        self.assertIn("function getActiveWorkspacePanels", script)
+        self.assertIn("function renderDisabledComponents", script)
+        self.assertIn("unavailableReason", script)
+        self.assertIn("statusSource", script)
+        self.assertIn("Enable or configure", script)
+        self.assertIn("getActiveWorkspacePanels(components)", script)
+
+    def test_workspace_header_submits_canonical_engine_and_model_selection(self):
+        html = self.client.get("/").text
+        script = self.client.get("/static/app.js").text
+
+        self.assertIn('id="workspace-agent-select"', html)
+        self.assertNotIn('id="workspace-agent-select" disabled', html)
+        self.assertIn('value="borg"', html)
+        self.assertIn('value="auto"', html)
+        self.assertIn('value="multi-model"', html)
+        self.assertIn('fetch("/api/workspace/tasks"', script)
+        self.assertIn("requested_engine", script)
+        self.assertIn("effective_engine", script)
+        self.assertIn("requested_model", script)
+        self.assertIn("effective_model", script)
+        self.assertIn('`/api/model-runs/${encodeURIComponent(activeCoreTaskId)}/cancel`', script)
+        self.assertNotIn('fetch("/api/project-workspace/run"', script)
 
     def test_plain_text_api_failures_are_rendered_without_json_parse_errors(self):
         script = self.client.get("/static/app.js").text
 
         self.assertIn("async function responseErrorMessage", script)
         self.assertIn('responseErrorMessage(response, "Hardware detection failed")', script)
-        self.assertIn('responseErrorMessage(response, "The model request failed")', script)
-        self.assertIn('responseErrorMessage(response, "Unable to launch coding agent")', script)
 
     def test_new_terminal_process_resets_the_replay_cursor(self):
         script = self.client.get("/static/app.js").text
@@ -79,7 +206,7 @@ class WebStaticTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.0.17-beta.5", response.text)
+        self.assertIn("V1.0.18-alpha.11", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -93,6 +220,10 @@ class WebStaticTests(unittest.TestCase):
                 "content-output",
                 "artifact-output",
                 "error-output",
+                "conversation-timeline",
+                "conversation-export-markdown",
+                "conversation-export-json",
+                "conversation-export-zip",
             }.issubset(parser.ids)
         )
 
@@ -100,11 +231,19 @@ class WebStaticTests(unittest.TestCase):
         html = self.client.get("/").text
         css = self.client.get("/static/app.css")
         javascript = self.client.get("/static/app.js")
-        self.assertIn('/static/app.css?v=1.0.17-beta.5', html)
+        self.assertIn('/static/app.css?v=1.0.18-alpha.11', html)
         self.assertEqual(css.status_code, 200)
         self.assertIn("text/css", css.headers["content-type"])
         self.assertEqual(javascript.status_code, 200)
         self.assertIn("javascript", javascript.headers["content-type"])
+
+    def test_workspace_layout_controller_loads_before_application(self):
+        html = self.client.get("/").text
+
+        layout_index = html.index('/static/workspace_layout.js')
+        application_index = html.index('/static/app.js')
+        self.assertLess(layout_index, application_index)
+        self.assertIn('json_codr_workspace_layout_v1', Path("web/workspace_layout.js").read_text(encoding="utf-8"))
 
     def test_global_navigation_and_hardware_sections_are_present(self):
         html = self.client.get("/").text
@@ -117,8 +256,10 @@ class WebStaticTests(unittest.TestCase):
             "view-chat", "terminal-panel", "context-panel", "skills-panel",
             "hardware-panel", "settings-panel",
         }.issubset(parser.ids))
-        for destination in ("chat", "terminal", "context", "skills", "hardware", "settings"):
+        for destination in ("workspace", "context", "skills", "hardware", "settings"):
             self.assertIn(f'data-destination="{destination}"', html)
+        self.assertNotIn('data-destination="chat"', html)
+        self.assertNotIn('data-destination="terminal"', html)
         for section in (
             "overview", "profiles", "runtimes", "compatibility", "model-search",
             "benchmarks", "history", "localperf",
@@ -220,8 +361,7 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('/static/vendor/xterm-addon-fit.js', html)
         self.assertIn('id="terminal-tabs"', html)
         self.assertIn('data-terminal-profile="powershell"', html)
-        self.assertIn('data-terminal-profile="continue"', html)
-        self.assertIn('data-terminal-profile="aider"', html)
+        self.assertEqual(html.count('data-terminal-profile="powershell"'), 1)
         self.assertIn('id="terminal-xterm"', html)
         self.assertIn('type: "resize"', javascript)
         self.assertIn('type: "attach"', javascript)
@@ -233,8 +373,8 @@ class WebStaticTests(unittest.TestCase):
         html = self.client.get("/").text
         javascript = self.client.get("/static/app.js").text
 
-        self.assertIn('/static/terminal_keyboard.js?v=1.0.17-beta.5-clipboard2', html)
-        self.assertIn('/static/app.js?v=1.0.17-beta.5-clipboard2', html)
+        self.assertIn('/static/terminal_keyboard.js?v=1.0.18-alpha.11', html)
+        self.assertIn('/static/app.js?v=1.0.18-alpha.11', html)
         self.assertLess(html.index("terminal_keyboard.js"), html.index("app.js"))
         self.assertIn("createTerminalKeyboardController", javascript)
         self.assertIn("attachCustomKeyEventHandler", javascript)
@@ -508,12 +648,12 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('sidebar_width: width', javascript)
         self.assertIn("let persistedThemeMode = null", javascript)
         self.assertIn("persistedThemeMode = normalizeThemeMode(settingsState.ui.theme)", javascript)
-        self.assertIn("applyThemeMode(persistedThemeMode", javascript)
+        self.assertIn("uiCustomizationController.seedLegacyMode(persistedThemeMode)", javascript)
         self.assertIn("themeRevisionAtStart === themeSaveRevision", javascript)
         self.assertIn("skillsRevisionAtStart === skillsChangeRevision", javascript)
         self.assertIn("navigationRevisionAtStart === navigationChangeRevision", javascript)
         self.assertIn("loadApplication().then(() => queueSettingsLoad())", javascript)
-        self.assertIn('id="setting-theme" class="setting-select" aria-describedby="setting-theme-help" disabled', html)
+        self.assertIn('id="ui-mode" class="setting-select" aria-describedby="ui-mode-help"', html)
         self.assertIn('id="setting-skills-open" type="checkbox" disabled', html)
 
 
@@ -521,14 +661,17 @@ class WebStaticTests(unittest.TestCase):
         response = self.client.get("/")
         parser = IdCollector()
         parser.feed(response.text)
-        self.assertIn("setting-theme", parser.ids)
-        self.assertIn("json_codr_theme", response.text)
+        self.assertIn("ui-mode", parser.ids)
+        self.assertIn("ui-preset", parser.ids)
 
         javascript = self.client.get("/static/app.js").text
-        self.assertIn("const VALID_THEME_MODES", javascript)
-        self.assertIn('matchMedia("(prefers-color-scheme: dark)")', javascript)
-        self.assertIn('addEventListener("change"', javascript)
-        self.assertIn("applyThemeMode", javascript)
+        catalog = self.client.get("/static/ui_catalog.js").text
+        bootstrap = self.client.get("/static/ui_bootstrap.js").text
+        controller = self.client.get("/static/ui_customization.js").text
+        self.assertIn('LEGACY_THEME_KEY = "json_codr_theme"', catalog)
+        self.assertIn('matchMedia("(prefers-color-scheme: dark)")', bootstrap)
+        self.assertIn("seedLegacyMode", controller)
+        self.assertIn("applyAppearanceState", javascript)
         self.assertIn("persistedThemeMode", javascript)
 
         css = self.client.get("/static/app.css").text
@@ -595,6 +738,21 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn(".attached-skill-chip", css)
         self.assertIn(".action-card", css)
         self.assertIn(":root[data-theme=\"light\"]", css)
+
+
+    def test_workspace_responsive_and_accessibility_contracts_are_present(self):
+        html = self.client.get("/").text
+        script = self.client.get("/static/app.js").text
+        css = self.client.get("/static/app.css").text
+        self.assertIn('data-workspace-mode', script)
+        self.assertIn('Alt+1', script)
+        self.assertIn('Alt+2', script)
+        self.assertIn('Alt+3', script)
+        self.assertIn('aria-valuetext', script)
+        self.assertIn('workspace-announcer', html)
+        self.assertIn('prefers-reduced-motion', css)
+        self.assertIn('[data-workspace-mode="mobile"]', css)
+        self.assertIn('[data-workspace-mode="intermediate"]', css)
 
 
 if __name__ == "__main__":

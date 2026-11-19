@@ -4,21 +4,14 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <script>
-      (() => {
-        const validModes = new Set(["light", "dark", "system"]);
-        const cachedMode = localStorage.getItem("json_codr_theme");
-        const mode = validModes.has(cachedMode) ? cachedMode : "dark";
-        const effectiveTheme = mode === "system"
-          ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
-          : mode;
-        document.documentElement.dataset.theme = effectiveTheme;
-        document.documentElement.style.colorScheme = effectiveTheme;
-      })();
-    </script>
+    <script src="/static/ui_catalog.js?v=1.0.18-alpha.11"></script>
+    <script src="/static/ui_bootstrap.js?v=1.0.18-alpha.11"></script>
     <title>JSON_CODR · Local model console</title>
+    <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/static/vendor/xterm.css" />
-    <link rel="stylesheet" href="/static/app.css?v=1.0.17-beta.5" />
+    <link rel="stylesheet" href="/static/app.css?v=1.0.18-alpha.11" />
+    <link rel="stylesheet" href="/static/fonts/fonts.css?v=1.0.18-alpha.11" />
+    <link rel="stylesheet" href="/static/gamma.css?v=1.0.18-alpha.11" />
   </head>
   <body>
     <div class="ambient ambient-one"></div>
@@ -39,8 +32,7 @@
           <button id="sidebar-collapse" class="sidebar-icon-button" type="button" aria-label="Collapse navigation" aria-expanded="true">‹</button>
         </div>
         <div class="sidebar-destinations">
-          <button class="sidebar-destination is-active" type="button" data-destination="chat" aria-current="page" title="Chat"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-chat"/></svg><span>Chat</span></button>
-          <button class="sidebar-destination" type="button" data-destination="terminal" title="Live CLI"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-terminal"/></svg><span>Live CLI</span></button>
+          <button class="sidebar-destination is-active" type="button" data-destination="workspace" aria-current="page" title="Workspace"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-chat"/></svg><span>Workspace</span></button>
           <button class="sidebar-destination" type="button" data-destination="context" title="Context &amp; files"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-context"/></svg><span>Context &amp; files</span></button>
           <button class="sidebar-destination" type="button" data-destination="skills" title="Skills"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-skills"/></svg><span>Skills</span></button>
           <button class="sidebar-destination" type="button" data-destination="hardware" title="Hardware"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-hardware"/></svg><span>Hardware</span></button>
@@ -63,7 +55,7 @@
       <header class="topbar">
         <a class="brand" href="/" aria-label="JSON CODR home">
           <span class="brand-mark">{ }</span>
-          <span><strong>JSON_CODR</strong><small>V1.0.17-beta.5 · local model console</small></span>
+          <span><strong>JSON_CODR</strong><small>V1.0.18-alpha.11 · unified local agent</small></span>
         </a>
         <div id="health-status" class="health" role="status" aria-live="polite">
           <span class="health-dot"></span><span>Connecting</span>
@@ -71,7 +63,38 @@
         <button id="mobile-navigation-toggle" class="panel-toggle mobile-navigation-toggle" type="button" aria-controls="app-sidebar" aria-expanded="false">Menu</button>
       </header>
 
-      <section id="view-chat" class="app-view" data-view="chat" aria-labelledby="chat-heading">
+      <section id="view-chat" class="app-view workspace-shell" data-view="workspace" aria-labelledby="chat-heading">
+      <header id="workspace-header" class="workspace-header" aria-label="Workspace controls">
+        <div class="workspace-project"><span class="eyebrow">ACTIVE PROJECT</span><strong>JSON_CODR</strong></div>
+        <div class="workspace-execution-controls">
+          <label for="workspace-agent-select">Agent
+            <select id="workspace-agent-select"><option value="borg">BORG local agent</option></select>
+          </label>
+          <label for="model-select">Model
+            <select id="model-select" name="model" aria-describedby="model-detail" disabled>
+              <option value="auto">Auto</option><option value="multi-model">Multi-model</option>
+            </select>
+          </label>
+          <button id="workspace-layout-menu" class="secondary" type="button" aria-haspopup="menu" aria-expanded="false">Layout</button>
+          <div id="workspace-layout-popover" class="workspace-layout-popover" role="menu" hidden>
+            <button type="button" role="menuitem" data-workspace-preset="focus">Focus preset</button>
+            <button type="button" role="menuitem" data-workspace-preset="code">Code preset</button>
+            <button type="button" role="menuitem" data-workspace-preset="observe">Observe preset</button>
+            <button type="button" role="menuitem" data-workspace-action="reset">Reset layout</button>
+          </div>
+        </div>
+        <div id="model-detail" class="model-detail">Waiting for Ollama model metadata.</div>
+      </header>
+      <div class="workspace-regions">
+        <aside id="workspace-left-dock" class="workspace-dock workspace-left-dock" aria-label="Project tools" hidden></aside>
+        <div class="workspace-separator workspace-separator-left" role="separator" aria-label="Resize project tools" aria-orientation="vertical" aria-valuemin="180" aria-valuemax="420" aria-valuenow="260" tabindex="0" hidden></div>
+        <section id="workspace-task-canvas" class="workspace-task-canvas" aria-label="Active task">
+          <nav class="workspace-task-tabs" role="tablist" aria-label="Task views">
+            <button type="button" role="tab" aria-selected="true">Chat</button>
+            <button type="button" role="tab" aria-selected="false" hidden>Plan</button>
+            <button type="button" role="tab" aria-selected="false" hidden>Changes</button>
+            <button type="button" role="tab" aria-selected="false" hidden>Results</button>
+          </nav>
       <section class="hero">
         <p class="eyebrow">STRUCTURED INFERENCE / LOCAL ONLY</p>
         <h1 id="chat-heading">One prompt.<br /><span>One precise model.</span></h1>
@@ -80,25 +103,17 @@
 
       <section class="workspace" aria-label="Model chat workspace">
         <form id="chat-form" class="composer">
-          <div class="field-row">
-            <label for="model-select">Active model</label>
-            <span id="model-count" class="meta">Loading roster…</span>
-          </div>
-          <div class="select-wrap">
-            <select id="model-select" name="model" aria-describedby="model-detail" disabled></select>
-          </div>
-          <div id="model-detail" class="model-detail">Waiting for Ollama model metadata.</div>
-
           <div class="field-row prompt-label">
             <label for="prompt-input">Prompt</label>
-            <span class="meta"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> to run</span>
+            <span id="model-count" class="meta">Loading roster…</span>
           </div>
           <textarea id="prompt-input" name="prompt" rows="9" placeholder="Describe the code, review, or explanation you need…" required></textarea>
 
           <div class="actions">
             <button id="submit-button" class="primary" type="submit" disabled>
-              <span>Run model</span><span aria-hidden="true">↗</span>
+              <span>Run</span><span aria-hidden="true">↗</span>
             </button>
+            <button id="workspace-attach" class="secondary workspace-attach" type="button" aria-label="Attach files">📎</button>
             <button id="cancel-button" class="secondary" type="button" hidden>Cancel</button>
             <span id="request-status" class="request-status" role="status" aria-live="polite"></span>
           </div>
@@ -110,8 +125,14 @@
           </div>
           <div id="empty-state" class="empty-state">
             <div class="empty-glyph">_</div>
-            <p>Your validated response will appear here.</p>
+            <p>Your persistent conversation will appear here.</p>
           </div>
+          <div id="conversation-timeline" class="conversation-timeline" aria-live="polite" aria-label="Conversation messages"></div>
+          <nav class="conversation-exports" aria-label="Export conversation">
+            <a id="conversation-export-markdown" href="#" download>Export Markdown</a>
+            <a id="conversation-export-json" href="#" download>Export JSON</a>
+            <a id="conversation-export-zip" href="#" download>Export ZIP</a>
+          </nav>
           <div id="result-state" hidden>
             <section id="attached-skills" class="attached-skills" aria-label="Skills attached to this response" hidden></section>
             <article>
@@ -129,8 +150,65 @@
             </section>
           </div>
           <div id="error-output" class="error" role="alert" hidden></div>
+          <section class="task-runtime" aria-label="Task activity">
+            <div class="task-controls">
+              <input id="task-steer" type="text" placeholder="Add direction to the active task" aria-label="Steer active task" />
+              <button id="task-stop" class="secondary" type="button" disabled>Stop</button>
+              <button id="task-retry" class="secondary" type="button" disabled>Retry</button>
+              <button id="task-undo" class="secondary" type="button" disabled>Undo</button>
+            </div>
+            <details id="task-execution-details" hidden>
+              <summary>Execution details</summary>
+              <dl class="task-model-route"><dt>Requested model</dt><dd id="task-requested-model">Not reported</dd><dt>Effective model</dt><dd id="task-effective-model">Not reported</dd></dl>
+              <ol id="task-activity" class="task-activity" aria-live="polite"></ol>
+            </details>
+          </section>
         </section>
       </section>
+
+      <section class="all-model-panel" aria-labelledby="all-model-heading">
+        <div class="all-model-heading"><div><p class="eyebrow">MULTI-MODEL / SHARED CONTEXT</p><h2 id="all-model-heading">Ask all available models</h2></div><span id="all-model-status" class="meta" role="status" aria-live="polite">Ready</span></div>
+        <form id="all-model-form" class="all-model-form">
+          <label for="all-model-profile">Profile</label>
+          <select id="all-model-profile"><option value="general">General search</option><option value="code_jury">Code jury</option></select>
+          <label for="all-model-parallelism">Parallel responses</label>
+          <select id="all-model-parallelism"><option value="1">Low memory · 1 at a time</option><option value="2" selected>Compatibility · 2 at a time</option><option value="3">Faster · 3 at a time</option><option value="4">Maximum · 4 at a time</option></select>
+          <p class="meta">Higher parallelism can reduce wait time, but requires enough RAM or VRAM to keep multiple models loaded.</p>
+          <label for="all-model-prompt">One prompt for every installed model</label>
+          <textarea id="all-model-prompt" rows="6" placeholder="Ask every available model using the current files, pasted content, and images." required></textarea>
+          <div class="actions"><button id="all-model-start" class="primary" type="submit">Run all models</button><button id="all-model-cancel" class="secondary" type="button" disabled>Cancel</button></div>
+        </form>
+        <div class="all-model-toolbar">
+          <label for="all-model-filter">Filter results</label><input id="all-model-filter" type="search" placeholder="Model, status, or response" />
+          <a id="all-model-export-json" class="secondary file-button" href="#" download>Export JSON</a>
+          <a id="all-model-export-markdown" class="secondary file-button" href="#" download>Export Markdown</a>
+          <a id="all-model-export-csv" class="secondary file-button" href="#" download>Export CSV</a>
+        </div>
+        <section id="all-model-consensus" class="all-model-consensus" aria-label="Code jury consensus" hidden></section>
+        <div id="all-model-results" class="all-model-results" aria-live="polite"><p class="meta">No all-model run has started.</p></div>
+      </section>
+        </section>
+        <div class="workspace-separator workspace-separator-right" role="separator" aria-label="Resize task inspector" aria-orientation="vertical" aria-valuemin="200" aria-valuemax="480" aria-valuenow="300" tabindex="0" hidden></div>
+        <aside id="workspace-right-dock" class="workspace-dock workspace-right-dock" aria-label="Task inspector" hidden></aside>
+      </div>
+      <div class="workspace-separator workspace-separator-bottom" role="separator" aria-label="Resize execution tools" aria-orientation="horizontal" aria-valuemin="140" aria-valuemax="600" aria-valuenow="260" tabindex="0" hidden></div>
+      <section id="workspace-bottom-dock" class="workspace-dock workspace-bottom-dock" aria-label="Execution tools" hidden></section>
+      <div id="workspace-statusbar" class="workspace-statusbar" role="status" aria-live="polite"><span id="workspace-persistent-notice">Ready</span><button id="workspace-activity-stop" class="secondary" type="button" hidden>Stop</button><span>Local workspace</span></div>
+      <div id="workspace-announcer" class="sr-only" role="status" aria-live="assertive" aria-atomic="true"></div>
+      </section>
+
+      <section id="workspace-files-panel" class="workspace-tool-panel" aria-label="Task files" tabindex="-1" hidden>
+        <div class="workspace-tool-head"><strong>Files</strong><button type="button" data-manage-destination="context">Manage files</button></div>
+        <button id="workspace-files-attach" class="secondary" type="button">Attach files</button>
+        <div id="workspace-files-list" class="workspace-quick-list"><p class="meta">No files attached.</p></div>
+      </section>
+      <section id="workspace-skills-panel" class="workspace-tool-panel" aria-label="Task skills" tabindex="-1" hidden>
+        <div class="workspace-tool-head"><strong>Skills</strong><button type="button" data-manage-destination="skills">Manage skills</button></div>
+        <div id="workspace-skills-list" class="workspace-quick-list"><p class="meta">No skills installed.</p></div>
+      </section>
+      <section id="workspace-activity-panel" class="workspace-tool-panel" aria-label="Task activity summary" tabindex="-1" hidden>
+        <div class="workspace-tool-head"><strong>Activity</strong></div>
+        <div id="workspace-activity-notice" class="workspace-activity-notice" aria-live="polite">Ready</div>
       </section>
 
       <aside id="context-panel" class="context-panel app-view" data-view="context" aria-label="Attachment context" hidden>
@@ -210,18 +288,54 @@
         <div class="context-head"><div><span class="eyebrow">SETTINGS</span><h2>System configuration</h2></div></div>
         <section class="dependency-review">
           <strong>Interface</strong>
-          <label class="setting-row" for="setting-theme">Appearance</label>
-          <select id="setting-theme" class="setting-select" aria-describedby="setting-theme-help" disabled>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-            <option value="system">System</option>
-          </select>
-          <p id="setting-theme-help" class="meta setting-help">System follows your Windows appearance.</p>
+          <div class="appearance-editor" aria-labelledby="appearance-heading">
+            <h3 id="appearance-heading">Appearance</h3>
+            <p class="meta">Preview a preset, then customize individual component families. Changes remain local to this browser until saved.</p>
+            <label class="setting-row" for="ui-preset">Preset</label>
+            <select id="ui-preset" class="setting-select"></select>
+            <div id="ui-preset-details" class="ui-preset-details" aria-live="polite"></div>
+            <label class="setting-row" for="ui-mode">Color mode</label>
+            <select id="ui-mode" class="setting-select" aria-describedby="ui-mode-help"></select>
+            <p id="ui-mode-help" class="meta setting-help">System follows your Windows appearance.</p>
+            <label class="setting-row" for="ui-density">Density</label>
+            <select id="ui-density" class="setting-select"></select>
+            <label class="setting-row" for="ui-typography">Typography</label>
+            <select id="ui-typography" class="setting-select"></select>
+            <details class="ui-component-editor">
+              <summary>Component mappings · <span id="ui-override-summary">0 overrides</span></summary>
+              <div id="ui-component-overrides"></div>
+            </details>
+            <p id="ui-preview-status" class="meta" role="status" aria-live="polite">Appearance controls loading</p>
+            <div class="actions">
+              <button id="ui-save" class="primary" type="button">Save appearance</button>
+              <button id="ui-cancel" class="secondary" type="button">Cancel preview</button>
+              <button id="ui-reset-preset" class="secondary" type="button">Reset preset mappings</button>
+              <button id="ui-restore-defaults" class="secondary" type="button">Restore NOC Light</button>
+            </div>
+          </div>
           <label class="setting-row"><input id="setting-skills-open" type="checkbox" disabled /> Reopen Skills panel on startup</label>
         </section>
         <section class="dependency-review">
           <strong>Approved skill directories</strong>
           <div id="approved-skill-directories" class="dependency-list"><p class="meta">No folders approved.</p></div>
+        </section>
+        <section class="dependency-review" aria-labelledby="component-registry-heading">
+          <div class="dependency-head"><div><span class="eyebrow">BORG COMPONENTS</span><strong id="component-registry-heading">Install tools and repositories</strong></div></div>
+          <p class="meta">Components install globally by default into isolated runtimes. Review detected effects before activation.</p>
+          <label class="setting-row" for="component-source">Source path, public Git URL, or package coordinate</label>
+          <input id="component-source" class="setting-select" type="text" placeholder="D:\path\to\tool or https://github.com/owner/repo" />
+          <label class="setting-row" for="component-source-kind">Source type</label>
+          <select id="component-source-kind" class="setting-select"><option value="local">Local path</option><option value="git">Public Git</option><option value="archive">ZIP archive</option><option value="python">PyPI package</option><option value="node">npm package</option><option value="mcp">MCP manifest</option><option value="executable">Executable</option></select>
+          <label class="setting-row" for="component-scope">Activation scope</label>
+          <select id="component-scope" class="setting-select"><option value="global">Global</option><option value="project">Current project</option></select>
+          <div class="actions"><button id="component-plan" class="secondary" type="button">Review installation plan</button><button id="component-install" class="primary" type="button" disabled>Install verified component</button></div>
+          <pre id="component-plan-details" class="attachment-preview" hidden></pre>
+          <div id="component-list" class="dependency-list"><p class="meta">No verified components loaded.</p></div>
+        </section>
+        <section class="dependency-review" aria-labelledby="disabled-components-heading">
+          <div class="dependency-head"><div><span class="eyebrow">INACTIVE</span><strong id="disabled-components-heading">Disabled components</strong></div></div>
+          <p class="meta">Unavailable tools and models stay out of the Workspace until their requirements are satisfied.</p>
+          <div id="disabled-components" class="dependency-list"><p class="meta">No disabled components.</p></div>
         </section>
       </aside>
 
@@ -387,34 +501,36 @@
         </div>
       </aside>
 
-      <section id="terminal-panel" class="terminal-panel app-view" data-view="terminal" aria-label="Live command line" hidden>
+      <section id="terminal-panel" class="terminal-panel" aria-label="Live command line" tabindex="-1" hidden>
         <div class="terminal-head">
-          <div><span class="eyebrow">LOCAL POWERSHELL</span><strong>Live CLI passthrough</strong></div>
+          <div><span class="eyebrow">PROJECT WORKSPACE</span><strong>Shell and local coding agent</strong></div>
           <span id="terminal-status" class="meta">Not started</span>
         </div>
-        <div id="terminal-tabs" class="terminal-tabs" role="tablist" aria-label="Terminal sessions">
-          <button type="button" role="tab" data-terminal-profile="powershell" aria-selected="true">PowerShell</button>
-          <button type="button" role="tab" data-terminal-profile="continue" aria-selected="false">Continue</button>
-          <button type="button" role="tab" data-terminal-profile="aider" aria-selected="false">Aider</button>
+        <div id="terminal-tabs" class="terminal-tabs" role="tablist" aria-label="Project workspace mode">
+          <button type="button" role="tab" data-workspace-mode="shell" data-terminal-profile="powershell" aria-controls="workspace-shell" aria-selected="true">Shell</button>
+          <button type="button" role="tab" data-workspace-mode="agent" aria-controls="workspace-agent" aria-selected="false">Agent</button>
         </div>
-        <form id="coding-agent-launcher" class="coding-agent-launcher">
-          <div><span class="eyebrow">BETA CODING AGENTS</span><strong>Project execution profiles</strong></div>
-          <label>Agent<select id="coding-agent-tool"><option value="broker" selected>Coding sandbox · create, review, edit &amp; run</option><option value="shell">Unrestricted shell · non-sandboxed</option><option value="continue">Continue CLI</option><option value="aider">Aider</option></select></label>
-          <label>Model<select id="coding-agent-model"></select></label>
-          <label>Project root<input id="coding-agent-project" type="text" value="D:\\JSON_CODR_repo" /></label>
-          <label>Mode<select id="coding-agent-mode"><option value="interactive">Interactive</option><option value="delegated">Delegated</option></select></label>
-          <label><input id="coding-agent-persistent" type="checkbox" checked /> Full persistent authorization for this project and agent</label>
-          <button id="coding-agent-launch" class="primary" type="submit">Launch agent</button>
-          <span id="coding-agent-status" class="meta" role="status" aria-live="polite"></span>
-          <div id="coding-agent-grants" class="coding-agent-grants" aria-live="polite"></div>
-        </form>
-        <div id="terminal-xterm" class="terminal-xterm" aria-label="Interactive terminal"></div>
-        <pre id="terminal-output" class="terminal-output terminal-output-fallback" aria-live="polite"></pre>
-        <div class="terminal-command">
-          <span aria-hidden="true">PS&gt;</span>
-          <input id="terminal-input" type="text" autocomplete="off" spellcheck="false" aria-label="PowerShell command" placeholder="Enter a command" />
-          <button id="terminal-run" class="primary" type="button">Run</button>
-          <button id="terminal-stop" class="secondary" type="button">Stop</button>
+        <div id="workspace-shell" data-workspace-view="shell">
+          <div id="terminal-xterm" class="terminal-xterm" aria-label="Interactive terminal"></div>
+          <pre id="terminal-output" class="terminal-output terminal-output-fallback" aria-live="polite"></pre>
+          <div class="terminal-command">
+            <span aria-hidden="true">PS&gt;</span>
+            <input id="terminal-input" type="text" autocomplete="off" spellcheck="false" aria-label="PowerShell command" placeholder="Enter a command" />
+            <button id="terminal-run" class="primary" type="button">Run</button>
+            <button id="terminal-stop" class="secondary" type="button">Stop</button>
+          </div>
+        </div>
+        <div id="workspace-agent" class="workspace-agent" data-workspace-view="agent" hidden>
+          <form id="workspace-agent-form" class="workspace-agent-form">
+            <label>Project root<input id="workspace-project-root" type="text" value="." required autocomplete="off" spellcheck="false" /></label>
+            <label>Local model<select id="workspace-model" required></select></label>
+            <label class="workspace-outcome">Coding outcome<textarea id="workspace-outcome" rows="7" required placeholder="Describe the outcome. JSON_CODR will inspect the repository, propose bounded actions, execute them through BORG, and report verified results."></textarea></label>
+            <button id="workspace-agent-run" class="primary" type="submit">Run agent task</button>
+          </form>
+          <div class="workspace-agent-report" aria-live="polite">
+            <p id="workspace-agent-status" class="meta">Ready for a project task.</p>
+            <pre id="workspace-agent-result">No agent task has run.</pre>
+          </div>
         </div>
       </section>
 
@@ -438,11 +554,17 @@
       <footer><span>Runs entirely on this machine</span><span>127.0.0.1 · Ollama</span></footer>
       </main>
     </div>
-    <script src="/static/dependency_install_queue.js?v=1.0.17-beta.5" defer></script>
-    <script src="/static/benchmark_leaderboard.js?v=1.0.17-beta.5" defer></script>
-    <script src="/static/terminal_keyboard.js?v=1.0.17-beta.5-clipboard2" defer></script>
+    <script src="/static/dependency_install_queue.js?v=1.0.18-alpha.11" defer></script>
+    <script src="/static/benchmark_leaderboard.js?v=1.0.18-alpha.11" defer></script>
+    <script src="/static/terminal_keyboard.js?v=1.0.18-alpha.11" defer></script>
+    <script src="/static/core_client.js?v=1.0.18-alpha.11" defer></script>
+    <script src="/static/task_view.js?v=1.0.18-alpha.11" defer></script>
+    <script src="/static/conversation_view.js?v=1.0.18-alpha.11" defer></script>
     <script src="/static/vendor/xterm.js" defer></script>
     <script src="/static/vendor/xterm-addon-fit.js" defer></script>
-    <script src="/static/app.js?v=1.0.17-beta.5-clipboard2" defer></script>
+    <script src="/static/model_runs.js?v=1.0.18-alpha.11" defer></script>
+    <script src="/static/workspace_layout.js?v=1.0.18-alpha.11" defer></script>
+    <script src="/static/ui_customization.js?v=1.0.18-alpha.11" defer></script>
+    <script src="/static/app.js?v=1.0.18-alpha.11" defer></script>
   </body>
 </html>

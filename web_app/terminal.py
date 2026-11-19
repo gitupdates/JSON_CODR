@@ -10,12 +10,14 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 
-def child_environment(overrides: dict[str, str] | None = None, inherited=None) -> dict[str, str]:
+def child_environment(overrides: dict[str, str] | None = None, inherited=None, shim_root: str | Path | None = None) -> dict[str, str]:
     environment = dict(os.environ if inherited is None else inherited)
     system_root = environment.get("SystemRoot") or environment.get("SYSTEMROOT")
     if system_root and not (environment.get("windir") or environment.get("WINDIR")):
         environment["windir"] = system_root
     environment.update(overrides or {})
+    if shim_root:
+        environment["PATH"] = str(Path(shim_root).resolve()) + os.pathsep + environment.get("PATH", "")
     return environment
 
 
@@ -73,11 +75,13 @@ class TerminalService:
         self,
         pty_factory: PtyFactory | None | object = _AUTO_PTY,
         replay_limit: int = 4 * 1024 * 1024,
+        shim_root: str | Path | None = None,
     ) -> None:
         self._terminals: dict[str, _TerminalProcess] = {}
         self._lock = threading.Lock()
         self._pty_factory = _default_pty_factory() if pty_factory is _AUTO_PTY else pty_factory
         self._replay_limit = replay_limit
+        self._shim_root = shim_root
 
     def create(self, shell: str, cwd: Path, cols: int = 100, rows: int = 30) -> TerminalRecord:
         if shell not in {"powershell", "cmd"}:
@@ -90,7 +94,7 @@ class TerminalService:
             if shell == "powershell"
             else ["cmd.exe", "/Q"]
         )
-        environment = child_environment()
+        environment = child_environment(shim_root=self._shim_root)
         if self._pty_factory is not None:
             pty_command = (
                 ["powershell.exe", "-NoLogo", "-NoProfile", "-NoExit"]
@@ -114,7 +118,7 @@ class TerminalService:
         return record
 
     def create_agent(self, plan) -> TerminalRecord:
-        environment = child_environment(plan.environment)
+        environment = child_environment(plan.environment, shim_root=self._shim_root)
         if plan.interactive:
             agent_command = list(plan.argv)
             if Path(plan.argv[0]).suffix.lower() in {".cmd", ".bat"}:

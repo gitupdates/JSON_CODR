@@ -5,7 +5,8 @@ import ollama
 from pydantic import ValidationError
 
 from cli import StructuredCLIResponse, load_config, parse_response_content
-from web_app.models import ChatResult, ConversionBundle, GpuProfileSettings
+from web_app.models import ChatResult, ConversionBundle, GpuProfileSettings, ReasoningEntry, ReasoningTrace
+from web_app.reasoning import ReasoningNormalizer
 
 
 class OllamaUnavailableError(RuntimeError):
@@ -13,7 +14,9 @@ class OllamaUnavailableError(RuntimeError):
 
 
 class ModelOutputError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, provider_events: Optional[List[dict[str, object]]] = None) -> None:
+        super().__init__(message)
+        self.provider_events = list(provider_events or [])
 
 
 class ModelTimeoutError(RuntimeError):
@@ -41,15 +44,21 @@ class OllamaService:
             request["options"] = options
         try:
             return await asyncio.wait_for(self.client.chat(**request), timeout=self.timeout_seconds)
-        except Exception:
-            if not options:
-                raise
-            request.pop("options", None)
-            return await asyncio.wait_for(self.client.chat(**request), timeout=self.timeout_seconds)
+        except Exception as initial_error:
+            if options:
+                request.pop("options", None)
+                try:
+                    return await asyncio.wait_for(self.client.chat(**request), timeout=self.timeout_seconds)
+                except Exception:
+                    pass
+            if request.get("think") is True:
+                request.pop("think", None)
+                return await asyncio.wait_for(self.client.chat(**request), timeout=self.timeout_seconds)
+            raise initial_error
 
     async def health(self) -> Dict[str, bool]:
         try:
-            await asyncio.wait_for(self.client.list(), timeout=2)
+            await asyncio.wait_for(self.client.list(), timeout=5)
             return {"ollama": True}
         except Exception:
             return {"ollama": False}
@@ -179,7 +188,13 @@ class OllamaService:
             raise ValueError("Unknown or ambiguous model")
         return matches[0]
 
-    async def chat(self, model: str, prompt: str, images: Optional[List[Any]] = None) -> ChatResult:
+    async def chat(
+        self,
+        model: str,
+        prompt: str,
+        images: Optional[List[Any]] = None,
+        allow_repair: bool = True,
+    ) -> ChatResult:
         resolved = self._resolve(model)
         live = await self._live_models()
         if resolved not in live:
@@ -198,9 +213,176 @@ class OllamaService:
         try:
             raw = response.message.content if hasattr(response, "message") else response["message"]["content"]
             parsed = parse_response_content(raw)
-        except (ValidationError, KeyError, TypeError, AttributeError) as error:
-            raise ModelOutputError("Malformed structured output") from error
-        return ChatResult(model=resolved, **parsed.model_dump())
+            if not parsed.content.strip():
+                raise ValueError("Structured response content is empty")
+        except (ValidationError, KeyError, TypeError, AttributeError, ValueError) as error:
+            initial_raw = str(raw) if "raw" in locals() else ""
+            plain = initial_raw.strip()
+            if not allow_repair:
+                summary = next((line.strip() for line in plain.splitlines() if line.strip()), plain)[:240]
+                return ChatResult(
+                    model=resolved,
+                    status="success",
+                    summary=summary,
+                    content=plain,
+                    error="structured_output_fallback",
+                    provider_events=[{
+                        "type": "structured_output_fallback",
+                        "initial_raw": initial_raw,
+                    }],
+                )
+            repair_event: dict[str, object] = {
+                "type": "schema_repair",
+                "initial_raw": initial_raw,
+                "repaired_raw": None,
+            }
+            repair_request = {
+                "model": resolved,
+                "messages": [
+                    *request["messages"],
+                    {"role": "assistant", "content": plain},
+                    {
+                        "role": "user",
+                        "content": (
+                            "Reformat your previous answer into the required JSON response schema. "
+                            "Preserve its meaning, add no new claims, and return JSON only."
+                        ),
+                    },
+                ],
+                "format": StructuredCLIResponse.model_json_schema(),
+            }
+            try:
+                repaired_response = await self._chat_with_optimization(resolved, repair_request)
+                repaired_raw = (
+                    repaired_response.message.content
+                    if hasattr(repaired_response, "message")
+                    else repaired_response["message"]["content"]
+                )
+                repaired = parse_response_content(repaired_raw)
+                if not repaired.content.strip():
+                    raise ValueError("Repaired structured response content is empty")
+                repair_event["repaired_raw"] = str(repaired_raw)
+                return ChatResult(
+                    model=resolved,
+                    **repaired.model_dump(),
+                    provider_events=[repair_event],
+                )
+            except Exception as repair_error:
+                if "repaired_raw" in locals():
+                    repair_event["repaired_raw"] = str(repaired_raw)
+                repair_event["error"] = f"{type(repair_error).__name__}: {repair_error}"
+                if not plain:
+                    raise ModelOutputError(
+                        "Malformed structured output",
+                        provider_events=[repair_event],
+                    ) from repair_error
+            summary = next((line.strip() for line in plain.splitlines() if line.strip()), plain)[:240]
+            return ChatResult(
+                model=resolved,
+                status="success",
+                summary=summary,
+                content=plain,
+                error="structured_output_fallback",
+                provider_events=[repair_event],
+            )
+        return ChatResult(
+            model=resolved,
+            **parsed.model_dump(),
+            provider_events=[{"type": "structured_response", "raw": str(raw)}],
+        )
+
+    async def stream_chat(
+        self,
+        model: str,
+        prompt: str,
+        images: Optional[List[Any]] = None,
+        public_reasoning: bool = False,
+    ):
+        resolved = self._resolve(model)
+        live = await self._live_models()
+        if resolved not in live:
+            raise OllamaUnavailableError("Model is not installed")
+        messages = []
+        if public_reasoning:
+            messages.append({
+                "role": "system",
+                "content": (
+                    "Use the runtime's separate reasoning channel for a concise, auditable public rationale, "
+                    "then provide a clean final answer. State assumptions, evidence, uncertainty, and verification. "
+                    "Do not claim tools or files were used unless they were supplied."
+                ),
+            })
+        messages.append({"role": "user", "content": prompt, "images": images or None})
+        request = {"model": resolved, "messages": messages, "stream": True}
+        if public_reasoning:
+            request["think"] = True
+        normalizer = ReasoningNormalizer()
+        content_parts: list[str] = []
+        reasoning_entries: list[ReasoningEntry] = []
+        warnings: list[str] = []
+        try:
+            attempts = [request]
+            if request.get("think") is True:
+                attempts.append({key: value for key, value in request.items() if key != "think"})
+            for attempt in attempts:
+                received_chunk = False
+                try:
+                    stream = await self._chat_with_optimization(resolved, attempt)
+                    async with asyncio.timeout(self.timeout_seconds):
+                        async for chunk in stream:
+                            received_chunk = True
+                            message = chunk.message if hasattr(chunk, "message") else chunk.get("message", {})
+                            content = getattr(message, "content", None) if not isinstance(message, dict) else message.get("content")
+                            reasoning = getattr(message, "thinking", None) if not isinstance(message, dict) else message.get("thinking")
+                            for delta in normalizer.feed({"content": content or "", "reasoning": reasoning or ""}):
+                                event = self._stream_delta(delta, reasoning_entries, content_parts, warnings)
+                                if event:
+                                    yield event
+                    break
+                except ollama.ResponseError as error:
+                    unsupported_thinking = (
+                        attempt.get("think") is True
+                        and not received_chunk
+                        and "does not support thinking" in str(error).casefold()
+                    )
+                    if unsupported_thinking:
+                        continue
+                    raise
+            for delta in normalizer.finish():
+                event = self._stream_delta(delta, reasoning_entries, content_parts, warnings)
+                if event:
+                    yield event
+        except TimeoutError as error:
+            raise ModelTimeoutError("Model request timed out") from error
+        except (ModelTimeoutError, ModelOutputError, OllamaUnavailableError, ValueError):
+            raise
+        except Exception as error:
+            raise OllamaUnavailableError("Ollama request failed") from error
+        content = "".join(content_parts).strip()
+        if not content:
+            raise ModelOutputError("Model returned no answer content")
+        summary = next((line.strip() for line in content.splitlines() if line.strip()), "Model response")[:240]
+        trace = ReasoningTrace(entries=reasoning_entries, warnings=warnings) if reasoning_entries or warnings else None
+        yield {
+            "type": "completed",
+            "result": ChatResult(model=resolved, status="success", summary=summary, content=content, reasoning=trace),
+        }
+
+    @staticmethod
+    def _stream_delta(delta, reasoning_entries, content_parts, warnings):
+        if delta.channel == "content":
+            content_parts.append(delta.text)
+            return {"type": "content", "text": delta.text}
+        if delta.channel == "reasoning":
+            reasoning_entries.append(ReasoningEntry(
+                sequence=len(reasoning_entries),
+                kind="analysis",
+                text=delta.text,
+                provenance=delta.provenance,
+            ))
+            return {"type": "reasoning", "text": delta.text, "provenance": delta.provenance}
+        warnings.append(delta.text)
+        return {"type": "warning", "text": delta.text}
 
     async def convert_archive(self, model: str, prompt: str) -> ConversionBundle:
         resolved = self._resolve(model)

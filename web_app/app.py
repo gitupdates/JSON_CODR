@@ -4,8 +4,9 @@ import asyncio
 import os
 import re
 import sys
+from uuid import uuid7
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -13,6 +14,7 @@ from web_app.attachments import AttachmentService, AttachmentTooLarge
 from web_app.actions import ActionProposalService
 from web_app.artifacts import ArtifactService
 from web_app.context import ContextAssembler
+from web_app.conversation import ConversationService
 from web_app.hardware import HardwareBackendManager
 from web_app.inference.catalog import OptimizedModelCatalog
 from web_app.inference.contracts import ProviderKind
@@ -30,8 +32,26 @@ from web_app.benchmark_baseline import BenchmarkBaselineService
 from web_app.coding_agents import CodingAgentService
 from web_app.git_broker import GitBrokerService
 from web_app.git_adapter import GitActionAdapter
+from web_app.core.adapters import CapabilityCall
+from web_app.core.api import create_core_router
+from web_app.core.artifact_store import ArtifactStore
+from web_app.core.assimilation import AssimilationService, FunctionalProbeResult, SkillInstallAdapter
+from web_app.core.contracts import TaskCommand, TaskStatus
+from web_app.core.git_adapter import GitExecutionAdapter
+from web_app.core.inference_adapter import InferenceAdapter
+from web_app.core.mcp_stdio_backend import build_mcp_adapters
+from web_app.core.policy import PolicyService
+from web_app.core.project_adapter import ProjectAdapter
+from web_app.core.service import CoreService
+from web_app.core.store import TaskStore
+from web_app.core.component_manager import ComponentManager
+from web_app.core.component_catalog import active_component_command
+from web_app.core.component_adapter import LazyComponentExecutionAdapter
+from web_app.core.terminal_adapter import TerminalAdapter
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest
+from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
+from web_app.model_run_store import ModelRunStore, RequestKeyConflict
+from web_app.model_runs import ModelRunService, canonical_model_prompt
 from web_app.ollama_service import (
     ModelOutputError,
     ModelTimeoutError,
@@ -76,10 +96,21 @@ def create_app(
 ) -> FastAPI:
     application = FastAPI(title="JSON_CODR", version=APP_VERSION)
     workspace = workspace or WorkspaceService(default_data_root())
+    component_manager = None
+    component_root = workspace.data_root / "core" / "component-registry"
+
+    def get_component_manager() -> ComponentManager:
+        nonlocal component_manager
+        if component_manager is None:
+            component_manager = ComponentManager(component_root)
+            application.state.component_manager = component_manager
+        return component_manager
     configure_local_analysis_tools(workspace.data_root)
     attachments = attachments or AttachmentService(workspace)
     skill_library = SkillLibraryService(workspace.data_root)
     skill_library.ensure_builtin_rea()
+    skill_library.ensure_builtin_multi_model_jury()
+    skill_library.ensure_builtin_readteam()
     skill_library.ensure_envelopes()
     skill_converter = SkillConverterService()
     settings = SettingsService(workspace.data_root)
@@ -122,12 +153,48 @@ def create_app(
     skill_discovery = SkillDiscoveryService(skill_library, skill_converter, workspace.data_root)
     github_skills = github_skills or GithubSkillService(skill_library, skill_converter, workspace.data_root)
     context_assembler = ContextAssembler(attachments, skills=skill_library)
+    model_run_store = ModelRunStore(workspace.data_root)
+    model_runs = ModelRunService(
+        model_run_store,
+        inference_router or service,
+        workspace,
+        context_assembler,
+        concurrency=4,
+    )
+    application.state.model_runs = model_runs
+    model_run_tasks: set[asyncio.Task] = set()
+    application.state.model_run_tasks = model_run_tasks
+
+    def finish_model_run(task: asyncio.Task) -> None:
+        model_run_tasks.discard(task)
+        if not task.cancelled():
+            task.exception()
+
+    async def close_model_runs() -> None:
+        for task in model_run_tasks:
+            task.cancel()
+        if model_run_tasks:
+            await asyncio.gather(*model_run_tasks, return_exceptions=True)
+
+    application.router.add_event_handler("startup", model_runs.recover_incomplete_runs)
+    application.router.add_event_handler("shutdown", close_model_runs)
     dependency_service = DependencyService(attachments)
     artifact_service = ArtifactService(workspace)
-    terminals = terminals or TerminalService()
+    conversation_service = ConversationService(
+        workspace,
+        attachments,
+        Path(__file__).resolve().parent.parent,
+        artifact_service,
+    )
+    terminals = terminals or TerminalService(shim_root=component_root / "shims")
     close_terminals = getattr(terminals, "close_all", None)
     if close_terminals is not None:
         application.router.add_event_handler("shutdown", close_terminals)
+    def close_component_manager() -> None:
+        if component_manager is not None:
+            component_manager.close()
+
+    application.router.add_event_handler("shutdown", close_component_manager)
     coding_agents = coding_agents or CodingAgentService(workspace.data_root)
     git_broker = git_broker or GitBrokerService(workspace.data_root, verification_checks={
         "python-compile": [sys.executable, "-m", "compileall", "-q", "."],
@@ -139,6 +206,138 @@ def create_app(
     })
     git_adapter = GitActionAdapter(verification_checks=git_broker.verification_checks)
     git_broker.recover_interrupted_tasks()
+    core_runtime = None
+    core_artifacts = None
+    core_capabilities = ()
+    core_mcp_backends = []
+
+    async def probe_component(manifest, staged):
+        if manifest.kind != "skill-pack":
+            return FunctionalProbeResult(success=False, reason="Unsupported component kind")
+        try:
+            payload_path = next(staged.iterdir())
+            pack = SkillPack.model_validate_json(payload_path.read_text(encoding="utf-8"))
+        except (OSError, StopIteration, ValueError) as error:
+            return FunctionalProbeResult(success=False, reason=f"Invalid skill pack: {error}")
+        if not pack.skills or any("JSON_CODR_SKILL_SCHEMA: 1" not in skill.content for skill in pack.skills):
+            return FunctionalProbeResult(success=False, reason="Skill pack is missing the JSON_CODR envelope")
+        return FunctionalProbeResult(success=True, evidence=f"verified:{manifest.content_digest}")
+
+    def resolve_skill_install(source_kind: str, reference: dict):
+        if source_kind == "discovery":
+            return skill_discovery.prepare_install(str(reference["discovery_id"]))
+        if source_kind == "github":
+            return github_skills.prepare_install(str(reference["preview_id"]))
+        if source_kind == "attachment":
+            return convert_attachment(str(reference["session_id"]), str(reference["attachment_id"])), lambda: None
+        raise ValueError("Unsupported skill source")
+
+    def get_core_runtime():
+        nonlocal core_runtime, core_capabilities
+        if core_runtime is None:
+            core_root = workspace.data_root / "core"
+            core_tasks = TaskStore(core_root / "tasks.sqlite")
+            core_policy = PolicyService(core_root / "policy.sqlite")
+            core_terminal_adapter = TerminalAdapter(terminals)
+            core_project_adapter = ProjectAdapter(core_root / "project-state")
+            def prepare_inference_prompt(call, prompt):
+                model = call.arguments.get("model")
+                if not isinstance(model, str):
+                    raise ValueError("inference generation requires model")
+                session_id = call.arguments.get("session_id")
+                if not isinstance(session_id, str):
+                    return canonical_model_prompt(model=model, task=prompt, assembled_prompt=prompt), {}
+                session = workspace.get_session(session_id)
+                recommendation_result = recommendations.recommend(session, prompt)
+                context_result = context_assembler.build(session, prompt, recommendation_result)
+                return canonical_model_prompt(
+                    model=model,
+                    task=prompt,
+                    assembled_prompt=context_result.prompt,
+                ), {
+                    "attached_skills": [item.model_dump(mode="json") for item in context_result.attached_skills],
+                    "attached_skillsets": context_result.skillsets,
+                    "skill_recommendations": [
+                        item.model_dump(mode="json") for item in recommendation_result.recommendations
+                    ],
+                }
+
+            core_inference_adapter = InferenceAdapter(
+                inference_router or service,
+                prepare_prompt=prepare_inference_prompt,
+            )
+            core_git_adapter = GitExecutionAdapter(
+                git_broker,
+                lambda grant_id, project_root: coding_agents.authorized_grant(grant_id, project_root, "broker"),
+            )
+            component_adapter = SkillInstallAdapter(
+                AssimilationService(core_root / "components", probe_component),
+                resolve_skill_install,
+                skill_library.install,
+                DuplicateSkillPack,
+            )
+            adapters = {
+                "git.execute": core_git_adapter,
+                "inference.generate": core_inference_adapter,
+                "project.read": core_project_adapter,
+                "project.search": core_project_adapter,
+                "project.patch": core_project_adapter,
+                "checkpoint.create": core_project_adapter,
+                "checkpoint.restore": core_project_adapter,
+                "terminal.session": core_terminal_adapter,
+                "terminal.execute": core_terminal_adapter,
+                "terminal.interrupt": core_terminal_adapter,
+                "terminal.close": core_terminal_adapter,
+                "component.install": component_adapter,
+                "component.execute": LazyComponentExecutionAdapter(get_component_manager),
+            }
+            craft_command = active_component_command(component_root, "craft-anything-cli")
+            mcp_adapters, mcp_backends = build_mcp_adapters(
+                workspace.data_root / "mcp_servers.json",
+                rea_provider_root=workspace.data_root / "providers" / "rea",
+                craft_command=craft_command,
+            )
+            adapters.update(mcp_adapters)
+            core_mcp_backends.extend(mcp_backends)
+            core_service = CoreService(
+                core_tasks,
+                core_policy,
+                adapters,
+                restore_checkpoint=core_project_adapter.restore,
+            )
+            core_capabilities = tuple({"capability_id": capability_id} for capability_id in sorted(adapters))
+            core_runtime = (core_service, core_tasks, core_policy)
+            application.state.core_service = core_service
+            application.state.core_task_store = core_tasks
+            application.state.core_policy = core_policy
+        return core_runtime
+
+    def get_core_artifacts() -> ArtifactStore:
+        nonlocal core_artifacts
+        if core_artifacts is None:
+            core_root = workspace.data_root / "core"
+            core_artifacts = ArtifactStore(core_root / "artifacts", core_root / "artifacts.sqlite")
+            application.state.core_artifact_store = core_artifacts
+        return core_artifacts
+
+    async def close_core_runtime() -> None:
+        await asyncio.gather(*(backend.close() for backend in core_mcp_backends), return_exceptions=True)
+        if core_runtime is not None:
+            _, core_tasks, core_policy = core_runtime
+            if core_artifacts is not None:
+                core_artifacts.close()
+            core_policy.close()
+            core_tasks.close()
+
+    application.router.add_event_handler("shutdown", close_core_runtime)
+    application.include_router(
+        create_core_router(
+            get_core_runtime,
+            artifact_store=get_core_artifacts,
+            capabilities=lambda: core_capabilities if get_core_runtime() else (),
+            components=get_component_manager,
+        )
+    )
     action_proposals = ActionProposalService()
     web_root = Path(__file__).resolve().parent.parent / "web"
     application.mount("/static", StaticFiles(directory=web_root), name="static")
@@ -179,6 +378,60 @@ def create_app(
             return {"models": await (inference_router.list_models() if inference_router else service.list_models())}
         except OllamaUnavailableError as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
+
+    @application.post("/api/model-runs", status_code=201)
+    async def create_model_run(request: ModelRunCreateRequest):
+        try:
+            workspace.get_session(request.session_id)
+            run = await model_runs.create(request)
+            task = asyncio.create_task(model_runs.run(run.run_id))
+            model_run_tasks.add(task)
+            task.add_done_callback(finish_model_run)
+            return run
+        except RequestKeyConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Session not found") from error
+
+    @application.get("/api/model-runs/{run_id}")
+    async def get_model_run(run_id: str):
+        try:
+            return model_runs.get(run_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Run not found") from error
+
+    @application.get("/api/model-runs/{run_id}/results/{result_id}/original")
+    async def get_model_run_original(run_id: str, result_id: str, x_json_codr: str | None = Header(None)):
+        if x_json_codr != "1":
+            raise HTTPException(status_code=403, detail="Local authorization required")
+        try:
+            return model_run_store.get_original(run_id, result_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Original output not found") from error
+
+    @application.post("/api/model-runs/{run_id}/cancel")
+    async def cancel_model_run(run_id: str):
+        try:
+            return model_runs.cancel(run_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Run not found") from error
+
+    @application.get("/api/model-runs/{run_id}/export")
+    async def export_model_run(run_id: str, format: str = "json"):
+        try:
+            media_type, content = model_runs.export(run_id, format)
+            return Response(content=content, media_type=media_type)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Run not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @application.get("/api/model-runs/{run_id}/search")
+    async def search_model_run(run_id: str, q: str):
+        try:
+            return model_runs.search(run_id, q)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Run not found") from error
 
     @application.get("/api/models/{model:path}/tool-compatibility")
     async def model_tool_compatibility(model: str):
@@ -443,6 +696,85 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Session not found") from error
 
+    @application.get("/api/sessions/{session_id}/conversation")
+    async def get_conversation(session_id: str):
+        try:
+            return conversation_service.history(session_id)
+        except InvalidSessionId as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Session not found") from error
+
+    @application.post("/api/sessions/{session_id}/conversation", status_code=201)
+    async def append_conversation_message(session_id: str, message: ChatMessage):
+        try:
+            return conversation_service.append(session_id, message)
+        except InvalidSessionId as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Session not found") from error
+
+    @application.get("/api/sessions/{session_id}/conversation/export")
+    async def export_conversation(
+        session_id: str,
+        format: str = "markdown",
+        include_binaries: bool = False,
+    ):
+        try:
+            payload, media_type, filename = conversation_service.export_session(
+                session_id,
+                format,
+                include_binaries=include_binaries,
+            )
+        except InvalidSessionId as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Session not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return Response(
+            content=payload,
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @application.get("/api/sessions/{session_id}/messages/{message_id}/export")
+    async def export_conversation_message(
+        session_id: str,
+        message_id: str,
+        format: str = "markdown",
+    ):
+        try:
+            payload, media_type, filename = conversation_service.export_message(
+                session_id,
+                message_id,
+                format,
+            )
+        except InvalidSessionId as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Message not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return Response(
+            content=payload,
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @application.get("/api/sessions/{session_id}/references/{reference_id}")
+    async def download_conversation_reference(session_id: str, reference_id: str):
+        try:
+            reference = conversation_service.find_reference(session_id, reference_id)
+            path, media_type = conversation_service.resolve_reference(session_id, reference)
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail="Reference is outside the active scope") from error
+        except InvalidSessionId as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except (KeyError, ValueError) as error:
+            raise HTTPException(status_code=404, detail="Reference not found") from error
+        return FileResponse(path, media_type=media_type, filename=reference.label)
+
     @application.post("/api/sessions/{session_id}/skill-recommendations")
     async def preview_skill_recommendations(session_id: str, request: SkillRecommendationRequest):
         try:
@@ -480,6 +812,7 @@ def create_app(
     async def delete_session(session_id: str):
         try:
             workspace.delete_session(session_id)
+            model_run_store.delete_session(session_id)
         except InvalidSessionId as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         except KeyError as error:
@@ -618,10 +951,37 @@ def create_app(
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
+    async def install_skill_through_core(source_kind: str, reference: dict):
+        core_service, _, core_policy = get_core_runtime()
+        call = CapabilityCall(
+            capability_id="component.install",
+            operation="install",
+            project_root=str(Path(__file__).resolve().parent.parent),
+            arguments={"source_kind": source_kind, "reference": reference},
+        )
+        core_policy.grant("user", "legacy", call, scope="project")
+        task_id = str(uuid7())
+        record = await core_service.submit(TaskCommand(
+            command_id=str(uuid7()),
+            task_id=task_id,
+            thread_id=f"component:{source_kind}",
+            project_id="legacy",
+            command_type="component.install",
+            payload=call.model_dump(mode="json"),
+        ))
+        if record.status is not TaskStatus.completed:
+            failure = record.events[-1].payload
+            code = failure.get("code")
+            reason = failure.get("reason", "Component installation failed")
+            status = 409 if code == "component_duplicate" else 422 if code in {"invalid_request", "component_probe_failed"} else 500
+            raise HTTPException(status_code=status, detail=reason)
+        completed = next(event for event in reversed(record.events) if event.event_type == "component.installed")
+        return SkillPack.model_validate(completed.payload["result"])
+
     @application.post("/api/skills/install-discovery", status_code=201)
     async def install_discovered_skill(request: DiscoveryInstallRequest):
         try:
-            installed = skill_discovery.install(request.discovery_id)
+            installed = await install_skill_through_core("discovery", {"discovery_id": request.discovery_id})
             skillsets.reconcile()
             return installed
         except DuplicateSkillPack as error:
@@ -641,7 +1001,7 @@ def create_app(
     @application.post("/api/skills/github/install", status_code=201)
     async def install_github_skill(request: GithubSkillInstallRequest):
         try:
-            installed = github_skills.install(request.preview_id)
+            installed = await install_skill_through_core("github", {"preview_id": request.preview_id})
             skillsets.reconcile()
             return installed
         except DuplicateSkillPack as error:
@@ -677,7 +1037,10 @@ def create_app(
     @application.post("/api/sessions/{session_id}/attachments/{attachment_id}/skill-install", status_code=201)
     async def install_skill_pack(session_id: str, attachment_id: str):
         try:
-            installed = skill_library.install(convert_attachment(session_id, attachment_id))
+            installed = await install_skill_through_core("attachment", {
+                "session_id": session_id,
+                "attachment_id": attachment_id,
+            })
             skillsets.reconcile()
             return installed
         except DuplicateSkillPack as error:
@@ -819,6 +1182,38 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Execution grant not found") from error
 
+    async def execute_git_through_core(action_request, model: str, grant_id: str):
+        core_service, _, core_policy = get_core_runtime()
+        operation = next(
+            (kind for kind in ("push", "commit", "sync") if any(action.kind == kind for action in action_request.actions)),
+            "bounded_edit" if any(action.kind == "apply_patch" for action in action_request.actions) else "read",
+        )
+        call = CapabilityCall(
+            capability_id="git.execute",
+            operation=operation,
+            project_root=action_request.project_root,
+            arguments={
+                "request": action_request.model_dump(mode="json"),
+                "model": model,
+                "grant_id": grant_id,
+            },
+        )
+        if operation in {"push", "commit", "sync"}:
+            core_policy.grant("user", "legacy", call, scope="project")
+        task_id = str(uuid7())
+        record = await core_service.submit(TaskCommand(
+            command_id=str(uuid7()),
+            task_id=task_id,
+            thread_id=f"legacy:{task_id}",
+            project_id="legacy",
+            command_type="git.execute",
+            payload=call.model_dump(mode="json"),
+        ))
+        if record.status is not TaskStatus.completed:
+            raise RuntimeError(record.events[-1].payload.get("reason", "Git execution failed"))
+        completed = next(event for event in reversed(record.events) if event.event_type == "git.completed")
+        return completed.payload["result"]
+
     @application.post("/api/git-broker/tasks", status_code=201)
     async def execute_git_broker_task(request: BrokerTaskRequest, x_json_codr: str | None = Header(None)):
         require_terminal_header(x_json_codr)
@@ -827,9 +1222,7 @@ def create_app(
         if not authorized():
             raise HTTPException(status_code=403, detail="Broker authorization does not cover this project")
         try:
-            return await asyncio.to_thread(
-                git_broker.execute, request.request, request.model, request.grant_id, authorized
-            )
+            return await execute_git_through_core(request.request, request.model, request.grant_id)
         except (ValueError, RuntimeError, PermissionError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
@@ -849,11 +1242,91 @@ def create_app(
                 raise ValueError("Model response changed the authorized project root")
             if action_request.baseline_fingerprint != snapshot.dirty_fingerprint:
                 raise ValueError("Model response changed the authorized baseline")
-            result = await asyncio.to_thread(
-                git_broker.execute, action_request, request.model, request.grant_id, authorized
-            )
+            result = await execute_git_through_core(action_request, request.model, request.grant_id)
             return {"compatibility": "broker_adapter", "result": result}
         except (ValueError, RuntimeError, PermissionError, OllamaUnavailableError, ModelOutputError, ModelTimeoutError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    async def execute_project_workspace(project_root: str, model: str, outcome: str) -> dict:
+        grant = coding_agents.grant(project_root, "broker")
+        snapshot = await asyncio.to_thread(git_broker.inspect, project_root)
+        contract = git_adapter.prompt_contract(snapshot.root, snapshot.dirty_fingerprint)
+        generated = await service.chat(model, f"{outcome}\n\n{contract}")
+        action_request = git_adapter.parse(generated.content)
+        if Path(action_request.project_root).resolve() != Path(snapshot.root):
+            raise ValueError("Model response changed the authorized project root")
+        if action_request.baseline_fingerprint != snapshot.dirty_fingerprint:
+            raise ValueError("Model response changed the authorized baseline")
+        result = await execute_git_through_core(action_request, generated.model, grant.id)
+        return {
+            "route": "broker_adapter", "effective_model": generated.model,
+            "project_root": snapshot.root, "result": result,
+        }
+
+    @application.post("/api/project-workspace/run", status_code=201)
+    async def run_project_workspace(request: ProjectWorkspaceRunRequest, x_json_codr: str | None = Header(None)):
+        require_terminal_header(x_json_codr)
+        try:
+            executed = await execute_project_workspace(request.project_root, request.model, request.outcome)
+            return {**executed, "requested_model": request.model}
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except (RuntimeError, PermissionError, OllamaUnavailableError, ModelOutputError, ModelTimeoutError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @application.post("/api/workspace/tasks", response_model=WorkspaceTaskResponse, status_code=201)
+    async def submit_workspace_task(request: WorkspaceTaskRequest, response: Response):
+        if request.engine_id != "borg":
+            raise HTTPException(status_code=409, detail="Requested engine is not a verified Workspace engine")
+        try:
+            session = workspace.get_session(request.session_id)
+            installed = [
+                item for item in await (inference_router.list_models() if inference_router else service.list_models())
+                if item.get("installed")
+            ]
+            installed_names = [item["name"] for item in installed]
+            if request.model_selection == "multi-model":
+                run = await model_runs.create(ModelRunCreateRequest(
+                    session_id=session.id, prompt=request.prompt, profile="general", parallelism=2,
+                ))
+                task = asyncio.create_task(model_runs.run(run.run_id))
+                model_run_tasks.add(task)
+                task.add_done_callback(finish_model_run)
+                response.status_code = 202
+                return WorkspaceTaskResponse(
+                    task_id=run.run_id, requested_engine=request.engine_id, effective_engine="borg",
+                    requested_model="multi-model", effective_model=None, route="multi-model",
+                    status="running", warnings=[], result={"run_id": run.run_id},
+                )
+            if not installed_names:
+                raise HTTPException(status_code=409, detail="No installed local model is available")
+            warnings = []
+            requested_model = request.model_selection
+            selected_model = installed_names[0] if requested_model == "auto" else requested_model
+            if selected_model not in installed_names:
+                raise HTTPException(status_code=409, detail="Requested model is not installed")
+            if requested_model == "auto":
+                warnings.append(f"Auto selected {selected_model} from the installed model roster")
+            compatibility = await service.tool_compatibility(selected_model)
+            if not compatibility["available"]:
+                raise HTTPException(status_code=409, detail="Requested engine and model do not have a verified tool route")
+            effective_model = compatibility["effective_tool_model"] or selected_model
+            if effective_model != selected_model:
+                warnings.append(f"Verified tool execution uses {effective_model}; requested model remains {selected_model}")
+            recommendation = recommendations.recommend(session, request.prompt)
+            assembled = context_assembler.build(session, request.prompt, recommendation)
+            executed = await execute_project_workspace(request.project_root, effective_model, assembled.prompt)
+            return WorkspaceTaskResponse(
+                task_id=str(uuid7()), requested_engine=request.engine_id, effective_engine="borg",
+                requested_model=requested_model, effective_model=executed["effective_model"],
+                route=executed["route"], status="completed", warnings=warnings,
+                result=executed["result"], artifact_references=[],
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Session not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except (RuntimeError, PermissionError, OllamaUnavailableError, ModelOutputError, ModelTimeoutError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.post("/api/coding-agents/grants", status_code=201)
@@ -908,26 +1381,62 @@ def create_app(
         require_terminal_header(x_json_codr)
         cwd = Path(request.cwd).resolve() if request.cwd else Path(__file__).resolve().parent.parent
         try:
-            return terminals.create(request.shell, cwd)
+            core_service, _, _ = get_core_runtime()
+            call = CapabilityCall(
+                capability_id="terminal.session",
+                operation="session",
+                project_root=str(cwd),
+                arguments={"shell": request.shell},
+            )
+            task_id = str(uuid7())
+            record = await core_service.submit(TaskCommand(
+                command_id=str(uuid7()),
+                task_id=task_id,
+                thread_id=f"terminal:{task_id}",
+                project_id="legacy",
+                command_type="terminal.session",
+                payload=call.model_dump(mode="json"),
+            ))
+            if record.status is not TaskStatus.completed:
+                raise ValueError(record.events[-1].payload.get("reason", "Terminal creation failed"))
+            started = next(event for event in reversed(record.events) if event.event_type == "terminal.session_started")
+            return started.payload["record"]
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+
+    async def submit_terminal_mutation(operation: str, terminal_id: str) -> None:
+        core_service, _, _ = get_core_runtime()
+        call = CapabilityCall(
+            capability_id=f"terminal.{operation}",
+            operation=operation,
+            project_root=str(Path(__file__).resolve().parent.parent),
+            arguments={"terminal_id": terminal_id},
+        )
+        task_id = str(uuid7())
+        record = await core_service.submit(TaskCommand(
+            command_id=str(uuid7()),
+            task_id=task_id,
+            thread_id=f"terminal:{terminal_id}",
+            project_id="legacy",
+            command_type=f"terminal.{operation}",
+            payload=call.model_dump(mode="json"),
+        ))
+        if record.status is not TaskStatus.completed:
+            reason = record.events[-1].payload.get("reason", "Terminal operation failed")
+            if reason == "capability target not found":
+                raise HTTPException(status_code=404, detail="Terminal not found")
+            raise HTTPException(status_code=409, detail=reason)
 
     @application.post("/api/terminals/{terminal_id}/interrupt", status_code=204)
     async def interrupt_terminal(terminal_id: str, x_json_codr: str | None = Header(None)):
         require_terminal_header(x_json_codr)
-        try:
-            terminals.interrupt(terminal_id)
-        except KeyError as error:
-            raise HTTPException(status_code=404, detail="Terminal not found") from error
+        await submit_terminal_mutation("interrupt", terminal_id)
         return Response(status_code=204)
 
     @application.delete("/api/terminals/{terminal_id}", status_code=204)
     async def close_terminal(terminal_id: str, x_json_codr: str | None = Header(None)):
         require_terminal_header(x_json_codr)
-        try:
-            terminals.close(terminal_id)
-        except KeyError as error:
-            raise HTTPException(status_code=404, detail="Terminal not found") from error
+        await submit_terminal_mutation("close", terminal_id)
         return Response(status_code=204)
 
     def validate_action_terminal(proposal, terminal_id: str):
@@ -1074,6 +1583,47 @@ def create_app(
         except WebSocketDisconnect:
             pass
 
+    async def generate_chat_through_core(
+        model: str,
+        prompt: str,
+        images: list[Path],
+        thread_id: str,
+        session_id: str | None = None,
+    ) -> ChatResult:
+        core_service, _, _ = get_core_runtime()
+        call = CapabilityCall(
+            capability_id="inference.generate",
+            operation="generate",
+            project_root=str(Path(__file__).resolve().parent.parent),
+            arguments={
+                "model": model,
+                "prompt": prompt,
+                "images": [str(path) for path in images],
+                **({"session_id": session_id} if session_id else {}),
+            },
+        )
+        task_id = str(uuid7())
+        record = await core_service.submit(TaskCommand(
+            command_id=str(uuid7()),
+            task_id=task_id,
+            thread_id=thread_id,
+            project_id="legacy",
+            command_type="inference.generate",
+            payload=call.model_dump(mode="json"),
+        ))
+        if record.status is not TaskStatus.completed:
+            failure = record.events[-1].payload
+            code = failure.get("code")
+            reason = failure.get("reason", "Model request failed")
+            status = {"model_timeout": 504, "model_output": 502, "invalid_request": 400}.get(code, 502)
+            if code == "model_unavailable":
+                status = 409 if reason == "Model is not installed" else 502
+                if status == 502:
+                    hardware.record_runtime_failure(reason)
+            raise HTTPException(status_code=status, detail=reason)
+        completed = next(event for event in reversed(record.events) if event.event_type == "inference.completed")
+        return ChatResult.model_validate(completed.payload["result"])
+
     @application.post("/api/chat", response_model=ChatResult)
     async def chat(request: ChatRequest, http_request: Request):
         if not request.prompt.strip():
@@ -1101,6 +1651,11 @@ def create_app(
                 None,
             )
             if wants_conversion and source_archive:
+                model_prompt = canonical_model_prompt(
+                    model=request.model,
+                    task=original_prompt,
+                    assembled_prompt=model_prompt,
+                )
                 bundle = await service.convert_archive(request.model, model_prompt)
                 artifact = artifact_service.save_conversion(
                     request.session_id,
@@ -1127,9 +1682,12 @@ def create_app(
                     artifact=artifact,
                 )
             else:
-                result = await (
-                    inference_router.chat(request.model, model_prompt, images=model_images)
-                    if inference_router else service.chat(request.model, model_prompt, images=model_images)
+                result = await generate_chat_through_core(
+                    request.model,
+                    original_prompt,
+                    model_images,
+                    request.session_id or f"chat:{uuid7()}",
+                    request.session_id,
                 )
             if context_result and recommendation_result:
                 result.attached_skills = context_result.attached_skills
@@ -1144,10 +1702,24 @@ def create_app(
                     str(Path(__file__).resolve().parent.parent),
                 )
             if request.session_id:
-                workspace.append_message(request.session_id, ChatMessage(role="user", content=original_prompt))
+                canonical_run = model_runs.record_single(
+                    session_id=request.session_id,
+                    prompt=original_prompt,
+                    requested_model=request.model,
+                    result=result,
+                )
+                result.run_id = canonical_run.run_id
                 workspace.append_message(
                     request.session_id,
-                    ChatMessage(role="assistant", content=f"{result.summary}\n\n{result.content}"),
+                    ChatMessage(role="user", content=original_prompt, task_id=canonical_run.run_id),
+                )
+                workspace.append_message(
+                    request.session_id,
+                    ChatMessage(
+                        role="assistant",
+                        content=f"{result.summary}\n\n{result.content}",
+                        task_id=canonical_run.run_id,
+                    ),
                 )
             return result
         except InvalidSessionId as error:

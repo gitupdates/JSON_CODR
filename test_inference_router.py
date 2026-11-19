@@ -14,9 +14,20 @@ class FakeOllama:
     async def list_models(self):
         return [{"name": name, "installed": True} for name in self.installed]
 
-    async def chat(self, model, prompt, images=None):
+    async def chat(self, model, prompt, images=None, allow_repair=True):
         self.calls.append(model)
         return ChatResult(model=model, status="ok", summary="ollama", content="done")
+
+    async def supports_vision(self, model):
+        return model.endswith("vision")
+
+    async def stream_chat(self, model, prompt, images=None, public_reasoning=False):
+        self.calls.append((model, public_reasoning))
+        yield {"type": "content", "text": "live"}
+        yield {
+            "type": "completed",
+            "result": ChatResult(model=model, status="ok", summary="live", content="live"),
+        }
 
 
 class FakeProvider:
@@ -40,6 +51,27 @@ class FakeRegistry:
 
 
 class InferenceRouterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_vision_capability_uses_ollama_and_treats_optimized_catalog_as_text_only(self):
+        router = InferenceRouter(FakeOllama(), OptimizedModelCatalog(), FakeRegistry(FakeProvider()), set())
+
+        self.assertTrue(await router.supports_vision("local-vision"))
+        self.assertFalse(await router.supports_vision(OptimizedModelCatalog().list()[0].id))
+
+    async def test_unqualified_models_stream_directly_from_ollama(self):
+        ollama = FakeOllama()
+        router = InferenceRouter(ollama, OptimizedModelCatalog(), FakeRegistry(FakeProvider()), verified_models=set())
+
+        events = [
+            event async for event in router.stream_chat(
+                "qwen2.5-coder:0.5b",
+                "hello",
+                public_reasoning=True,
+            )
+        ]
+
+        self.assertEqual([event["type"] for event in events], ["content", "completed"])
+        self.assertEqual(ollama.calls, [("qwen2.5-coder:0.5b", True)])
+
     async def test_unqualified_models_use_only_ollama(self):
         ollama = FakeOllama()
         provider = FakeProvider()
@@ -71,6 +103,8 @@ class InferenceRouterTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(ollama.calls, [model.ollama_fallback])
         self.assertIn("Fallback", result.summary)
+        self.assertEqual(result.provider_events[0]["type"], "provider_fallback")
+        self.assertEqual(result.provider_events[0]["effective_model"], model.ollama_fallback)
         self.assertIn(model.id, router.quarantined)
 
         ollama = FakeOllama(["another-coder:latest"])
