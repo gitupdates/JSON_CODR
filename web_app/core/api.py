@@ -34,6 +34,7 @@ class RestoreRequest(BaseModel):
 class TaskApprovalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scope: str = Field(pattern=r"^(project|schedule)$")
+    proposal_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class ComponentInstallApproval(BaseModel):
@@ -137,11 +138,18 @@ def create_core_router(
         principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
     ):
         try:
-            return await runtime()[0].approve(task_id, principal=principal, scope=request.scope)
+            return await runtime()[0].approve(
+                task_id,
+                principal=principal,
+                scope=request.scope,
+                proposal_id=request.proposal_id,
+            )
         except KeyError as error:
             raise HTTPException(status_code=404, detail="task not found") from error
         except ValueError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
 
     @router.post("/api/tasks/{task_id}/retry")
     async def retry_task(

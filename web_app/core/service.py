@@ -5,6 +5,8 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping
 
 from web_app.core.adapters import AdapterEvent, CapabilityAdapter, CapabilityCall, CapabilityExecutionError, ExecutionContext
+from web_app.core.approval import ApprovalLease, ApprovalStore
+from web_app.core.canonical import canonical_digest
 from web_app.core.contracts import JsonValue, TaskCommand, TaskEvent, TaskEventDraft, TaskRecord, TaskStatus
 from web_app.core.policy import PolicyEffect, PolicyService
 from web_app.core.store import TaskStore
@@ -22,18 +24,28 @@ class CoreService:
         *,
         restore_checkpoint: Callable[[str], object] | None = None,
         agent_runner: Callable[[str], Awaitable[TaskRecord]] | None = None,
+        approval_store: ApprovalStore | None = None,
+        project_fingerprint: Callable[[str], str] | None = None,
     ) -> None:
         self._tasks = task_store
         self._policy = policy
         self._adapters = dict(adapters)
         self._restore_checkpoint = restore_checkpoint
         self._agent_runner = agent_runner
+        self._approval_store = approval_store
+        self._project_fingerprint = project_fingerprint
         self._submission_lock = asyncio.Lock()
         self._runs: dict[str, asyncio.Task[None]] = {}
         self._event_signals: dict[str, asyncio.Event] = {}
 
-    async def submit(self, command: TaskCommand, *, principal: str = "user") -> TaskRecord:
-        record = await self.start(command, principal=principal)
+    async def submit(
+        self,
+        command: TaskCommand,
+        *,
+        principal: str = "user",
+        approval_lease: ApprovalLease | None = None,
+    ) -> TaskRecord:
+        record = await self.start(command, principal=principal, approval_lease=approval_lease)
         if record.status in {
             TaskStatus.completed,
             TaskStatus.failed,
@@ -43,7 +55,13 @@ class CoreService:
             return record
         return await self.wait(command.task_id)
 
-    async def start(self, command: TaskCommand, *, principal: str = "user") -> TaskRecord:
+    async def start(
+        self,
+        command: TaskCommand,
+        *,
+        principal: str = "user",
+        approval_lease: ApprovalLease | None = None,
+    ) -> TaskRecord:
         async with self._submission_lock:
             record = self._tasks.create(command)
             if command.command_type == "agent.run":
@@ -78,6 +96,46 @@ class CoreService:
                     )
                     return self._tasks.get(command.task_id)
                 if decision.effect is PolicyEffect.require_approval:
+                    if approval_lease is not None:
+                        if approval_lease.call_digest != canonical_digest(call.model_dump(mode="json")):
+                            raise PermissionError("approval lease does not match capability call")
+                    elif self._approval_store is not None:
+                        if self._project_fingerprint is None:
+                            raise RuntimeError("exact approval requires project fingerprinting")
+                        proposal = self._approval_store.propose(
+                            principal=principal,
+                            project_id=command.project_id,
+                            task_id=command.task_id,
+                            step_id=command.task_id,
+                            step_revision=1,
+                            call=call,
+                            project_fingerprint=self._project_fingerprint(call.project_root),
+                        )
+                        self._append(
+                            command.task_id,
+                            TaskEventDraft(
+                                event_type="task.permission_required",
+                                payload={
+                                    "capability_id": call.capability_id,
+                                    "operation": call.operation,
+                                    "proposal_id": proposal.proposal_id,
+                                    "call_digest": proposal.call_digest,
+                                    "project_fingerprint": proposal.project_fingerprint,
+                                    "expires_at": proposal.expires_at.isoformat(),
+                                },
+                            ),
+                        )
+                        return self._tasks.get(command.task_id)
+                    else:
+                        self._append(
+                            command.task_id,
+                            TaskEventDraft(
+                                event_type="task.permission_required",
+                                payload={"capability_id": call.capability_id, "operation": call.operation},
+                            ),
+                        )
+                        return self._tasks.get(command.task_id)
+                if decision.effect is PolicyEffect.require_approval and approval_lease is None:
                     self._append(
                         command.task_id,
                         TaskEventDraft(
@@ -203,7 +261,12 @@ class CoreService:
         return record
 
     async def approve(
-        self, task_id: str, *, principal: str = "user", scope: str = "project"
+        self,
+        task_id: str,
+        *,
+        principal: str = "user",
+        scope: str = "project",
+        proposal_id: str | None = None,
     ) -> TaskRecord:
         command = self._tasks.command(task_id)
         record = self._tasks.get(task_id)
@@ -217,11 +280,28 @@ class CoreService:
             child_task_id = approval.payload.get("child_task_id")
             if not isinstance(child_task_id, str):
                 raise ValueError("approval request is invalid")
-            await self.approve(child_task_id, principal=principal, scope=scope)
+            await self.approve(
+                child_task_id, principal=principal, scope=scope, proposal_id=proposal_id,
+            )
             return await self.submit(command, principal=principal)
+        call = CapabilityCall.model_validate(command.payload)
+        if self._approval_store is not None:
+            if proposal_id is None:
+                raise ValueError("exact approval proposal id is required")
+            if self._project_fingerprint is None:
+                raise RuntimeError("exact approval requires project fingerprinting")
+            lease = self._approval_store.consume(
+                proposal_id,
+                principal=principal,
+                call=call,
+                project_fingerprint=self._project_fingerprint(call.project_root),
+                step_revision=1,
+            )
+            if not record.events or record.events[-1].event_type != "task.permission_required":
+                raise ValueError("task is not awaiting approval")
+            return await self.submit(command, principal=principal, approval_lease=lease)
         if not record.events or record.events[-1].event_type != "task.permission_required":
             raise ValueError("task is not awaiting approval")
-        call = CapabilityCall.model_validate(command.payload)
         self._policy.grant(principal, command.project_id, call, scope=scope)
         return await self.submit(command, principal=principal)
 

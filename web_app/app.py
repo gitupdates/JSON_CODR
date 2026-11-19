@@ -34,6 +34,7 @@ from web_app.coding_agents import CodingAgentService
 from web_app.git_broker import GitBrokerService
 from web_app.git_adapter import GitActionAdapter
 from web_app.core.adapters import CapabilityCall
+from web_app.core.approval import ApprovalStore
 from web_app.core.agent_runtime import AgentRuntime
 from web_app.core.agent_services import (
     EventEvidenceVerifier,
@@ -220,6 +221,7 @@ def create_app(
     git_broker.recover_interrupted_tasks()
     core_runtime = None
     core_memory = None
+    core_approvals = None
     core_artifacts = None
     core_capabilities = ()
     core_mcp_backends = []
@@ -246,7 +248,7 @@ def create_app(
         raise ValueError("Unsupported skill source")
 
     def get_core_runtime():
-        nonlocal core_runtime, core_capabilities, core_memory
+        nonlocal core_runtime, core_capabilities, core_memory, core_approvals
         if core_runtime is None:
             core_root = workspace.data_root / "core"
             core_tasks = TaskStore(core_root / "tasks.sqlite")
@@ -337,14 +339,29 @@ def create_app(
                     raise RuntimeError("agent runtime is not initialized")
                 return await agent_runtime.run(task_id)
 
+            project_root = Path(__file__).resolve().parent.parent
+
+            def agent_project_fingerprint(root: str | None) -> str:
+                reader = ProjectReader(root or project_root)
+                instruction_paths = {
+                    instruction.relative_path for instruction in reader.instructions_for(".")
+                }
+                files = tuple(
+                    project_file for project_file in reader.files()
+                    if project_file.relative_path not in instruction_paths
+                )
+                return reader.fingerprint(files)
+
+            core_approvals = ApprovalStore(core_root / "approvals.sqlite")
             core_service = CoreService(
                 core_tasks,
                 core_policy,
                 adapters,
                 restore_checkpoint=core_project_adapter.restore,
                 agent_runner=run_agent,
+                approval_store=core_approvals,
+                project_fingerprint=agent_project_fingerprint,
             )
-            project_root = Path(__file__).resolve().parent.parent
             resolver = ProjectContextResolver({"legacy": project_root})
             core_memory = MemoryStore(core_root / "memory.sqlite")
             application.state.core_memory = core_memory
@@ -364,17 +381,6 @@ def create_app(
                             return event["result"].content
                     raise ValueError("planner model returned no completed result")
                 return (await service.chat(model, prompt)).content
-
-            def agent_project_fingerprint(root: str | None) -> str:
-                reader = ProjectReader(root or project_root)
-                instruction_paths = {
-                    instruction.relative_path for instruction in reader.instructions_for(".")
-                }
-                files = tuple(
-                    project_file for project_file in reader.files()
-                    if project_file.relative_path not in instruction_paths
-                )
-                return reader.fingerprint(files)
 
             planner = InferencePlanner(
                 generate_agent_plan,
@@ -414,6 +420,8 @@ def create_app(
                 core_artifacts.close()
             core_policy.close()
             core_tasks.close()
+            if core_approvals is not None:
+                core_approvals.close()
             if core_memory is not None:
                 core_memory.close()
 

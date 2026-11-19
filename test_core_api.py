@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from web_app.core.adapters import AdapterEvent, CapabilityCall
+from web_app.core.approval import ApprovalStore
 from web_app.core.api import create_core_router
 from web_app.core.artifact_store import ArtifactMetadata, ArtifactStore
 from web_app.core.contracts import TaskCommand
@@ -30,9 +31,16 @@ class CoreApiTests(unittest.TestCase):
         root = Path(self.temporary.name)
         self.tasks = TaskStore(root / "tasks.sqlite")
         self.policy = PolicyService(root / "policy.sqlite")
+        self.approvals = ApprovalStore(root / "approvals.sqlite")
         self.artifacts = ArtifactStore(root / "artifacts", root / "artifacts.sqlite")
         self.adapter = RecordingAdapter()
-        self.core = CoreService(self.tasks, self.policy, {"project.read": self.adapter})
+        self.core = CoreService(
+            self.tasks,
+            self.policy,
+            {"project.read": self.adapter},
+            approval_store=self.approvals,
+            project_fingerprint=lambda _root: "sha256:" + "1" * 64,
+        )
         app = FastAPI()
         app.include_router(
             create_core_router(
@@ -46,6 +54,7 @@ class CoreApiTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.client.close()
         self.artifacts.close()
+        self.approvals.close()
         self.policy.close()
         self.tasks.close()
         self.temporary.cleanup()
@@ -88,12 +97,23 @@ class CoreApiTests(unittest.TestCase):
     def test_permission_required_task_has_explicit_approval_route(self):
         command = self.command(operation="install", command_id="command-install", task_id="task-install")
         pending = self.client.post("/api/tasks", json=command)
+        proposal_id = pending.json()["events"][-1]["payload"]["proposal_id"]
 
-        approved = self.client.post("/api/tasks/task-install/approve", json={"scope": "project"})
+        missing = self.client.post("/api/tasks/task-install/approve", json={"scope": "project"})
+        approved = self.client.post(
+            "/api/tasks/task-install/approve",
+            json={"scope": "project", "proposal_id": proposal_id},
+        )
+        replayed = self.client.post(
+            "/api/tasks/task-install/approve",
+            json={"scope": "project", "proposal_id": proposal_id},
+        )
 
         self.assertEqual(pending.status_code, 202)
+        self.assertEqual(missing.status_code, 409)
         self.assertEqual(approved.status_code, 200)
         self.assertEqual(approved.json()["status"], "completed")
+        self.assertEqual(replayed.status_code, 403)
 
     def test_event_replay_multiple_observers_steering_cancellation_and_threads(self):
         self.client.post("/api/tasks", json=self.command())
