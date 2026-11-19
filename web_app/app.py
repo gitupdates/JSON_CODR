@@ -264,6 +264,7 @@ def create_app(
 
             from cli import load_config
             from web_app.core.model_tags import ModelTagRegistry
+            from web_app.core.native_primitives import NativePrimitiveAdapter
             from web_app.core.native_ollama import NativeOllamaTransport
 
             model_registry = ModelTagRegistry.load(Path(__file__).resolve().parent.parent / "zero_layer_models.json")
@@ -288,6 +289,7 @@ def create_app(
                 skill_library.install,
                 DuplicateSkillPack,
             )
+            native_primitives = NativePrimitiveAdapter(core_project_adapter, core_terminal_adapter)
             adapters = {
                 "git.execute": core_git_adapter,
                 "inference.generate": core_inference_adapter,
@@ -300,6 +302,10 @@ def create_app(
                 "terminal.execute": core_terminal_adapter,
                 "terminal.interrupt": core_terminal_adapter,
                 "terminal.close": core_terminal_adapter,
+                "native.read": native_primitives,
+                "native.write": native_primitives,
+                "native.edit": native_primitives,
+                "native.shell": native_primitives,
                 "component.install": component_adapter,
                 "component.execute": LazyComponentExecutionAdapter(get_component_manager),
             }

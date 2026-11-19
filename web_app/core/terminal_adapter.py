@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import os
+import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -82,3 +85,34 @@ class TerminalAdapter:
 
     def history(self, terminal_id: str) -> tuple[str, ...]:
         return tuple(self._history.get(terminal_id, ()))
+
+    async def run_bounded(self, command: str, cwd: Path, shell: str, timeout: int) -> dict[str, object]:
+        if sys.platform == "win32":
+            executable = "powershell.exe" if shell == "powershell" else "cmd.exe"
+            arguments = ["-NoProfile", "-NonInteractive", "-Command", command] if shell == "powershell" else ["/d", "/s", "/c", command]
+        else:
+            executable = os.environ.get("SHELL", "/bin/sh")
+            arguments = ["-c", command]
+        process = await asyncio.create_subprocess_exec(
+            executable,
+            *arguments,
+            cwd=str(cwd),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        except (TimeoutError, asyncio.TimeoutError):
+            process.kill()
+            await process.wait()
+            return {"exit_code": -1, "stdout": "", "stderr": f"Execution timed out after {timeout}s", "timed_out": True}
+        except asyncio.CancelledError:
+            process.kill()
+            await process.wait()
+            raise
+        return {
+            "exit_code": int(process.returncode or 0),
+            "stdout": stdout.decode("utf-8", errors="replace"),
+            "stderr": stderr.decode("utf-8", errors="replace"),
+            "timed_out": False,
+        }
