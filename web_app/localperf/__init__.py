@@ -1,0 +1,4 @@
+from web_app.localperf.models import LOCALPERF_SCHEMA_VERSION
+from web_app.localperf.workload import CORE_WORKLOAD, WORKLOAD_NAME, WORKLOAD_VERSION
+
+__all__ = ["CORE_WORKLOAD", "LOCALPERF_SCHEMA_VERSION", "WORKLOAD_NAME", "WORKLOAD_VERSION"]
