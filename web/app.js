@@ -186,6 +186,18 @@ const elements = {
   taskExecutionDetails: document.querySelector("#task-execution-details"),
   taskRequestedModel: document.querySelector("#task-requested-model"),
   taskEffectiveModel: document.querySelector("#task-effective-model"),
+  taskPlanReview: document.querySelector("#task-plan-review"),
+  taskPlanCanonical: document.querySelector("#task-plan-canonical"),
+  taskPlanProse: document.querySelector("#task-plan-prose"),
+  taskPlanStale: document.querySelector("#task-plan-stale"),
+  taskPlanApprove: document.querySelector("#task-plan-approve"),
+  taskPlanEdit: document.querySelector("#task-plan-edit"),
+  taskPlanRequestChanges: document.querySelector("#task-plan-request-changes"),
+  taskPlanReject: document.querySelector("#task-plan-reject"),
+  taskStepSelect: document.querySelector("#task-step-select"),
+  taskStepEdit: document.querySelector("#task-step-edit"),
+  taskStepRequestChanges: document.querySelector("#task-step-request-changes"),
+  taskStepReject: document.querySelector("#task-step-reject"),
 };
 
 const VALID_THEME_MODES = new Set(["light", "dark", "system"]);
@@ -246,11 +258,74 @@ const taskView = window.JSONCodrTaskView({
 });
 let activeCoreTaskId = null;
 let activeWorkspaceRoute = null;
+let activePlanReview = null;
 const conversationView = new window.JSONCodrConversationView({ timeline: elements.conversationTimeline });
 let restoredConversationSessionId = null;
+async function renderPlanReview(record) {
+  const planEvent = [...(record.events || [])].reverse().find((event) => event.payload?.plan_id);
+  if (!planEvent) return;
+  const planId = planEvent.payload.plan_id;
+  if (activePlanReview?.taskId === record.task_id && activePlanReview?.planId === planId && !activePlanReview.stale) return;
+  const revisions = await coreClient.getPlanRevisions(record.task_id, planId);
+  const plan = revisions.at(-1);
+  if (!plan) return;
+  activePlanReview = { taskId: record.task_id, planId, revision: plan.revision, plan, stale: false };
+  elements.taskPlanCanonical.value = JSON.stringify(plan, null, 2);
+  elements.taskPlanProse.value = "";
+  elements.taskPlanStale.hidden = true;
+  elements.taskStepSelect.replaceChildren(...plan.steps.map((step) => {
+    const option = document.createElement("option"); option.value = step.step_id;
+    option.textContent = `${step.step_id} · ${step.capability_id}.${step.operation}`; return option;
+  }));
+  elements.taskPlanReview.hidden = false;
+}
+
+async function submitPlanReview(action) {
+  if (!activePlanReview) return;
+  let plan = null;
+  if (["approve", "edit", "revise"].includes(action)) plan = JSON.parse(elements.taskPlanCanonical.value);
+  try {
+    const result = await coreClient.revisePlan(activePlanReview.taskId, activePlanReview.planId, {
+      expectedRevision: activePlanReview.revision, action, plan, reason: elements.taskPlanProse.value.trim() || null,
+    });
+    if (result?.revision) {
+      activePlanReview = { ...activePlanReview, revision: result.revision, plan: result, stale: false };
+      elements.taskPlanCanonical.value = JSON.stringify(result, null, 2);
+    }
+  } catch (error) {
+    if (/stale|revision|conflict/i.test(error.message)) {
+      activePlanReview.stale = true; elements.taskPlanStale.hidden = false;
+    }
+    throw error;
+  }
+}
+
+async function submitStepReview(action) {
+  if (!activePlanReview || !elements.taskStepSelect.value) return;
+  const parsed = JSON.parse(elements.taskPlanCanonical.value);
+  const step = parsed.steps.find((item) => item.step_id === elements.taskStepSelect.value) || null;
+  try {
+    const result = await coreClient.reviseStep(activePlanReview.taskId, activePlanReview.planId, elements.taskStepSelect.value, {
+      expectedRevision: activePlanReview.revision, action,
+      step: ["approve", "edit", "revise"].includes(action) ? step : null,
+      reason: elements.taskPlanProse.value.trim() || null,
+    });
+    if (result?.revision) {
+      activePlanReview = { ...activePlanReview, revision: result.revision, plan: result, stale: false };
+      elements.taskPlanCanonical.value = JSON.stringify(result, null, 2);
+    }
+  } catch (error) {
+    if (/stale|revision|conflict/i.test(error.message)) {
+      activePlanReview.stale = true; elements.taskPlanStale.hidden = false;
+    }
+    throw error;
+  }
+}
+
 function handleCoreRecord(record) {
   if (record.task_id !== activeCoreTaskId) return;
   taskView.render(record);
+  renderPlanReview(record).catch((error) => showError(error.message));
   const latestEvent = (record.events || []).at(-1);
   renderWorkspaceActivityNotice(latestEvent?.event_type || record.status, record.status);
   const message = conversationView.apply(record);
@@ -2490,6 +2565,13 @@ elements.taskUndo.addEventListener("click", () => {
   if (!checkpoint) return showError("No checkpoint is available for this task.");
   coreClient.restore(activeCoreTaskId, checkpoint).catch((error) => showError(error.message));
 });
+elements.taskPlanApprove.addEventListener("click", () => submitPlanReview("approve").catch((error) => showError(error.message)));
+elements.taskPlanEdit.addEventListener("click", () => submitPlanReview("edit").catch((error) => showError(error.message)));
+elements.taskPlanRequestChanges.addEventListener("click", () => submitPlanReview("request_changes").catch((error) => showError(error.message)));
+elements.taskPlanReject.addEventListener("click", () => submitPlanReview("reject").catch((error) => showError(error.message)));
+elements.taskStepEdit.addEventListener("click", () => submitStepReview("edit").catch((error) => showError(error.message)));
+elements.taskStepRequestChanges.addEventListener("click", () => submitStepReview("request_changes").catch((error) => showError(error.message)));
+elements.taskStepReject.addEventListener("click", () => submitStepReview("reject").catch((error) => showError(error.message)));
 let recommendationTimer = null;
 elements.prompt.addEventListener("input", () => {
   clearTimeout(recommendationTimer);

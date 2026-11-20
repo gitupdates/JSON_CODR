@@ -188,6 +188,10 @@ class CoreApiTests(unittest.TestCase):
             "/api/tasks/task-1/plans/plan-1/revise",
             json={"expected_revision": None, "action": "edit", "plan": plan},
         )
+        approved = self.client.post(
+            "/api/tasks/task-1/plans/plan-1/revise",
+            json={"expected_revision": 1, "action": "approve", "plan": plan},
+        )
         step = {**plan["steps"][0], "operation": "search"}
         revised = self.client.post(
             "/api/tasks/task-1/plans/plan-1/steps/step-1/revise",
@@ -198,6 +202,8 @@ class CoreApiTests(unittest.TestCase):
             json={"expected_revision": 1, "action": "reject", "reason": "change it"},
         )
         self.assertEqual(created.status_code, 200)
+        self.assertEqual(approved.status_code, 200)
+        self.assertEqual(approved.json()["revision"], 1)
         self.assertEqual(revised.json()["revision"], 2)
         self.assertEqual(revised.json()["steps"][0]["operation"], "search")
         self.assertEqual(stale.status_code, 409)

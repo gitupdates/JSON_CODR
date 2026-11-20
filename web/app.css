@@ -421,6 +421,13 @@ footer { padding: 22px 0 34px; color: var(--text-subtle); font: 600 10px ui-mono
 .task-activity .permission-required { color: var(--error-text); }
 .task-model-route { display: grid; grid-template-columns: max-content 1fr; gap: 5px 12px; }
 .task-model-route dt { color: var(--muted); }
+.task-plan-review { display: grid; gap: 10px; margin-top: 14px; padding: 14px; border: 1px solid var(--line); background: var(--surface-raised); }
+.task-plan-heading, .task-plan-actions, .task-step-review { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; justify-content: space-between; }
+.task-plan-heading h3 { margin: 2px 0; }
+.task-plan-review textarea, .task-plan-review select { width: 100%; color: var(--text); background: var(--surface-input); border: 1px solid var(--line); padding: 9px 11px; }
+.task-plan-warning { margin: 0; color: var(--error-text); }
+.task-plan-stale { color: var(--error-text); font-weight: 700; }
+.task-step-review label { flex-basis: 100%; }
 @media (max-width: 720px) { .task-controls > * { width: 100%; } .task-model-route { grid-template-columns: 1fr; } }
 .coding-agent-launcher { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; padding: 16px; border-bottom: 1px solid var(--line); align-items: end; }
 .coding-agent-launcher label { display: grid; gap: 6px; font-size: 0.82rem; }

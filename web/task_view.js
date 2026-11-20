@@ -13,7 +13,7 @@
           requested = event.payload.requested_model_id || requested;
           effective = event.payload.effective_model_id || effective;
         }
-        if (event.event_type === "task.permission_required") item.className = "permission-required";
+        if (["task.permission_required", "agent.approval_required"].includes(event.event_type)) item.className = "permission-required";
       }
       elements.requested.textContent = requested;
       elements.effective.textContent = effective;

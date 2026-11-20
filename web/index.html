@@ -162,6 +162,26 @@
               <dl class="task-model-route"><dt>Requested model</dt><dd id="task-requested-model">Not reported</dd><dt>Effective model</dt><dd id="task-effective-model">Not reported</dd></dl>
               <ol id="task-activity" class="task-activity" aria-live="polite"></ol>
             </details>
+            <section id="task-plan-review" class="task-plan-review" aria-labelledby="task-plan-review-title" hidden>
+              <div class="task-plan-heading"><div><p class="result-label">PLAN REVIEW</p><h3 id="task-plan-review-title">Canonical execution plan</h3></div><span id="task-plan-stale" class="task-plan-stale" role="status" hidden>Plan changed. Reload before deciding.</span></div>
+              <p id="task-plan-warning" class="task-plan-warning">Read-only inspection may continue automatically. File changes, commands, network access, installations, Git publication, deployments, and reduced isolation require an explicit one-use approval.</p>
+              <label for="task-plan-canonical">Canonical plan fields</label>
+              <textarea id="task-plan-canonical" rows="10" spellcheck="false" aria-describedby="task-plan-warning"></textarea>
+              <label for="task-plan-prose">Reviewer note (not executable)</label>
+              <textarea id="task-plan-prose" rows="3" placeholder="Reason or requested change. This prose is never interpreted as a tool call."></textarea>
+              <div class="task-plan-actions">
+                <button id="task-plan-approve" class="primary" type="button">Approve revision</button>
+                <button id="task-plan-edit" class="secondary" type="button">Save edited plan</button>
+                <button id="task-plan-request-changes" class="secondary" type="button">Request plan changes</button>
+                <button id="task-plan-reject" class="secondary" type="button">Reject plan</button>
+              </div>
+              <div class="task-step-review">
+                <label for="task-step-select">Plan step</label><select id="task-step-select"></select>
+                <button id="task-step-edit" class="secondary" type="button">Save edited step</button>
+                <button id="task-step-request-changes" class="secondary" type="button">Request step changes</button>
+                <button id="task-step-reject" class="secondary" type="button">Reject step</button>
+              </div>
+            </section>
           </section>
         </section>
       </section>

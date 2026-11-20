@@ -29,6 +29,21 @@ class CoreWebContractTests(unittest.TestCase):
         self.assertIn("task.permission_required", self.view)
         self.assertIn("details", self.html)
 
+    def test_plan_review_exposes_canonical_revision_controls(self):
+        for identifier in (
+            "task-plan-review", "task-plan-canonical", "task-plan-prose",
+            "task-plan-approve", "task-plan-edit", "task-plan-request-changes",
+            "task-plan-reject", "task-plan-warning", "task-plan-stale",
+        ):
+            self.assertIn(f'id="{identifier}"', self.html)
+        self.assertIn("getPlanRevisions", self.client)
+        self.assertIn("revisePlan", self.client)
+        self.assertIn("reviseStep", self.client)
+        self.assertIn("expectedRevision", self.client)
+        self.assertIn("renderPlanReview", self.app)
+        self.assertIn("agent.approval_required", self.view)
+        self.assertIn("reduced isolation", (self.html + self.app).lower())
+
     def test_submission_drop_and_immediate_steering_share_the_task_store(self):
         self.assertIn("JSONCodrCoreClient", self.app)
         self.assertIn("JSONCodrTaskView", self.app)

@@ -141,11 +141,24 @@ def create_core_router(
     @router.post("/api/tasks/{task_id}/plans/{plan_id}/revise")
     def revise_plan(task_id: str, plan_id: str, request: PlanRevisionRequest):
         store = runtime()[1]
+        current = store.latest_plan(task_id, plan_id)
+        if request.expected_revision is not None and (
+            current is None or current.revision != request.expected_revision
+        ):
+            raise HTTPException(status_code=409, detail="plan revision is stale")
         if request.action in {"reject", "request_changes"}:
             return store.append(task_id, TaskEventDraft(
                 event_type=f"agent.plan_{request.action}",
                 payload={"plan_id": plan_id, "expected_revision": request.expected_revision, "reason": request.reason},
             ))
+        if request.action == "approve":
+            if current is None:
+                raise HTTPException(status_code=404, detail="plan not found")
+            store.append(task_id, TaskEventDraft(
+                event_type="agent.plan_approved",
+                payload={"plan_id": plan_id, "revision": current.revision},
+            ))
+            return current
         if request.plan is None or request.plan.plan_id != plan_id:
             raise HTTPException(status_code=422, detail="matching plan revision is required")
         try:

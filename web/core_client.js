@@ -74,6 +74,22 @@
       });
     }
 
+    async getPlanRevisions(taskId, planId) {
+      return this.request(`/api/tasks/${encodeURIComponent(taskId)}/plans/${encodeURIComponent(planId)}`);
+    }
+
+    async revisePlan(taskId, planId, { expectedRevision, action, plan = null, reason = null }) {
+      return this.request(`/api/tasks/${encodeURIComponent(taskId)}/plans/${encodeURIComponent(planId)}/revise`, {
+        method: "POST", body: { expected_revision: expectedRevision, action, plan, reason },
+      });
+    }
+
+    async reviseStep(taskId, planId, stepId, { expectedRevision, action, step = null, reason = null }) {
+      return this.request(`/api/tasks/${encodeURIComponent(taskId)}/plans/${encodeURIComponent(planId)}/steps/${encodeURIComponent(stepId)}/revise`, {
+        method: "POST", body: { expected_revision: expectedRevision, action, step, reason },
+      });
+    }
+
     async planComponent(request) {
       return this.request("/api/components/plan", { method: "POST", body: request });
     }
