@@ -1,6 +1,7 @@
 param(
   [switch]$NoBrowser,
-  [switch]$ValidateOnly
+  [switch]$ValidateOnly,
+  [switch]$Direct
 )
 
 $ErrorActionPreference = 'Stop'
@@ -8,23 +9,36 @@ $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $HostAddress = '127.0.0.1'
 $Port = 8765
 $Url = "http://${HostAddress}:$Port"
+$Version = 'V1.0.18-alpha.17'
 $Python = (Get-Command python -ErrorAction Stop).Source
-$Ollama = (Get-Command ollama -ErrorAction Stop).Source
+$OllamaCommand = Get-Command ollama -ErrorAction SilentlyContinue
+if ($OllamaCommand) {
+  $Ollama = $OllamaCommand.Source
+} else {
+  $Ollama = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'
+  if (-not (Test-Path -LiteralPath $Ollama)) {
+    throw 'Ollama is not installed or available in PATH.'
+  }
+}
 
 if ($ValidateOnly) {
   [pscustomobject]@{
     host = $HostAddress
     port = $Port
     url = $Url
+    version = $Version
     python = $Python
     ollama = $Ollama
     modelStore = $env:JSON_CODR_MODELS
+    supervised = -not $Direct
+    ollamaNoCloud = $true
   } | ConvertTo-Json
   exit 0
 }
 
 $env:PYTHONUTF8 = '1'
 $env:PYTHONIOENCODING = 'utf-8'
+$env:OLLAMA_NO_CLOUD = '1'
 if ($env:JSON_CODR_MODELS) {
   $env:OLLAMA_MODELS = $env:JSON_CODR_MODELS
 }
@@ -48,9 +62,12 @@ try {
     }
   }
 
-  $WebProcess = Start-Process -FilePath $Python -ArgumentList @(
-    '-m', 'uvicorn', 'web_app.app:app', '--host', $HostAddress, '--port', $Port
-  ) -WorkingDirectory $Root -WindowStyle Hidden -PassThru
+  if ($Direct) {
+    $WebArguments = @('-m', 'uvicorn', 'web_app.app:app', '--host', $HostAddress, '--port', $Port)
+  } else {
+    $WebArguments = @('supervisor.py', '--host', $HostAddress, '--port', $Port)
+  }
+  $WebProcess = Start-Process -FilePath $Python -ArgumentList $WebArguments -WorkingDirectory $Root -WindowStyle Hidden -PassThru
 
   for ($Attempt = 0; $Attempt -lt 30; $Attempt++) {
     Start-Sleep -Milliseconds 300
@@ -63,7 +80,7 @@ try {
     }
   }
 
-  Write-Host "JSON_CODR V1.0.2 is running at $Url"
+  Write-Host "JSON_CODR $Version is running at $Url"
   Write-Host 'Press Ctrl+C to stop the local web server.'
   if (-not $NoBrowser) { Start-Process $Url }
   Wait-Process -Id $WebProcess.Id

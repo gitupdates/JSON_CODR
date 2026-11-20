@@ -1,4 +1,5 @@
 import io
+import json
 import tempfile
 import unittest
 import zipfile
@@ -8,7 +9,8 @@ from fastapi.testclient import TestClient
 
 from web_app.app import create_app
 from web_app.attachments import AttachmentService
-from web_app.skills import DuplicateSkillPack, SkillConverterService, SkillDiscoveryService, SkillLibraryService
+from web_app.models import SkillPack, SkillRecord
+from web_app.skills import DuplicateSkillPack, GithubSkillService, SkillConverterService, SkillDiscoveryService, SkillLibraryService
 from web_app.workspace import WorkspaceService
 
 
@@ -27,6 +29,137 @@ def archive(entries: dict[str, str]) -> bytes:
 
 
 class SkillLibraryTests(unittest.TestCase):
+    def test_github_skill_preview_pins_commit_and_installs_complete_skill_directory(self):
+        contents_url = "https://api.github.com/repos/openai/plugins/contents/plugins/superpowers/skills/using-superpowers?ref=deadbeef"
+        responses = {
+            "https://api.github.com/repos/openai/plugins/commits/main": b'{"sha":"deadbeef"}',
+            contents_url: json.dumps([
+                {"type": "file", "name": "SKILL.md", "path": "plugins/superpowers/skills/using-superpowers/SKILL.md", "download_url": "https://raw.test/SKILL.md"},
+                {"type": "file", "name": "reference.md", "path": "plugins/superpowers/skills/using-superpowers/reference.md", "download_url": "https://raw.test/reference.md"},
+            ]).encode(),
+            "https://raw.test/SKILL.md": b"---\nname: using-superpowers\ndescription: Route work through skills\n---\nUse the available skills.",
+            "https://raw.test/reference.md": b"Supporting instructions",
+        }
+        github = GithubSkillService(
+            self.library,
+            self.converter,
+            self.root,
+            fetch=lambda url: responses[url],
+        )
+
+        preview = github.preview(
+            "https://github.com/openai/plugins/blob/main/plugins/superpowers/skills/using-superpowers/SKILL.md"
+        )
+        installed = github.install(preview["preview_id"])
+
+        self.assertEqual(preview["repository"], "openai/plugins")
+        self.assertEqual(preview["revision"], "deadbeef")
+        self.assertEqual([skill.name for skill in installed.skills], ["using-superpowers"])
+        self.assertIn("JSON_CODR_SKILL_SCHEMA: 1", installed.skills[0].content)
+        self.assertTrue(Path(installed.source_path).is_file())
+        with zipfile.ZipFile(installed.source_path) as bundle:
+            self.assertIn("using-superpowers/reference.md", bundle.namelist())
+
+    def test_github_skill_rejects_non_github_and_non_skill_urls(self):
+        github = GithubSkillService(self.library, self.converter, self.root, fetch=lambda _url: b"")
+
+        for url in (
+            "https://example.com/SKILL.md",
+            "https://github.com/openai/plugins/blob/main/README.md",
+        ):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                github.preview(url)
+
+    def test_api_previews_and_installs_github_skill(self):
+        contents_url = "https://api.github.com/repos/openai/plugins/contents/plugins/superpowers/skills/using-superpowers?ref=deadbeef"
+        responses = {
+            "https://api.github.com/repos/openai/plugins/commits/main": b'{"sha":"deadbeef"}',
+            contents_url: json.dumps([
+                {"type": "file", "name": "SKILL.md", "path": "plugins/superpowers/skills/using-superpowers/SKILL.md", "download_url": "https://raw.test/SKILL.md"},
+            ]).encode(),
+            "https://raw.test/SKILL.md": b"---\nname: using-superpowers\n---\nUse skills first.",
+        }
+        github = GithubSkillService(self.library, self.converter, self.root, fetch=lambda url: responses[url])
+        with TestClient(create_app(FakeOllamaService(), self.workspace, github_skills=github)) as client:
+            preview = client.post("/api/skills/github/preview", json={
+                "url": "https://github.com/openai/plugins/blob/main/plugins/superpowers/skills/using-superpowers/SKILL.md"
+            })
+            installed = client.post("/api/skills/github/install", json={"preview_id": preview.json()["preview_id"]})
+
+            self.assertEqual(preview.status_code, 200)
+            self.assertEqual(installed.status_code, 201)
+            self.assertEqual(installed.json()["skills"][0]["name"], "using-superpowers")
+            tasks = client.app.state.core_task_store.for_thread("component:github")
+            self.assertEqual(len(tasks), 1)
+            event = next(item for item in tasks[0].events if item.event_type == "component.installed")
+            self.assertEqual(event.payload["source_kind"], "github")
+            self.assertEqual(event.payload["result"]["id"], installed.json()["id"])
+
+    def test_builtin_rea_skill_is_available_to_every_model_session(self):
+        library = SkillLibraryService(self.root)
+
+        pack = library.ensure_builtin_rea()
+        installed = next(item for item in library.list() if item.id == "rea-agents")
+
+        self.assertEqual(pack.id, "rea-agents")
+        self.assertTrue(installed.skills[0].enabled)
+        self.assertIn("JSON_CODR_SKILL_SCHEMA: 1", installed.skills[0].content)
+        self.assertIn("rea analyze-javascript-application", installed.skills[0].content)
+
+    def test_builtin_multi_model_jury_skill_uses_real_batch_results_and_human_authority(self):
+        library = SkillLibraryService(self.root)
+
+        pack = library.ensure_builtin_multi_model_jury()
+        installed = next(item for item in library.list() if item.id == "multi-model-jury")
+
+        self.assertEqual(pack.id, "multi-model-jury")
+        self.assertTrue(installed.skills[0].enabled)
+        self.assertIn("JSON_CODR_SKILL_SCHEMA: 1", installed.skills[0].content)
+        self.assertIn("Ask all available models", installed.skills[0].content)
+        self.assertIn("VOTE: <GO, NO GO, or ABSTAIN>", installed.skills[0].content)
+        self.assertIn("preserved original", installed.skills[0].content)
+        self.assertIn("human decision-maker", installed.skills[0].content)
+
+    def test_builtin_readteam_skill_requires_evidence_first_adversarial_review(self):
+        library = SkillLibraryService(self.root)
+
+        pack = library.ensure_builtin_readteam()
+        installed = next(item for item in library.list() if item.id == "readteam")
+
+        self.assertEqual(pack.id, "readteam")
+        self.assertTrue(installed.skills[0].enabled)
+        self.assertIn("JSON_CODR_SKILL_SCHEMA: 1", installed.skills[0].content)
+        self.assertIn("/readteam", installed.skills[0].content)
+        self.assertIn("CLAIM LEDGER", installed.skills[0].content)
+        self.assertIn("FACT, INFERENCE, ASSUMPTION, or UNKNOWN", installed.skills[0].content)
+        self.assertIn("SECURITY, PRIVACY, SAFETY, AND STANDARDS", installed.skills[0].content)
+        self.assertIn("MUST be INSUFFICIENT EVIDENCE", installed.skills[0].content)
+        self.assertIn("Do not execute", installed.skills[0].content)
+
+    def test_builtin_readteam_refreshes_an_outdated_builtin_without_duplicating_the_pack(self):
+        library = SkillLibraryService(self.root)
+        library.install(SkillPack(
+            id="readteam",
+            name="READTEAM secondary review",
+            source_format="generic",
+            source_name="JSON_CODR built-in READTEAM review",
+            source_digest="json-codr-readteam-v1",
+            skills=[SkillRecord(
+                id="readteam-secondary-review",
+                name="READTEAM adversarial review",
+                content="JSON_CODR_SKILL_SCHEMA: 1\nOld instructions",
+                enabled=False,
+            )],
+        ))
+
+        refreshed = library.ensure_builtin_readteam()
+
+        self.assertEqual([pack.id for pack in library.list()].count("readteam"), 1)
+        self.assertEqual(refreshed.source_digest, "json-codr-readteam-v3")
+        self.assertFalse(refreshed.skills[0].enabled)
+        self.assertIn("defensive evidence review", refreshed.skills[0].content)
+        self.assertIn("INSUFFICIENT EVIDENCE", refreshed.skills[0].content)
+
     def test_native_json_codr_envelope_is_imported_without_conversion(self):
         source = self.root / "native.zip"
         native = """---
@@ -57,8 +190,25 @@ Review the supplied artifact.
         self.workspace = WorkspaceService(self.root)
         self.library = SkillLibraryService(self.root)
         self.converter = SkillConverterService()
+        self.clients = []
 
-    def tearDown(self): self.temporary_directory.cleanup()
+    def client(self, app):
+        client = TestClient(app)
+        self.clients.append(client)
+        return client
+
+    def tearDown(self):
+        for client in reversed(self.clients):
+            if hasattr(client.app.state, "core_policy"):
+                for name in (
+                    "core_approval_store", "core_project_registry", "core_model_conformance",
+                    "core_policy", "core_task_store", "core_memory",
+                ):
+                    store = getattr(client.app.state, name, None)
+                    if store is not None:
+                        store.close()
+            client.close()
+        self.temporary_directory.cleanup()
 
     def test_detects_and_converts_claude_codex_and_generic_packs(self):
         fixtures = [
@@ -72,6 +222,37 @@ Review the supplied artifact.
             pack = self.converter.convert(source, filename)
             self.assertEqual(pack.source_format, expected)
             self.assertTrue(pack.skills)
+
+    def test_generic_command_pack_ignores_prompt_helper_markdown(self):
+        source = self.root / "commands.zip"
+        source.write_bytes(archive({
+            "commands/review/review.md": "# Review\nReview code",
+            "commands/review/prompt.md": "# Prompt\nInternal prompt helper",
+            "commands/deploy/deploy.md": "# Deploy\nDeploy code",
+            "commands/deploy/prompt.md": "# Prompt\nDifferent helper",
+        }))
+
+        pack = self.converter.convert(source, source.name)
+
+        self.assertEqual([skill.name for skill in pack.skills], ["review", "deploy"])
+
+    def test_deduplicate_removes_normalized_name_collisions_and_keeps_richer_skill(self):
+        from web_app.models import SkillPack, SkillRecord
+        self.library._save([
+            SkillPack(id="one", name="One", source_format="generic", source_name="one.zip", skills=[
+                SkillRecord(id="workflow", name="Workflow", description="", content="short"),
+            ]),
+            SkillPack(id="two", name="Two", source_format="codex", source_name="two.zip", skills=[
+                SkillRecord(id="workflow", name=" workflow ", description="Complete workflow", content="much richer workflow instructions"),
+            ]),
+        ])
+
+        result = self.library.deduplicate()
+
+        remaining = [skill for pack in self.library.list() for skill in pack.skills]
+        self.assertEqual(result["removed_skills"], 1)
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0].description, "Complete workflow")
 
     def test_translates_provider_specific_skill_syntax(self):
         source = self.root / "claude.zip"
@@ -177,12 +358,14 @@ Review the supplied artifact.
             "skills.zip",
             io.BytesIO(archive({"skills/review/SKILL.md": "---\nname: review\ndescription: Review code\n---\nDo a careful review."})),
         )
-        client = TestClient(create_app(FakeOllamaService(), self.workspace, attachments))
+        client = self.client(create_app(FakeOllamaService(), self.workspace, attachments))
         preview = client.post(f"/api/sessions/{session.id}/attachments/{record.id}/skill-preview")
         self.assertEqual(preview.status_code, 200)
         installed = client.post(f"/api/sessions/{session.id}/attachments/{record.id}/skill-install").json()
         skill_id = installed["skills"][0]["id"]
         selection = f'{installed["id"]}:{skill_id}'
+        skillsets_path = self.root / "skillsets.json"
+        self.assertIn(selection, skillsets_path.read_text(encoding="utf-8"))
         selected = client.patch(f"/api/sessions/{session.id}/skills", json={"selected": [selection]})
         self.assertEqual(selected.json()["selected_skill_ids"], [selection])
         edited = client.patch(
@@ -191,8 +374,15 @@ Review the supplied artifact.
         )
         self.assertIn("Updated review instructions", edited.json()["content"])
         self.assertIn("JSON_CODR_SKILL_SCHEMA: 1", edited.json()["content"])
+        disabled = client.patch(
+            f'/api/skills/{installed["id"]}/{skill_id}',
+            json={"content": "Updated review instructions", "enabled": False},
+        )
+        self.assertEqual(disabled.status_code, 200)
+        self.assertNotIn(selection, skillsets_path.read_text(encoding="utf-8"))
         self.assertEqual(client.delete(f'/api/skills/{installed["id"]}').status_code, 204)
-        self.assertEqual(client.get("/api/skills").json(), [])
+        builtins = {"rea-agents", "multi-model-jury", "readteam"}
+        self.assertEqual([item for item in client.get("/api/skills").json() if item["id"] not in builtins], [])
 
     def test_api_save_and_apply_updates_skill_and_selects_it_for_session(self):
         session = self.workspace.create_session()
@@ -202,7 +392,7 @@ Review the supplied artifact.
             "skills.zip",
             io.BytesIO(archive({"skills/review/SKILL.md": "---\nname: review\n---\nOriginal instructions"})),
         )
-        client = TestClient(create_app(FakeOllamaService(), self.workspace, attachments))
+        client = self.client(create_app(FakeOllamaService(), self.workspace, attachments))
         installed = client.post(
             f"/api/sessions/{session.id}/attachments/{record.id}/skill-install"
         ).json()
@@ -229,7 +419,7 @@ Review the supplied artifact.
         record = attachments.import_stream(
             session.id, "skills.zip", io.BytesIO(archive({"SKILL.md": "---\nname: review\n---\nReview"})),
         )
-        client = TestClient(create_app(FakeOllamaService(), self.workspace, attachments))
+        client = self.client(create_app(FakeOllamaService(), self.workspace, attachments))
         installed = client.post(f"/api/sessions/{session.id}/attachments/{record.id}/skill-install").json()
 
         renamed = client.patch(f'/api/skills/{installed["id"]}', json={"name": "Greenfield Analysis Suite"})
@@ -247,7 +437,7 @@ Review the supplied artifact.
             "skills.zip",
             io.BytesIO(archive({"skills/review/SKILL.md": "---\nname: review\n---\nReview carefully"})),
         )
-        client = TestClient(create_app(FakeOllamaService(), self.workspace, attachments))
+        client = self.client(create_app(FakeOllamaService(), self.workspace, attachments))
         endpoint = f"/api/sessions/{session.id}/attachments/{record.id}/skill-install"
 
         self.assertEqual(client.post(endpoint).status_code, 201)
@@ -287,6 +477,60 @@ Review the supplied artifact.
         archive_path.write_bytes(archive({"skills/archive/SKILL.md": "---\nname: archive\n---\nChanged"}))
         with self.assertRaises(ValueError):
             discovery.install(archive_item.id)
+
+    def test_uploaded_folder_preserves_structure_and_installs_from_snapshot(self):
+        discovery = SkillDiscoveryService(self.library, self.converter, self.root)
+        entries = [
+            ("selected/review/SKILL.md", b"---\nname: uploaded-review\n---\nReview it"),
+            ("selected/review/reference.txt", b"supporting context"),
+        ]
+
+        result = discovery.scan_uploaded_folder(entries)
+        installed = discovery.install(result.discoveries[0].id)
+
+        self.assertEqual(result.discoveries[0].name, "review")
+        self.assertEqual(installed.skills[0].name, "uploaded-review")
+        self.assertFalse((self.root / "skill-upload-staging").exists())
+
+    def test_uploaded_folder_rejects_unsafe_and_duplicate_paths_without_staging(self):
+        discovery = SkillDiscoveryService(self.library, self.converter, self.root)
+        invalid_sets = [
+            [("../SKILL.md", b"bad")],
+            [("/absolute/SKILL.md", b"bad")],
+            [("C:/skills/SKILL.md", b"bad")],
+            [("skills/SKILL.md", b"one"), ("SKILLS/skill.md", b"two")],
+            [("a/b/c/d/e/f/SKILL.md", b"too deep")],
+        ]
+
+        for entries in invalid_sets:
+            with self.subTest(entries=[name for name, _ in entries]):
+                with self.assertRaises(ValueError):
+                    discovery.scan_uploaded_folder(entries)
+        self.assertFalse((self.root / "skill-upload-staging").exists())
+
+    def test_api_scans_uploaded_skill_folder(self):
+        client = self.client(create_app(FakeOllamaService(), self.workspace))
+
+        response = client.post(
+            "/api/skills/scan-upload",
+            files=[
+                ("relative_paths", (None, "selected/SKILL.md")),
+                ("files", ("SKILL.md", b"---\nname: browser-skill\n---\nUse it", "text/markdown")),
+            ],
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["discoveries"][0]["skill_count"], 1)
+
+    def test_api_rejects_mismatched_uploaded_skill_folder(self):
+        client = self.client(create_app(FakeOllamaService(), self.workspace))
+
+        response = client.post(
+            "/api/skills/scan-upload",
+            files=[("files", ("SKILL.md", b"content", "text/markdown"))],
+        )
+
+        self.assertEqual(response.status_code, 422)
 
     def test_empty_scan_authorizes_one_known_location_scan(self):
         empty = self.root / "empty"
@@ -330,11 +574,12 @@ Review the supplied artifact.
         scan_root.mkdir()
         (scan_root / "SKILL.md").write_text("---\nname: scanned\ndescription: Scanned skill\n---\nUse it", encoding="utf-8")
         workspace = WorkspaceService(self.root)
-        client = TestClient(create_app(FakeOllamaService(), workspace))
+        client = self.client(create_app(FakeOllamaService(), workspace))
 
         preview = client.post("/api/skills/scan", json={"directory": str(scan_root)})
         self.assertEqual(preview.status_code, 200)
-        self.assertEqual(client.get("/api/skills").json(), [])
+        builtins = {"rea-agents", "multi-model-jury", "readteam"}
+        self.assertEqual([item for item in client.get("/api/skills").json() if item["id"] not in builtins], [])
         installed = client.post("/api/skills/install-discovery", json={"discovery_id": preview.json()["discoveries"][0]["id"]})
         self.assertEqual(installed.status_code, 201)
         pack = installed.json()

@@ -1,6 +1,34 @@
 # JSON_CODR
 
-JSON_CODR V1.0.2 is a localhost-only web and CLI interface for structured responses from local Ollama coding models.
+JSON_CODR V1.0.18-alpha.17 is a localhost-only, unified project agent for local Ollama models.
+
+## Unified project workflow
+
+Choose a model, describe the outcome in **Chat**, and run it. JSON_CODR creates one durable task for the conversation and routes all model, project, terminal, Git, browser, skill, and optional-provider work through that task. Users do not select an internal executor.
+
+The response panel shows live activity and the requested and effective model identities. Use **Steer** by entering more direction while a task is active, **Stop** to request cancellation, **Retry** to create a linked retry, and **Undo** when the task produced a checkpoint. Execution details stay collapsed until needed. The **Live CLI** is the terminal view of the same local system, with command history, clipboard support, resize/reconnect, and the Ctrl+X then Ctrl+C interrupt chord.
+
+V1.0.18-alpha.17 provides one responsive **Workspace** for chat, task context, skills, activity, files, and the persistent ConPTY terminal. NOC Light is the default appearance, with five selectable themes, collapsible navigation, licensed OpenDyslexic assets, and developer-editable component mappings. Saved appearance selections are reloaded whenever Settings is reopened instead of reverting to the startup interface. The Agent and Model controls use one canonical task route with explicit automatic, multi-model, and exact-model selections; fallback routing is reported rather than hidden. Layout presets and dock placement persist locally while narrow screens preserve the active task and terminal session. Verified global components with an MCP server can contribute mode-specific agent capabilities, and the production agent loop now resolves trusted project context, plans through local inference, verifies persisted evidence, and resumes durable work after restart. Craft Anything 0.6.1 remains independently available in Clean Room and Deep/Ghidra modes when installed through the component registry.
+
+Local reads, searches, discovery, and inference can run automatically inside the selected project boundary. File changes, commands and tests, network access, installation, Git publication, deployments, destructive changes, and budget overrides require an exact one-use approval. Terminal lifecycle buttons are direct user controls, but commands entered in a terminal remain separately gated. Legacy broad grants are archived during migration rather than becoming autonomous authority. A model without native tool calling may use a verified brokered route; JSON_CODR always displays the requested and effective model and never labels that route as native.
+
+Attachments and folders can be selected or dropped into the page. Skills, MCP resources, browser automation, REA/Ghidra analysis, language intelligence, schedules, hooks, and child tasks use the same capability and policy path. Imported components are staged, probed, provenance-recorded, and either activated or quarantined. Optional provider failure leaves the base Ollama/CPU path available.
+
+Remote PyPI and npm components require exact coordinates such as `cowsay==6.1` or `cowsay@1.6.0`. Before approval, BORG displays extracted identity, dependencies, hashes, entry points, blocked build behavior, and every required compatibility alteration. Installation preserves the acquired package, records observed native launchers separately from effective normalized commands, and activates only after a real probe succeeds. Local, Git, and archive sources cannot claim trusted registry provenance merely by including manifest filenames.
+
+### Headless use
+
+Submit through the neutral task API or CLI:
+
+```powershell
+python -m web_app.core.cli run --project D:\path\to\project --output text "Inspect, edit, and test this project"
+```
+
+`json`, `text`, and `stream-json` outputs are supported. Exit code `0` means completed, `1` means failed, and `2` means permission is required.
+
+### Migrating beta data
+
+The alpha migration is copy-on-write: the beta data root is hashed and never modified. General settings, project permissions, skills, benchmark history, imported resources, and valid conversations are copied; secrets are excluded. Older executor-specific configuration is archived as inactive evidence. Malformed records are reported, and the new destination can be rolled back without touching the source.
 
 ## Skill catalog and settings
 
@@ -13,6 +41,18 @@ New skills can target JSON_CODR directly without provider conversion. Follow the
 Use **Scan folder** to inspect an explicit local directory for Claude, Codex, generic skill folders, ZIP archives, and 7z archives. Discovery is preview-only until **Install** is selected. If an explicit scan finds nothing, JSON_CODR offers a separately confirmed scan of known provider locations. It never scans whole drives or installs skills silently.
 
 Open **Settings** to control whether the Skills panel reopens at startup and to rescan or remove approved skill directories. Settings are stored under the configured JSON_CODR data root and are shared across local sessions.
+
+## Hardware optimization and benchmarks
+
+Open **Settings → Hardware optimization** to detect CPU, supported GPU runtimes, and Windows NPU or AI accelerator devices. CPU is the compatibility fallback. An accelerated Ollama backend is saved only after an isolated model-generation probe succeeds; unavailable NPU runtimes are reported without being executed.
+
+V1.0.10 introduces LocalPerf minimum conformance for repeatable local-inference measurements. Quick runs execute the versioned 12-prompt LocalPerf-Core-v1 workload three times and Thorough runs seven times after warmup. Each configuration records generation throughput, streaming time-to-first-token, peak VRAM, quality checks, configuration identity, and atomic aggregate JSON plus sample JSONL artifacts. Incomplete or failed configurations remain visible but cannot be selected as conforming winners. Ollama CPU remains the compatibility fallback.
+
+V1.0.16 adds capability-first holistic rankings and portable benchmark baseline exports that preserve the underlying integrity and performance evidence. V1.0.15 added strict versioned Integrity & Comprehension evaluations plus integrity-only and equal-weight quality/performance leaderboard rankings sourced only from persisted local benchmark evidence.
+
+V1.0.11 added sanitized-by-default portable `.localperf.zip` reference packages with checksums, schemas, methodology, reporting templates, preview/import validation, and explicit consent for system details. Hardware Optimization reports model-specific acceleration states and provides a pinned offline optimized-model catalog plus explicit on-demand search of approved remote model metadata. A model is labeled accelerated only after model-specific evidence or a successful provider probe.
+
+The **Benchmarks** tab compares CPU with all detected runnable backends or one selected optimization using the same model and LocalPerf-Core-v1 workload. A selected accelerator is always paired with a fresh CPU baseline. **Quick** runs 12 prompts three times; **Thorough** runs them seven times after warmup. Results show conformance, model/runtime verification, TTFT, peak VRAM, duration, quality, token throughput, and CPU-relative performance. Benchmarking does not change the active backend, and canonical runs are stored under the JSON_CODR data root.
 
 ## Requirements
 
@@ -31,6 +71,15 @@ python -m pip install -r requirements.txt
 ```powershell
 .\run_web.ps1
 ```
+
+The web application may run on Python 3.14. Optional hardware runtimes that have not yet added Python 3.14 support use a separately installed Python 3.12 interpreter selected with `JSON_CODR_COMPATIBLE_PYTHON`:
+
+```powershell
+$env:JSON_CODR_COMPATIBLE_PYTHON = 'C:\Users\Jason.Hensz\AppData\Local\Programs\Python\Python312\python.exe'
+& 'C:\Users\Jason.Hensz\AppData\Local\Programs\Python\Python314\python.exe' -m uvicorn web_app.app:app --host 127.0.0.1 --port 8765
+```
+
+Qwen 2.5 Coder 7B is treated as broker-verified only when its exact model digest, Ollama version, planner contract, capability catalog, and adapter digests match current conformance evidence. Drift returns it to an unverified route until the probe is rerun.
 
 The launcher starts Ollama when necessary, serves the application at
 `http://127.0.0.1:8765`, and opens the page in your default browser. Press
