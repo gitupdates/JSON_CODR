@@ -9,6 +9,7 @@ const elements = {
   submit: document.querySelector("#submit-button"),
   cancel: document.querySelector("#cancel-button"),
   requestStatus: document.querySelector("#request-status"),
+  workspaceAttach: document.querySelector("#workspace-attach"),
   responseModel: document.querySelector("#response-model"),
   empty: document.querySelector("#empty-state"),
   result: document.querySelector("#result-state"),
@@ -2687,6 +2688,7 @@ elements.attachmentInput.addEventListener("change", async () => {
     elements.attachmentInput.value = "";
   }
 });
+elements.workspaceAttach.addEventListener("click", () => elements.attachmentInput.click());
 elements.attachmentFolderInput.addEventListener("change", async () => {
   try {
     await uploadFiles(elements.attachmentFolderInput.files);

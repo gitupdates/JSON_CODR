@@ -331,6 +331,11 @@ class WebStaticTests(unittest.TestCase):
         html = self.client.get("/").text
         javascript = self.client.get("/static/app.js").text
 
+        self.assertIn('workspaceAttach: document.querySelector("#workspace-attach")', javascript)
+        self.assertIn(
+            'elements.workspaceAttach.addEventListener("click", () => elements.attachmentInput.click())',
+            javascript,
+        )
         self.assertIn('for="attachment-input">Browse files', html)
         self.assertIn('id="attachment-folder-input"', html)
         self.assertIn('id="skill-folder-input"', html)
