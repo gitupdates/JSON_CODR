@@ -73,6 +73,7 @@ Important checkpoint commits, oldest to newest:
 | `fb7aa07` | Components, templates, and protected manifest |
 | `00e0515` | Undoable browser scene commands |
 | `aef05d6` | Chat paperclip opens the multi-file chooser |
+| `66a5970` | Managed assets and sanitized UI reference imports |
 
 ## Architecture resolution
 
