@@ -56,6 +56,7 @@ Completed on the Hybrid integration branch:
 2. Atomic project store, immutable parent-linked revisions, optimistic digest conflicts, recoverable drafts, restore, duplication, deletion confirmation, and managed-root confinement.
 3. Data-only registry for all 24 built-in component types, Blank/Landing Page/Dashboard/Form templates, NOC Light defaults, and the versioned 16-region protected JSON_CODR manifest.
 4. Python 3.14 host execution can explicitly select a Python 3.11/3.12 optional-hardware sidecar through `JSON_CODR_COMPATIBLE_PYTHON`.
+5. Serializable browser commands, Python-compatible canonical digests, reversible scene edits, selection transforms, snapping, undo/redo, and protected-node checks.
 
 Important checkpoint commits, oldest to newest:
 
@@ -70,25 +71,36 @@ Important checkpoint commits, oldest to newest:
 | `b1701d8` | Atomic project history |
 | `fb7aa07` | Components, templates, and protected manifest |
 
+## Architecture resolution
+
+The selected design is one structured, versioned scene model shared by JSON_CODR customization and user projects, with stack/grid as the responsive default and bounded freeform positioning inside freeform containers. Direct live-DOM editing was rejected because it can break application behavior and upgrades; separate customization and page-builder systems were rejected because they duplicate the editor, persistence, and export surface. JSON_CODR remains protected through an overlay and locked capabilities.
+
 ## Resume point
 
-Start with **Task 4: Serializable command engine and browser document model** in the implementation plan. Its required files are:
+Start with **Task 5: Managed assets and sanitized Playwright reference capture/import** in the implementation plan. Its required files are:
+
+- `web_app/designer/assets.py`
+- `web_app/designer/references.py`
+- `web_app/designer/capture_adapters.py`
+- `web/designer_capture.js`
+- `tools/playwright_ui_capture.mjs`
+- `tools/make_ui_reference_archive.py`
+- `docs/user/ui-reference-capture.md`
+- `test_designer_assets.py`
+- `test_designer_references.py`
+
+Task 5 must keep imported references inert and sanitized. Do not persist scripts, cookies, headers, storage, form values, authentication state, API bodies, or executable behavior. Capture remains bounded and requires authorization/license provenance.
+
+Task 4 added:
 
 - `web/designer_model.js`
 - `web/designer_commands.js`
 - `test_designer_commands.py`
 
-Task 4 workflow:
-
-1. Write Node-backed failing tests for every serializable command and inverse.
-2. Confirm the JavaScript modules are absent (RED).
-3. Implement a pure deterministic model with no DOM or network access.
-4. Require the expected document digest and return structured conflicts.
-5. Run focused tests, commit, and push before starting Task 5.
+Its focused tests cover every serializable command and inverse, conflicts, protected nodes, snapping and selection transforms, bounded freeform geometry, breakpoint inheritance, and history behavior.
 
 ## Remaining task sequence
 
-4. Serializable command engine and browser document model.
 5. Managed assets and sanitized Playwright reference capture/import.
 6. Lossless CSS parser, recursive `@import` resolver, Tarjan SCC cycle bundles, exact comment preservation, and deterministic serialization.
 7. Designer API surface and conflict-safe uploads.
