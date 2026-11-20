@@ -23,6 +23,8 @@ class RepositorySnapshot:
     remote_head: str | None
     dirty_fingerprint: str
     clean: bool
+    ahead: int | None = None
+    behind: int | None = None
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,7 @@ class BrokerActionResult:
 
 class GitBrokerService:
     _MAX_OUTPUT_BYTES = 200_000
+
     def __init__(self, data_root: Path, verification_checks: dict[str, list[str]] | None = None) -> None:
         self.data_root = Path(data_root).resolve()
         self.audit_path = self.data_root / "git-broker-audit.json"
@@ -265,6 +268,15 @@ class GitBrokerService:
         branch = self._git(project, "branch", "--show-current") or None
         upstream = self._git(project, "rev-parse", "--abbrev-ref", "@{upstream}", check=False) or None
         remote_head = self._git(project, "rev-parse", "@{upstream}", check=False) if upstream else None
+        ahead = behind = None
+        if upstream:
+            counts = self._git(project, "rev-list", "--left-right", "--count", f"HEAD...{upstream}", check=False)
+            try:
+                local_count, upstream_count = (int(value) for value in counts.split())
+                ahead, behind = local_count, upstream_count
+            except (ValueError, TypeError):
+                # Keep the counts unknown if the configured tracking ref cannot be compared.
+                ahead = behind = None
         status = self._git(project, "status", "--porcelain=v2", "--untracked-files=all")
         digest = hashlib.sha256()
         digest.update(f"head={head}\nbranch={branch}\nupstream={upstream}\n".encode("utf-8"))
@@ -286,6 +298,7 @@ class GitBrokerService:
         return RepositorySnapshot(
             root=str(project), head=head, branch=branch, upstream=upstream,
             remote_head=remote_head or None, dirty_fingerprint=fingerprint, clean=not bool(status),
+            ahead=ahead, behind=behind,
         )
 
     def create_worktree(self, project_root: Path | str, worktree_root: Path | str, branch: str) -> dict[str, str]:

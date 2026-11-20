@@ -70,7 +70,7 @@ class GitBrokerContractTests(unittest.TestCase):
 
 
 class GitBrokerInspectionTests(unittest.TestCase):
-    def test_inspect_reports_branch_upstream_and_dirty_fingerprint(self):
+    def test_inspect_reports_branch_upstream_dirty_fingerprint_and_ahead_behind(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             remote = root / "remote.git"
@@ -87,6 +87,8 @@ class GitBrokerInspectionTests(unittest.TestCase):
             service = GitBrokerService(root / "data")
 
             clean = service.inspect(project)
+            self.assertEqual(clean.ahead, 0)
+            self.assertEqual(clean.behind, 0)
             (project / "README.md").write_text("changed\n", encoding="utf-8")
             dirty = service.inspect(project)
 
