@@ -57,6 +57,7 @@ Completed on the Hybrid integration branch:
 3. Data-only registry for all 24 built-in component types, Blank/Landing Page/Dashboard/Form templates, NOC Light defaults, and the versioned 16-region protected JSON_CODR manifest.
 4. Python 3.14 host execution can explicitly select a Python 3.11/3.12 optional-hardware sidecar through `JSON_CODR_COMPATIBLE_PYTHON`.
 5. Serializable browser commands, Python-compatible canonical digests, reversible scene edits, selection transforms, snapping, undo/redo, and protected-node checks.
+6. Managed image/SVG/font imports, bounded capture envelopes, authorized Playwright capture, sanitized reference archives/previews, screenshot asset storage, and reference provenance.
 
 Important checkpoint commits, oldest to newest:
 
@@ -70,14 +71,16 @@ Important checkpoint commits, oldest to newest:
 | `f01f1d8` | Lossless CSS extraction requirements |
 | `b1701d8` | Atomic project history |
 | `fb7aa07` | Components, templates, and protected manifest |
+| `00e0515` | Undoable browser scene commands |
+| `aef05d6` | Chat paperclip opens the multi-file chooser |
 
 ## Architecture resolution
 
 The selected design is one structured, versioned scene model shared by JSON_CODR customization and user projects, with stack/grid as the responsive default and bounded freeform positioning inside freeform containers. Direct live-DOM editing was rejected because it can break application behavior and upgrades; separate customization and page-builder systems were rejected because they duplicate the editor, persistence, and export surface. JSON_CODR remains protected through an overlay and locked capabilities.
 
-## Resume point
+## Task 5 deliverables
 
-Start with **Task 5: Managed assets and sanitized Playwright reference capture/import** in the implementation plan. Its required files are:
+Task 5, **Managed assets and sanitized Playwright reference capture/import**, is implemented. Its required files are:
 
 - `web_app/designer/assets.py`
 - `web_app/designer/references.py`
@@ -89,7 +92,7 @@ Start with **Task 5: Managed assets and sanitized Playwright reference capture/i
 - `test_designer_assets.py`
 - `test_designer_references.py`
 
-Task 5 must keep imported references inert and sanitized. Do not persist scripts, cookies, headers, storage, form values, authentication state, API bodies, or executable behavior. Capture remains bounded and requires authorization/license provenance.
+Task 5 keeps imported references inert and sanitized. It rejects prohibited capture fields, validates generated asset paths and checksums, bounds image/archive/resource sizes, and requires authorization/license provenance. It does not install Playwright or browser binaries; the capture adapter reports when the optional runtime is unavailable.
 
 Task 4 added:
 
@@ -99,9 +102,18 @@ Task 4 added:
 
 Its focused tests cover every serializable command and inverse, conflicts, protected nodes, snapping and selection transforms, bounded freeform geometry, breakpoint inheritance, and history behavior.
 
+## Resume point
+
+Start with **Task 6: Lossless CSS parser, import resolver, and cycle bundles** in the implementation plan. Task 5 verification passed:
+
+```powershell
+python -m unittest test_designer_assets.py test_designer_references.py test_designer_contracts.py test_designer_store.py test_designer_components.py test_designer_commands.py -v
+```
+
+The focused command ran 52 tests successfully. `node --check` passed for both capture JavaScript files, Python compilation passed for the new modules/tools, and `git diff --check` was clean.
+
 ## Remaining task sequence
 
-5. Managed assets and sanitized Playwright reference capture/import.
 6. Lossless CSS parser, recursive `@import` resolver, Tarjan SCC cycle bundles, exact comment preservation, and deterministic serialization.
 7. Designer API surface and conflict-safe uploads.
 8. Sandboxed renderer, validation, and static export.

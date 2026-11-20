@@ -166,24 +166,24 @@
 - Test: `test_designer_references.py`
 
 **Interfaces:**
-- Consumes: compatible behavior from `C:/UI/extract_ui.js` and `C:/UI/make_ui_archive.py`, project identifiers from Task 2.
+- Consumes: documented legacy capture requirements and project identifiers from Task 2.
 - Produces: `AssetService.import_file(project_id, stream, filename, media_type)`, `ReferenceImporter.import_image`, `import_extract`, `import_archive`, `reference_preview`, `CaptureAdapter.describe()`, `CaptureAdapter.capture(request)`, and versioned capture-envelope/`ui-extract.json`/archive schemas.
 
-- [ ] **Step 1: Write failing hostile-input and compatibility tests**
+- [x] **Step 1: Write failing hostile-input and compatibility tests**
 
   Cover PNG/JPEG/sanitized SVG/font imports, hashes and provenance, maximum sizes, MIME/content mismatch, active SVG content, malformed extracts, forbidden private data fields, ZIP traversal/symlinks/bombs, manifest mismatch, `REVIEW.txt` acknowledgement, unsupported archive versions, inert HTML/CSS preview, authorization/license provenance, adapter versioning, and draft provenance. Playwright fixtures must include DOM/accessibility trees, CSS response bodies, inline styles, safe computed properties, CSS variables/token candidates, image/background/SVG/font inventories, bounded same-origin assets, resource metadata, route/breakpoint screenshots, unresolved cross-origin resources, selector-usage evidence, and framework hints. Assert that scripts, source maps, API payloads, headers, cookies, storage, form values, and authentication state are absent.
 
-- [ ] **Step 2: Run tests and verify importers are missing**
+- [x] **Step 2: Run tests and verify importers are missing**
 
   Run: `python -m unittest test_designer_assets.py test_designer_references.py -v`
 
-- [ ] **Step 3: Implement managed copies and maintained capture tools**
+- [x] **Step 3: Implement managed copies and maintained capture tools**
 
-  Preserve the supplied extractor's exclusions for table cells, input values, query strings, and hostnames. Preserve the archive tool's leak-check/report/manifest behavior while making UI paths and replacement rules configuration inputs. Add Playwright as the only first-release browser automation component with no silent browser download. Capture network resources through bounded response handling rather than wget/HTTrack-style mirroring; record selector usage without destructive CSS purging; treat framework detection as advisory. Implement Puppeteer, Storybook, Screenshot-to-Code, React DevTools, FlaUInspect, PyQtInspect, and Applitools only as capability descriptors for later adapters. Never execute imported scripts or silently accept unresolved review findings.
+  The legacy `C:/UI` scripts were unavailable, so define a versioned compatible extract/archive format from the documented exclusions and manifest requirements rather than assuming unknown behavior. Add Playwright as the only first-release browser automation component with no silent browser download. Capture network resources through bounded response handling rather than wget/HTTrack-style mirroring; record selector usage without destructive CSS purging; treat framework detection as advisory. Implement Puppeteer, Storybook, Screenshot-to-Code, React DevTools, FlaUInspect, PyQtInspect, and Applitools only as capability descriptors for later adapters. Never execute imported scripts or silently accept unresolved review findings.
 
-- [ ] **Step 4: Run focused tests and commit**
+- [x] **Step 4: Run focused tests and commit**
 
-  Run: `python -m unittest test_designer_assets.py test_designer_references.py -v`
+  Run: `python -m unittest test_designer_assets.py test_designer_references.py test_designer_contracts.py test_designer_store.py test_designer_components.py test_designer_commands.py -v` (52 tests passed)
 
   `git add web_app/designer/assets.py web_app/designer/references.py web_app/designer/capture_adapters.py web/designer_capture.js tools/playwright_ui_capture.mjs tools/make_ui_reference_archive.py docs/user/ui-reference-capture.md test_designer_assets.py test_designer_references.py && git commit -m "feat(designer): import sanitized UI references"`
 
