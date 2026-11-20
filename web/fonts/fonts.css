@@ -1,0 +1,23 @@
+@font-face {
+  font-family: "OpenDyslexic";
+  src: url("/static/fonts/opendyslexic-400.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "OpenDyslexic";
+  src: url("/static/fonts/opendyslexic-700.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+:root { --font-ui: "Segoe UI", system-ui, sans-serif; --font-code: "Cascadia Code", Consolas, monospace; }
+:root[data-ui-typography="system"] { --font-ui: system-ui, -apple-system, "Segoe UI", sans-serif; }
+:root[data-ui-typography="mono-forward"] { --font-ui: "Cascadia Code", Consolas, ui-monospace, monospace; }
+:root[data-ui-typography="opendyslexic"] { --font-ui: "OpenDyslexic", system-ui, sans-serif; }
+
+body, button, input, select, textarea { font-family: var(--font-ui); }
+code, pre, .terminal-panel, .sidebar-brand { font-family: var(--font-code); }
