@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gitupdates/JSON_CODR/blob/main/docs/user/json-codr-skill-envelope.schema.json",
+  "title": "JSON_CODR Skill Envelope",
+  "description": "Logical fields represented by a version-1 JSON_CODR SKILL.md envelope.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "name", "description", "intent", "capabilities", "syntax", "execution_directive", "instructions"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "name": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 64 },
+    "description": { "type": "string", "minLength": 1 },
+    "intent": { "type": "string", "minLength": 1 },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "syntax": { "type": "string", "minLength": 1 },
+    "execution_directive": { "type": "string", "minLength": 1 },
+    "instructions": { "type": "string", "minLength": 1 }
+  }
+}
