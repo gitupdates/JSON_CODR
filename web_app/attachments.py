@@ -35,10 +35,35 @@ class AttachmentService:
         normalized = value.replace("\\", "/")
         return PurePath(normalized).name or "attachment"
 
-    def import_stream(self, session_id: str, display_name: str, stream: BinaryIO) -> AttachmentRecord:
+    @staticmethod
+    def _relative_display_name(value: str) -> str:
+        normalized = value.replace("\\", "/")
+        parts = normalized.split("/")
+        if (
+            not normalized
+            or len(normalized) > 500
+            or normalized.startswith("/")
+            or (len(normalized) > 1 and normalized[1] == ":")
+            or any(part in {"", ".", ".."} for part in parts)
+        ):
+            raise ValueError("Attachment relative path is invalid")
+        return "/".join(parts)
+
+    def import_stream(
+        self,
+        session_id: str,
+        display_name: str,
+        stream: BinaryIO,
+        *,
+        relative_path: str | None = None,
+    ) -> AttachmentRecord:
         session = self.workspace.get_session(session_id)
         attachment_id = uuid.uuid4().hex
-        safe_name = self._display_name(display_name)
+        safe_name = (
+            self._relative_display_name(relative_path)
+            if relative_path is not None
+            else self._display_name(display_name)
+        )
         if len(session.attachments) >= self.max_files:
             raise AttachmentTooLarge(f"Session is limited to {self.max_files} attachments")
         data = stream.read(self.max_file_bytes + 1)
