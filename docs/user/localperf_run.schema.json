@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://json-codr.local/schemas/localperf-run-0.3.0.json",
+  "title": "JSON_CODR LocalPerf Run",
+  "type": "object",
+  "required": ["schema_version", "evaluation_id", "workload_name", "workload_version", "workload_hash", "configuration", "samples", "metrics", "conformance"],
+  "properties": {
+    "schema_version": {"const": "0.3.0-localperf"},
+    "evaluation_id": {"type": "string"},
+    "workload_name": {"const": "LocalPerf-Core-v1"},
+    "workload_version": {"const": "1.0"},
+    "workload_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "configuration": {"type": "object"},
+    "samples": {"type": "array"},
+    "metrics": {"type": "object"},
+    "conformance": {"type": "object"}
+  },
+  "additionalProperties": true
+}
