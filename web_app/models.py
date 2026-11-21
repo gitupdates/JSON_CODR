@@ -8,6 +8,38 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from web_app.version import APP_VERSION
 
 
+class BootstrapAdministratorRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    claim: str = Field(min_length=20, max_length=512)
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=8, max_length=1024)
+
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class ReauthenticationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class AccountEnrollmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    claim: str = Field(min_length=20, max_length=512)
+    password: str = Field(min_length=8, max_length=1024)
+
+
+class AccountResetRequest(AccountEnrollmentRequest):
+    pass
+
+
 class ChatRequest(BaseModel):
     model: str
     prompt: str

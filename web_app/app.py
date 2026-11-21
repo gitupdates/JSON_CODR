@@ -73,7 +73,12 @@ from web_app.core.capability_discovery import discover_project_profile
 from web_app.core.canonical import canonical_digest
 from web_app.core.terminal_adapter import TerminalAdapter
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GitHubAuthCancelRequest, GitHubAuthLoginRequest, GitHubBuildCheckRequest, GitHubBuildUpdateRequest, GitHubConfirmedWrite, GitHubIssueCommentRequest, GitHubIssueCreateRequest, GitHubIssueUpdateRequest, GitHubLocalBranchRequest, GitHubLocalCloneRequest, GitHubLocalCommitRequest, GitHubLocalPushRequest, GitHubLocalStageRequest, GitHubLocalSyncRequest, GitHubPullRequestCreateRequest, GitHubPullRequestMergeRequest, GitHubPullRequestUpdateRequest, GitHubReleaseCreateRequest, GitHubReleaseUpdateRequest, GitHubRemoteBranchCreateRequest, GitHubRepositoryCreateRequest, GitHubRepositoryDeleteRequest, GitHubRepositoryUpdateRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
+from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GitHubAuthCancelRequest, GitHubAuthLoginRequest, GitHubBuildCheckRequest, GitHubBuildUpdateRequest, GitHubConfirmedWrite, GitHubIssueCommentRequest, GitHubIssueCreateRequest, GitHubIssueUpdateRequest, GitHubLocalBranchRequest, GitHubLocalCloneRequest, GitHubLocalCommitRequest, GitHubLocalPushRequest, GitHubLocalStageRequest, GitHubLocalSyncRequest, GitHubPullRequestCreateRequest, GitHubPullRequestMergeRequest, GitHubPullRequestUpdateRequest, GitHubReleaseCreateRequest, GitHubReleaseUpdateRequest, GitHubRemoteBranchCreateRequest, GitHubRepositoryCreateRequest, GitHubRepositoryDeleteRequest, GitHubRepositoryUpdateRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse, AccountEnrollmentRequest, AccountResetRequest, BootstrapAdministratorRequest, LoginRequest, ReauthenticationRequest
+from web_app.security.accounts import AccountService
+from web_app.security.bootstrap import BootstrapService
+from web_app.security.passwords import PasswordHasher
+from web_app.security.sessions import SESSION_COOKIE_NAME, SessionService
+from web_app.security.store import SecurityStore
 from web_app.model_run_store import ModelRunStore, RequestKeyConflict
 from web_app.model_runs import ModelRunService, canonical_model_prompt
 from web_app.ollama_service import (
@@ -119,9 +124,21 @@ def create_app(
     github_skills: GithubSkillService | None = None,
     github_cli: GitHubCLI | None = None,
     github_auth: GitHubAuthSessionService | None = None,
+    security_store: SecurityStore | None = None,
+    account_service: AccountService | None = None,
+    session_service: SessionService | None = None,
+    bootstrap_service: BootstrapService | None = None,
 ) -> FastAPI:
     application = FastAPI(title="JSON_CODR", version=APP_VERSION)
     workspace = workspace or WorkspaceService(default_data_root())
+    security_store = security_store or SecurityStore(workspace.data_root / "security.sqlite3")
+    account_service = account_service or AccountService(security_store, PasswordHasher())
+    session_service = session_service or SessionService(security_store)
+    bootstrap_service = bootstrap_service or BootstrapService(security_store, account_service)
+    application.state.security_store = security_store
+    application.state.account_service = account_service
+    application.state.session_service = session_service
+    application.state.bootstrap_service = bootstrap_service
     component_manager = None
     component_root = workspace.data_root / "core" / "component-registry"
 
@@ -2354,6 +2371,89 @@ def create_app(
             if status == 502:
                 hardware.record_runtime_failure(str(error))
             raise HTTPException(status_code=status, detail=str(error)) from error
+
+    def current_principal(request: Request):
+        principal = session_service.lookup(request.cookies.get(SESSION_COOKIE_NAME))
+        if principal is None:
+            raise HTTPException(status_code=401, detail="Authentication is required")
+        return principal
+
+    @application.post("/api/auth/bootstrap", status_code=201)
+    async def bootstrap_administrator(payload: BootstrapAdministratorRequest):
+        try:
+            account = bootstrap_service.claim_initial_administrator(payload.claim, payload.username, payload.password)
+        except (PermissionError, ValueError):
+            raise HTTPException(status_code=403, detail="Bootstrap claim is invalid or expired")
+        return {"username": account.username, "status": account.status}
+
+    @application.post("/api/auth/login")
+    async def login(payload: LoginRequest, request: Request, response: Response):
+        account = account_service.authenticate(payload.username, payload.password)
+        if account is None:
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+        previous = request.cookies.get(SESSION_COOKIE_NAME)
+        if previous:
+            session_service.logout(previous)
+        issued = session_service.create(account.account_id)
+        session_service.set_cookie(response, issued.token)
+        return {"username": account.username, "status": account.status}
+
+    @application.get("/api/auth/session")
+    async def auth_session(request: Request):
+        principal = current_principal(request)
+        return {"username": principal.username, "status": principal.status, "recent_auth_at": principal.recent_auth_at}
+
+    @application.post("/api/auth/logout", status_code=204)
+    async def logout(request: Request, response: Response):
+        token = request.cookies.get(SESSION_COOKIE_NAME)
+        if token:
+            session_service.logout(token)
+        session_service.clear_cookie(response)
+
+    @application.post("/api/auth/logout-all", status_code=204)
+    async def logout_all(request: Request, response: Response):
+        principal = current_principal(request)
+        session_service.logout_all(principal.account_id)
+        session_service.clear_cookie(response)
+
+    @application.post("/api/auth/reauth", status_code=204)
+    async def reauthenticate(payload: ReauthenticationRequest, request: Request):
+        principal = current_principal(request)
+        token = request.cookies.get(SESSION_COOKIE_NAME)
+        if token is None or not account_service.verify_account_password(principal.account_id, payload.password):
+            raise HTTPException(status_code=401, detail="Invalid password")
+        if not session_service.mark_reauthenticated(token):
+            raise HTTPException(status_code=401, detail="Authentication is required")
+
+    @application.get("/api/auth/sessions")
+    async def list_auth_sessions(request: Request):
+        principal = current_principal(request)
+        return {"sessions": session_service.list_sessions(principal.account_id)}
+
+    @application.post("/api/auth/sessions/{session_id}/revoke", status_code=204)
+    async def revoke_auth_session(session_id: str, request: Request):
+        from uuid import UUID
+        principal = current_principal(request)
+        try:
+            revoked = session_service.revoke_session(principal.account_id, UUID(session_id))
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if not revoked:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+    @application.post("/api/auth/enrollment", status_code=204)
+    async def enroll_account(payload: AccountEnrollmentRequest):
+        try:
+            bootstrap_service.enroll_account(payload.claim, payload.password)
+        except (PermissionError, ValueError):
+            raise HTTPException(status_code=403, detail="Enrollment claim is invalid or expired")
+
+    @application.post("/api/auth/password-reset", status_code=204)
+    async def reset_account_password(payload: AccountResetRequest):
+        try:
+            bootstrap_service.reset_account_password(payload.claim, payload.password)
+        except (PermissionError, ValueError):
+            raise HTTPException(status_code=403, detail="Reset claim is invalid or expired")
 
     return application
 

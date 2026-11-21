@@ -10,7 +10,7 @@ from pathlib import Path
 from uuid import UUID
 
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE accounts (
@@ -153,6 +153,47 @@ CREATE TABLE migration_ledger (
     updated_at TEXT NOT NULL CHECK (is_utc_timestamp(updated_at)),
     version INTEGER NOT NULL CHECK (version >= 1)
 );
+
+CREATE TABLE auth_claims (
+    auth_claim_id TEXT NOT NULL PRIMARY KEY CHECK (is_canonical_uuid(auth_claim_id)),
+    claim_hash TEXT NOT NULL UNIQUE,
+    purpose TEXT NOT NULL CHECK (purpose IN ('enrollment', 'reset')),
+    account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE CHECK (is_canonical_uuid(account_id)),
+    expires_at TEXT NOT NULL CHECK (is_utc_timestamp(expires_at)),
+    consumed_at TEXT CHECK (consumed_at IS NULL OR is_utc_timestamp(consumed_at)),
+    created_at TEXT NOT NULL CHECK (is_utc_timestamp(created_at)),
+    updated_at TEXT NOT NULL CHECK (is_utc_timestamp(updated_at)),
+    version INTEGER NOT NULL CHECK (version >= 1)
+);
+
+CREATE TABLE login_throttles (
+    username_casefold TEXT NOT NULL PRIMARY KEY,
+    failed_count INTEGER NOT NULL CHECK (failed_count >= 0),
+    blocked_until TEXT CHECK (blocked_until IS NULL OR is_utc_timestamp(blocked_until)),
+    updated_at TEXT NOT NULL CHECK (is_utc_timestamp(updated_at)),
+    version INTEGER NOT NULL CHECK (version >= 1)
+);
+"""
+
+_MIGRATION_2_TO_3 = """
+CREATE TABLE auth_claims (
+    auth_claim_id TEXT NOT NULL PRIMARY KEY CHECK (is_canonical_uuid(auth_claim_id)),
+    claim_hash TEXT NOT NULL UNIQUE,
+    purpose TEXT NOT NULL CHECK (purpose IN ('enrollment', 'reset')),
+    account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE CHECK (is_canonical_uuid(account_id)),
+    expires_at TEXT NOT NULL CHECK (is_utc_timestamp(expires_at)),
+    consumed_at TEXT CHECK (consumed_at IS NULL OR is_utc_timestamp(consumed_at)),
+    created_at TEXT NOT NULL CHECK (is_utc_timestamp(created_at)),
+    updated_at TEXT NOT NULL CHECK (is_utc_timestamp(updated_at)),
+    version INTEGER NOT NULL CHECK (version >= 1)
+);
+CREATE TABLE login_throttles (
+    username_casefold TEXT NOT NULL PRIMARY KEY,
+    failed_count INTEGER NOT NULL CHECK (failed_count >= 0),
+    blocked_until TEXT CHECK (blocked_until IS NULL OR is_utc_timestamp(blocked_until)),
+    updated_at TEXT NOT NULL CHECK (is_utc_timestamp(updated_at)),
+    version INTEGER NOT NULL CHECK (version >= 1)
+);
 """
 
 
@@ -201,6 +242,11 @@ class SecurityStore:
                     "VALUES (1, 0, ?, ?, 1)",
                     ("1970-01-01T00:00:00+00:00", "1970-01-01T00:00:00+00:00"),
                 )
+                connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+            elif version == 2:
+                for statement in _MIGRATION_2_TO_3.split(";"):
+                    if statement.strip():
+                        connection.execute(statement)
                 connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
             elif version != _SCHEMA_VERSION:
                 raise RuntimeError(f"unsupported security schema version: {version}")

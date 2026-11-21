@@ -1,6 +1,7 @@
 param(
   [switch]$NoBrowser,
   [switch]$ValidateOnly,
+  [switch]$BootstrapClaimOnly,
   [switch]$Direct
 )
 
@@ -103,6 +104,17 @@ if ($env:JSON_CODR_MODELS) {
   $env:OLLAMA_MODELS = $env:JSON_CODR_MODELS
 }
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+$BootstrapClaim = & $Python -c "from web_app.security.accounts import AccountService; from web_app.security.bootstrap import BootstrapService; from web_app.security.passwords import PasswordHasher; from web_app.security.store import SecurityStore; from web_app.workspace import default_data_root; store = SecurityStore(default_data_root() / 'security.sqlite3'); print(BootstrapService(store, AccountService(store, PasswordHasher())).issue_initial_claim() or '')"
+if ($LASTEXITCODE -ne 0) {
+  throw 'Unable to initialize local account bootstrap.'
+}
+if ($BootstrapClaim) {
+  Write-Host "Administrator bootstrap claim: $BootstrapClaim"
+}
+if ($BootstrapClaimOnly) {
+  exit 0
+}
 
 $OwnedOllama = $null
 $WebProcess = $null

@@ -1,5 +1,8 @@
 import json
+import os
 import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -60,6 +63,31 @@ class RunWebTests(unittest.TestCase):
         )
         process = subprocess.run(["powershell.exe", "-NoProfile", "-Command", command])
         self.assertEqual(process.returncode, 0)
+
+    def test_launcher_prints_claim_only_while_bootstrap_is_pending(self):
+        with tempfile.TemporaryDirectory() as data_root:
+            environment = os.environ.copy()
+            environment["LOCALAPPDATA"] = data_root
+            environment["JSON_CODR_PYTHON"] = sys.executable
+            pending = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "run_web.ps1"), "-BootstrapClaimOnly"],
+                cwd=ROOT, capture_output=True, text=True, env=environment,
+            )
+            self.assertEqual(pending.returncode, 0, pending.stderr)
+            marker = "Administrator bootstrap claim: "
+            self.assertIn(marker, pending.stdout)
+            claim = pending.stdout.split(marker, 1)[1].strip()
+            claimed = subprocess.run(
+                [sys.executable, "-c", "from web_app.security.accounts import AccountService; from web_app.security.bootstrap import BootstrapService; from web_app.security.passwords import PasswordHasher; from web_app.security.store import SecurityStore; from web_app.workspace import default_data_root; store=SecurityStore(default_data_root()/'security.sqlite3'); BootstrapService(store, AccountService(store, PasswordHasher())).claim_initial_administrator(__import__('os').environ['BOOTSTRAP_CLAIM'], 'Administrator', 'correct horse battery staple')"],
+                cwd=ROOT, capture_output=True, text=True, env={**environment, "BOOTSTRAP_CLAIM": claim},
+            )
+            self.assertEqual(claimed.returncode, 0, claimed.stderr)
+            completed = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "run_web.ps1"), "-BootstrapClaimOnly"],
+                cwd=ROOT, capture_output=True, text=True, env=environment,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertNotIn(marker, completed.stdout)
 
 
 if __name__ == "__main__":
