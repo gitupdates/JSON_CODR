@@ -1448,10 +1448,11 @@ def create_app(
     async def github_commits(
         owner: str,
         repository: str,
+        branch: str | None = None,
         x_json_codr: str | None = Header(None),
     ):
         require_terminal_header(x_json_codr)
-        return await github_call(github_cli.commits, owner, repository)
+        return await github_call(github_cli.commits, owner, repository, branch)
 
     @application.post("/api/github/repos/{owner}/{repository}/pulls", status_code=201)
     async def github_create_pull_request(

@@ -282,6 +282,7 @@ class WebApiTests(unittest.TestCase):
         class FakeGitHubCLI:
             def __init__(self):
                 self.writes = []
+                self.commit_reads = []
 
             def status(self):
                 return {"authenticated": True, "login": "test-user"}
@@ -292,7 +293,8 @@ class WebApiTests(unittest.TestCase):
             def branches(self, owner, repository):
                 return [{"name": "main", "protected": True}]
 
-            def commits(self, owner, repository):
+            def commits(self, owner, repository, branch=None):
+                self.commit_reads.append((owner, repository, branch))
                 return [{"sha": "abc123", "message": "Test commit"}]
 
             def create_issue(self, owner, repository, title, body):
@@ -310,6 +312,9 @@ class WebApiTests(unittest.TestCase):
         repositories = client.get("/api/github/repositories", headers=headers)
         branches = client.get("/api/github/repos/test-user/sample/branches", headers=headers)
         commits = client.get("/api/github/repos/test-user/sample/commits", headers=headers)
+        branch_commits = client.get(
+            "/api/github/repos/test-user/sample/commits?branch=feature%2Fui", headers=headers,
+        )
         unconfirmed = client.post(
             "/api/github/repos/test-user/sample/issues",
             headers=headers,
@@ -326,6 +331,11 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(repositories.json()[0]["full_name"], "test-user/sample")
         self.assertEqual(branches.json()[0]["name"], "main")
         self.assertEqual(commits.json()[0]["sha"], "abc123")
+        self.assertEqual(branch_commits.json()[0]["sha"], "abc123")
+        self.assertEqual(github.commit_reads, [
+            ("test-user", "sample", None),
+            ("test-user", "sample", "feature/ui"),
+        ])
         self.assertEqual(unconfirmed.status_code, 422)
         self.assertEqual(created.status_code, 201)
         self.assertEqual(github.writes, [("test-user", "sample", "Issue", "Details")])
@@ -1302,7 +1312,7 @@ class WebApiTests(unittest.TestCase):
             "requested_model": "qwen3:8b",
             "advertised_tools": True,
             "native_tools_verified": True,
-            "route": "native_verified",
+            "route": "broker_verified",
             "effective_tool_model": "qwen3:8b",
             "available": True,
         })

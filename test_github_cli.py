@@ -62,7 +62,10 @@ class GitHubCLITests(unittest.TestCase):
         self.assertIn("body=$(not-a-shell-command)", calls[1])
 
     def test_branch_and_commit_reads_return_only_public_summary_fields(self):
+        calls = []
+
         def runner(arguments, **kwargs):
+            calls.append(arguments)
             if "/commits?" in arguments[-1]:
                 output = [[{
                     "sha": "abc123",
@@ -84,9 +87,14 @@ class GitHubCLITests(unittest.TestCase):
             [{"name": "main", "protected": True, "sha": "ignored"}],
         )
         commits = client.commits("gitupdates", "sample")
+        filtered_commits = client.commits("gitupdates", "sample", "feature/ui")
         self.assertEqual(commits[0]["sha"], "abc123")
+        self.assertEqual(filtered_commits[0]["sha"], "abc123")
         self.assertEqual(commits[0]["message"], "A commit\nwith details")
         self.assertNotIn("login", commits[0]["author"])
+        self.assertEqual(calls[1][-1], "repos/gitupdates/sample/commits?per_page=30")
+        self.assertEqual(calls[2], ["git.exe", "check-ref-format", "refs/heads/feature/ui"])
+        self.assertEqual(calls[3][-1], "repos/gitupdates/sample/commits?per_page=30&sha=feature%2Fui")
 
     def test_authentication_errors_are_mapped_and_credentials_redacted(self):
         def runner(arguments, **kwargs):
@@ -251,6 +259,10 @@ class GitHubCLITests(unittest.TestCase):
                 output = {"name": "new-project", "full_name": "example/new-project", "private": True}
             elif target == "repos/example/new-project":
                 output = {"name": "renamed", "full_name": "example/renamed", "archived": True}
+            elif target == "repos/example/renamed" and "GET" in arguments:
+                output = {"default_branch": "main"}
+            elif target.endswith("/branches/feature/change"):
+                output = {"name": "feature/change", "protected": False}
             elif target.endswith("/git/ref/heads/main"):
                 output = {"object": {"sha": "abc123"}}
             elif target.endswith("/git/refs"):

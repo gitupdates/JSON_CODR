@@ -121,9 +121,14 @@ class GitHubCLI:
         self._delete_api(f"{path}/git/refs/heads/{quote(branch, safe='/')}")
         return {"repository": f"{owner}/{repository}", "branch": branch, "deleted": True}
 
-    def commits(self, owner: str, repository: str) -> list[dict[str, object]]:
+    def commits(
+        self, owner: str, repository: str, branch: str | None = None,
+    ) -> list[dict[str, object]]:
         path = self._repository_path(owner, repository)
-        items = self._api_pages(f"{path}/commits", {"per_page": "30"})
+        query = {"per_page": "30"}
+        if branch is not None:
+            query["sha"] = self._validated_branch(branch)
+        items = self._api_pages(f"{path}/commits", query)
         commits = []
         for item in items:
             if not isinstance(item, dict):
