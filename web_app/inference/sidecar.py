@@ -19,7 +19,7 @@ class SidecarClient:
         self.python = Path(python or sys.executable)
         self.runner = runner or self._run
 
-    async def request(self, operation: str, payload: dict, timeout: float = 120) -> dict:
+    async def request(self, operation: str, payload: dict, timeout: float = 300) -> dict:
         request = {"operation": operation, "payload": payload}
         command = [str(self.python), "-m", "web_app.inference.sidecar_main"]
         try:

@@ -12,10 +12,10 @@ from web_app.inference.contracts import ProviderKind
 
 
 PACKAGES = {
-    ProviderKind.openvino: ("openvino-genai==2025.4", "openvino-tokenizers==2025.4", "huggingface-hub==0.36.0"),
-    ProviderKind.ryzen_ai: ("onnxruntime-genai==0.19.0", "huggingface-hub==0.36.0"),
-    ProviderKind.winml: ("onnxruntime-genai==0.19.0", "huggingface-hub==0.36.0"),
-    ProviderKind.directml: ("onnxruntime-genai-directml==0.12.2", "huggingface-hub==0.36.0"),
+    ProviderKind.openvino: ("openvino-genai==2025.4", "openvino-tokenizers==2025.4", "huggingface-hub==0.36.0", "pydantic>=2,<3"),
+    ProviderKind.ryzen_ai: ("onnxruntime-genai==0.19.0", "huggingface-hub==0.36.0", "pydantic>=2,<3"),
+    ProviderKind.winml: ("onnxruntime-genai==0.19.0", "huggingface-hub==0.36.0", "pydantic>=2,<3"),
+    ProviderKind.directml: ("onnxruntime-genai-directml==0.12.2", "huggingface-hub==0.36.0", "pydantic>=2,<3"),
 }
 
 
