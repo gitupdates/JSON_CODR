@@ -62,7 +62,35 @@ class AccountService:
         groups: dict[str, str] = {}
         legacy = {"users": "user", "designers": "designer", "administrators": "admin", "developers": "developer"}
         for old, new in legacy.items():
-            connection.execute("UPDATE groups SET stable_id = ? WHERE stable_id = ? AND NOT EXISTS (SELECT 1 FROM groups g2 WHERE g2.stable_id = ?)", (new, old, new))
+            legacy_row = connection.execute("SELECT group_id FROM groups WHERE stable_id = ?", (old,)).fetchone()
+            if legacy_row is None:
+                continue
+            canonical_row = connection.execute("SELECT group_id FROM groups WHERE stable_id = ?", (new,)).fetchone()
+            if canonical_row is None:
+                connection.execute(
+                    "UPDATE groups SET stable_id = ?, updated_at = ?, version = version + 1 WHERE group_id = ?",
+                    (new, _stamp(now), legacy_row[0]),
+                )
+                continue
+
+            legacy_group_id = legacy_row[0]
+            canonical_group_id = canonical_row[0]
+            connection.execute(
+                "DELETE FROM memberships WHERE group_id = ? AND EXISTS ("
+                "SELECT 1 FROM memberships canonical WHERE canonical.account_id = memberships.account_id "
+                "AND canonical.group_id = ?)",
+                (legacy_group_id, canonical_group_id),
+            )
+            connection.execute(
+                "UPDATE memberships SET group_id = ?, updated_at = ?, version = version + 1 WHERE group_id = ?",
+                (canonical_group_id, _stamp(now), legacy_group_id),
+            )
+            for table in ("policy_entries", "resource_acls"):
+                connection.execute(
+                    f"UPDATE {table} SET group_id = ?, updated_at = ?, version = version + 1 WHERE group_id = ?",
+                    (canonical_group_id, _stamp(now), legacy_group_id),
+                )
+            connection.execute("DELETE FROM groups WHERE group_id = ?", (legacy_group_id,))
         for stable_id, display_name in BASE_GROUPS.items():
             row = connection.execute("SELECT group_id FROM groups WHERE stable_id = ?", (stable_id,)).fetchone()
             if row is None:

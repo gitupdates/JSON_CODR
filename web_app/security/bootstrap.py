@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
@@ -52,7 +53,9 @@ class BootstrapService:
                 connection, username, password, set(BASE_GROUPS), timestamp, account_id=ADMINISTRATOR_ACCOUNT_ID
             )
 
-    def _authorize_recent_admin(self, connection: object, principal: SessionPrincipal, now: datetime) -> None:
+    def _authorize_recent_admin(
+        self, connection: sqlite3.Connection, principal: SessionPrincipal, now: datetime
+    ) -> None:
         row = connection.execute(
             "SELECT accounts.status, sessions.recent_auth_at, sessions.revoked_at, sessions.idle_expires_at, sessions.absolute_expires_at FROM sessions JOIN accounts ON accounts.account_id = sessions.account_id "
             "JOIN memberships ON memberships.account_id = accounts.account_id JOIN groups ON groups.group_id = memberships.group_id "
@@ -91,7 +94,9 @@ class BootstrapService:
             connection.execute("UPDATE auth_claims SET consumed_at = ?, updated_at = ?, version = version + 1 WHERE account_id = ? AND purpose = ? AND consumed_at IS NULL", (timestamp.isoformat(), timestamp.isoformat(), str(account_id), purpose))
             return self._issue_claim_in_transaction(connection, purpose, account_id, timestamp, lifetime)
 
-    def _issue_claim_in_transaction(self, connection: object, purpose: str, account_id: UUID, now: datetime, lifetime: timedelta) -> str:
+    def _issue_claim_in_transaction(
+        self, connection: sqlite3.Connection, purpose: str, account_id: UUID, now: datetime, lifetime: timedelta
+    ) -> str:
         if lifetime <= timedelta():
             raise ValueError("claim lifetime must be positive")
         claim = secrets.token_urlsafe(32)

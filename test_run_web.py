@@ -66,12 +66,18 @@ class RunWebTests(unittest.TestCase):
 
     def test_launcher_prints_claim_only_while_bootstrap_is_pending(self):
         with tempfile.TemporaryDirectory() as data_root:
+            unrelated_cwd = Path(os.environ.get("SystemRoot", r"C:\Windows"))
             environment = os.environ.copy()
             environment["LOCALAPPDATA"] = data_root
             environment["JSON_CODR_PYTHON"] = sys.executable
+            repository_probe = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"], cwd=unrelated_cwd,
+                capture_output=True, text=True, env=environment,
+            )
+            self.assertNotEqual(repository_probe.returncode, 0, repository_probe.stdout)
             pending = subprocess.run(
                 ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "run_web.ps1"), "-BootstrapClaimOnly"],
-                cwd=ROOT, capture_output=True, text=True, env=environment,
+                cwd=unrelated_cwd, capture_output=True, text=True, env=environment,
             )
             self.assertEqual(pending.returncode, 0, pending.stderr)
             marker = "Administrator bootstrap claim: "
@@ -84,7 +90,7 @@ class RunWebTests(unittest.TestCase):
             self.assertEqual(claimed.returncode, 0, claimed.stderr)
             completed = subprocess.run(
                 ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "run_web.ps1"), "-BootstrapClaimOnly"],
-                cwd=ROOT, capture_output=True, text=True, env=environment,
+                cwd=unrelated_cwd, capture_output=True, text=True, env=environment,
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertNotIn(marker, completed.stdout)

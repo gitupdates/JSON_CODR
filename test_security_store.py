@@ -295,6 +295,27 @@ class SecurityStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "unsupported security schema version: 1"):
             self.store.initialize()
 
+    def test_schema_version_two_migrates_auth_claim_and_throttle_tables_atomically(self) -> None:
+        connection = self.store._connect()
+        try:
+            version_two_schema = security_store._SCHEMA.split("CREATE TABLE auth_claims", 1)[0]
+            connection.executescript(version_two_schema)
+            connection.execute("PRAGMA user_version = 2")
+            connection.commit()
+        finally:
+            connection.close()
+
+        self.store.initialize()
+
+        with self.store.transaction() as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
+            tables = {
+                row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('auth_claims', 'login_throttles')"
+                )
+            }
+            self.assertEqual(tables, {"auth_claims", "login_throttles"})
+
 
 if __name__ == "__main__":
     unittest.main()
