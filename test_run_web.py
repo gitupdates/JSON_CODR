@@ -35,6 +35,19 @@ class RunWebTests(unittest.TestCase):
             cwd=ROOT,
             check=True,
         )
+        self.assertTrue(payload["compatiblePython"])
+        compatible = subprocess.run(
+            [
+                payload["compatiblePython"],
+                "-c",
+                "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn(compatible.stdout.strip(), {"3.11", "3.12"})
         self.assertTrue(payload["ollama"])
         self.assertTrue(payload["supervised"])
         self.assertTrue(payload["ollamaNoCloud"])

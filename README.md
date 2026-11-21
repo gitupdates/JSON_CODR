@@ -87,13 +87,20 @@ The server binds only to `127.0.0.1`; it is not exposed to other machines.
 
 ## GitHub integration
 
-Install the GitHub CLI (`gh`) and authenticate it with `gh auth login`. In the
-web app, open **GitHub** in the sidebar to browse repositories, issues, pull
-requests, releases, branches, and commits available to that CLI account. The
-page also supports confirmed issue/PR/release operations and local branch,
-stage, commit, and push actions. Credentials remain in the local CLI; every
-write requires an explicit confirmation. Repository creation/deletion and
-account or secret management are not exposed.
+Install the GitHub CLI (`gh`), then open **GitHub** in the web app. If the CLI
+is signed out, the guided connection panel starts GitHub's browser/device
+login and displays the one-time device code when needed. Credentials remain
+in GitHub CLI's local credential store and are never handled by JSON_CODR.
+
+After signing in, select an accessible repository and branch and connect its
+local checkout. **Check build** fetches that exact branch and shows the local
+and remote commits, timestamps, working-tree state, and ahead/behind counts.
+When the checkout is clean, matches the selection, has no local-only commits,
+and is strictly behind, **Update to latest** can perform a confirmed
+fast-forward-only update. Dirty, detached, divergent, stale, or mismatched
+checkouts are blocked without resetting, rebasing, switching, or discarding
+work. Advanced issue, pull-request, release, branch, stage, commit, and push
+controls remain available below the guided connection.
 
 ## Run tests
 

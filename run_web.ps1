@@ -40,6 +40,35 @@ foreach ($Candidate in $PythonCandidates) {
 if (-not $Python) {
   throw 'A compatible Python 3.14 or newer interpreter is required.'
 }
+$CompatiblePythonCandidates = @()
+if ($env:JSON_CODR_COMPATIBLE_PYTHON) {
+  $CompatiblePythonCandidates += $env:JSON_CODR_COMPATIBLE_PYTHON
+}
+$KnownPython312 = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\python.exe'
+$KnownPython311 = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\python.exe'
+if (Test-Path -LiteralPath $KnownPython312) { $CompatiblePythonCandidates += $KnownPython312 }
+if (Test-Path -LiteralPath $KnownPython311) { $CompatiblePythonCandidates += $KnownPython311 }
+$CompatiblePythonCandidates += @('python3.12', 'python3.11', 'python')
+$CompatiblePython = $null
+$SeenCompatiblePythonPaths = @{}
+foreach ($Candidate in $CompatiblePythonCandidates) {
+  $PythonCommand = Get-Command $Candidate -ErrorAction SilentlyContinue
+  if (-not $PythonCommand) { continue }
+  foreach ($Command in @($PythonCommand)) {
+    $PythonPath = $Command.Source
+    if (-not $PythonPath -or $SeenCompatiblePythonPaths.ContainsKey($PythonPath)) { continue }
+    $SeenCompatiblePythonPaths[$PythonPath] = $true
+    $VersionOutput = & $PythonPath -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
+    if ($LASTEXITCODE -eq 0 -and $VersionOutput -in @('3.11', '3.12')) {
+      $CompatiblePython = $PythonPath
+      break
+    }
+  }
+  if ($CompatiblePython) { break }
+}
+if (-not $CompatiblePython) {
+  throw 'A Python 3.11 or 3.12 interpreter is required for optional provider environments.'
+}
 $OllamaCommand = Get-Command ollama -ErrorAction SilentlyContinue
 if ($OllamaCommand) {
   $Ollama = $OllamaCommand.Source
@@ -57,6 +86,7 @@ if ($ValidateOnly) {
     url = $Url
     version = $Version
     python = $Python
+    compatiblePython = $CompatiblePython
     ollama = $Ollama
     modelStore = $env:JSON_CODR_MODELS
     supervised = -not $Direct
@@ -68,6 +98,7 @@ if ($ValidateOnly) {
 $env:PYTHONUTF8 = '1'
 $env:PYTHONIOENCODING = 'utf-8'
 $env:OLLAMA_NO_CLOUD = '1'
+$env:JSON_CODR_COMPATIBLE_PYTHON = $CompatiblePython
 if ($env:JSON_CODR_MODELS) {
   $env:OLLAMA_MODELS = $env:JSON_CODR_MODELS
 }
