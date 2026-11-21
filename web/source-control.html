@@ -760,14 +760,15 @@
         card("GitHub push permission", localSnapshot.push_allowed ? "Allowed" : "Not allowed", localSnapshot.push_allowed ? "ok" : "error"),
       );
       renderChangedFiles(changes);
+      const repositoryMatch = selectedRepository && localSnapshot.repository?.toLowerCase() === selectedRepository.full_name.toLowerCase();
+      const branchMatch = selectedBranch && localSnapshot.branch === selectedBranch.name;
+      const scopeMatch = Boolean(repositoryMatch && branchMatch);
       $("#create-branch").disabled = false;
       $("#stage-files").disabled = !changes.length;
       $("#commit-files").disabled = !(localSnapshot.staged_paths || []).length;
-      $("#push-files").disabled = !localSnapshot.push_allowed || !localSnapshot.branch;
+      $("#push-files").disabled = !localSnapshot.push_allowed || !localSnapshot.branch || !scopeMatch;
       $("#fetch-files").disabled = false;
-      $("#pull-files").disabled = !localSnapshot.branch;
-      const repositoryMatch = selectedRepository && localSnapshot.repository?.toLowerCase() === selectedRepository.full_name.toLowerCase();
-      const branchMatch = selectedBranch && localSnapshot.branch === selectedBranch.name;
+      $("#pull-files").disabled = !localSnapshot.branch || !scopeMatch;
       $("#connection-summary").replaceChildren(
         card("Remote repository", selectedRepository?.full_name || "Not selected"),
         card("Remote branch", selectedBranch?.name || "Not selected"),

@@ -232,6 +232,8 @@ process.stdout.write(JSON.stringify({
         self.assertIn("expected_remote_sha", html)
         self.assertIn("expected_login", html)
         self.assertIn("inspectionGeneration", html)
+        self.assertIn('$("#push-files").disabled = !localSnapshot.push_allowed || !localSnapshot.branch || !scopeMatch;', html)
+        self.assertIn('$("#pull-files").disabled = !localSnapshot.branch || !scopeMatch;', html)
         self.assertNotIn("example/sample", html)
         self.assertNotIn("gitupdates/JSON_CODR", html)
 
