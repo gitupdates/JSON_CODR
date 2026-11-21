@@ -45,7 +45,6 @@ class SessionService:
     def __init__(self, store: SecurityStore, *, secure_cookies: bool = True) -> None:
         self.store = store
         self.secure_cookies = secure_cookies
-        self._idle_windows: dict[UUID, timedelta] = {}
 
     def _insert(self, connection: sqlite3.Connection, account_id: UUID, now: datetime, idle: timedelta, absolute: timedelta) -> IssuedSession:
         active = connection.execute("SELECT status FROM accounts WHERE account_id = ?", (str(account_id),)).fetchone()
@@ -60,7 +59,6 @@ class SessionService:
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, 1)",
             (str(session_id), str(account_id), _hash(token), now.isoformat(), idle_expires.isoformat(), absolute_expires.isoformat(), now.isoformat(), now.isoformat(), now.isoformat(), now.isoformat()),
         )
-        self._idle_windows[session_id] = idle
         return IssuedSession(session_id, token)
 
     def create(self, account_id: UUID, now: datetime | None = None, *, idle_lifetime: timedelta = timedelta(minutes=30), absolute_lifetime: timedelta = timedelta(hours=8)) -> IssuedSession:
@@ -72,7 +70,7 @@ class SessionService:
 
     def _lookup(self, connection: sqlite3.Connection, token: str, now: datetime, touch: bool = True) -> SessionPrincipal | None:
         row = connection.execute(
-            "SELECT sessions.session_id, sessions.account_id, accounts.username, accounts.status, sessions.recent_auth_at, sessions.idle_expires_at, sessions.absolute_expires_at, sessions.revoked_at "
+            "SELECT sessions.session_id, sessions.account_id, accounts.username, accounts.status, sessions.recent_auth_at, sessions.idle_expires_at, sessions.absolute_expires_at, sessions.revoked_at, sessions.last_seen_at "
             "FROM sessions JOIN accounts ON accounts.account_id = sessions.account_id WHERE sessions.token_hash = ?", (_hash(token),)
         ).fetchone()
         if row is None:
@@ -81,7 +79,11 @@ class SessionService:
             connection.execute("UPDATE sessions SET revoked_at = COALESCE(revoked_at, ?), updated_at = ?, version = version + 1 WHERE session_id = ?", (now.isoformat(), now.isoformat(), row[0]))
             return None
         if touch:
-            new_idle = min(now + self._idle_windows.get(UUID(row[0]), timedelta(minutes=30)), datetime.fromisoformat(row[6]))
+            idle_window = datetime.fromisoformat(row[5]) - datetime.fromisoformat(row[8])
+            if idle_window <= timedelta():
+                connection.execute("UPDATE sessions SET revoked_at = COALESCE(revoked_at, ?), updated_at = ?, version = version + 1 WHERE session_id = ?", (now.isoformat(), now.isoformat(), row[0]))
+                return None
+            new_idle = min(now + idle_window, datetime.fromisoformat(row[6]))
             connection.execute("UPDATE sessions SET last_seen_at = ?, idle_expires_at = ?, updated_at = ?, version = version + 1 WHERE session_id = ?", (now.isoformat(), new_idle.isoformat(), now.isoformat(), row[0]))
         return SessionPrincipal(UUID(row[1]), UUID(row[0]), row[2], row[3], datetime.fromisoformat(row[4]) if row[4] else None)
 
@@ -120,11 +122,11 @@ class SessionService:
             connection.execute("UPDATE sessions SET recent_auth_at = ?, updated_at = ?, version = version + 1 WHERE session_id = ?", (timestamp.isoformat(), timestamp.isoformat(), str(principal.session_id)))
             return True
 
-    def list_sessions(self, account_id: UUID) -> list[dict[str, str | None]]:
+    def list_sessions(self, account_id: UUID, now: datetime | None = None) -> list[dict[str, str | bool | None]]:
+        timestamp = _utc(now)
         with self.store.transaction() as connection:
             rows = connection.execute("SELECT session_id, issued_at, last_seen_at, recent_auth_at, revoked_at, idle_expires_at, absolute_expires_at FROM sessions WHERE account_id = ? ORDER BY issued_at DESC", (str(account_id),)).fetchall()
-            now = _utc()
-            return [{"session_id": row[0], "issued_at": row[1], "last_seen_at": row[2], "recent_auth_at": row[3], "revoked_at": row[4], "idle_expires_at": row[5], "absolute_expires_at": row[6], "active": row[4] is None and datetime.fromisoformat(row[5]) > now and datetime.fromisoformat(row[6]) > now} for row in rows]
+            return [{"session_id": row[0], "issued_at": row[1], "last_seen_at": row[2], "recent_auth_at": row[3], "revoked_at": row[4], "idle_expires_at": row[5], "absolute_expires_at": row[6], "active": row[4] is None and datetime.fromisoformat(row[5]) > timestamp and datetime.fromisoformat(row[6]) > timestamp} for row in rows]
 
     def revoke_session(self, account_id: UUID, session_id: UUID, now: datetime | None = None) -> bool:
         timestamp = _utc(now)

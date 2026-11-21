@@ -70,6 +70,25 @@ class AccountSecurityTests(unittest.TestCase):
         self.accounts.reset_password(account.account_id, "a newer correct password", now=self.now)
         self.assertIsNone(self.sessions.lookup(reset.token, now=self.now))
 
+    def test_custom_idle_window_survives_touch_and_service_restart(self) -> None:
+        account = self.accounts.create_account("Idle", "correct horse battery staple")
+        issued = self.sessions.create(account.account_id, now=self.now, idle_lifetime=timedelta(seconds=10), absolute_lifetime=timedelta(minutes=1))
+        self.assertIsNotNone(self.sessions.lookup(issued.token, now=self.now + timedelta(seconds=5)))
+        restarted = SessionService(self.store)
+        self.assertIsNotNone(restarted.lookup(issued.token, now=self.now + timedelta(seconds=14)))
+        self.assertIsNone(restarted.lookup(issued.token, now=self.now + timedelta(seconds=25)))
+
+    def test_session_listing_reports_idle_and_absolute_expiry(self) -> None:
+        account = self.accounts.create_account("Listing", "correct horse battery staple")
+        idle = self.sessions.create(account.account_id, now=self.now, idle_lifetime=timedelta(seconds=1), absolute_lifetime=timedelta(minutes=1))
+        absolute = self.sessions.create(account.account_id, now=self.now, idle_lifetime=timedelta(minutes=1), absolute_lifetime=timedelta(seconds=1))
+        rows = self.sessions.list_sessions(account.account_id, now=self.now + timedelta(seconds=2))
+        by_id = {row["session_id"]: row for row in rows}
+        for issued in (idle, absolute):
+            self.assertFalse(by_id[str(issued.session_id)]["active"])
+            self.assertTrue(by_id[str(issued.session_id)]["idle_expires_at"])
+            self.assertTrue(by_id[str(issued.session_id)]["absolute_expires_at"])
+
     def test_absolute_expiry_throttling_recent_auth_session_revocation_and_suspension(self) -> None:
         account = self.accounts.create_account("Alice", "correct horse battery staple")
         absolute = self.sessions.create(
