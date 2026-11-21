@@ -30,6 +30,38 @@ class IdCollector(HTMLParser):
 
 
 class WebStaticTests(unittest.TestCase):
+    def test_source_control_guides_github_login_scope_build_check_and_safe_update(self):
+        html = Path("web/source-control.html").read_text(encoding="utf-8")
+        parser = IdCollector()
+        parser.feed(html)
+        self.assertTrue({
+            "github-connect-panel",
+            "github-sign-in",
+            "github-login-status",
+            "github-login-cancel",
+            "github-device-code",
+            "repository-select",
+            "branch-select",
+            "project-root",
+            "connect-checkout",
+            "connection-summary",
+            "check-build",
+            "update-build",
+            "build-status",
+            "local-build-details",
+            "remote-build-details",
+        }.issubset(parser.ids))
+        self.assertIn('aria-live="polite"', html)
+        self.assertIn("/api/github/auth/login", html)
+        self.assertIn("/api/github/local/check-build", html)
+        self.assertIn("/api/github/local/update-build", html)
+        self.assertIn("json_codr_github_connection_", html)
+        self.assertIn("commits?branch=", html)
+        self.assertIn("expected_local_sha", html)
+        self.assertIn("expected_remote_sha", html)
+        self.assertNotIn("example/sample", html)
+        self.assertNotIn("gitupdates/JSON_CODR", html)
+
     def test_all_model_search_is_additive_and_exposes_jury_controls(self):
         html = Path("web/index.html").read_text(encoding="utf-8")
         runtime = Path("web/model_runs.js").read_text(encoding="utf-8") if Path("web/model_runs.js").exists() else ""

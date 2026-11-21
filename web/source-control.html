@@ -7,17 +7,44 @@
   <title>JSON_CODR · GitHub and source control</title>
   <style>
     :root{color-scheme:dark;--bg:#080a0d;--panel:#101319;--input:#0c0f13;--line:#343b46;--text:#f4f6f8;--muted:#a3adba;--accent:#c7ff4a;--red:#ff9a9a;font:15px system-ui,sans-serif;color:var(--text);background:var(--bg)}
-    *{box-sizing:border-box}body{max-width:1100px;margin:0 auto;padding:24px}header,.row,.actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}h1{margin:.25em 0}h2{font-size:1.15rem;margin-top:0}h3{font-size:1rem;margin:.25em 0}p,.muted{color:var(--muted);line-height:1.55}.card{margin:16px 0;padding:20px;border:1px solid var(--line);background:var(--panel)}label{display:grid;gap:7px;flex:1;min-width:220px;font-size:.9rem}input,select,textarea{min-width:0;width:100%;padding:10px 12px;color:var(--text);background:var(--input);border:1px solid var(--line);font:inherit}input,select{height:42px}textarea{min-height:90px;resize:vertical}button{min-height:40px;padding:0 14px;border:1px solid var(--line);background:#242a33;color:var(--text);font:inherit;font-weight:700;cursor:pointer}button.primary{background:var(--accent);color:#101319;border-color:var(--accent)}button:disabled{opacity:.55;cursor:wait}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,a:focus-visible{outline:3px solid var(--accent);outline-offset:2px}.status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.status-item,.record{padding:12px;background:var(--input);border:1px solid var(--line);overflow-wrap:anywhere}.status-item span{display:block;color:var(--muted);font-size:.76rem;text-transform:uppercase;letter-spacing:.08em}.status-item strong{display:block;margin-top:6px}.record{margin:10px 0}.record p{margin:.5em 0}.record-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.record-actions button{min-height:34px}.ok{color:var(--accent)}.error{color:var(--red)}pre{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted)}code{overflow-wrap:anywhere}a{color:var(--accent)}#notice{min-height:1.5em}.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}.checkbox-row{display:flex;align-items:center;gap:8px;min-width:0}.checkbox-row input{width:auto;height:auto}.file-row{display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.file-row input{width:auto;height:auto;margin-top:4px}.section-title{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.notice{min-height:1.5em}.tab-note{font-size:.85rem}@media(max-width:520px){body{padding:14px}.card{padding:15px}}
+    *{box-sizing:border-box}body{max-width:1100px;margin:0 auto;padding:24px}header,.row,.actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}h1{margin:.25em 0}h2{font-size:1.15rem;margin-top:0}h3{font-size:1rem;margin:.25em 0}p,.muted{color:var(--muted);line-height:1.55}.card{margin:16px 0;padding:20px;border:1px solid var(--line);background:var(--panel)}label{display:grid;gap:7px;flex:1;min-width:220px;font-size:.9rem}input,select,textarea{min-width:0;width:100%;padding:10px 12px;color:var(--text);background:var(--input);border:1px solid var(--line);font:inherit}input,select{height:42px}textarea{min-height:90px;resize:vertical}button{min-height:40px;padding:0 14px;border:1px solid var(--line);background:#242a33;color:var(--text);font:inherit;font-weight:700;cursor:pointer}button.primary{background:var(--accent);color:#101319;border-color:var(--accent)}button:disabled{opacity:.55;cursor:not-allowed}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,a:focus-visible{outline:3px solid var(--accent);outline-offset:2px}.status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.status-item,.record{padding:12px;background:var(--input);border:1px solid var(--line);overflow-wrap:anywhere}.status-item span{display:block;color:var(--muted);font-size:.76rem;text-transform:uppercase;letter-spacing:.08em}.status-item strong{display:block;margin-top:6px}.record{margin:10px 0}.record p{margin:.5em 0}.record-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.record-actions button{min-height:34px}.ok{color:var(--accent)}.error{color:var(--red)}pre{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted)}code{overflow-wrap:anywhere}a{color:var(--accent)}#notice{min-height:1.5em}.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}.checkbox-row{display:flex;align-items:center;gap:8px;min-width:0}.checkbox-row input{width:auto;height:auto}.file-row{display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.file-row input{width:auto;height:auto;margin-top:4px}.section-title{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.notice{min-height:1.5em}.tab-note{font-size:.85rem}.connect-panel{border-color:#71823d;background:linear-gradient(145deg,#151b16,var(--panel))}.connect-step{padding:14px 0;border-top:1px solid var(--line)}.connect-step:first-of-type{border-top:0}.step-label{margin:0 0 8px;color:var(--accent);font-size:.78rem;font-weight:800;letter-spacing:.09em;text-transform:uppercase}.build-banner{padding:14px;border-left:4px solid var(--line);background:var(--input);font-weight:700}.build-banner[data-state="current"]{border-color:var(--accent)}.build-banner[data-state="behind"]{border-color:#ffd36a}.build-banner[data-state="blocked"],.build-banner[data-state="error"]{border-color:var(--red)}.device-code{padding:12px;border:1px dashed var(--accent);background:var(--input)}.hidden{display:none!important}@media(max-width:520px){body{padding:14px}.card{padding:15px}.actions button{width:100%}}
   </style>
 </head>
 <body>
   <header><div><p class="muted">JSON_CODR · LOCAL SOURCE CONTROL</p><h1>GitHub and Git workspace</h1></div><a href="/">Back to workspace</a></header>
-  <p>Uses the authenticated local GitHub CLI account; credentials remain on this machine. Reads cover repositories available to that account. Every change requires confirmation in this page and is independently gated by the API.</p>
+  <p>Connect an authenticated GitHub account, choose the repository and branch you intend to use, then compare and safely update an explicit local checkout. Credentials remain in GitHub CLI on this machine.</p>
+
+  <section class="card connect-panel" id="github-connect-panel" aria-labelledby="connect-heading">
+    <div class="section-title"><div><p class="step-label">Guided connection</p><h2 id="connect-heading">Connect GitHub and check your build</h2></div><button id="refresh-account" type="button">Refresh account</button></div>
+    <div class="connect-step">
+      <p class="step-label">1 · GitHub account</p>
+      <p id="account-status" class="notice" role="status" aria-live="polite">Checking local GitHub CLI authentication...</p>
+      <div class="actions"><button id="github-sign-in" class="primary" type="button" hidden>Sign in to GitHub</button><button id="github-login-cancel" type="button" hidden>Cancel sign-in</button></div>
+      <p id="github-login-status" class="notice" role="status" aria-live="polite"></p>
+      <p id="github-device-code" class="device-code hidden">Open <a href="https://github.com/login/device" target="_blank" rel="noopener noreferrer">GitHub device verification</a> and enter code <strong></strong>.</p>
+    </div>
+    <div class="connect-step">
+      <p class="step-label">2 · Remote scope</p>
+      <div class="form-grid">
+        <label for="repository-select">Repository<select id="repository-select" disabled><option value="">Sign in to load repositories</option></select></label>
+        <label for="branch-select">Branch<select id="branch-select" disabled><option value="">Select a repository first</option></select></label>
+      </div>
+    </div>
+    <div class="connect-step">
+      <p class="step-label">3 · Local checkout</p>
+      <div class="row"><label for="project-root">Repository folder path<input id="project-root" type="text" placeholder="D:\projects\my-app" autocomplete="off" spellcheck="false"></label><button id="connect-checkout" class="primary" type="button" disabled>Connect checkout</button></div>
+      <div id="connection-summary" class="status-grid" aria-live="polite"><p class="muted">Select a repository and branch, then connect a local checkout.</p></div>
+    </div>
+    <div class="connect-step">
+      <p class="step-label">4 · Build status</p>
+      <p id="build-status" class="build-banner" data-state="idle" role="status" aria-live="polite">Connect a matching checkout to check its build.</p>
+      <div class="status-grid"><div id="local-build-details" class="status-item"><span>Local build</span><strong>Not checked</strong></div><div id="remote-build-details" class="status-item"><span>Selected branch</span><strong>Not checked</strong></div></div>
+    </div>
+    <div class="connect-step actions"><button id="check-build" type="button" disabled>Check build</button><button id="update-build" class="primary" type="button" disabled>Update to latest</button></div>
+  </section>
 
   <section class="card" aria-labelledby="account-heading">
-    <div class="section-title"><h2 id="account-heading">GitHub account and repositories</h2><button id="refresh-account" type="button">Refresh account and repositories</button></div>
-    <p id="account-status" class="notice" role="status" aria-live="polite">Checking local GitHub CLI authentication...</p>
-    <label for="repository-select">Repository<select id="repository-select" disabled><option value="">Authenticate and load repositories</option></select></label>
+    <h2 id="account-heading">Repository administration</h2>
     <details>
       <summary>Create repository</summary>
       <div class="form-grid">
@@ -98,7 +125,7 @@
     <h2 id="local-heading">Local repository actions</h2>
     <p class="tab-note">Clone, fetch, fast-forward pull, branch creation, staging, commits, and pushes operate on the selected local checkout. Pull requires a clean working tree and refuses divergent branches.</p>
     <div class="row"><label for="clone-destination">Clone selected GitHub repository into<input id="clone-destination" type="text" placeholder="D:\projects\my-app" autocomplete="off" spellcheck="false"></label><button id="clone-repository" type="button" disabled>Clone repository</button></div>
-    <div class="row"><label for="project-root">Repository folder path<input id="project-root" type="text" placeholder="D:\projects\my-app" autocomplete="off" spellcheck="false"></label><div class="actions"><button id="inspect" class="primary" type="button">Inspect repository</button><button id="authorize" type="button" disabled>Authorize Git broker</button></div></div>
+    <div class="actions"><button id="authorize" type="button" disabled>Authorize Git broker</button></div>
     <p id="local-notice" class="notice" role="status" aria-live="polite">Enter a local folder that already contains a Git repository.</p>
     <div class="status-grid" id="local-summary"><p class="muted">No local repository inspected.</p></div>
     <div class="form-grid">
@@ -117,15 +144,22 @@
   const $ = (selector) => document.querySelector(selector);
   const accountStatus = $("#account-status");
   const repositorySelect = $("#repository-select");
+  const branchSelect = $("#branch-select");
   const projectRoot = $("#project-root");
   const localNotice = $("#local-notice");
   const localSummary = $("#local-summary");
   const changedFiles = $("#changed-files");
   const brokerDetails = $("#broker-details");
   let selectedRepository = null;
+  let selectedBranch = null;
   let brokerSnapshot = null;
   let localSnapshot = null;
+  let buildSnapshot = null;
   let githubRepositories = [];
+  let githubBranches = [];
+  let authenticatedLogin = null;
+  let activeLoginSession = null;
+  let connectionGeneration = 0;
 
   projectRoot.value = localStorage.getItem("json_codr_git_project_root") || localStorage.getItem("json_codr_workspace_project_root") || "";
 
@@ -145,7 +179,11 @@
     if (options.body) headers["Content-Type"] = "application/json";
     const response = await fetch(path, {...options, headers});
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.detail || `Request failed (${response.status})`);
+    if (!response.ok) {
+      const error = new Error(payload.detail || `Request failed (${response.status})`);
+      error.status = response.status;
+      throw error;
+    }
     return payload;
   }
   async function write(path, method, data, message, confirmationFlag = true) {
@@ -215,20 +253,23 @@
     }
   }
   async function loadRepositoryData() {
-    if (!selectedRepository) return;
+    if (!selectedRepository || !selectedBranch) return;
+    const generation = connectionGeneration;
     $("#refresh-repository").disabled = true;
     const prefix = repoPath("");
     try {
       const [branches, commits, issues, pulls, releases] = await Promise.all([
-        request(`${prefix}/branches`), request(`${prefix}/commits`),
+        request(`${prefix}/branches`), request(`${prefix}/commits?branch=${encodeURIComponent(selectedBranch.name)}`),
         request(`${prefix}/issues?state=${encodeURIComponent($("#issue-state").value)}`),
         request(`${prefix}/pulls?state=${encodeURIComponent($("#pull-state").value)}`),
         request(`${prefix}/releases`),
       ]);
+      if (generation !== connectionGeneration) return;
       $("#repository-summary").replaceChildren(
         card("Repository", selectedRepository.full_name),
         card("Visibility", selectedRepository.private ? "Private" : "Public"),
         card("Default branch", selectedRepository.default_branch || "Unknown"),
+        card("Selected branch", selectedBranch.name),
         card("Open issues", issues.length),
         card("Open pull requests", pulls.length),
         card("Releases", releases.length),
@@ -240,6 +281,9 @@
       $("#repository-default-branch").value = selectedRepository.default_branch || "";
       $("#repository-visibility").value = selectedRepository.private ? "private" : "public";
       $("#toggle-archive").textContent = selectedRepository.archived ? "Unarchive repository" : "Archive repository";
+      $("#remote-branch-source").value = selectedBranch.name;
+      if (!$("#pr-base").dataset.edited) $("#pr-base").value = selectedBranch.name;
+      if (!$("#release-target").dataset.edited) $("#release-target").value = selectedBranch.name;
     } catch (error) {
       $("#repository-summary").replaceChildren(card("GitHub error", error.message, "error"));
     } finally { $("#refresh-repository").disabled = false; }
@@ -341,51 +385,201 @@
       actions.append(edit, remove); box.append(actions); target.append(box);
     }
   }
+  function preferenceKey() {
+    return authenticatedLogin ? `json_codr_github_connection_${authenticatedLogin}` : null;
+  }
+  function savedConnection() {
+    const key = preferenceKey();
+    if (!key) return {};
+    try { return JSON.parse(localStorage.getItem(key) || "{}"); }
+    catch { localStorage.removeItem(key); return {}; }
+  }
+  function saveConnection() {
+    const key = preferenceKey();
+    if (!key) return;
+    localStorage.setItem(key, JSON.stringify({
+      repository: selectedRepository?.full_name || null,
+      branch: selectedBranch?.name || null,
+      project_root: projectRoot.value.trim() || null,
+    }));
+  }
+  function clearBuildResult(message = "Check the build after connecting this exact scope.") {
+    buildSnapshot = null;
+    $("#update-build").disabled = true;
+    $("#build-status").dataset.state = "idle";
+    $("#build-status").textContent = message;
+    $("#local-build-details").replaceChildren(element("span", "Local build"), element("strong", "Not checked"));
+    $("#remote-build-details").replaceChildren(element("span", "Selected branch"), element("strong", "Not checked"));
+  }
+  function scopeMatchesLocal() {
+    return Boolean(
+      localSnapshot && selectedRepository && selectedBranch &&
+      localSnapshot.repository?.toLowerCase() === selectedRepository.full_name.toLowerCase() &&
+      localSnapshot.branch === selectedBranch.name
+    );
+  }
+  function updateConnectionControls() {
+    const hasScope = Boolean(selectedRepository && selectedBranch);
+    $("#connect-checkout").disabled = !hasScope || !projectRoot.value.trim();
+    $("#check-build").disabled = !scopeMatchesLocal();
+  }
   async function loadAccount() {
+    const generation = ++connectionGeneration;
     accountStatus.textContent = "Checking local GitHub CLI authentication...";
     $("#refresh-account").disabled = true;
+    $("#github-sign-in").hidden = true;
     try {
-      const [account, repositories] = await Promise.all([request("/api/github/status"), request("/api/github/repositories")]);
+      const account = await request("/api/github/status");
+      const repositories = await request("/api/github/repositories");
+      if (generation !== connectionGeneration) return;
+      authenticatedLogin = account.login;
       githubRepositories = repositories;
-      const previous = localStorage.getItem("json_codr_github_repository");
+      const saved = savedConnection();
       repositorySelect.replaceChildren(element("option", "Select a repository"));
       for (const repository of repositories) {
         const option = element("option", `${repository.full_name}${repository.private ? " · private" : ""}`);
         option.value = repository.full_name; repositorySelect.append(option);
       }
-      const remembered = repositories.find(repository => repository.full_name === previous);
       repositorySelect.disabled = false;
       $("#create-repository").disabled = false;
-      accountStatus.textContent = `Authenticated as ${account.login} via the local GitHub CLI. ${repositories.length} repositories available.`;
-      if (remembered) { repositorySelect.value = remembered.full_name; selectRepository(); }
+      accountStatus.textContent = `Signed in as ${account.login}. Choose a repository and branch to continue.`;
+      const remembered = repositories.find(repository => repository.full_name === saved.repository);
+      if (remembered) {
+        repositorySelect.value = remembered.full_name;
+        await selectRepository(saved.branch);
+        if (saved.project_root) projectRoot.value = saved.project_root;
+      } else {
+        selectedRepository = null; selectedBranch = null;
+        branchSelect.replaceChildren(element("option", "Select a repository first"));
+        branchSelect.disabled = true;
+      }
+      updateConnectionControls();
     } catch (error) {
-      accountStatus.textContent = `GitHub is unavailable: ${error.message}. Install and authenticate the local GitHub CLI, then refresh.`;
-      repositorySelect.disabled = true;
+      authenticatedLogin = null; selectedRepository = null; selectedBranch = null;
+      githubRepositories = []; githubBranches = [];
+      repositorySelect.replaceChildren(element("option", "Sign in to load repositories"));
+      repositorySelect.disabled = true; branchSelect.disabled = true;
       $("#create-repository").disabled = true;
+      const missing = error.message.toLowerCase().includes("not installed");
+      $("#github-sign-in").hidden = missing;
+      accountStatus.textContent = missing
+        ? "GitHub CLI is not installed. Install it, then refresh this page."
+        : "Sign in to GitHub to select a repository and branch.";
+      $("#github-login-status").textContent = error.message;
+      clearBuildResult("Sign in and select a scope before checking a build.");
     } finally { $("#refresh-account").disabled = false; }
   }
-  function selectRepository() {
+  async function selectRepository(rememberedBranch = null) {
+    const generation = ++connectionGeneration;
     selectedRepository = githubRepositories.find(repository => repository.full_name === repositorySelect.value) || null;
-    if (selectedRepository) localStorage.setItem("json_codr_github_repository", selectedRepository.full_name);
+    selectedBranch = null; githubBranches = []; localSnapshot = null;
+    branchSelect.replaceChildren(element("option", selectedRepository ? "Loading branches..." : "Select a repository first"));
+    branchSelect.disabled = true;
+    clearBuildResult();
     for (const selector of [
       "#refresh-repository", "#refresh-issues", "#refresh-pulls", "#refresh-releases",
       "#create-issue", "#create-pr", "#create-release", "#save-repository",
       "#toggle-archive", "#delete-repository", "#create-remote-branch", "#clone-repository",
     ]) $(selector).disabled = !selectedRepository;
-    if (selectedRepository) {
-      $("#remote-branch-source").value = selectedRepository.default_branch || "";
-      loadRepositoryData();
-    } else {
+    if (!selectedRepository) {
+      saveConnection(); updateConnectionControls();
       $("#repository-summary").replaceChildren(element("p", "Select a repository to load activity.", "muted"));
-      for (const selector of ["#branches-list", "#commits-list", "#issues-list", "#pulls-list", "#releases-list"]) {
-        $(selector).replaceChildren(element("p", "No repository selected.", "muted"));
-      }
+      return;
     }
+    try {
+      const branches = await request(repoPath("/branches"));
+      if (generation !== connectionGeneration) return;
+      githubBranches = branches;
+      branchSelect.replaceChildren(element("option", "Select a branch"));
+      for (const branch of branches) {
+        const option = element("option", `${branch.name}${branch.protected ? " · protected" : ""}`);
+        option.value = branch.name; branchSelect.append(option);
+      }
+      branchSelect.disabled = !branches.length;
+      const remembered = branches.find(branch => branch.name === rememberedBranch);
+      if (remembered) { branchSelect.value = remembered.name; await selectBranch(); }
+      else {
+        saveConnection(); updateConnectionControls();
+        $("#repository-summary").replaceChildren(element("p", branches.length ? "Select a branch to load scoped activity." : "This repository has no branches.", "muted"));
+      }
+    } catch (error) {
+      branchSelect.replaceChildren(element("option", "Unable to load branches"));
+      accountStatus.textContent = error.message;
+    }
+  }
+  async function selectBranch() {
+    connectionGeneration += 1;
+    selectedBranch = githubBranches.find(branch => branch.name === branchSelect.value) || null;
+    localSnapshot = null;
+    clearBuildResult(); saveConnection(); updateConnectionControls();
+    if (selectedBranch) await loadRepositoryData();
   }
 
   $("#refresh-account").addEventListener("click", loadAccount);
   $("#refresh-repository").addEventListener("click", loadRepositoryData);
-  repositorySelect.addEventListener("change", selectRepository);
+  repositorySelect.addEventListener("change", () => selectRepository());
+  branchSelect.addEventListener("change", selectBranch);
+  const wait = milliseconds => new Promise(resolve => window.setTimeout(resolve, milliseconds));
+  async function pollLogin(sessionId) {
+    while (activeLoginSession === sessionId) {
+      const status = await request(`/api/github/auth/login/${encodeURIComponent(sessionId)}`);
+      $("#github-login-status").textContent = status.detail || "Waiting for GitHub authentication...";
+      const device = $("#github-device-code");
+      if (status.state === "waiting" && status.device_code) {
+        device.classList.remove("hidden");
+        device.querySelector("strong").textContent = status.device_code;
+      } else device.classList.add("hidden");
+      if (status.state === "authenticated") {
+        activeLoginSession = null;
+        $("#github-login-cancel").hidden = true;
+        await loadAccount();
+        return;
+      }
+      if (["failed", "cancelled", "expired"].includes(status.state)) {
+        activeLoginSession = null;
+        $("#github-login-cancel").hidden = true;
+        $("#github-sign-in").hidden = false;
+        return;
+      }
+      await wait(1000);
+    }
+  }
+  $("#github-sign-in").addEventListener("click", async () => {
+    try {
+      const started = await write(
+        "/api/github/auth/login", "POST", {},
+        "Open GitHub's browser/device sign-in flow on this computer? Credentials remain in GitHub CLI.",
+      );
+      if (!started) return;
+      activeLoginSession = started.session_id;
+      $("#github-sign-in").hidden = true;
+      $("#github-login-cancel").hidden = false;
+      $("#github-login-status").textContent = started.detail;
+      await pollLogin(started.session_id);
+    } catch (error) {
+      $("#github-login-status").textContent = error.message;
+      $("#github-sign-in").hidden = false;
+    }
+  });
+  $("#github-login-cancel").addEventListener("click", async () => {
+    if (!activeLoginSession) return;
+    const sessionId = activeLoginSession;
+    try {
+      const cancelled = await write(
+        `/api/github/auth/login/${encodeURIComponent(sessionId)}/cancel`, "POST", {},
+        "Cancel the current GitHub sign-in attempt?",
+      );
+      if (!cancelled) return;
+      activeLoginSession = null;
+      $("#github-login-status").textContent = cancelled.detail;
+      $("#github-login-cancel").hidden = true;
+      $("#github-sign-in").hidden = false;
+      $("#github-device-code").classList.add("hidden");
+    } catch (error) { $("#github-login-status").textContent = error.message; }
+  });
+  for (const selector of ["#pr-base", "#release-target"]) {
+    $(selector).addEventListener("input", event => { event.currentTarget.dataset.edited = "true"; });
+  }
   $("#refresh-issues").addEventListener("click", loadRepositoryData);
   $("#refresh-pulls").addEventListener("click", loadRepositoryData);
   $("#refresh-releases").addEventListener("click", loadRepositoryData);
@@ -403,10 +597,10 @@
         auto_init: $("#new-repository-auto-init").checked,
       }, `Create ${owner ? `${owner}/` : "your account /"}${name} as a ${$("#new-repository-visibility").value} repository?`);
       if (!created) return;
-      localStorage.setItem("json_codr_github_repository", created.full_name);
       $("#new-repository-owner").value = ""; $("#new-repository-name").value = "";
       $("#new-repository-description").value = ""; $("#new-repository-homepage").value = "";
       await loadAccount();
+      repositorySelect.value = created.full_name; await selectRepository();
     } catch (error) { accountStatus.textContent = error.message; }
   });
   $("#save-repository").addEventListener("click", async () => {
@@ -422,8 +616,8 @@
     try {
       const updated = await write(repoPath(""), "PATCH", fields, `Save settings for ${selectedRepository.full_name}?`);
       if (!updated) return;
-      localStorage.setItem("json_codr_github_repository", updated.full_name);
       await loadAccount();
+      repositorySelect.value = updated.full_name; await selectRepository();
     } catch (error) { accountStatus.textContent = error.message; }
   });
   $("#toggle-archive").addEventListener("click", async () => {
@@ -444,10 +638,8 @@
       const deleted = await write(repoPath(""), "DELETE", {confirm_name: fullName},
         `Permanently delete ${fullName}? This cannot be undone.`);
       if (!deleted) return;
-      localStorage.removeItem("json_codr_github_repository");
-      selectedRepository = null;
+      selectedRepository = null; selectedBranch = null; saveConnection();
       await loadAccount();
-      selectRepository();
     } catch (error) { accountStatus.textContent = error.message; }
   });
   $("#create-remote-branch").addEventListener("click", async () => {
@@ -511,7 +703,8 @@
     const path = projectRoot.value.trim();
     if (!path) { localNotice.textContent = "Enter a repository folder path first."; projectRoot.focus(); return; }
     localStorage.setItem("json_codr_git_project_root", path);
-    $("#inspect").disabled = true; localNotice.textContent = "Inspecting local repository...";
+    $("#connect-checkout").disabled = true; localNotice.textContent = "Inspecting local repository...";
+    clearBuildResult("Checking whether this checkout matches the selected scope...");
     try {
       const result = await request(`/api/git-broker/status?project_root=${encodeURIComponent(path)}`);
       brokerSnapshot = result.repository;
@@ -540,14 +733,28 @@
       $("#push-files").disabled = !localSnapshot.push_allowed || !localSnapshot.branch;
       $("#fetch-files").disabled = false;
       $("#pull-files").disabled = !localSnapshot.branch;
-      localNotice.textContent = `Inspected ${localSnapshot.repository} at ${localSnapshot.project_root}.`;
+      const repositoryMatch = selectedRepository && localSnapshot.repository?.toLowerCase() === selectedRepository.full_name.toLowerCase();
+      const branchMatch = selectedBranch && localSnapshot.branch === selectedBranch.name;
+      $("#connection-summary").replaceChildren(
+        card("Remote repository", selectedRepository?.full_name || "Not selected"),
+        card("Remote branch", selectedBranch?.name || "Not selected"),
+        card("Local repository", localSnapshot.repository),
+        card("Local branch", localSnapshot.branch || "Detached HEAD"),
+        card("Connection", repositoryMatch && branchMatch ? "Matched" : repositoryMatch ? "Branch mismatch" : "Repository mismatch", repositoryMatch && branchMatch ? "ok" : "error"),
+      );
+      localNotice.textContent = repositoryMatch && branchMatch
+        ? `Connected ${localSnapshot.repository} / ${localSnapshot.branch}.`
+        : "The local checkout does not match the selected repository and branch. Build update is blocked.";
+      saveConnection();
+      clearBuildResult(repositoryMatch && branchMatch ? "Ready to check the current build." : "Connect a matching checkout before checking a build.");
     } catch (error) {
       localSnapshot = null; localSummary.replaceChildren(card("GitHub status", error.message, "error"));
       changedFiles.replaceChildren(element("p", "Unable to load changed files.", "muted"));
+      $("#connection-summary").replaceChildren(card("Connection error", error.message, "error"));
       $("#create-branch").disabled = $("#stage-files").disabled = $("#commit-files").disabled =
         $("#fetch-files").disabled = $("#pull-files").disabled = $("#push-files").disabled = true;
       localNotice.textContent = `GitHub-backed local operations unavailable: ${error.message}`;
-    } finally { $("#inspect").disabled = false; }
+    } finally { updateConnectionControls(); }
   }
   function renderChangedFiles(changes) {
     changedFiles.replaceChildren();
@@ -560,8 +767,85 @@
     }
   }
   async function refreshLocal() { await inspectLocal(); }
-  $("#inspect").addEventListener("click", inspectLocal);
+  $("#connect-checkout").addEventListener("click", inspectLocal);
   projectRoot.addEventListener("keydown", event => { if (event.key === "Enter") inspectLocal(); });
+  projectRoot.addEventListener("input", () => {
+    localSnapshot = null;
+    connectionGeneration += 1;
+    clearBuildResult("Reconnect this path before checking its build.");
+    updateConnectionControls();
+  });
+  function commitSummary(commit) {
+    if (!commit) return "Unavailable";
+    return `${commit.short_sha || commit.sha?.slice(0, 12) || "Unknown"} · ${commit.subject || "No subject"}`;
+  }
+  function renderBuildResult(result) {
+    buildSnapshot = result;
+    const banner = $("#build-status");
+    banner.dataset.state = result.status === "current" ? "current" : result.status === "behind" ? "behind" : "blocked";
+    banner.textContent = result.detail || "Build check complete.";
+    const local = result.local_commit;
+    const remote = result.remote_commit;
+    $("#local-build-details").replaceChildren(
+      element("span", "Local build"),
+      element("strong", commitSummary(local)),
+      element("p", local ? `${local.author_name || "Unknown author"} · ${local.authored_at || "Unknown time"}` : "No local commit details."),
+      element("p", `Working tree: ${result.dirty ? "local changes" : "clean"}`),
+    );
+    $("#remote-build-details").replaceChildren(
+      element("span", `${result.repository} / ${result.branch}`),
+      element("strong", commitSummary(remote)),
+      element("p", remote ? `${remote.author_name || "Unknown author"} · ${remote.authored_at || "Unknown time"}` : "No remote commit details."),
+      element("p", result.ahead === null ? "Ahead / behind: unavailable" : `Ahead / behind: ${result.ahead} / ${result.behind}`),
+    );
+    $("#update-build").disabled = !result.update_allowed;
+    updateConnectionControls();
+  }
+  $("#check-build").addEventListener("click", async () => {
+    if (!scopeMatchesLocal()) return;
+    const generation = connectionGeneration;
+    $("#check-build").disabled = true;
+    $("#update-build").disabled = true;
+    $("#build-status").dataset.state = "idle";
+    $("#build-status").textContent = "Fetching the selected branch and comparing commits...";
+    try {
+      const result = await write(
+        "/api/github/local/check-build", "POST",
+        {project_root: localSnapshot.project_root, repository: selectedRepository.full_name, branch: selectedBranch.name},
+        `Fetch and check ${selectedRepository.full_name} / ${selectedBranch.name} against ${localSnapshot.project_root}?`,
+      );
+      if (result && generation === connectionGeneration) renderBuildResult(result);
+    } catch (error) {
+      $("#build-status").dataset.state = "error";
+      $("#build-status").textContent = error.message;
+    } finally { updateConnectionControls(); }
+  });
+  $("#update-build").addEventListener("click", async () => {
+    if (!buildSnapshot?.update_allowed || !scopeMatchesLocal()) return;
+    const localCommit = buildSnapshot.local_commit;
+    const remoteCommit = buildSnapshot.remote_commit;
+    if (!localCommit?.sha || !remoteCommit?.sha) return;
+    const generation = connectionGeneration;
+    $("#update-build").disabled = true;
+    try {
+      const result = await write(
+        "/api/github/local/update-build", "POST",
+        {
+          project_root: localSnapshot.project_root,
+          repository: selectedRepository.full_name,
+          branch: selectedBranch.name,
+          expected_local_sha: localCommit.sha,
+          expected_remote_sha: remoteCommit.sha,
+        },
+        `Fast-forward ${selectedRepository.full_name} / ${selectedBranch.name} at ${localSnapshot.project_root}?\n\nCurrent: ${localCommit.short_sha || localCommit.sha}\nTarget: ${remoteCommit.short_sha || remoteCommit.sha}\n\nLocal changes, divergence, or stale commits will block the update.`,
+      );
+      if (result && generation === connectionGeneration) renderBuildResult(result);
+    } catch (error) {
+      clearBuildResult("The build changed or could not be updated safely. Check it again.");
+      $("#build-status").dataset.state = "error";
+      $("#build-status").textContent = error.message;
+    }
+  });
   $("#authorize").addEventListener("click", async () => {
     const path = projectRoot.value.trim();
     if (!brokerSnapshot || brokerSnapshot.root !== path) { localNotice.textContent = "Inspect this exact repository path before authorizing it."; return; }
