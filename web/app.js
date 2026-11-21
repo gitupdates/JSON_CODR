@@ -10,6 +10,10 @@ const elements = {
   cancel: document.querySelector("#cancel-button"),
   requestStatus: document.querySelector("#request-status"),
   workspaceAttach: document.querySelector("#workspace-attach"),
+  workspaceAttachmentMenu: document.querySelector("#workspace-attachment-menu"),
+  workspaceFilesPopover: document.querySelector("#workspace-files-popover"),
+  workspaceFilesPopoverList: document.querySelector("#workspace-files-popover-list"),
+  workspaceFilesManage: document.querySelector("#workspace-files-manage"),
   responseModel: document.querySelector("#response-model"),
   empty: document.querySelector("#empty-state"),
   result: document.querySelector("#result-state"),
@@ -186,6 +190,7 @@ const elements = {
   taskExecutionDetails: document.querySelector("#task-execution-details"),
   taskRequestedModel: document.querySelector("#task-requested-model"),
   taskEffectiveModel: document.querySelector("#task-effective-model"),
+  taskPlanReviewOpen: document.querySelector("#task-plan-review-open"),
   taskPlanReview: document.querySelector("#task-plan-review"),
   taskPlanCanonical: document.querySelector("#task-plan-canonical"),
   taskPlanProse: document.querySelector("#task-plan-prose"),
@@ -277,7 +282,7 @@ async function renderPlanReview(record) {
     const option = document.createElement("option"); option.value = step.step_id;
     option.textContent = `${step.step_id} · ${step.capability_id}.${step.operation}`; return option;
   }));
-  elements.taskPlanReview.hidden = false;
+  elements.taskPlanReviewOpen.hidden = false;
 }
 
 async function submitPlanReview(action) {
@@ -361,9 +366,8 @@ const workspaceHosts = {
   bottom: elements.workspaceBottomDock,
 };
 const workspaceLayout = window.createWorkspaceLayoutController({
-  availablePanels: ["files", "skills", "activity", "terminal"],
+  availablePanels: ["skills", "activity", "terminal"],
   panelPlacements: {
-    files: ["left", "right", "bottom"],
     skills: ["left", "right", "bottom"],
     activity: ["right", "left", "bottom"],
     terminal: ["bottom", "left", "right"],
@@ -406,22 +410,44 @@ function renderDisabledComponents(components) {
 }
 
 function renderWorkspaceFiles(attachments) {
-  if (!elements.workspaceFilesList) return;
-  elements.workspaceFilesList.replaceChildren();
-  if (!attachments.length) {
-    const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "No files attached.";
-    elements.workspaceFilesList.append(empty); return;
+  for (const list of [elements.workspaceFilesList, elements.workspaceFilesPopoverList]) {
+    if (!list) continue;
+    list.replaceChildren();
+    if (!attachments.length) {
+      const empty = document.createElement("p"); empty.className = "meta"; empty.textContent = "No files attached.";
+      list.append(empty); continue;
+    }
+    for (const attachment of attachments) {
+      const row = document.createElement("div"); row.className = "workspace-quick-row";
+      const name = document.createElement("span"); name.textContent = attachment.display_name;
+      const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "Remove";
+      remove.addEventListener("click", async () => {
+        await fetch(`/api/sessions/${sessionId}/attachments/${attachment.id}`, { method: "DELETE" });
+        await loadAttachments();
+      });
+      row.append(name, remove); list.append(row);
+    }
   }
-  for (const attachment of attachments) {
-    const row = document.createElement("div"); row.className = "workspace-quick-row";
-    const name = document.createElement("span"); name.textContent = attachment.display_name;
-    const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "Remove";
-    remove.addEventListener("click", async () => {
-      await fetch(`/api/sessions/${sessionId}/attachments/${attachment.id}`, { method: "DELETE" });
-      await loadAttachments();
-    });
-    row.append(name, remove); elements.workspaceFilesList.append(row);
-  }
+}
+
+function closeWorkspaceFilesPopover({ restoreFocus = false } = {}) {
+  if (!elements.workspaceFilesPopover?.matches(":popover-open")) return;
+  elements.workspaceFilesPopover.hidePopover();
+  if (restoreFocus) elements.workspaceAttach.focus();
+}
+
+function positionWorkspaceFilesPopover() {
+  if (!elements.workspaceFilesPopover.matches(":popover-open")) return;
+  const anchor = elements.workspaceAttach.getBoundingClientRect();
+  const margin = 12;
+  const width = Math.min(280, Math.max(0, window.innerWidth - margin * 2));
+  const left = Math.max(margin, Math.min(anchor.left, window.innerWidth - width - margin));
+  elements.workspaceFilesPopover.style.width = `${width}px`;
+  elements.workspaceFilesPopover.style.left = `${left}px`;
+  elements.workspaceFilesPopover.style.top = `${anchor.bottom + 8}px`;
+  const popup = elements.workspaceFilesPopover.getBoundingClientRect();
+  const top = Math.min(anchor.bottom + 8, window.innerHeight - popup.height - margin);
+  elements.workspaceFilesPopover.style.top = `${Math.max(margin, top)}px`;
 }
 
 function renderWorkspaceSkills(packs, selected) {
@@ -2493,6 +2519,11 @@ async function submitPrompt(event) {
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || "Workspace task failed");
+    if (activeCoreTaskId !== payload.task_id) {
+      activePlanReview = null;
+      elements.taskPlanReviewOpen.hidden = true;
+      if (elements.taskPlanReview.matches(":popover-open")) elements.taskPlanReview.hidePopover();
+    }
     activeCoreTaskId = payload.task_id;
     activeWorkspaceRoute = payload.route;
     elements.taskRequestedModel.textContent = payload.requested_model;
@@ -2569,6 +2600,22 @@ elements.taskPlanApprove.addEventListener("click", () => submitPlanReview("appro
 elements.taskPlanEdit.addEventListener("click", () => submitPlanReview("edit").catch((error) => showError(error.message)));
 elements.taskPlanRequestChanges.addEventListener("click", () => submitPlanReview("request_changes").catch((error) => showError(error.message)));
 elements.taskPlanReject.addEventListener("click", () => submitPlanReview("reject").catch((error) => showError(error.message)));
+elements.taskPlanReviewOpen.addEventListener("click", () => {
+  elements.taskPlanReview.showPopover();
+  elements.taskPlanCanonical.focus({ preventScroll: true });
+});
+elements.taskPlanReview.addEventListener("toggle", () => {
+  elements.taskPlanReviewOpen.setAttribute(
+    "aria-expanded",
+    String(elements.taskPlanReview.matches(":popover-open")),
+  );
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && elements.taskPlanReview.matches(":popover-open")) {
+    elements.taskPlanReview.hidePopover();
+    elements.taskPlanReviewOpen.focus();
+  }
+});
 elements.taskStepEdit.addEventListener("click", () => submitStepReview("edit").catch((error) => showError(error.message)));
 elements.taskStepRequestChanges.addEventListener("click", () => submitStepReview("request_changes").catch((error) => showError(error.message)));
 elements.taskStepReject.addEventListener("click", () => submitStepReview("reject").catch((error) => showError(error.message)));
@@ -2770,7 +2817,33 @@ elements.attachmentInput.addEventListener("change", async () => {
     elements.attachmentInput.value = "";
   }
 });
-elements.workspaceAttach.addEventListener("click", () => elements.attachmentInput.click());
+elements.workspaceAttach.addEventListener("click", () => {
+  if (elements.workspaceFilesPopover.matches(":popover-open")) {
+    closeWorkspaceFilesPopover();
+  } else {
+    elements.workspaceFilesPopover.showPopover();
+    positionWorkspaceFilesPopover();
+  }
+});
+elements.workspaceFilesPopover.addEventListener("toggle", () => {
+  elements.workspaceAttach.setAttribute(
+    "aria-expanded",
+    String(elements.workspaceFilesPopover.matches(":popover-open")),
+  );
+});
+elements.workspaceFilesManage.addEventListener("click", () => {
+ closeWorkspaceFilesPopover();
+ selectDestination("context");
+});
+elements.workspaceFilesAttach.addEventListener("click", () => {
+ closeWorkspaceFilesPopover();
+ elements.attachmentInput.click();
+});
+document.addEventListener("click", (event) => {
+  if (!elements.workspaceAttachmentMenu.contains(event.target)) closeWorkspaceFilesPopover();
+});
+window.addEventListener("resize", positionWorkspaceFilesPopover);
+window.addEventListener("scroll", positionWorkspaceFilesPopover, true);
 elements.attachmentFolderInput.addEventListener("change", async () => {
   try {
     await uploadFiles(elements.attachmentFolderInput.files);
@@ -2902,6 +2975,10 @@ elements.workspaceAgentForm.addEventListener("submit", (event) => {
   runWorkspaceAgent();
 });
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && elements.workspaceFilesPopover.matches(":popover-open")) {
+    event.preventDefault();
+    closeWorkspaceFilesPopover({ restoreFocus: true });
+  }
   if (event.ctrlKey && !event.altKey && event.key.toLowerCase() === "j") {
     event.preventDefault();
     selectDestination("workspace");
@@ -2941,7 +3018,7 @@ registerWorkspacePanel({
     requestAnimationFrame(() => terminalFitAddon?.fit());
   },
 });
-elements.workspaceFilesAttach?.addEventListener("click", () => elements.attachmentInput.click());
+document.querySelector("#workspace-dock-files-attach")?.addEventListener("click", () => elements.attachmentInput.click());
 for (const button of document.querySelectorAll("[data-manage-destination]")) {
   button.addEventListener("click", () => selectDestination(button.dataset.manageDestination));
 }

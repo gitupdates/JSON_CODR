@@ -26,7 +26,7 @@ class SettingsTests(unittest.TestCase):
     def test_defaults_and_persistence_preserve_unknown_configuration(self):
         service = SettingsService(self.root)
         self.assertEqual(service.get().version, 3)
-        self.assertEqual(service.get().app_version, "V1.0.18-alpha.16")
+        self.assertEqual(service.get().app_version, "V1.0.18-alpha.17")
         self.assertTrue(service.get().skill_routing.auto_attach)
         self.assertTrue(service.get().ui.skill_catalog_open)
         self.assertEqual(service.get().ui.theme, "dark")
@@ -93,7 +93,7 @@ class SettingsTests(unittest.TestCase):
         workspace = WorkspaceService(self.root)
         client = TestClient(create_app(FakeService(), workspace))
 
-        self.assertEqual(client.get("/api/settings").json()["app_version"], "V1.0.18-alpha.16")
+        self.assertEqual(client.get("/api/settings").json()["app_version"], "V1.0.18-alpha.17")
         self.assertEqual(client.get("/api/settings").json()["ui"]["theme"], "dark")
         self.assertTrue(client.get("/api/settings").json()["ui"]["skill_catalog_open"])
         updated = client.patch("/api/settings", json={

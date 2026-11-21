@@ -1,6 +1,6 @@
 # JSON_CODR
 
-JSON_CODR V1.0.18-alpha.16 is a localhost-only, unified project agent for local Ollama models.
+JSON_CODR V1.0.18-alpha.17 is a localhost-only, unified project agent for local Ollama models.
 
 ## Unified project workflow
 
@@ -8,7 +8,7 @@ Choose a model, describe the outcome in **Chat**, and run it. JSON_CODR creates 
 
 The response panel shows live activity and the requested and effective model identities. Use **Steer** by entering more direction while a task is active, **Stop** to request cancellation, **Retry** to create a linked retry, and **Undo** when the task produced a checkpoint. Execution details stay collapsed until needed. The **Live CLI** is the terminal view of the same local system, with command history, clipboard support, resize/reconnect, and the Ctrl+X then Ctrl+C interrupt chord.
 
-V1.0.18-alpha.16 provides one responsive **Workspace** for chat, task context, skills, activity, files, and the persistent ConPTY terminal. NOC Light is the default appearance, with five selectable themes, collapsible navigation, licensed OpenDyslexic assets, and developer-editable component mappings. Saved appearance selections are reloaded whenever Settings is reopened instead of reverting to the startup interface. The Agent and Model controls use one canonical task route with explicit automatic, multi-model, and exact-model selections; fallback routing is reported rather than hidden. Layout presets and dock placement persist locally while narrow screens preserve the active task and terminal session. Verified global components with an MCP server can contribute mode-specific agent capabilities, and the production agent loop now resolves trusted project context, plans through local inference, verifies persisted evidence, and resumes durable work after restart. Craft Anything 0.6.1 remains independently available in Clean Room and Deep/Ghidra modes when installed through the component registry.
+V1.0.18-alpha.17 provides one responsive **Workspace** for chat, task context, skills, activity, files, and the persistent ConPTY terminal. NOC Light is the default appearance, with five selectable themes, collapsible navigation, licensed OpenDyslexic assets, and developer-editable component mappings. Saved appearance selections are reloaded whenever Settings is reopened instead of reverting to the startup interface. The Agent and Model controls use one canonical task route with explicit automatic, multi-model, and exact-model selections; fallback routing is reported rather than hidden. Layout presets and dock placement persist locally while narrow screens preserve the active task and terminal session. Verified global components with an MCP server can contribute mode-specific agent capabilities, and the production agent loop now resolves trusted project context, plans through local inference, verifies persisted evidence, and resumes durable work after restart. Craft Anything 0.6.1 remains independently available in Clean Room and Deep/Ghidra modes when installed through the component registry.
 
 Local reads, searches, tests, bounded edits, and inference can run automatically inside the selected project boundary. Network access, installation, Git publication, destructive changes, and budget overrides require policy approval. Persistent grants remain project-scoped and can be revoked. A model without native tool calling may use a verified brokered route; JSON_CODR always displays the requested and effective model and never labels that route as native.
 
@@ -56,7 +56,7 @@ The **Benchmarks** tab compares CPU with all detected runnable backends or one s
 
 ## Requirements
 
-- Windows with Python 3.8 or newer
+- Windows with Python 3.14 or newer
 - Ollama available in `PATH`
 - At least one configured model installed in Ollama
 

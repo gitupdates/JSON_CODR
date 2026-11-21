@@ -28,8 +28,13 @@ class RunWebTests(unittest.TestCase):
         self.assertEqual(payload["host"], "127.0.0.1")
         self.assertEqual(payload["port"], 8765)
         self.assertEqual(payload["url"], "http://127.0.0.1:8765")
-        self.assertEqual(payload["version"], "V1.0.18-alpha.16")
+        self.assertEqual(payload["version"], "V1.0.18-alpha.17")
         self.assertTrue(payload["python"])
+        subprocess.run(
+            [payload["python"], "-c", "from uuid import uuid7"],
+            cwd=ROOT,
+            check=True,
+        )
         self.assertTrue(payload["ollama"])
         self.assertTrue(payload["supervised"])
         self.assertTrue(payload["ollamaNoCloud"])

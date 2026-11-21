@@ -9,8 +9,37 @@ $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $HostAddress = '127.0.0.1'
 $Port = 8765
 $Url = "http://${HostAddress}:$Port"
-$Version = 'V1.0.18-alpha.16'
-$Python = (Get-Command python -ErrorAction Stop).Source
+$Version = 'V1.0.18-alpha.17'
+$PythonCandidates = @()
+if ($env:JSON_CODR_PYTHON) {
+  $PythonCandidates += $env:JSON_CODR_PYTHON
+}
+$KnownPython314 = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python314\python.exe'
+$KnownPython315 = Join-Path $env:LOCALAPPDATA 'Python\bin\python3.15.exe'
+if (Test-Path -LiteralPath $KnownPython314) { $PythonCandidates += $KnownPython314 }
+if (Test-Path -LiteralPath $KnownPython315) { $PythonCandidates += $KnownPython315 }
+$PythonCandidates += @('python3.14', 'python3.15', 'python')
+
+$Python = $null
+$SeenPythonPaths = @{}
+foreach ($Candidate in $PythonCandidates) {
+  $PythonCommand = Get-Command $Candidate -ErrorAction SilentlyContinue
+  if (-not $PythonCommand) { continue }
+  foreach ($Command in @($PythonCommand)) {
+    $PythonPath = $Command.Source
+    if (-not $PythonPath -or $SeenPythonPaths.ContainsKey($PythonPath)) { continue }
+    $SeenPythonPaths[$PythonPath] = $true
+    & $PythonPath -c "from uuid import uuid7; import fastapi, uvicorn, pydantic, ollama" *> $null
+    if ($LASTEXITCODE -eq 0) {
+      $Python = $PythonPath
+      break
+    }
+  }
+  if ($Python) { break }
+}
+if (-not $Python) {
+  throw 'A compatible Python 3.14 or newer interpreter is required.'
+}
 $OllamaCommand = Get-Command ollama -ErrorAction SilentlyContinue
 if ($OllamaCommand) {
   $Ollama = $OllamaCommand.Source

@@ -110,6 +110,36 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('<span>Run</span>', html)
         self.assertNotIn('Agent Activity', html)
 
+    def test_paperclip_opens_layered_file_actions(self):
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+        parser = IdCollector()
+        parser.feed(html)
+
+        self.assertTrue({
+            "workspace-attachment-menu", "workspace-files-popover",
+            "workspace-files-manage", "workspace-files-attach",
+            "workspace-files-popover-list",
+        }.issubset(parser.ids))
+        self.assertIn('aria-controls="workspace-files-popover"', html)
+        self.assertIn('aria-haspopup="dialog"', html)
+        script = self.client.get("/static/app.js").text
+        self.assertIn("closeWorkspaceFilesPopover", script)
+        self.assertIn('event.key === "Escape"', script)
+        self.assertIn("workspaceFilesPopoverList", script)
+        self.assertIn('availablePanels: ["skills", "activity", "terminal"]', script)
+
+    def test_execution_plan_review_is_opened_on_demand(self):
+        html = self.client.get("/").text
+        self.assertIn('id="task-plan-review-open"', html)
+        self.assertIn('id="task-plan-review" class="task-plan-review"', html)
+        self.assertIn('role="dialog" popover="auto"', html)
+        script = self.client.get("/static/app.js").text
+        self.assertIn("elements.taskPlanReview.showPopover()", script)
+        self.assertIn("elements.taskPlanReviewOpen.hidden = false", script)
+        self.assertIn('event.key === "Escape" && elements.taskPlanReview.matches(":popover-open")', script)
+
     def test_workspace_panel_registry_uses_single_instance_layout_transitions(self):
         script = self.client.get("/static/app.js").text
         html = self.client.get("/").text
@@ -214,7 +244,7 @@ class WebStaticTests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.0.18-alpha.16", response.text)
+        self.assertIn("V1.0.18-alpha.17", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -239,7 +269,7 @@ class WebStaticTests(unittest.TestCase):
         html = self.client.get("/").text
         css = self.client.get("/static/app.css")
         javascript = self.client.get("/static/app.js")
-        self.assertIn('/static/app.css?v=1.0.18-alpha.16', html)
+        self.assertIn('/static/app.css?v=1.0.18-alpha.17', html)
         self.assertEqual(css.status_code, 200)
         self.assertIn("text/css", css.headers["content-type"])
         self.assertEqual(javascript.status_code, 200)
@@ -332,10 +362,9 @@ class WebStaticTests(unittest.TestCase):
         javascript = self.client.get("/static/app.js").text
 
         self.assertIn('workspaceAttach: document.querySelector("#workspace-attach")', javascript)
-        self.assertIn(
-            'elements.workspaceAttach.addEventListener("click", () => elements.attachmentInput.click())',
-            javascript,
-        )
+        self.assertIn("elements.workspaceFilesPopover.showPopover()", javascript)
+        self.assertIn('elements.workspaceFilesAttach.addEventListener("click", () => {', javascript)
+        self.assertIn("elements.attachmentInput.click();", javascript)
         self.assertIn('for="attachment-input">Browse files', html)
         self.assertIn('id="attachment-folder-input"', html)
         self.assertIn('id="skill-folder-input"', html)
@@ -386,8 +415,8 @@ class WebStaticTests(unittest.TestCase):
         html = self.client.get("/").text
         javascript = self.client.get("/static/app.js").text
 
-        self.assertIn('/static/terminal_keyboard.js?v=1.0.18-alpha.16', html)
-        self.assertIn('/static/app.js?v=1.0.18-alpha.16', html)
+        self.assertIn('/static/terminal_keyboard.js?v=1.0.18-alpha.17', html)
+        self.assertIn('/static/app.js?v=1.0.18-alpha.17', html)
         self.assertLess(html.index("terminal_keyboard.js"), html.index("app.js"))
         self.assertIn("createTerminalKeyboardController", javascript)
         self.assertIn("attachCustomKeyEventHandler", javascript)

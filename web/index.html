@@ -4,14 +4,14 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <script src="/static/ui_catalog.js?v=1.0.18-alpha.16"></script>
-    <script src="/static/ui_bootstrap.js?v=1.0.18-alpha.16"></script>
+    <script src="/static/ui_catalog.js?v=1.0.18-alpha.17"></script>
+    <script src="/static/ui_bootstrap.js?v=1.0.18-alpha.17"></script>
     <title>JSON_CODR · Local model console</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/static/vendor/xterm.css" />
-    <link rel="stylesheet" href="/static/app.css?v=1.0.18-alpha.16" />
-    <link rel="stylesheet" href="/static/fonts/fonts.css?v=1.0.18-alpha.16" />
-    <link rel="stylesheet" href="/static/gamma.css?v=1.0.18-alpha.16" />
+    <link rel="stylesheet" href="/static/app.css?v=1.0.18-alpha.17" />
+    <link rel="stylesheet" href="/static/fonts/fonts.css?v=1.0.18-alpha.17" />
+    <link rel="stylesheet" href="/static/gamma.css?v=1.0.18-alpha.17" />
   </head>
   <body>
     <div class="ambient ambient-one"></div>
@@ -55,7 +55,7 @@
       <header class="topbar">
         <a class="brand" href="/" aria-label="JSON CODR home">
           <span class="brand-mark">{ }</span>
-          <span><strong>JSON_CODR</strong><small>V1.0.18-alpha.16 · unified local agent</small></span>
+          <span><strong>JSON_CODR</strong><small>V1.0.18-alpha.17 · unified local agent</small></span>
         </a>
         <div id="health-status" class="health" role="status" aria-live="polite">
           <span class="health-dot"></span><span>Connecting</span>
@@ -113,7 +113,17 @@
             <button id="submit-button" class="primary" type="submit" disabled>
               <span>Run</span><span aria-hidden="true">↗</span>
             </button>
-            <button id="workspace-attach" class="secondary workspace-attach" type="button" aria-label="Attach files">📎</button>
+            <div id="workspace-attachment-menu" class="workspace-attachment-menu">
+              <button id="workspace-attach" class="secondary workspace-attach" type="button" aria-label="Attach files" aria-haspopup="dialog" aria-expanded="false" aria-controls="workspace-files-popover">📎</button>
+              <section id="workspace-files-popover" class="workspace-files-popover" aria-label="Files" role="dialog" popover="auto">
+                <div class="workspace-tool-head">
+                  <strong>Files</strong>
+                  <button id="workspace-files-manage" type="button">Manage files</button>
+                </div>
+                <button id="workspace-files-attach" class="secondary" type="button">Attach files</button>
+                <div id="workspace-files-popover-list" class="workspace-quick-list"><p class="meta">No files attached.</p></div>
+              </section>
+            </div>
             <button id="cancel-button" class="secondary" type="button" hidden>Cancel</button>
             <span id="request-status" class="request-status" role="status" aria-live="polite"></span>
           </div>
@@ -156,13 +166,14 @@
               <button id="task-stop" class="secondary" type="button" disabled>Stop</button>
               <button id="task-retry" class="secondary" type="button" disabled>Retry</button>
               <button id="task-undo" class="secondary" type="button" disabled>Undo</button>
+              <button id="task-plan-review-open" class="secondary task-plan-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="task-plan-review" hidden>Review execution plan</button>
             </div>
             <details id="task-execution-details" hidden>
               <summary>Execution details</summary>
               <dl class="task-model-route"><dt>Requested model</dt><dd id="task-requested-model">Not reported</dd><dt>Effective model</dt><dd id="task-effective-model">Not reported</dd></dl>
               <ol id="task-activity" class="task-activity" aria-live="polite"></ol>
             </details>
-            <section id="task-plan-review" class="task-plan-review" aria-labelledby="task-plan-review-title" hidden>
+            <section id="task-plan-review" class="task-plan-review" aria-labelledby="task-plan-review-title" role="dialog" popover="auto">
               <div class="task-plan-heading"><div><p class="result-label">PLAN REVIEW</p><h3 id="task-plan-review-title">Canonical execution plan</h3></div><span id="task-plan-stale" class="task-plan-stale" role="status" hidden>Plan changed. Reload before deciding.</span></div>
               <p id="task-plan-warning" class="task-plan-warning">Read-only inspection may continue automatically. File changes, commands, network access, installations, Git publication, deployments, and reduced isolation require an explicit one-use approval.</p>
               <label for="task-plan-canonical">Canonical plan fields</label>
@@ -219,7 +230,7 @@
 
       <section id="workspace-files-panel" class="workspace-tool-panel" aria-label="Task files" tabindex="-1" hidden>
         <div class="workspace-tool-head"><strong>Files</strong><button type="button" data-manage-destination="context">Manage files</button></div>
-        <button id="workspace-files-attach" class="secondary" type="button">Attach files</button>
+        <button id="workspace-dock-files-attach" class="secondary" type="button">Attach files</button>
         <div id="workspace-files-list" class="workspace-quick-list"><p class="meta">No files attached.</p></div>
       </section>
       <section id="workspace-skills-panel" class="workspace-tool-panel" aria-label="Task skills" tabindex="-1" hidden>
@@ -579,17 +590,17 @@
       <footer><span>Runs entirely on this machine</span><span>127.0.0.1 · Ollama</span></footer>
       </main>
     </div>
-    <script src="/static/dependency_install_queue.js?v=1.0.18-alpha.16" defer></script>
-    <script src="/static/benchmark_leaderboard.js?v=1.0.18-alpha.16" defer></script>
-    <script src="/static/terminal_keyboard.js?v=1.0.18-alpha.16" defer></script>
-    <script src="/static/core_client.js?v=1.0.18-alpha.16" defer></script>
-    <script src="/static/task_view.js?v=1.0.18-alpha.16" defer></script>
-    <script src="/static/conversation_view.js?v=1.0.18-alpha.16" defer></script>
+    <script src="/static/dependency_install_queue.js?v=1.0.18-alpha.17" defer></script>
+    <script src="/static/benchmark_leaderboard.js?v=1.0.18-alpha.17" defer></script>
+    <script src="/static/terminal_keyboard.js?v=1.0.18-alpha.17" defer></script>
+    <script src="/static/core_client.js?v=1.0.18-alpha.17" defer></script>
+    <script src="/static/task_view.js?v=1.0.18-alpha.17" defer></script>
+    <script src="/static/conversation_view.js?v=1.0.18-alpha.17" defer></script>
     <script src="/static/vendor/xterm.js" defer></script>
     <script src="/static/vendor/xterm-addon-fit.js" defer></script>
-    <script src="/static/model_runs.js?v=1.0.18-alpha.16" defer></script>
-    <script src="/static/workspace_layout.js?v=1.0.18-alpha.16" defer></script>
-    <script src="/static/ui_customization.js?v=1.0.18-alpha.16" defer></script>
-    <script src="/static/app.js?v=1.0.18-alpha.16" defer></script>
+    <script src="/static/model_runs.js?v=1.0.18-alpha.17" defer></script>
+    <script src="/static/workspace_layout.js?v=1.0.18-alpha.17" defer></script>
+    <script src="/static/ui_customization.js?v=1.0.18-alpha.17" defer></script>
+    <script src="/static/app.js?v=1.0.18-alpha.17" defer></script>
   </body>
 </html>

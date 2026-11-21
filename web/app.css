@@ -183,6 +183,22 @@ body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 50% -
 .workspace-task-tabs button { height: 36px; min-width: auto; padding: 0 13px; color: var(--muted); background: transparent; }
 .workspace-task-tabs button[aria-selected="true"] { color: var(--text); background: var(--surface-raised); }
 .workspace-attach { min-width: 44px; padding: 0; font-size: 18px; }
+.workspace-attachment-menu { position: relative; }
+.workspace-files-popover:popover-open {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  z-index: 30;
+  width: min(280px, calc(100vw - 32px));
+  max-height: min(60vh, 360px);
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-panel-solid);
+  box-shadow: 0 16px 40px var(--shadow);
+}
+.workspace-files-popover > .secondary { width: 100%; margin-top: 10px; }
+.workspace-files-popover .workspace-tool-head > button { height: 36px; }
 .workspace-statusbar { min-height: 28px; display: flex; justify-content: space-between; align-items: center; padding: 5px 10px; color: var(--muted); border: 1px solid var(--line); border-top: 0; font: 600 10px ui-monospace, monospace; }
 .workspace-shell[data-workspace-mode="intermediate"] .workspace-header { grid-template-columns: 1fr; }
 .workspace-shell[data-workspace-mode="intermediate"] .workspace-execution-controls { justify-content: flex-start; }
@@ -421,7 +437,11 @@ footer { padding: 22px 0 34px; color: var(--text-subtle); font: 600 10px ui-mono
 .task-activity .permission-required { color: var(--error-text); }
 .task-model-route { display: grid; grid-template-columns: max-content 1fr; gap: 5px 12px; }
 .task-model-route dt { color: var(--muted); }
-.task-plan-review { display: grid; gap: 10px; margin-top: 14px; padding: 14px; border: 1px solid var(--line); background: var(--surface-raised); }
+.task-plan-review { gap: 10px; margin: 0; padding: 18px; border: 1px solid var(--line); background: var(--surface-panel-solid); color: var(--text); box-shadow: 0 24px 80px var(--shadow); }
+.task-plan-review:not(:popover-open) { display: none; }
+.task-plan-review:popover-open { position: fixed; inset: 50% auto auto 50%; transform: translate(-50%, -50%); display: grid; width: min(760px, calc(100vw - 32px)); max-height: min(86vh, 900px); overflow: auto; z-index: 40; }
+.task-plan-review::backdrop { background: rgb(5 8 12 / 45%); }
+.task-plan-open { min-width: auto; height: 36px; }
 .task-plan-heading, .task-plan-actions, .task-step-review { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; justify-content: space-between; }
 .task-plan-heading h3 { margin: 2px 0; }
 .task-plan-review textarea, .task-plan-review select { width: 100%; color: var(--text); background: var(--surface-input); border: 1px solid var(--line); padding: 9px 11px; }

@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>JSON_CODR · Source Control</title>
+  <style>
+    :root{color-scheme:dark;--bg:#080a0d;--panel:#101319;--input:#0c0f13;--line:#343b46;--text:#f4f6f8;--muted:#a3adba;--accent:#c7ff4a;--red:#ff9a9a;font:15px system-ui,sans-serif;color:var(--text);background:var(--bg)}
+    *{box-sizing:border-box}body{max-width:980px;margin:0 auto;padding:24px}header,.row,.actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}h1{margin:.25em 0}h2{font-size:1.15rem}p,.muted{color:var(--muted);line-height:1.55}.card{margin:16px 0;padding:20px;border:1px solid var(--line);background:var(--panel)}label{display:grid;gap:7px;flex:1;min-width:240px;font-size:.9rem}input{min-width:0;width:100%;height:42px;padding:0 12px;color:var(--text);background:var(--input);border:1px solid var(--line);font:inherit}button{min-height:40px;padding:0 14px;border:1px solid var(--line);background:#242a33;color:var(--text);font:inherit;font-weight:700;cursor:pointer}button.primary{background:var(--accent);color:#101319;border-color:var(--accent)}button:disabled{opacity:.55;cursor:wait}button:focus-visible,input:focus-visible,a:focus-visible{outline:3px solid var(--accent);outline-offset:2px}.status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}.status-item{padding:12px;background:var(--input);border:1px solid var(--line);overflow-wrap:anywhere}.status-item span{display:block;color:var(--muted);font-size:.76rem;text-transform:uppercase;letter-spacing:.08em}.status-item strong{display:block;margin-top:6px}.ok{color:var(--accent)}.error{color:var(--red)}pre{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted)}code{overflow-wrap:anywhere}a{color:var(--accent)}#notice{min-height:1.5em} @media(max-width:520px){body{padding:14px}.card{padding:15px}}
+  </style>
+</head>
+<body>
+  <header><div><p class="muted">JSON_CODR · LOCAL SOURCE CONTROL</p><h1>Git workspace</h1></div><a href="/">Back to workspace</a></header>
+  <p>This panel inspects a local Git checkout and can authorize JSON_CODR’s existing project-scoped Git broker. Ahead/behind values use the local upstream-tracking ref, which may be stale until fetched. This first version does not sign in to GitHub or create/clone repositories.</p>
+  <section class="card" aria-labelledby="project-heading">
+    <h2 id="project-heading">Select a local repository</h2>
+    <div class="row"><label for="project-root">Repository folder path<input id="project-root" type="text" placeholder="D:\\projects\\my-app" autocomplete="off" spellcheck="false"></label><div class="actions"><button id="inspect" class="primary" type="button">Inspect repository</button><button id="authorize" type="button">Authorize Git broker</button></div></div>
+    <p id="notice" role="status" aria-live="polite">Enter a local folder that already contains a Git repository.</p>
+  </section>
+  <section class="card" aria-labelledby="status-heading">
+    <div class="row"><h2 id="status-heading">Repository status</h2><a id="github-link" href="https://github.com" target="_blank" rel="noopener noreferrer">Open GitHub</a></div>
+    <div id="status-grid" class="status-grid" aria-live="polite"><p class="muted">No repository inspected.</p></div>
+    <details><summary>Technical details</summary><pre id="technical"></pre></details>
+  </section>
+  <section class="card"><h2>What this panel currently supports</h2><p>Local checkout inspection and granting/revoking the existing broker are connected to the JSON_CODR API. The broker supports reviewed status/read/patch/verification/commit/sync/push tasks through its existing APIs. GitHub OAuth, repository listing/creation, cloning, folder upload, branch switching, and pull UI still need to be implemented as separate workflows.</p></section>
+<script>
+(() => {
+  const root = document.querySelector("#project-root");
+  const notice = document.querySelector("#notice");
+  const grid = document.querySelector("#status-grid");
+  const technical = document.querySelector("#technical");
+  const inspectButton = document.querySelector("#inspect");
+  const authorizeButton = document.querySelector("#authorize");
+  let snapshot = null;
+  root.value = localStorage.getItem("json_codr_git_project_root") || localStorage.getItem("json_codr_workspace_project_root") || "";
+  function item(label, value, className = "") {
+    const article = document.createElement("div"); article.className = "status-item";
+    const caption = document.createElement("span"); caption.textContent = label;
+    const content = document.createElement("strong"); content.textContent = value;
+    if (className) content.className = className;
+    article.append(caption, content); return article;
+  }
+  async function responseJson(response, fallback) {
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.detail || fallback);
+    return payload;
+  }
+  async function inspect() {
+    const path = root.value.trim();
+    if (!path) { notice.textContent = "Enter a repository folder path first."; root.focus(); return; }
+    localStorage.setItem("json_codr_git_project_root", path);
+    inspectButton.disabled = true; notice.textContent = "Inspecting local repository…";
+    try {
+      const url = `/api/git-broker/status?project_root=${encodeURIComponent(path)}`;
+      const result = await responseJson(await fetch(url), "Unable to inspect repository");
+      snapshot = result.repository;
+      const ahead = snapshot.ahead == null ? "Unknown" : String(snapshot.ahead);
+      const behind = snapshot.behind == null ? "Unknown" : String(snapshot.behind);
+      const sync = snapshot.ahead == null || snapshot.behind == null ? "No upstream comparison" : snapshot.ahead === 0 && snapshot.behind === 0 ? "In sync with upstream" : `${ahead} ahead · ${behind} behind`;
+      grid.replaceChildren(
+        item("Working tree", snapshot.clean ? "Clean" : "Has uncommitted changes", snapshot.clean ? "ok" : "error"),
+        item("Current branch", snapshot.branch || "Detached HEAD"),
+        item("Upstream", snapshot.upstream || "Not configured"),
+        item("Commits ahead", ahead),
+        item("Commits behind", behind),
+        item("Relationship", sync),
+        item("HEAD", (snapshot.head || "").slice(0, 12)),
+        item("Tracked remote HEAD", (snapshot.remote_head || "Unavailable").slice(0, 12)),
+      );
+      technical.textContent = JSON.stringify(snapshot, null, 2);
+      notice.textContent = "Repository inspected. Ahead/behind counts compare the current branch with its configured upstream tracking ref; fetch before treating them as current.";
+      authorizeButton.disabled = false;
+    } catch (error) {
+      snapshot = null; grid.replaceChildren(item("Inspection error", error.message, "error")); technical.textContent = "";
+      notice.textContent = error.message; authorizeButton.disabled = true;
+    } finally { inspectButton.disabled = false; }
+  }
+  async function authorize() {
+    const path = root.value.trim();
+    if (!snapshot || snapshot.root !== path) { notice.textContent = "Inspect this exact repository path before authorizing it."; return; }
+    if (!window.confirm(`Grant JSON_CODR's Git broker access scoped to this project?\n\n${path}\n\nThe grant enables only broker-mediated Git operations; review and approve write operations separately.`)) return;
+    authorizeButton.disabled = true; notice.textContent = "Creating project-scoped broker grant…";
+    try {
+      const result = await responseJson(await fetch("/api/git-broker/grants", {
+        method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
+        body: JSON.stringify({ project_root: path, profile: "broker" }),
+      }), "Unable to create Git broker grant");
+      notice.textContent = `Broker grant created for ${result.project_root}. Grant ID: ${result.id}`;
+    } catch (error) { notice.textContent = error.message; }
+    finally { authorizeButton.disabled = false; }
+  }
+  authorizeButton.disabled = true;
+  inspectButton.addEventListener("click", inspect);
+  authorizeButton.addEventListener("click", authorize);
+  root.addEventListener("keydown", (event) => { if (event.key === "Enter") inspect(); });
+})();
+</script>
+</body>
+</html>
