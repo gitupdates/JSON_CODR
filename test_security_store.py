@@ -155,6 +155,146 @@ class SecurityStoreTests(unittest.TestCase):
             connection.close()
         self.assertEqual(tables, [])
 
+    def test_entity_ids_reject_null_noncanonical_and_non_uuid_values(self) -> None:
+        self.store.initialize()
+        timestamp = "2026-11-21T00:00:00+00:00"
+        account_id = str(uuid4())
+        capability_id = str(uuid4())
+
+        with self.store.transaction() as connection:
+            for invalid_id in (None, "not-a-uuid", str(uuid4()).upper()):
+                username = f"InvalidAccount-{uuid4()}"
+                with self.subTest(table="accounts", invalid_id=invalid_id), self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute(
+                        "INSERT INTO accounts "
+                        "(account_id, username, username_casefold, status, created_at, updated_at, version) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (invalid_id, username, username.casefold(), "active", timestamp, timestamp, 1),
+                    )
+                with self.subTest(table="groups", invalid_id=invalid_id), self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute(
+                        "INSERT INTO groups "
+                        "(group_id, stable_id, display_name, created_at, updated_at, version) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (invalid_id, f"invalid-{uuid4()}", "Invalid", timestamp, timestamp, 1),
+                    )
+
+            connection.execute(
+                "INSERT INTO accounts "
+                "(account_id, username, username_casefold, status, created_at, updated_at, version) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (account_id, "Valid", "valid", "active", timestamp, timestamp, 1),
+            )
+            connection.execute(
+                "INSERT INTO capabilities "
+                "(capability_id, stable_id, description, created_at, updated_at, version) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (capability_id, "test.capability", "test", timestamp, timestamp, 1),
+            )
+            for invalid_id in (None, "not-a-uuid", str(uuid4()).upper()):
+                with self.subTest(table="sessions", invalid_id=invalid_id), self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute(
+                        "INSERT INTO sessions "
+                        "(session_id, account_id, token_hash, issued_at, idle_expires_at, absolute_expires_at, "
+                        "last_seen_at, policy_epoch, created_at, updated_at, version) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (invalid_id, account_id, f"hash-{uuid4()}", timestamp, timestamp, timestamp, timestamp, 0, timestamp, timestamp, 1),
+                    )
+                with self.subTest(table="policy_entries", invalid_id=invalid_id), self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute(
+                        "INSERT INTO policy_entries "
+                        "(policy_entry_id, account_id, capability_id, resource_pattern, action_pattern, effect, scope, created_at, updated_at, version) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (invalid_id, account_id, capability_id, "resource", "action", "grant", "own", timestamp, timestamp, 1),
+                    )
+                with self.subTest(table="audit_entries", invalid_id=invalid_id), self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute(
+                        "INSERT INTO audit_entries "
+                        "(audit_entry_id, resource_id, action, decision, reason_code, entry_hash, created_at, updated_at, version) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (invalid_id, "resource", "action", "deny", "test", f"hash-{uuid4()}", timestamp, timestamp, 1),
+                    )
+
+    def test_nullable_uuid_references_reject_malformed_non_null_values(self) -> None:
+        self.store.initialize()
+        timestamp = "2026-11-21T00:00:00+00:00"
+        account_id = str(uuid4())
+        capability_id = str(uuid4())
+
+        with self.store.transaction() as connection:
+            connection.execute(
+                "INSERT INTO accounts "
+                "(account_id, username, username_casefold, status, created_at, updated_at, version) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (account_id, "Owner", "owner", "active", timestamp, timestamp, 1),
+            )
+            connection.execute(
+                "INSERT INTO capabilities "
+                "(capability_id, stable_id, description, created_at, updated_at, version) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (capability_id, "test.nullable", "test", timestamp, timestamp, 1),
+            )
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute(
+                    "INSERT INTO policy_entries "
+                    "(policy_entry_id, account_id, capability_id, resource_pattern, action_pattern, effect, scope, created_at, updated_at, version) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (str(uuid4()), "not-a-uuid", capability_id, "resource", "action", "grant", "own", timestamp, timestamp, 1),
+                )
+            for column in ("actor_account_id", "session_id", "correlation_id"):
+                with self.subTest(column=column), self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute(
+                        f"INSERT INTO audit_entries "
+                        f"(audit_entry_id, {column}, resource_id, action, decision, reason_code, entry_hash, created_at, updated_at, version) "
+                        f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (str(uuid4()), "not-a-uuid", "resource", "action", "deny", "test", f"hash-{uuid4()}", timestamp, timestamp, 1),
+                    )
+
+    def test_transaction_boundary_rejects_fabricated_casefolds_and_non_utc_timestamps(self) -> None:
+        self.store.initialize()
+        timestamp = "2026-11-21T00:00:00+00:00"
+
+        with self.store.transaction() as connection:
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute(
+                    "INSERT INTO accounts "
+                    "(account_id, username, username_casefold, status, created_at, updated_at, version) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (str(uuid4()), "Alice", "fabricated", "active", timestamp, timestamp, 1),
+                )
+            connection.execute(
+                "INSERT INTO accounts "
+                "(account_id, username, username_casefold, status, created_at, updated_at, version) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (str(uuid4()), "Alice", "alice", "active", timestamp, timestamp, 1),
+            )
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute(
+                    "INSERT INTO accounts "
+                    "(account_id, username, username_casefold, status, created_at, updated_at, version) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (str(uuid4()), "ALICE", "alice", "active", timestamp, timestamp, 1),
+                )
+            for invalid_timestamp in ("not-a-timestamp", "2026-11-21T00:00:00+01:00"):
+                username = f"timestamp-{uuid4()}"
+                with self.subTest(invalid_timestamp=invalid_timestamp), self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute(
+                        "INSERT INTO accounts "
+                        "(account_id, username, username_casefold, status, created_at, updated_at, version) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (str(uuid4()), username, username.casefold(), "active", invalid_timestamp, timestamp, 1),
+                    )
+
+    def test_preconstraint_schema_version_fails_closed(self) -> None:
+        connection = sqlite3.connect(self.database_path)
+        try:
+            connection.execute("PRAGMA user_version = 1")
+        finally:
+            connection.close()
+
+        with self.assertRaisesRegex(RuntimeError, "unsupported security schema version: 1"):
+            self.store.initialize()
+
 
 if __name__ == "__main__":
     unittest.main()
