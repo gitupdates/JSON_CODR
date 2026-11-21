@@ -541,6 +541,97 @@ class WebApiTests(unittest.TestCase):
             "fetch_local_changes", "pull_local_changes",
         ])
 
+    def test_github_build_check_and_update_require_confirmation_and_exact_scope(self):
+        from web_app.github_cli import GitHubBuildConflict
+
+        class FakeGitHubCLI:
+            def __init__(self):
+                self.calls = []
+
+            def check_build(self, *args):
+                self.calls.append(("check", args))
+                return {
+                    "repository": args[1], "branch": args[2], "status": "behind",
+                    "local_commit": {"sha": "a" * 40},
+                    "remote_commit": {"sha": "b" * 40},
+                    "update_allowed": True,
+                }
+
+            def update_build(self, *args):
+                self.calls.append(("update", args))
+                if args[3] == "c" * 40:
+                    raise GitHubBuildConflict("The build changed. Check again.")
+                return {
+                    "repository": args[1], "branch": args[2], "status": "current",
+                    "local_commit": {"sha": args[4]},
+                    "remote_commit": {"sha": args[4]},
+                    "update_allowed": False,
+                }
+
+        github = FakeGitHubCLI()
+        client = self.track_core_client(
+            TestClient(create_app(self.service, self.workspace, github_cli=github))
+        )
+        headers = {"X-JSON-CODR": "1"}
+        check_body = {
+            "confirmed": True,
+            "project_root": "C:/work/sample",
+            "repository": "test-user/sample",
+            "branch": "feature/ui",
+        }
+        self.assertEqual(client.post("/api/github/local/check-build", json=check_body).status_code, 403)
+        self.assertEqual(
+            client.post(
+                "/api/github/local/check-build",
+                headers=headers,
+                json={key: value for key, value in check_body.items() if key != "confirmed"},
+            ).status_code,
+            422,
+        )
+        checked = client.post("/api/github/local/check-build", headers=headers, json=check_body)
+        self.assertEqual(checked.status_code, 200)
+        self.assertEqual(checked.json()["status"], "behind")
+        self.assertEqual(
+            github.calls[0],
+            ("check", ("C:/work/sample", "test-user/sample", "feature/ui")),
+        )
+
+        invalid_repository = client.post(
+            "/api/github/local/check-build",
+            headers=headers,
+            json={**check_body, "repository": "not-a-repository"},
+        )
+        invalid_branch = client.post(
+            "/api/github/local/check-build",
+            headers=headers,
+            json={**check_body, "branch": ""},
+        )
+        invalid_sha = client.post(
+            "/api/github/local/update-build",
+            headers=headers,
+            json={**check_body, "expected_local_sha": "abc", "expected_remote_sha": "b" * 40},
+        )
+        self.assertEqual((invalid_repository.status_code, invalid_branch.status_code, invalid_sha.status_code), (422, 422, 422))
+
+        updated = client.post(
+            "/api/github/local/update-build",
+            headers=headers,
+            json={**check_body, "expected_local_sha": "a" * 40, "expected_remote_sha": "b" * 40},
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["status"], "current")
+        self.assertEqual(
+            github.calls[1],
+            ("update", ("C:/work/sample", "test-user/sample", "feature/ui", "a" * 40, "b" * 40)),
+        )
+        stale = client.post(
+            "/api/github/local/update-build",
+            headers=headers,
+            json={**check_body, "expected_local_sha": "c" * 40, "expected_remote_sha": "b" * 40},
+        )
+        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(stale.json()["detail"], "The build changed. Check again.")
+
     def track_core_client(self, client):
         self._core_clients.append(client)
         return client

@@ -792,6 +792,21 @@ class GitHubLocalSyncRequest(GitHubConfirmedWrite):
     project_root: str = Field(min_length=1, max_length=1000)
 
 
+class GitHubBuildCheckRequest(GitHubConfirmedWrite):
+    project_root: str = Field(min_length=1, max_length=1000)
+    repository: str = Field(
+        min_length=3,
+        max_length=140,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,38}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$",
+    )
+    branch: str = Field(min_length=1, max_length=200)
+
+
+class GitHubBuildUpdateRequest(GitHubBuildCheckRequest):
+    expected_local_sha: str = Field(pattern=r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
+    expected_remote_sha: str = Field(pattern=r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
+
+
 class GitHubLocalCloneRequest(GitHubConfirmedWrite):
     repository: str = Field(min_length=3, max_length=140)
     destination: str = Field(min_length=1, max_length=1000)

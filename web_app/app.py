@@ -73,7 +73,7 @@ from web_app.core.capability_discovery import discover_project_profile
 from web_app.core.canonical import canonical_digest
 from web_app.core.terminal_adapter import TerminalAdapter
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GitHubAuthCancelRequest, GitHubAuthLoginRequest, GitHubConfirmedWrite, GitHubIssueCommentRequest, GitHubIssueCreateRequest, GitHubIssueUpdateRequest, GitHubLocalBranchRequest, GitHubLocalCloneRequest, GitHubLocalCommitRequest, GitHubLocalPushRequest, GitHubLocalStageRequest, GitHubLocalSyncRequest, GitHubPullRequestCreateRequest, GitHubPullRequestMergeRequest, GitHubPullRequestUpdateRequest, GitHubReleaseCreateRequest, GitHubReleaseUpdateRequest, GitHubRemoteBranchCreateRequest, GitHubRepositoryCreateRequest, GitHubRepositoryDeleteRequest, GitHubRepositoryUpdateRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
+from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GitHubAuthCancelRequest, GitHubAuthLoginRequest, GitHubBuildCheckRequest, GitHubBuildUpdateRequest, GitHubConfirmedWrite, GitHubIssueCommentRequest, GitHubIssueCreateRequest, GitHubIssueUpdateRequest, GitHubLocalBranchRequest, GitHubLocalCloneRequest, GitHubLocalCommitRequest, GitHubLocalPushRequest, GitHubLocalStageRequest, GitHubLocalSyncRequest, GitHubPullRequestCreateRequest, GitHubPullRequestMergeRequest, GitHubPullRequestUpdateRequest, GitHubReleaseCreateRequest, GitHubReleaseUpdateRequest, GitHubRemoteBranchCreateRequest, GitHubRepositoryCreateRequest, GitHubRepositoryDeleteRequest, GitHubRepositoryUpdateRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
 from web_app.model_run_store import ModelRunStore, RequestKeyConflict
 from web_app.model_runs import ModelRunService, canonical_model_prompt
 from web_app.ollama_service import (
@@ -179,7 +179,7 @@ def create_app(
     skill_discovery = SkillDiscoveryService(skill_library, skill_converter, workspace.data_root)
     github_skills = github_skills or GithubSkillService(skill_library, skill_converter, workspace.data_root)
     github_cli = github_cli or GitHubCLI()
-    github_auth = github_auth or GitHubAuthSessionService(status_probe=github_cli.status)
+    github_auth = github_auth or GitHubAuthSessionService(status_probe=lambda: github_cli.status())
     application.router.add_event_handler("shutdown", github_auth.close)
     context_assembler = ContextAssembler(attachments, skills=skill_library)
     model_run_store = ModelRunStore(workspace.data_root)
@@ -1606,6 +1606,34 @@ def create_app(
     ):
         require_terminal_header(x_json_codr)
         return await github_call(github_cli.pull_local_changes, request.project_root)
+
+    @application.post("/api/github/local/check-build")
+    async def github_local_check_build(
+        request: GitHubBuildCheckRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(
+            github_cli.check_build,
+            request.project_root,
+            request.repository,
+            request.branch,
+        )
+
+    @application.post("/api/github/local/update-build")
+    async def github_local_update_build(
+        request: GitHubBuildUpdateRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(
+            github_cli.update_build,
+            request.project_root,
+            request.repository,
+            request.branch,
+            request.expected_local_sha,
+            request.expected_remote_sha,
+        )
 
     @application.get("/api/github/local/status")
     async def github_local_status(
