@@ -38,6 +38,8 @@ class BootstrapService:
 
     def claim_initial_administrator(self, claim: str, username: str, password: str, now: datetime | None = None) -> AccountRecord:
         timestamp = _utc(now)
+        if username != "Administrator":
+            raise PermissionError("initial username must be Administrator")
         with self.store.transaction() as connection:
             row = connection.execute("SELECT bootstrap_claim_id, expires_at, consumed_at FROM bootstrap_claims WHERE claim_hash = ?", (_hash(claim),)).fetchone()
             if row is None or row[2] is not None or datetime.fromisoformat(row[1]) <= timestamp or connection.execute("SELECT 1 FROM accounts LIMIT 1").fetchone() is not None:
@@ -57,15 +59,26 @@ class BootstrapService:
 
     def issue_enrollment_claim(self, administrator_id: UUID, account_id: UUID, now: datetime | None = None, lifetime: timedelta = timedelta(minutes=15)) -> str:
         timestamp = _utc(now)
-        if not self.accounts.is_effective_administrator(administrator_id):
-            raise PermissionError("administrator membership is required")
-        return self._issue_claim("enrollment", account_id, timestamp, lifetime)
+        with self.store.transaction() as connection:
+            if not self.accounts.is_effective_administrator(administrator_id, connection): raise PermissionError("administrator membership is required")
+            row = connection.execute("SELECT status FROM accounts WHERE account_id = ?", (str(account_id),)).fetchone()
+            if row is None or row[0] != "pending": raise PermissionError("enrollment requires pending account")
+            return self._issue_claim_in_transaction(connection, "enrollment", account_id, timestamp, lifetime)
 
     def issue_reset_claim(self, administrator_id: UUID, account_id: UUID, now: datetime | None = None, lifetime: timedelta = timedelta(minutes=15)) -> str:
         timestamp = _utc(now)
-        if not self.accounts.is_effective_administrator(administrator_id):
-            raise PermissionError("administrator membership is required")
-        return self._issue_claim("reset", account_id, timestamp, lifetime)
+        with self.store.transaction() as connection:
+            if not self.accounts.is_effective_administrator(administrator_id, connection): raise PermissionError("administrator membership is required")
+            row = connection.execute("SELECT status FROM accounts WHERE account_id = ?", (str(account_id),)).fetchone()
+            if row is None or row[0] != "active": raise PermissionError("reset requires active account")
+            connection.execute("UPDATE sessions SET revoked_at = ?, updated_at = ?, version = version + 1 WHERE account_id = ? AND revoked_at IS NULL", (timestamp.isoformat(), timestamp.isoformat(), str(account_id)))
+            return self._issue_claim_in_transaction(connection, "reset", account_id, timestamp, lifetime)
+
+    def _issue_claim_in_transaction(self, connection, purpose, account_id, now, lifetime):
+        if lifetime <= timedelta(): raise ValueError("claim lifetime must be positive")
+        claim = secrets.token_urlsafe(32)
+        connection.execute("INSERT INTO auth_claims (auth_claim_id, claim_hash, purpose, account_id, expires_at, consumed_at, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 1)", (str(uuid4()), _hash(claim), purpose, str(account_id), (now + lifetime).isoformat(), now.isoformat(), now.isoformat()))
+        return claim
 
     def _consume(self, claim: str, purpose: str, password: str, now: datetime) -> AccountRecord:
         with self.store.transaction() as connection:
@@ -74,7 +87,12 @@ class BootstrapService:
                 raise PermissionError("claim is invalid or expired")
             connection.execute("UPDATE auth_claims SET consumed_at = ?, updated_at = ?, version = version + 1 WHERE auth_claim_id = ?", (now.isoformat(), now.isoformat(), row[0]))
             account_id = UUID(row[1])
+            status = connection.execute("SELECT status FROM accounts WHERE account_id = ?", (str(account_id),)).fetchone()[0]
+            if (purpose == "enrollment" and status != "pending") or (purpose == "reset" and status != "active"):
+                raise PermissionError("claim account state is invalid")
             self.accounts._set_password(connection, account_id, password, now)
+            if purpose == "enrollment":
+                connection.execute("UPDATE accounts SET status = 'active', updated_at = ?, version = version + 1 WHERE account_id = ?", (now.isoformat(), str(account_id)))
             return self.accounts._record(connection.execute("SELECT account_id, username, username_casefold, status, created_at, updated_at, version FROM accounts WHERE account_id = ?", (str(account_id),)).fetchone())  # type: ignore[return-value]
 
     def enroll_account(self, claim: str, password: str, now: datetime | None = None) -> AccountRecord:

@@ -2379,11 +2379,13 @@ def create_app(
         return principal
 
     @application.post("/api/auth/bootstrap", status_code=201)
-    async def bootstrap_administrator(payload: BootstrapAdministratorRequest):
+    async def bootstrap_administrator(payload: BootstrapAdministratorRequest, response: Response):
         try:
             account = bootstrap_service.claim_initial_administrator(payload.claim, payload.username, payload.password)
         except (PermissionError, ValueError):
             raise HTTPException(status_code=403, detail="Bootstrap claim is invalid or expired")
+        issued = session_service.create(account.account_id)
+        session_service.set_cookie(response, issued.token)
         return {"username": account.username, "status": account.status}
 
     @application.post("/api/auth/login")

@@ -105,7 +105,12 @@ if ($env:JSON_CODR_MODELS) {
 }
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-$BootstrapClaim = & $Python -c "from web_app.security.accounts import AccountService; from web_app.security.bootstrap import BootstrapService; from web_app.security.passwords import PasswordHasher; from web_app.security.store import SecurityStore; from web_app.workspace import default_data_root; store = SecurityStore(default_data_root() / 'security.sqlite3'); print(BootstrapService(store, AccountService(store, PasswordHasher())).issue_initial_claim() or '')"
+Push-Location $Root
+try {
+  $BootstrapClaim = & $Python -c "from web_app.security.accounts import AccountService; from web_app.security.bootstrap import BootstrapService; from web_app.security.passwords import PasswordHasher; from web_app.security.store import SecurityStore; from web_app.workspace import default_data_root; store = SecurityStore(default_data_root() / 'security.sqlite3'); print(BootstrapService(store, AccountService(store, PasswordHasher())).issue_initial_claim() or '')"
+} finally {
+  Pop-Location
+}
 if ($LASTEXITCODE -ne 0) {
   throw 'Unable to initialize local account bootstrap.'
 }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import hashlib
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, NAMESPACE_URL, uuid4, uuid5
 
@@ -13,10 +14,10 @@ from web_app.security.store import SecurityStore
 
 BASE_GROUPS = {
     "preferences": "Preferences",
-    "users": "Users",
-    "designers": "Designers",
-    "administrators": "Administrators",
-    "developers": "Developers",
+    "user": "Users",
+    "designer": "Designers",
+    "admin": "Administrators",
+    "developer": "Developers",
 }
 ADMINISTRATOR_ACCOUNT_ID = uuid5(NAMESPACE_URL, "json-codr.local/administrator")
 
@@ -40,6 +41,7 @@ class AccountService:
     def __init__(self, store: SecurityStore, passwords: PasswordHasher) -> None:
         self.store = store
         self.passwords = passwords
+        self._dummy_password_hash = passwords.hash_password("json-codr-unknown-login-dummy")
 
     def _record(self, row: sqlite3.Row | tuple | None) -> AccountRecord | None:
         if row is None:
@@ -58,6 +60,9 @@ class AccountService:
 
     def _ensure_groups(self, connection: sqlite3.Connection, now: datetime) -> dict[str, str]:
         groups: dict[str, str] = {}
+        legacy = {"users": "user", "designers": "designer", "administrators": "admin", "developers": "developer"}
+        for old, new in legacy.items():
+            connection.execute("UPDATE groups SET stable_id = ? WHERE stable_id = ? AND NOT EXISTS (SELECT 1 FROM groups g2 WHERE g2.stable_id = ?)", (new, old, new))
         for stable_id, display_name in BASE_GROUPS.items():
             row = connection.execute("SELECT group_id FROM groups WHERE stable_id = ?", (stable_id,)).fetchone()
             if row is None:
@@ -107,12 +112,12 @@ class AccountService:
     def create_account(self, username: str, password: str, now: datetime | None = None) -> AccountRecord:
         timestamp = _utc(now)
         with self.store.transaction() as connection:
-            return self._create_account(connection, username, password, {"preferences", "users"}, timestamp)
+            return self._create_account(connection, username, password, {"preferences", "user"}, timestamp)
 
     def create_pending_account(self, username: str, now: datetime | None = None) -> AccountRecord:
         timestamp = _utc(now)
         with self.store.transaction() as connection:
-            return self._create_account(connection, username, None, {"preferences", "users"}, timestamp, status="pending")
+            return self._create_account(connection, username, None, {"preferences", "user"}, timestamp, status="pending")
 
     def create_initial_administrator(self, username: str, password: str, now: datetime | None = None) -> AccountRecord:
         timestamp = _utc(now)
@@ -134,7 +139,7 @@ class AccountService:
         def check(active_connection: sqlite3.Connection) -> bool:
             return active_connection.execute(
                 "SELECT 1 FROM accounts JOIN memberships USING (account_id) JOIN groups USING (group_id) "
-                "WHERE accounts.account_id = ? AND accounts.status = 'active' AND groups.stable_id = 'administrators'",
+                "WHERE accounts.account_id = ? AND accounts.status = 'active' AND groups.stable_id = 'admin'",
                 (str(account_id),),
             ).fetchone() is not None
         if connection is not None:
@@ -147,7 +152,7 @@ class AccountService:
             return
         count = connection.execute(
             "SELECT COUNT(*) FROM accounts JOIN memberships USING (account_id) JOIN groups USING (group_id) "
-            "WHERE accounts.status = 'active' AND groups.stable_id = 'administrators'"
+            "WHERE accounts.status = 'active' AND groups.stable_id = 'admin'"
         ).fetchone()[0]
         if count <= 1:
             raise LastAdministratorError("the last active administrator cannot be changed")
@@ -170,6 +175,7 @@ class AccountService:
                     "UPDATE sessions SET revoked_at = ?, updated_at = ?, version = version + 1 "
                     "WHERE account_id = ? AND revoked_at IS NULL", (_stamp(timestamp), _stamp(timestamp), str(account_id))
                 )
+                connection.execute("UPDATE auth_claims SET consumed_at = ?, updated_at = ?, version = version + 1 WHERE account_id = ? AND consumed_at IS NULL", (_stamp(timestamp), _stamp(timestamp), str(account_id)))
 
     def set_group_membership(self, account_id: UUID, stable_id: str, included: bool, now: datetime | None = None) -> None:
         timestamp = _utc(now)
@@ -177,7 +183,7 @@ class AccountService:
             groups = self._ensure_groups(connection, timestamp)
             if stable_id not in groups:
                 raise ValueError("unknown group")
-            if stable_id == "administrators" and not included:
+            if stable_id == "admin" and not included:
                 self._require_not_last_administrator(connection, account_id)
             if included:
                 connection.execute(
@@ -188,8 +194,11 @@ class AccountService:
             else:
                 connection.execute("DELETE FROM memberships WHERE account_id = ? AND group_id = ?", (str(account_id), groups[stable_id]))
 
-    def _record_failed_login(self, connection: sqlite3.Connection, username: str, now: datetime) -> None:
-        key = username.casefold()
+    def _throttle_key(self, account_id: str | None, normalized_username: str, client_context: str) -> str:
+        material = f"account:{account_id}:{client_context}" if account_id else f"unknown:{normalized_username}:{client_context}"
+        return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+    def _record_failed_login(self, connection: sqlite3.Connection, key: str, now: datetime) -> None:
         row = connection.execute("SELECT failed_count FROM login_throttles WHERE username_casefold = ?", (key,)).fetchone()
         failures = (row[0] if row else 0) + 1
         blocked_until = _stamp(now + timedelta(seconds=min(300, 2 ** min(failures, 8)))) if failures >= 3 else None
@@ -199,22 +208,23 @@ class AccountService:
             (key, failures, blocked_until, _stamp(now)),
         )
 
-    def authenticate(self, username: str, password: str, now: datetime | None = None) -> AccountRecord | None:
+    def authenticate(self, username: str, password: str, now: datetime | None = None, *, client_context: str = "loopback") -> AccountRecord | None:
         timestamp = _utc(now)
         key = username.strip().casefold()
         with self.store.transaction() as connection:
-            throttle = connection.execute("SELECT blocked_until FROM login_throttles WHERE username_casefold = ?", (key,)).fetchone()
-            if throttle and throttle[0] and datetime.fromisoformat(throttle[0]) > timestamp:
-                return None
             row = connection.execute(
                 "SELECT accounts.account_id, accounts.username, accounts.username_casefold, accounts.status, accounts.created_at, accounts.updated_at, accounts.version, credentials.password_hash "
-                "FROM accounts LEFT JOIN credentials ON credentials.account_id = accounts.account_id WHERE accounts.username_casefold = ?",
-                (key,),
+                "FROM accounts LEFT JOIN credentials ON credentials.account_id = accounts.account_id WHERE accounts.username_casefold = ?", (key,)
             ).fetchone()
-            if row is None or row[3] != "active" or row[7] is None or not self.passwords.verify_password(password, row[7]):
-                self._record_failed_login(connection, username, timestamp)
+            bucket = self._throttle_key(row[0] if row else None, key, client_context)
+            throttle = connection.execute("SELECT blocked_until FROM login_throttles WHERE username_casefold = ?", (bucket,)).fetchone()
+            if throttle and throttle[0] and datetime.fromisoformat(throttle[0]) > timestamp:
                 return None
-            connection.execute("DELETE FROM login_throttles WHERE username_casefold = ?", (key,))
+            valid = self.passwords.verify_password(password, row[7]) if row and row[7] else self.passwords.verify_password(password, self._dummy_password_hash)
+            if row is None or row[3] != "active" or row[7] is None or not valid:
+                self._record_failed_login(connection, bucket, timestamp)
+                return None
+            connection.execute("DELETE FROM login_throttles WHERE username_casefold = ?", (bucket,))
             return self._record(row[:7])
 
     def verify_account_password(self, account_id: UUID, password: str) -> bool:
@@ -237,7 +247,6 @@ class AccountService:
                 "INSERT INTO credentials (credential_id, account_id, password_hash, password_changed_at, created_at, updated_at, version) "
                 "VALUES (?, ?, ?, ?, ?, ?, 1)", (str(uuid4()), str(account_id), password_hash, timestamp, timestamp, timestamp)
             )
-        connection.execute("UPDATE accounts SET status = 'active', updated_at = ?, version = version + 1 WHERE account_id = ?", (timestamp, str(account_id)))
         connection.execute(
             "UPDATE sessions SET revoked_at = ?, updated_at = ?, version = version + 1 WHERE account_id = ? AND revoked_at IS NULL",
             (timestamp, timestamp, str(account_id)),

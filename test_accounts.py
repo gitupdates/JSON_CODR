@@ -32,7 +32,7 @@ class AccountSecurityTests(unittest.TestCase):
         self.assertEqual(administrator.username, "Administrator")
         self.assertEqual(
             self.accounts.group_stable_ids(administrator.account_id),
-            {"preferences", "users", "designers", "administrators", "developers"},
+            {"preferences", "user", "designer", "admin", "developer"},
         )
         with self.assertRaises(PermissionError):
             self.bootstrap.claim_initial_administrator(claim, "Other", "another password", now=self.now)
@@ -52,7 +52,7 @@ class AccountSecurityTests(unittest.TestCase):
         self.assertNotIn(account.username, second.token)
         cookie = self.sessions.cookie_header(second.token)
         self.assertIn("HttpOnly", cookie)
-        self.assertIn("SameSite=Lax", cookie)
+        self.assertIn("SameSite=Strict", cookie)
         self.assertNotIn(str(account.account_id), cookie)
 
     def test_idle_absolute_expiry_logout_all_and_password_reset_revoke_sessions(self) -> None:
@@ -96,7 +96,7 @@ class AccountSecurityTests(unittest.TestCase):
         enrolled = self.bootstrap.enroll_account(claim, "user chosen password", now=self.now)
         self.assertEqual(enrolled.account_id, pending.account_id)
         self.assertTrue(self.accounts.authenticate("New User", "user chosen password"))
-        self.assertEqual(self.accounts.group_stable_ids(pending.account_id), {"preferences", "users"})
+        self.assertEqual(self.accounts.group_stable_ids(pending.account_id), {"preferences", "user"})
         with self.assertRaises(PermissionError):
             self.bootstrap.enroll_account(claim, "new password", now=self.now)
         reset = self.bootstrap.issue_reset_claim(administrator.account_id, pending.account_id, now=self.now)
@@ -110,7 +110,7 @@ class AccountSecurityTests(unittest.TestCase):
         with self.assertRaises(LastAdministratorError):
             self.accounts.set_status(administrator.account_id, "suspended")
         with self.assertRaises(LastAdministratorError):
-            self.accounts.set_group_membership(administrator.account_id, "administrators", False)
+            self.accounts.set_group_membership(administrator.account_id, "admin", False)
 
 
 if __name__ == "__main__":

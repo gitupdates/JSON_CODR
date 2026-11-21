@@ -42,8 +42,10 @@ class IssuedSession:
 
 
 class SessionService:
-    def __init__(self, store: SecurityStore) -> None:
+    def __init__(self, store: SecurityStore, *, secure_cookies: bool = True) -> None:
         self.store = store
+        self.secure_cookies = secure_cookies
+        self._idle_windows: dict[UUID, timedelta] = {}
 
     def _insert(self, connection: sqlite3.Connection, account_id: UUID, now: datetime, idle: timedelta, absolute: timedelta) -> IssuedSession:
         active = connection.execute("SELECT status FROM accounts WHERE account_id = ?", (str(account_id),)).fetchone()
@@ -58,6 +60,7 @@ class SessionService:
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, 1)",
             (str(session_id), str(account_id), _hash(token), now.isoformat(), idle_expires.isoformat(), absolute_expires.isoformat(), now.isoformat(), now.isoformat(), now.isoformat(), now.isoformat()),
         )
+        self._idle_windows[session_id] = idle
         return IssuedSession(session_id, token)
 
     def create(self, account_id: UUID, now: datetime | None = None, *, idle_lifetime: timedelta = timedelta(minutes=30), absolute_lifetime: timedelta = timedelta(hours=8)) -> IssuedSession:
@@ -78,7 +81,7 @@ class SessionService:
             connection.execute("UPDATE sessions SET revoked_at = COALESCE(revoked_at, ?), updated_at = ?, version = version + 1 WHERE session_id = ?", (now.isoformat(), now.isoformat(), row[0]))
             return None
         if touch:
-            new_idle = min(now + (datetime.fromisoformat(row[5]) - datetime.fromisoformat(row[5]) + timedelta(minutes=30)), datetime.fromisoformat(row[6]))
+            new_idle = min(now + self._idle_windows.get(UUID(row[0]), timedelta(minutes=30)), datetime.fromisoformat(row[6]))
             connection.execute("UPDATE sessions SET last_seen_at = ?, idle_expires_at = ?, updated_at = ?, version = version + 1 WHERE session_id = ?", (now.isoformat(), new_idle.isoformat(), now.isoformat(), row[0]))
         return SessionPrincipal(UUID(row[1]), UUID(row[0]), row[2], row[3], datetime.fromisoformat(row[4]) if row[4] else None)
 
@@ -119,8 +122,9 @@ class SessionService:
 
     def list_sessions(self, account_id: UUID) -> list[dict[str, str | None]]:
         with self.store.transaction() as connection:
-            rows = connection.execute("SELECT session_id, issued_at, last_seen_at, recent_auth_at, revoked_at FROM sessions WHERE account_id = ? ORDER BY issued_at DESC", (str(account_id),)).fetchall()
-            return [{"session_id": row[0], "issued_at": row[1], "last_seen_at": row[2], "recent_auth_at": row[3], "revoked_at": row[4]} for row in rows]
+            rows = connection.execute("SELECT session_id, issued_at, last_seen_at, recent_auth_at, revoked_at, idle_expires_at, absolute_expires_at FROM sessions WHERE account_id = ? ORDER BY issued_at DESC", (str(account_id),)).fetchall()
+            now = _utc()
+            return [{"session_id": row[0], "issued_at": row[1], "last_seen_at": row[2], "recent_auth_at": row[3], "revoked_at": row[4], "idle_expires_at": row[5], "absolute_expires_at": row[6], "active": row[4] is None and datetime.fromisoformat(row[5]) > now and datetime.fromisoformat(row[6]) > now} for row in rows]
 
     def revoke_session(self, account_id: UUID, session_id: UUID, now: datetime | None = None) -> bool:
         timestamp = _utc(now)
@@ -130,12 +134,10 @@ class SessionService:
 
     @staticmethod
     def cookie_header(token: str) -> str:
-        return f"{SESSION_COOKIE_NAME}={token}; HttpOnly; Path=/; SameSite=Lax"
+        return f"{SESSION_COOKIE_NAME}={token}; HttpOnly; Path=/; SameSite=Strict"
 
-    @staticmethod
-    def set_cookie(response, token: str) -> None:
-        response.set_cookie(SESSION_COOKIE_NAME, token, httponly=True, samesite="lax", path="/")
+    def set_cookie(self, response, token: str) -> None:
+        response.set_cookie(SESSION_COOKIE_NAME, token, httponly=True, samesite="strict", secure=self.secure_cookies, path="/")
 
-    @staticmethod
-    def clear_cookie(response) -> None:
-        response.delete_cookie(SESSION_COOKIE_NAME, httponly=True, samesite="lax", path="/")
+    def clear_cookie(self, response) -> None:
+        response.delete_cookie(SESSION_COOKIE_NAME, httponly=True, samesite="strict", secure=self.secure_cookies, path="/")

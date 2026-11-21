@@ -23,7 +23,7 @@ class AuthenticationApiTests(unittest.TestCase):
         root = Path(self.temporary_directory.name)
         store = SecurityStore(root / "security.sqlite3")
         accounts = AccountService(store, PasswordHasher())
-        sessions = SessionService(store)
+        sessions = SessionService(store, secure_cookies=False)
         bootstrap = BootstrapService(store, accounts)
         self.claim = bootstrap.issue_initial_claim()
         app = create_app(
@@ -44,6 +44,7 @@ class AuthenticationApiTests(unittest.TestCase):
         self.assertEqual(login.status_code, 200, login.text)
         self.assertNotIn("account_id", login.text)
         self.assertIn("HttpOnly", login.headers["set-cookie"])
+        self.assertIn("SameSite=strict", login.headers["set-cookie"])
         current = self.client.get("/api/auth/session")
         self.assertEqual(current.status_code, 200)
         self.assertEqual(current.json()["username"], "Administrator")
