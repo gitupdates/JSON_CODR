@@ -389,6 +389,42 @@ class DesignerReferenceTests(unittest.TestCase):
         with self.assertRaises(CapturePolicyError):
             sanitize_capture_envelope(oversized)
 
+    def test_node_capture_sanitizer_removes_remote_css_and_rejects_private_fields(self):
+        module_uri = (Path(__file__).parent / "tools" / "playwright_ui_capture.mjs").resolve().as_uri()
+        envelope = {
+            "schema_version": 1,
+            "pages": [{
+                "route": "/",
+                "stylesheets": [{
+                    "path": "/site.css",
+                    "body": ".card { background: url(https://evil.example/x); color: #123456; }",
+                }],
+            }],
+        }
+        program = f"""
+import {{ sanitizeEnvelope }} from {json.dumps(module_uri)};
+const clean = sanitizeEnvelope({json.dumps(envelope)});
+let rejectedPrivate = false;
+try {{ sanitizeEnvelope({{ schema_version: 1, pages: [], cookies: [{{ name: "session" }}] }}); }}
+catch {{ rejectedPrivate = true; }}
+process.stdout.write(JSON.stringify({{ clean, rejectedPrivate }}));
+"""
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", program],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        output = json.loads(result.stdout)
+        serialized = json.dumps(output["clean"])
+
+        self.assertTrue(output["rejectedPrivate"])
+        self.assertNotIn("evil.example", serialized)
+        self.assertEqual(
+            output["clean"]["pages"][0]["stylesheets"][0]["body"],
+            ".card { background: none; color: #123456; }",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

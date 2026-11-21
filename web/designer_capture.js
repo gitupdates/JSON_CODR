@@ -44,6 +44,7 @@
   const nodeCount = { value: 0 };
   const accessibility = [];
   const computedStyles = [];
+  const backgrounds = [];
   const selectorUsage = new Set();
   const walk = (element, depth) => {
     if (nodeCount.value >= maxNodes || depth > maxDepth) return null;
@@ -58,6 +59,13 @@
     const visual = {};
     for (const property of safeProperties) visual[property] = style[property];
     computedStyles.push({ tag: element.tagName.toLowerCase(), classes, bounds: boundsOf(element), properties: visual });
+    if (backgrounds.length < 512) {
+      for (const match of style.backgroundImage.matchAll(/url\(["']?(.*?)["']?\)/g)) {
+        const path = localPath(match[1]);
+        backgrounds.push(path ? { path } : { unresolved: true });
+        if (backgrounds.length >= 512) break;
+      }
+    }
     for (const className of classes) selectorUsage.add(`.${className}`);
     if (role || name) accessibility.push({ role: role.slice(0, 64), name: name.slice(0, 256) });
     return {
@@ -107,16 +115,6 @@
     alt: safeText(image.alt),
     bounds: boundsOf(image),
   })).filter((image) => image.path);
-  const backgrounds = [];
-  for (const item of computedStyles.slice(0, 512)) {
-    const element = document.querySelector(item.classes.map((name) => `.${CSS.escape(name)}`).join(","));
-    if (!element) continue;
-    const backgroundImage = getComputedStyle(element).backgroundImage;
-    for (const match of backgroundImage.matchAll(/url\(["']?(.*?)["']?\)/g)) {
-      const path = localPath(match[1]);
-      backgrounds.push(path ? { path } : { unresolved: true });
-    }
-  }
   const resources = Array.from(document.querySelectorAll("link[rel=stylesheet],img,svg,image"))
     .slice(0, 1024).map((element) => ({
       type: element.tagName.toLowerCase() === "link" ? "stylesheet" : "image",

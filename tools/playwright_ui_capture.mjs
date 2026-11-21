@@ -5,8 +5,11 @@ import { pathToFileURL } from "node:url";
 
 const MAX_PAGES = 100;
 const MAX_RESOURCE_BYTES = 5 * 1024 * 1024;
-const MAX_OUTPUT_BYTES = 20 * 1024 * 1024;
-
+const MAX_CAPTURE_BYTES = 20 * 1024 * 1024;
+const privateKey = /(?:cookie|header|storage|input.?value|form.?value|auth|credential|token|source.?map|script.?body|(?:xhr|fetch|api).?(?:body|payload)|table.?cell|hostname|(?:^|_)(?:host|url|href|src|origin|query)(?:$|_))/i;
+const hostnameText = /(?:https?:\/\/|www\.)|(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}/i;
+const knownFrameworks = new Set(["react", "next.js", "angular", "vue", "svelte", "tailwind", "bootstrap", "material ui"]);
+const tokenGroups = new Set(["colors", "spacing", "typography", "radius", "border", "shadow", "font_families"]);
 function fail(message) {
   console.error(message);
   process.exitCode = 1;
@@ -49,6 +52,96 @@ function validateRequest(request) {
     url: `${target.origin}${target.pathname || "/"}`,
     allowed_origins: request.allowed_origins,
   };
+}
+
+function sanitizeCss(source) {
+  return source
+    .replace(/@import\b[^;]*(?:;|$)/gi, "")
+    .replace(/url\s*\([^)]*\)/gi, "none")
+    .replace(/(?:https?:)?\/\/[^\s;,)]+/gi, "none")
+    .replace(/data:[^\s;,)]+/gi, "none")
+    .replace(/(?:javascript|vbscript|file):/gi, "")
+    .replace(hostnameText, "none");
+}
+
+function isRemotePath(value) {
+  const suffix = value.split(".").at(-1)?.toLowerCase();
+  if (["css", "png", "jpg", "jpeg", "svg", "woff", "woff2", "ttf", "otf"].includes(suffix)) {
+    return value.toLowerCase().startsWith("www.");
+  }
+  return /^(?:www\.)|^(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?:\/|$)/i.test(value);
+}
+
+function validatePath(value) {
+  if (typeof value !== "string" || !value || /:\/\/|[?#\\]/.test(value) || value.startsWith("//") ||
+      value.split("/").some((part) => part === "." || part === "..") || isRemotePath(value)) {
+    throw new Error("Capture contains a non-local or unsafe resource path.");
+  }
+}
+
+function sanitizeValue(value, keyContext = "", cssContext = false, depth = 0) {
+  if (depth > 32) throw new Error("Capture envelope nesting exceeds limit.");
+  if (Array.isArray(value)) {
+    if (value.length > 10000) throw new Error("Capture collection exceeds limit.");
+    return value.map((child) => sanitizeValue(child, keyContext, cssContext, depth + 1));
+  }
+  if (value && typeof value === "object") {
+    const result = {};
+    for (const [key, child] of Object.entries(value)) {
+      if (key === "excluded_field_counts") {
+        if (!child || typeof child !== "object" || Array.isArray(child) ||
+            Object.values(child).some((count) => !Number.isInteger(count) || count < 0)) {
+          throw new Error("Excluded-field counts must be non-negative integers.");
+        }
+        result[key] = child;
+        continue;
+      }
+      if (key === "tokens") {
+        if (!child || typeof child !== "object" || Array.isArray(child) ||
+            Object.keys(child).some((group) => !tokenGroups.has(group))) {
+          throw new Error("Capture design-token candidates are malformed.");
+        }
+        result[key] = sanitizeValue(child, key, false, depth + 1);
+        continue;
+      }
+      if (privateKey.test(key)) throw new Error(`Capture contains prohibited field: ${key}`);
+      const childCss = cssContext || key === "css_variables" ||
+        (["body", "declarations"].includes(key) && ["stylesheets", "inline_styles"].includes(keyContext));
+      result[key] = sanitizeValue(child, key, childCss, depth + 1);
+    }
+    return result;
+  }
+  if (typeof value === "string") {
+    if (Buffer.byteLength(value, "utf8") > MAX_RESOURCE_BYTES) throw new Error("Capture string exceeds size limit.");
+    if (cssContext) return sanitizeCss(value);
+    if (keyContext === "content_base64") return value;
+    if (keyContext === "path") validatePath(value);
+    else if (hostnameText.test(value) && !knownFrameworks.has(value.toLowerCase())) {
+      throw new Error("Capture text cannot contain hostnames or URLs.");
+    }
+    return value;
+  }
+  if (value === null || typeof value === "boolean" || Number.isFinite(value)) return value;
+  throw new Error("Capture contains an unsupported value.");
+}
+
+export function sanitizeEnvelope(envelope) {
+  if (!envelope || envelope.schema_version !== 1 || !Array.isArray(envelope.pages) || envelope.pages.length > MAX_PAGES) {
+    throw new Error("Unsupported or malformed capture envelope.");
+  }
+  const safe = sanitizeValue(envelope);
+  for (const page of safe.pages) {
+    if (typeof page.route !== "string" || !page.route.startsWith("/") || /[?#]/.test(page.route)) {
+      throw new Error("Capture route must be local and query-free.");
+    }
+    for (const resource of page.resources || []) {
+      if (resource.size !== undefined &&
+          (!Number.isInteger(resource.size) || resource.size < 0 || resource.size > MAX_RESOURCE_BYTES)) {
+        throw new Error("Captured resource size is invalid or exceeds limit.");
+      }
+    }
+  }
+  return safe;
 }
 
 async function main() {
@@ -163,14 +256,14 @@ async function main() {
     await context.close();
     await browser.close();
   }
-  const envelope = {
+  const envelope = sanitizeEnvelope({
     schema_version: 1,
     pages,
     framework_hints: [...new Set(pages.flatMap((page) => page.framework_hints || []))].slice(0, 32),
     excluded_field_counts: { browser_storage: 0, request_headers: 0, response_headers: 0 },
-  };
+  });
   const output = `${JSON.stringify(envelope, null, 2)}\n`;
-  if (Buffer.byteLength(output, "utf8") > MAX_OUTPUT_BYTES) throw new Error("Capture envelope exceeds output size limit.");
+  if (Buffer.byteLength(output, "utf8") > MAX_CAPTURE_BYTES) throw new Error("Capture envelope exceeds output size limit.");
   await writeFile(outputPath, output, { encoding: "utf8", flag: "wx" });
 }
 
