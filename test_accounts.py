@@ -111,14 +111,15 @@ class AccountSecurityTests(unittest.TestCase):
     def test_admin_enrollment_claim_lets_user_choose_password(self) -> None:
         administrator = self.accounts.create_initial_administrator("Administrator", "correct horse battery staple")
         pending = self.accounts.create_pending_account("New User")
-        claim = self.bootstrap.issue_enrollment_claim(administrator.account_id, pending.account_id, now=self.now)
+        principal = self.sessions.lookup(self.sessions.create(administrator.account_id, now=self.now).token, now=self.now)
+        claim = self.bootstrap.issue_claim_for_principal(principal, pending.account_id, "enrollment", now=self.now)
         enrolled = self.bootstrap.enroll_account(claim, "user chosen password", now=self.now)
         self.assertEqual(enrolled.account_id, pending.account_id)
         self.assertTrue(self.accounts.authenticate("New User", "user chosen password"))
         self.assertEqual(self.accounts.group_stable_ids(pending.account_id), {"preferences", "user"})
         with self.assertRaises(PermissionError):
             self.bootstrap.enroll_account(claim, "new password", now=self.now)
-        reset = self.bootstrap.issue_reset_claim(administrator.account_id, pending.account_id, now=self.now)
+        reset = self.bootstrap.issue_claim_for_principal(principal, pending.account_id, "reset", now=self.now)
         self.bootstrap.reset_account_password(reset, "reset chosen password", now=self.now)
         self.assertTrue(self.accounts.authenticate("New User", "reset chosen password"))
         with self.assertRaises(PermissionError):

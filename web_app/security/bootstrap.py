@@ -52,14 +52,20 @@ class BootstrapService:
                 connection, username, password, set(BASE_GROUPS), timestamp, account_id=ADMINISTRATOR_ACCOUNT_ID
             )
 
-    def _authorize_recent_admin(self, connection, principal: SessionPrincipal, now: datetime) -> None:
+    def _authorize_recent_admin(self, connection: object, principal: SessionPrincipal, now: datetime) -> None:
         row = connection.execute(
-            "SELECT accounts.status, sessions.recent_auth_at, sessions.revoked_at FROM sessions JOIN accounts ON accounts.account_id = sessions.account_id "
+            "SELECT accounts.status, sessions.recent_auth_at, sessions.revoked_at, sessions.idle_expires_at, sessions.absolute_expires_at FROM sessions JOIN accounts ON accounts.account_id = sessions.account_id "
             "JOIN memberships ON memberships.account_id = accounts.account_id JOIN groups ON groups.group_id = memberships.group_id "
             "WHERE sessions.session_id = ? AND sessions.account_id = ? AND groups.stable_id = 'admin'",
             (str(principal.session_id), str(principal.account_id)),
         ).fetchone()
-        if row is None or row[0] != "active" or row[2] is not None or row[1] is None or datetime.fromisoformat(row[1]) < now - RECENT_AUTH_WINDOW:
+        if row is None:
+            raise PermissionError("recent administrator authentication is required")
+        if row[0] != "active" or row[2] is not None or row[1] is None:
+            raise PermissionError("recent administrator authentication is required")
+        if datetime.fromisoformat(row[1]) < now - RECENT_AUTH_WINDOW:
+            raise PermissionError("recent administrator authentication is required")
+        if datetime.fromisoformat(row[3]) <= now or datetime.fromisoformat(row[4]) <= now:
             raise PermissionError("recent administrator authentication is required")
 
     def create_pending_account_with_claim(self, principal: SessionPrincipal, username: str, now: datetime | None = None) -> tuple[AccountRecord, str]:
@@ -85,25 +91,9 @@ class BootstrapService:
             connection.execute("UPDATE auth_claims SET consumed_at = ?, updated_at = ?, version = version + 1 WHERE account_id = ? AND purpose = ? AND consumed_at IS NULL", (timestamp.isoformat(), timestamp.isoformat(), str(account_id), purpose))
             return self._issue_claim_in_transaction(connection, purpose, account_id, timestamp, lifetime)
 
-    def issue_enrollment_claim(self, administrator_id: UUID, account_id: UUID, now: datetime | None = None, lifetime: timedelta = timedelta(minutes=15)) -> str:
-        timestamp = _utc(now)
-        with self.store.transaction() as connection:
-            if not self.accounts.is_effective_administrator(administrator_id, connection): raise PermissionError("administrator membership is required")
-            row = connection.execute("SELECT status FROM accounts WHERE account_id = ?", (str(account_id),)).fetchone()
-            if row is None or row[0] != "pending": raise PermissionError("enrollment requires pending account")
-            return self._issue_claim_in_transaction(connection, "enrollment", account_id, timestamp, lifetime)
-
-    def issue_reset_claim(self, administrator_id: UUID, account_id: UUID, now: datetime | None = None, lifetime: timedelta = timedelta(minutes=15)) -> str:
-        timestamp = _utc(now)
-        with self.store.transaction() as connection:
-            if not self.accounts.is_effective_administrator(administrator_id, connection): raise PermissionError("administrator membership is required")
-            row = connection.execute("SELECT status FROM accounts WHERE account_id = ?", (str(account_id),)).fetchone()
-            if row is None or row[0] != "active": raise PermissionError("reset requires active account")
-            connection.execute("UPDATE sessions SET revoked_at = ?, updated_at = ?, version = version + 1 WHERE account_id = ? AND revoked_at IS NULL", (timestamp.isoformat(), timestamp.isoformat(), str(account_id)))
-            return self._issue_claim_in_transaction(connection, "reset", account_id, timestamp, lifetime)
-
-    def _issue_claim_in_transaction(self, connection, purpose, account_id, now, lifetime):
-        if lifetime <= timedelta(): raise ValueError("claim lifetime must be positive")
+    def _issue_claim_in_transaction(self, connection: object, purpose: str, account_id: UUID, now: datetime, lifetime: timedelta) -> str:
+        if lifetime <= timedelta():
+            raise ValueError("claim lifetime must be positive")
         claim = secrets.token_urlsafe(32)
         connection.execute("INSERT INTO auth_claims (auth_claim_id, claim_hash, purpose, account_id, expires_at, consumed_at, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 1)", (str(uuid4()), _hash(claim), purpose, str(account_id), (now + lifetime).isoformat(), now.isoformat(), now.isoformat()))
         return claim
