@@ -229,6 +229,8 @@ class GitHubCLITests(unittest.TestCase):
 
             def runner(arguments, **kwargs):
                 calls.append(arguments)
+                if arguments[1:4] == ["api", "--hostname", "github.com"] and arguments[-1] == "user":
+                    return subprocess.CompletedProcess(arguments, 0, '{"login":"octocat","html_url":"https://github.com/octocat"}', "")
                 if arguments[1:3] == ["check-ref-format", "refs/heads/main"]:
                     return subprocess.CompletedProcess(arguments, 0, "", "")
                 command = arguments[3:]
@@ -299,6 +301,8 @@ class GitHubCLITests(unittest.TestCase):
 
             def runner(arguments, **kwargs):
                 calls.append(arguments)
+                if arguments[1:4] == ["api", "--hostname", "github.com"] and arguments[-1] == "user":
+                    return subprocess.CompletedProcess(arguments, 0, '{"login":"octocat","html_url":"https://github.com/octocat"}', "")
                 if arguments[1:3] == ["check-ref-format", "refs/heads/main"]:
                     return subprocess.CompletedProcess(arguments, 0, "", "")
                 command = arguments[3:]
@@ -320,7 +324,7 @@ class GitHubCLITests(unittest.TestCase):
                 if command[:3] == ["show", "-s", "--format=%H%x00%h%x00%s%x00%an%x00%aI"]:
                     sha = state["local_sha"] if command[3] == "HEAD" else state["remote_sha"]
                     output = f"{sha}\x00{sha[:7]}\x00Build\x00Builder\x002026-11-21T10:00:00-06:00"
-                elif key == ("merge", "--ff-only", "refs/remotes/origin/main"):
+                elif key == ("merge", "--ff-only", remote_sha):
                     state["local_sha"] = state["remote_sha"]
                     output = "Fast-forward"
                 elif key in outputs:
@@ -331,13 +335,13 @@ class GitHubCLITests(unittest.TestCase):
 
             client = GitHubCLI(executable_finder=lambda name: f"{name}.exe", runner=runner)
             with self.assertRaises(GitHubBuildConflict):
-                client.update_build(str(root), "example/sample", "main", "c" * 40, remote_sha)
+                client.update_build(str(root), "example/sample", "main", "c" * 40, remote_sha, "octocat", "github.com")
             self.assertFalse(any("merge" in call for call in calls))
 
-            updated = client.update_build(str(root), "example/sample", "main", local_sha, remote_sha)
+            updated = client.update_build(str(root), "example/sample", "main", local_sha, remote_sha, "octocat", "github.com")
             self.assertEqual(updated["status"], "current")
             self.assertFalse(updated["update_allowed"])
-            self.assertTrue(any(call[-3:] == ["merge", "--ff-only", "refs/remotes/origin/main"] for call in calls))
+            self.assertTrue(any(call[-3:] == ["merge", "--ff-only", remote_sha] for call in calls))
             flattened = " ".join(part for call in calls for part in call)
             for forbidden in (" reset ", " clean ", " checkout ", " switch ", " rebase ", "--force", "--set-upstream"):
                 self.assertNotIn(forbidden, f" {flattened} ")
@@ -345,8 +349,12 @@ class GitHubCLITests(unittest.TestCase):
             state.update(local_sha=local_sha, dirty=True)
             merge_count = sum("merge" in call for call in calls)
             with self.assertRaises(GitHubBuildConflict):
-                client.update_build(str(root), "example/sample", "main", local_sha, remote_sha)
+                client.update_build(str(root), "example/sample", "main", local_sha, remote_sha, "octocat", "github.com")
             self.assertEqual(sum("merge" in call for call in calls), merge_count)
+
+    def test_dot_prefixed_repository_name_is_valid(self):
+        client = GitHubCLI(executable_finder=lambda name: "git.exe")
+        self.assertEqual(client._validated_repository("example/.github"), "example/.github")
 
     def test_clone_uses_gh_and_requires_new_absolute_destination(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

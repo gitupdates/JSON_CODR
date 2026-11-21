@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 import subprocess
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Literal
@@ -31,6 +32,8 @@ class GitHubCLI:
         self._executable_finder = executable_finder
         self._runner = runner
         self._timeout = timeout
+        self._locks_guard = threading.Lock()
+        self._local_locks: dict[str, threading.RLock] = {}
 
     def status(self) -> dict[str, object]:
         user = self._json("gh", ["api", "user"])
@@ -391,6 +394,7 @@ class GitHubCLI:
     def check_build(
         self, project_root: str, repository: str, branch: str,
     ) -> dict[str, object]:
+        account = self.status()
         root, local_repository = self._local_repository(project_root)
         selected_repository = self._validated_repository(repository)
         selected_branch = self._validated_branch(branch)
@@ -415,6 +419,8 @@ class GitHubCLI:
             "detail": "Build status is unavailable.",
             "update_allowed": False,
             "update_blocked_reason": "Build status is unavailable.",
+            "authenticated_login": account["login"],
+            "authenticated_host": "github.com",
         }
         if local_repository.casefold() != selected_repository.casefold():
             return self._blocked_build(
@@ -484,6 +490,8 @@ class GitHubCLI:
         branch: str,
         expected_local_sha: str,
         expected_remote_sha: str,
+        expected_login: str,
+        expected_host: str,
     ) -> dict[str, object]:
         for name, value in (
             ("local", expected_local_sha),
@@ -491,20 +499,42 @@ class GitHubCLI:
         ):
             if not re.fullmatch(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})", value):
                 raise ValueError(f"Expected {name} commit is invalid")
-        current = self.check_build(project_root, repository, branch)
-        local_commit = current.get("local_commit")
-        remote_commit = current.get("remote_commit")
-        local_sha = local_commit.get("sha") if isinstance(local_commit, dict) else None
-        remote_sha = remote_commit.get("sha") if isinstance(remote_commit, dict) else None
-        if local_sha != expected_local_sha or remote_sha != expected_remote_sha:
-            raise GitHubBuildConflict("The local or remote build changed. Check the build again.")
-        if current.get("status") != "behind" or current.get("update_allowed") is not True:
-            reason = current.get("update_blocked_reason") or "This build cannot be updated safely."
-            raise GitHubBuildConflict(str(reason))
-        root = Path(str(current["project_root"]))
-        selected_branch = str(current["branch"])
-        self._git(root, "merge", "--ff-only", f"refs/remotes/origin/{selected_branch}")
-        return self.check_build(str(root), str(current["repository"]), selected_branch)
+        if expected_host != "github.com" or not expected_login:
+            raise ValueError("Expected GitHub identity is invalid")
+        requested_root = Path(project_root).expanduser().resolve()
+        with self._local_lock(requested_root):
+            current = self.check_build(project_root, repository, branch)
+            local_commit = current.get("local_commit")
+            remote_commit = current.get("remote_commit")
+            local_sha = local_commit.get("sha") if isinstance(local_commit, dict) else None
+            remote_sha = remote_commit.get("sha") if isinstance(remote_commit, dict) else None
+            if (
+                local_sha != expected_local_sha
+                or remote_sha != expected_remote_sha
+                or current.get("authenticated_login") != expected_login
+                or current.get("authenticated_host") != expected_host
+            ):
+                raise GitHubBuildConflict("The local build, remote build, or GitHub identity changed. Check the build again.")
+            if current.get("status") != "behind" or current.get("update_allowed") is not True:
+                reason = current.get("update_blocked_reason") or "This build cannot be updated safely."
+                raise GitHubBuildConflict(str(reason))
+            root = Path(str(current["project_root"]))
+            selected_branch = str(current["branch"])
+            account = self.status()
+            root_again, repository_again = self._local_repository(str(root))
+            if account.get("login") != expected_login or repository_again.casefold() != str(current["repository"]).casefold():
+                raise GitHubBuildConflict("The GitHub identity or repository changed. Check the build again.")
+            if self._git(root_again, "branch", "--show-current") != selected_branch:
+                raise GitHubBuildConflict("The local branch changed. Check the build again.")
+            if self._git(root_again, "rev-parse", "HEAD") != expected_local_sha:
+                raise GitHubBuildConflict("The local build changed. Check the build again.")
+            if self._git(root_again, "status", "--porcelain", "--untracked-files=normal"):
+                raise GitHubBuildConflict("The working tree changed. Check the build again.")
+            remote_ref = f"refs/remotes/origin/{selected_branch}"
+            if self._git(root_again, "rev-parse", remote_ref) != expected_remote_sha:
+                raise GitHubBuildConflict("The remote build changed. Check the build again.")
+            self._git(root_again, "merge", "--ff-only", expected_remote_sha)
+            return self.check_build(str(root_again), str(current["repository"]), selected_branch)
 
     def clone_local_repository(self, repository: str, destination: str) -> dict[str, object]:
         parts = repository.split("/")
@@ -607,7 +637,7 @@ class GitHubCLI:
         return int(counts[0]), int(counts[1])
 
     def _delete_api(self, endpoint: str) -> None:
-        self._run("gh", ["api", "--method", "DELETE", endpoint])
+        self._run("gh", ["api", "--hostname", "github.com", "--method", "DELETE", endpoint])
 
     @staticmethod
     def _github_slug(remote: str) -> str:
@@ -641,7 +671,7 @@ class GitHubCLI:
     def _repository_path(owner: str, repository: str) -> str:
         if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,38})", owner):
             raise ValueError("GitHub owner is invalid")
-        if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,99})", repository):
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", repository) or repository in {".", ".."}:
             raise ValueError("GitHub repository name is invalid")
         return f"repos/{owner}/{repository}"
 
@@ -727,13 +757,22 @@ class GitHubCLI:
         return response
 
     def _git_names(self, root: Path, *arguments: str) -> list[str]:
-        output = self._run("git", ["-C", str(root), *arguments])
+        with self._local_lock(root):
+            output = self._run("git", ["-C", str(root), *arguments])
         return [item for item in output.split("\0") if item]
 
     def _git(self, root: Path, *arguments: str) -> str:
-        return self._run("git", ["-C", str(root), *arguments]).strip()
+        with self._local_lock(root):
+            return self._run("git", ["-C", str(root), *arguments]).strip()
+
+    def _local_lock(self, root: Path) -> threading.RLock:
+        key = str(root.resolve()).casefold()
+        with self._locks_guard:
+            return self._local_locks.setdefault(key, threading.RLock())
 
     def _json(self, executable: str, arguments: list[str]) -> object:
+        if executable == "gh" and arguments and arguments[0] == "api" and "--hostname" not in arguments:
+            arguments = ["api", "--hostname", "github.com", *arguments[1:]]
         output = self._run(executable, arguments)
         try:
             return json.loads(output)

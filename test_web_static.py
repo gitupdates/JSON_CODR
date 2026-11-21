@@ -59,6 +59,8 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("commits?branch=", html)
         self.assertIn("expected_local_sha", html)
         self.assertIn("expected_remote_sha", html)
+        self.assertIn("expected_login", html)
+        self.assertIn("inspectionGeneration", html)
         self.assertNotIn("example/sample", html)
         self.assertNotIn("gitupdates/JSON_CODR", html)
 

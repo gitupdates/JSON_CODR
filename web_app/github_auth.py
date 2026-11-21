@@ -83,9 +83,12 @@ class GitHubAuthSessionService:
                 "device_code": None,
                 "process": process,
                 "cancel_requested": False,
+                "worker": None,
             }
             self._sessions[session_id] = session
-            threading.Thread(target=self._run_session, args=(session_id,), daemon=True).start()
+            worker = threading.Thread(target=self._run_session, args=(session_id,), daemon=True)
+            session["worker"] = worker
+            worker.start()
             return self._public(session)
 
     def status(self, session_id: str) -> dict[str, object]:
@@ -125,6 +128,10 @@ class GitHubAuthSessionService:
                 self.cancel(session_id)
             except GitHubAuthSessionNotFound:
                 pass
+        for _, session in active:
+            worker = session.get("worker")
+            if isinstance(worker, threading.Thread) and worker is not threading.current_thread():
+                worker.join(timeout=2)
 
     def _run_session(self, session_id: str) -> None:
         with self._lock:
@@ -202,13 +209,13 @@ class GitHubAuthSessionService:
             if account.get("authenticated") is True:
                 with self._lock:
                     current = self._sessions.get(session_id)
-                    if current is not None:
+                    if current is not None and current["state"] in self._ACTIVE_STATES and not current["cancel_requested"]:
                         current["login"] = account.get("login")
                         self._finish_locked(current, "authenticated", "GitHub authentication succeeded.")
                 return
         with self._lock:
             current = self._sessions.get(session_id)
-            if current is not None:
+            if current is not None and current["state"] in self._ACTIVE_STATES and not current["cancel_requested"]:
                 self._finish_locked(current, "failed", "GitHub authentication failed or was denied.")
 
     def _cleanup_locked(self) -> None:
@@ -226,6 +233,7 @@ class GitHubAuthSessionService:
         session["state"] = state
         session["detail"] = self._TOKEN_PATTERN.sub("[redacted]", detail)[:500]
         session["finished_at"] = self._clock()
+        session["device_code"] = None
 
     @staticmethod
     def _terminate(process: object) -> None:
@@ -237,7 +245,10 @@ class GitHubAuthSessionService:
         except (OSError, subprocess.TimeoutExpired):
             try:
                 getattr(process, "kill")()
+                getattr(process, "wait")(timeout=2)
             except OSError:
+                pass
+            except subprocess.TimeoutExpired:
                 pass
 
     @staticmethod

@@ -146,7 +146,7 @@ try {
   Wait-Process -Id $WebProcess.Id
 } finally {
   if ($WebProcess -and -not $WebProcess.HasExited) {
-    Stop-Process -Id $WebProcess.Id -Force
+    & taskkill.exe /PID $WebProcess.Id /T /F *> $null
   }
   if ($OwnedOllama -and -not $OwnedOllama.HasExited) {
     Stop-Process -Id $OwnedOllama.Id -Force

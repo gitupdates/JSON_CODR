@@ -609,28 +609,35 @@ class WebApiTests(unittest.TestCase):
         invalid_sha = client.post(
             "/api/github/local/update-build",
             headers=headers,
-            json={**check_body, "expected_local_sha": "abc", "expected_remote_sha": "b" * 40},
+            json={**check_body, "expected_local_sha": "abc", "expected_remote_sha": "b" * 40, "expected_login": "test-user", "expected_host": "github.com"},
         )
         self.assertEqual((invalid_repository.status_code, invalid_branch.status_code, invalid_sha.status_code), (422, 422, 422))
 
         updated = client.post(
             "/api/github/local/update-build",
             headers=headers,
-            json={**check_body, "expected_local_sha": "a" * 40, "expected_remote_sha": "b" * 40},
+            json={**check_body, "expected_local_sha": "a" * 40, "expected_remote_sha": "b" * 40, "expected_login": "test-user", "expected_host": "github.com"},
         )
         self.assertEqual(updated.status_code, 200)
         self.assertEqual(updated.json()["status"], "current")
         self.assertEqual(
             github.calls[1],
-            ("update", ("C:/work/sample", "test-user/sample", "feature/ui", "a" * 40, "b" * 40)),
+            ("update", ("C:/work/sample", "test-user/sample", "feature/ui", "a" * 40, "b" * 40, "test-user", "github.com")),
         )
         stale = client.post(
             "/api/github/local/update-build",
             headers=headers,
-            json={**check_body, "expected_local_sha": "c" * 40, "expected_remote_sha": "b" * 40},
+            json={**check_body, "expected_local_sha": "c" * 40, "expected_remote_sha": "b" * 40, "expected_login": "test-user", "expected_host": "github.com"},
         )
         self.assertEqual(stale.status_code, 409)
         self.assertEqual(stale.json()["detail"], "The build changed. Check again.")
+
+        dot_repository = client.post(
+            "/api/github/local/check-build",
+            headers=headers,
+            json={**check_body, "repository": "test-user/.github"},
+        )
+        self.assertEqual(dot_repository.status_code, 200)
 
     def track_core_client(self, client):
         self._core_clients.append(client)

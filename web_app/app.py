@@ -1633,6 +1633,8 @@ def create_app(
             request.branch,
             request.expected_local_sha,
             request.expected_remote_sha,
+            request.expected_login,
+            request.expected_host,
         )
 
     @application.get("/api/github/local/status")

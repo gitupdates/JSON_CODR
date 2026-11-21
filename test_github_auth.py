@@ -183,6 +183,31 @@ class GitHubAuthSessionTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "GitHub CLI is not installed"):
             service.start()
 
+    def test_cancel_during_blocked_status_probe_cannot_be_overwritten_by_success(self):
+        process = _Process(["Authentication complete.\n"])
+        probe_started = threading.Event()
+        release_probe = threading.Event()
+
+        def blocked_probe():
+            probe_started.set()
+            release_probe.wait(2)
+            return {"authenticated": True, "login": "octocat"}
+
+        service = GitHubAuthSessionService(
+            executable_finder=lambda name: "gh.exe",
+            process_factory=lambda *args, **kwargs: process,
+            status_probe=blocked_probe,
+            poll_interval=0.005,
+        )
+        session_id = service.start()["session_id"]
+        process.finish(0)
+        self.assertTrue(probe_started.wait(1))
+        service.cancel(session_id)
+        release_probe.set()
+        time.sleep(0.03)
+        self.assertEqual(service.status(session_id)["state"], "cancelled")
+        service.close()
+
 
 if __name__ == "__main__":
     unittest.main()

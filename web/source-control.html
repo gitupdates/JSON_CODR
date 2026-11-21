@@ -412,10 +412,12 @@
     $("#remote-build-details").replaceChildren(element("span", "Selected branch"), element("strong", "Not checked"));
   }
   function scopeMatchesLocal() {
+    const normalizePath = value => String(value || "").replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
     return Boolean(
       localSnapshot && selectedRepository && selectedBranch &&
       localSnapshot.repository?.toLowerCase() === selectedRepository.full_name.toLowerCase() &&
-      localSnapshot.branch === selectedBranch.name
+      localSnapshot.branch === selectedBranch.name &&
+      normalizePath(localSnapshot.project_root) === normalizePath(projectRoot.value.trim())
     );
   }
   function updateConnectionControls() {
@@ -702,21 +704,28 @@
   async function inspectLocal() {
     const path = projectRoot.value.trim();
     if (!path) { localNotice.textContent = "Enter a repository folder path first."; projectRoot.focus(); return; }
+    const inspectionGeneration = connectionGeneration;
+    const inspectionPath = path;
+    const inspectionIsCurrent = () => inspectionGeneration === connectionGeneration && projectRoot.value.trim() === inspectionPath;
     localStorage.setItem("json_codr_git_project_root", path);
     $("#connect-checkout").disabled = true; localNotice.textContent = "Inspecting local repository...";
     clearBuildResult("Checking whether this checkout matches the selected scope...");
     try {
       const result = await request(`/api/git-broker/status?project_root=${encodeURIComponent(path)}`);
+      if (!inspectionIsCurrent()) return;
       brokerSnapshot = result.repository;
       brokerDetails.textContent = JSON.stringify(brokerSnapshot, null, 2);
       $("#authorize").disabled = false;
       localNotice.textContent = `Git broker inspection complete for ${brokerSnapshot.root}.`;
     } catch (error) {
+      if (!inspectionIsCurrent()) return;
       brokerSnapshot = null; brokerDetails.textContent = ""; $("#authorize").disabled = true;
       localNotice.textContent = `Git broker inspection failed: ${error.message}`;
     }
     try {
-      localSnapshot = await request(`/api/github/local/status?project_root=${encodeURIComponent(path)}`);
+      const inspectedLocal = await request(`/api/github/local/status?project_root=${encodeURIComponent(path)}`);
+      if (!inspectionIsCurrent()) return;
+      localSnapshot = inspectedLocal;
       const changes = localSnapshot.changes || [];
       localSummary.replaceChildren(
         card("Repository", localSnapshot.repository),
@@ -748,13 +757,14 @@
       saveConnection();
       clearBuildResult(repositoryMatch && branchMatch ? "Ready to check the current build." : "Connect a matching checkout before checking a build.");
     } catch (error) {
+      if (!inspectionIsCurrent()) return;
       localSnapshot = null; localSummary.replaceChildren(card("GitHub status", error.message, "error"));
       changedFiles.replaceChildren(element("p", "Unable to load changed files.", "muted"));
       $("#connection-summary").replaceChildren(card("Connection error", error.message, "error"));
       $("#create-branch").disabled = $("#stage-files").disabled = $("#commit-files").disabled =
         $("#fetch-files").disabled = $("#pull-files").disabled = $("#push-files").disabled = true;
       localNotice.textContent = `GitHub-backed local operations unavailable: ${error.message}`;
-    } finally { updateConnectionControls(); }
+    } finally { if (inspectionIsCurrent()) updateConnectionControls(); }
   }
   function renderChangedFiles(changes) {
     changedFiles.replaceChildren();
@@ -836,6 +846,8 @@
           branch: selectedBranch.name,
           expected_local_sha: localCommit.sha,
           expected_remote_sha: remoteCommit.sha,
+          expected_login: buildSnapshot.authenticated_login,
+          expected_host: buildSnapshot.authenticated_host,
         },
         `Fast-forward ${selectedRepository.full_name} / ${selectedBranch.name} at ${localSnapshot.project_root}?\n\nCurrent: ${localCommit.short_sha || localCommit.sha}\nTarget: ${remoteCommit.short_sha || remoteCommit.sha}\n\nLocal changes, divergence, or stale commits will block the update.`,
       );

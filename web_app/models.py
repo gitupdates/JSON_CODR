@@ -797,7 +797,7 @@ class GitHubBuildCheckRequest(GitHubConfirmedWrite):
     repository: str = Field(
         min_length=3,
         max_length=140,
-        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,38}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$",
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,38}/[A-Za-z0-9_.-]{1,100}$",
     )
     branch: str = Field(min_length=1, max_length=200)
 
@@ -805,6 +805,8 @@ class GitHubBuildCheckRequest(GitHubConfirmedWrite):
 class GitHubBuildUpdateRequest(GitHubBuildCheckRequest):
     expected_local_sha: str = Field(pattern=r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
     expected_remote_sha: str = Field(pattern=r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
+    expected_login: str = Field(min_length=1, max_length=100)
+    expected_host: Literal["github.com"]
 
 
 class GitHubLocalCloneRequest(GitHubConfirmedWrite):

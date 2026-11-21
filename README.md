@@ -57,6 +57,7 @@ The **Benchmarks** tab compares CPU with all detected runnable backends or one s
 ## Requirements
 
 - Windows with Python 3.14 or newer
+- Python 3.11 or 3.12 for the optional provider subprocess environments
 - Ollama available in `PATH`
 - At least one configured model installed in Ollama
 
@@ -75,6 +76,11 @@ python -m pip install -r requirements.txt
 The launcher starts Ollama when necessary, serves the application at
 `http://127.0.0.1:8765`, and opens the page in your default browser. Press
 Ctrl+C in the launcher window to stop the web server.
+
+The launcher discovers both Python runtimes automatically. Set
+`JSON_CODR_PYTHON` for the Python 3.14+ application runtime or
+`JSON_CODR_COMPATIBLE_PYTHON` for the Python 3.11/3.12 provider runtime when
+automatic discovery is not suitable.
 
 If your Ollama models use a custom directory, set it before launching:
 
