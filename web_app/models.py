@@ -40,6 +40,11 @@ class AccountResetRequest(AccountEnrollmentRequest):
     pass
 
 
+class PendingAccountRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    username: str = Field(min_length=1, max_length=100)
+
+
 class ChatRequest(BaseModel):
     model: str
     prompt: str

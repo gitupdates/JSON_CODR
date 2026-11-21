@@ -73,7 +73,7 @@ from web_app.core.capability_discovery import discover_project_profile
 from web_app.core.canonical import canonical_digest
 from web_app.core.terminal_adapter import TerminalAdapter
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GitHubAuthCancelRequest, GitHubAuthLoginRequest, GitHubBuildCheckRequest, GitHubBuildUpdateRequest, GitHubConfirmedWrite, GitHubIssueCommentRequest, GitHubIssueCreateRequest, GitHubIssueUpdateRequest, GitHubLocalBranchRequest, GitHubLocalCloneRequest, GitHubLocalCommitRequest, GitHubLocalPushRequest, GitHubLocalStageRequest, GitHubLocalSyncRequest, GitHubPullRequestCreateRequest, GitHubPullRequestMergeRequest, GitHubPullRequestUpdateRequest, GitHubReleaseCreateRequest, GitHubReleaseUpdateRequest, GitHubRemoteBranchCreateRequest, GitHubRepositoryCreateRequest, GitHubRepositoryDeleteRequest, GitHubRepositoryUpdateRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse, AccountEnrollmentRequest, AccountResetRequest, BootstrapAdministratorRequest, LoginRequest, ReauthenticationRequest
+from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GitHubAuthCancelRequest, GitHubAuthLoginRequest, GitHubBuildCheckRequest, GitHubBuildUpdateRequest, GitHubConfirmedWrite, GitHubIssueCommentRequest, GitHubIssueCreateRequest, GitHubIssueUpdateRequest, GitHubLocalBranchRequest, GitHubLocalCloneRequest, GitHubLocalCommitRequest, GitHubLocalPushRequest, GitHubLocalStageRequest, GitHubLocalSyncRequest, GitHubPullRequestCreateRequest, GitHubPullRequestMergeRequest, GitHubPullRequestUpdateRequest, GitHubReleaseCreateRequest, GitHubReleaseUpdateRequest, GitHubRemoteBranchCreateRequest, GitHubRepositoryCreateRequest, GitHubRepositoryDeleteRequest, GitHubRepositoryUpdateRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse, AccountEnrollmentRequest, AccountResetRequest, BootstrapAdministratorRequest, LoginRequest, ReauthenticationRequest, PendingAccountRequest
 from web_app.security.accounts import AccountService
 from web_app.security.bootstrap import BootstrapService
 from web_app.security.passwords import PasswordHasher
@@ -2456,6 +2456,38 @@ def create_app(
             bootstrap_service.reset_account_password(payload.claim, payload.password)
         except (PermissionError, ValueError):
             raise HTTPException(status_code=403, detail="Reset claim is invalid or expired")
+
+    @application.post("/api/auth/accounts", status_code=201)
+    async def create_pending_account(payload: PendingAccountRequest, request: Request, response: Response):
+        principal = current_principal(request)
+        try:
+            account, claim = bootstrap_service.create_pending_account_with_claim(principal, payload.username)
+        except (PermissionError, ValueError):
+            raise HTTPException(status_code=403, detail="Recent administrator authentication is required")
+        response.headers["Cache-Control"] = "no-store"
+        return {"account_id": str(account.account_id), "username": account.username, "enrollment_claim": claim}
+
+    @application.post("/api/auth/accounts/{account_id}/enrollment-claim")
+    async def reissue_enrollment_claim(account_id: str, request: Request, response: Response):
+        from uuid import UUID
+        principal = current_principal(request)
+        try:
+            claim = bootstrap_service.issue_claim_for_principal(principal, UUID(account_id), "enrollment")
+        except (PermissionError, ValueError):
+            raise HTTPException(status_code=403, detail="Recent administrator authentication is required")
+        response.headers["Cache-Control"] = "no-store"
+        return {"enrollment_claim": claim}
+
+    @application.post("/api/auth/accounts/{account_id}/reset-claim")
+    async def issue_reset_claim(account_id: str, request: Request, response: Response):
+        from uuid import UUID
+        principal = current_principal(request)
+        try:
+            claim = bootstrap_service.issue_claim_for_principal(principal, UUID(account_id), "reset")
+        except (PermissionError, ValueError):
+            raise HTTPException(status_code=403, detail="Recent administrator authentication is required")
+        response.headers["Cache-Control"] = "no-store"
+        return {"reset_claim": claim}
 
     return application
 
