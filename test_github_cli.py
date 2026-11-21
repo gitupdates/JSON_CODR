@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_app.github_cli import GitHubCLI, GitHubCLIError
+from web_app.github_cli import GitHubBuildConflict, GitHubCLI, GitHubCLIError
 
 
 class GitHubCLITests(unittest.TestCase):
@@ -211,6 +211,142 @@ class GitHubCLITests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "local changes"):
                 client.pull_local_changes(str(root))
             self.assertEqual(sum("fetch" in arguments for arguments in calls), fetch_count)
+
+    def test_selected_build_comparison_classifies_safe_and_blocked_states(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            state = {
+                "repository": "example/sample",
+                "branch": "main",
+                "local_sha": "a" * 40,
+                "remote_sha": "b" * 40,
+                "ahead": 0,
+                "behind": 1,
+                "dirty": False,
+                "remote_exists": True,
+            }
+            calls = []
+
+            def runner(arguments, **kwargs):
+                calls.append(arguments)
+                if arguments[1:3] == ["check-ref-format", "refs/heads/main"]:
+                    return subprocess.CompletedProcess(arguments, 0, "", "")
+                command = arguments[3:]
+                if command == ["rev-parse", "--show-toplevel"]:
+                    output = str(root)
+                elif command == ["remote", "get-url", "origin"]:
+                    output = f"https://github.com/{state['repository']}.git"
+                elif command == ["branch", "--show-current"]:
+                    output = state["branch"]
+                elif command == ["status", "--porcelain", "--untracked-files=normal"]:
+                    output = " M README.md" if state["dirty"] else ""
+                elif command[:3] == ["ls-remote", "--heads", "origin"]:
+                    output = f"{state['remote_sha']}\trefs/heads/main\n" if state["remote_exists"] else ""
+                elif command[:2] == ["fetch", "origin"]:
+                    output = ""
+                elif command == ["rev-parse", "HEAD"]:
+                    output = state["local_sha"]
+                elif command == ["rev-parse", "refs/remotes/origin/main"]:
+                    output = state["remote_sha"]
+                elif command[:3] == ["rev-list", "--left-right", "--count"]:
+                    output = f"{state['ahead']}\t{state['behind']}"
+                elif command[:3] == ["show", "-s", "--format=%H%x00%h%x00%s%x00%an%x00%aI"]:
+                    sha = state["local_sha"] if command[3] == "HEAD" else state["remote_sha"]
+                    output = f"{sha}\x00{sha[:7]}\x00Test subject\x00Test Author\x002026-11-21T10:00:00-06:00"
+                elif command == ["status", "--porcelain=v2", "--branch"]:
+                    output = f"# branch.oid {state['local_sha']}\n# branch.head {state['branch']}\n"
+                else:
+                    raise AssertionError(f"Unexpected command: {arguments}")
+                return subprocess.CompletedProcess(arguments, 0, output, "")
+
+            client = GitHubCLI(
+                executable_finder=lambda name: f"{name}.exe",
+                runner=runner,
+            )
+            behind = client.check_build(str(root), "example/sample", "main")
+            self.assertEqual((behind["status"], behind["ahead"], behind["behind"]), ("behind", 0, 1))
+            self.assertTrue(behind["update_allowed"])
+            self.assertEqual(behind["local_commit"]["sha"], "a" * 40)
+            self.assertEqual(behind["remote_commit"]["sha"], "b" * 40)
+            self.assertIsNone(behind["upstream"])
+            self.assertIn(
+                "+refs/heads/main:refs/remotes/origin/main",
+                next(call for call in calls if "fetch" in call),
+            )
+
+            state["dirty"] = True
+            self.assertEqual(client.check_build(str(root), "example/sample", "main")["status"], "local_changes")
+            state.update(dirty=False, ahead=1, behind=0)
+            self.assertEqual(client.check_build(str(root), "example/sample", "main")["status"], "ahead")
+            state.update(ahead=1, behind=1)
+            self.assertEqual(client.check_build(str(root), "example/sample", "main")["status"], "diverged")
+            state.update(ahead=0, behind=1, branch="feature/other")
+            self.assertEqual(client.check_build(str(root), "example/sample", "main")["status"], "branch_mismatch")
+            state.update(branch="main", repository="example/other")
+            self.assertEqual(client.check_build(str(root), "example/sample", "main")["status"], "repository_mismatch")
+            state.update(repository="example/sample", branch="")
+            self.assertEqual(client.check_build(str(root), "example/sample", "main")["status"], "detached")
+            state.update(branch="main", remote_exists=False)
+            self.assertEqual(client.check_build(str(root), "example/sample", "main")["status"], "remote_missing")
+
+    def test_selected_build_update_revalidates_observed_shas_and_fast_forwards_only(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            local_sha = "a" * 40
+            remote_sha = "b" * 40
+            state = {"local_sha": local_sha, "remote_sha": remote_sha, "dirty": False}
+            calls = []
+
+            def runner(arguments, **kwargs):
+                calls.append(arguments)
+                if arguments[1:3] == ["check-ref-format", "refs/heads/main"]:
+                    return subprocess.CompletedProcess(arguments, 0, "", "")
+                command = arguments[3:]
+                outputs = {
+                    ("rev-parse", "--show-toplevel"): str(root),
+                    ("remote", "get-url", "origin"): "https://github.com/example/sample.git",
+                    ("branch", "--show-current"): "main",
+                    ("status", "--porcelain", "--untracked-files=normal"): " M file" if state["dirty"] else "",
+                    ("ls-remote", "--heads", "origin", "refs/heads/main"): f"{state['remote_sha']}\trefs/heads/main\n",
+                    ("fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"): "",
+                    ("rev-parse", "HEAD"): state["local_sha"],
+                    ("rev-parse", "refs/remotes/origin/main"): state["remote_sha"],
+                    ("rev-list", "--left-right", "--count", "HEAD...refs/remotes/origin/main"): (
+                        "0\t0" if state["local_sha"] == state["remote_sha"] else "0\t1"
+                    ),
+                    ("status", "--porcelain=v2", "--branch"): "# branch.head main\n",
+                }
+                key = tuple(command)
+                if command[:3] == ["show", "-s", "--format=%H%x00%h%x00%s%x00%an%x00%aI"]:
+                    sha = state["local_sha"] if command[3] == "HEAD" else state["remote_sha"]
+                    output = f"{sha}\x00{sha[:7]}\x00Build\x00Builder\x002026-11-21T10:00:00-06:00"
+                elif key == ("merge", "--ff-only", "refs/remotes/origin/main"):
+                    state["local_sha"] = state["remote_sha"]
+                    output = "Fast-forward"
+                elif key in outputs:
+                    output = outputs[key]
+                else:
+                    raise AssertionError(f"Unexpected command: {arguments}")
+                return subprocess.CompletedProcess(arguments, 0, output, "")
+
+            client = GitHubCLI(executable_finder=lambda name: f"{name}.exe", runner=runner)
+            with self.assertRaises(GitHubBuildConflict):
+                client.update_build(str(root), "example/sample", "main", "c" * 40, remote_sha)
+            self.assertFalse(any("merge" in call for call in calls))
+
+            updated = client.update_build(str(root), "example/sample", "main", local_sha, remote_sha)
+            self.assertEqual(updated["status"], "current")
+            self.assertFalse(updated["update_allowed"])
+            self.assertTrue(any(call[-3:] == ["merge", "--ff-only", "refs/remotes/origin/main"] for call in calls))
+            flattened = " ".join(part for call in calls for part in call)
+            for forbidden in (" reset ", " clean ", " checkout ", " switch ", " rebase ", "--force", "--set-upstream"):
+                self.assertNotIn(forbidden, f" {flattened} ")
+
+            state.update(local_sha=local_sha, dirty=True)
+            merge_count = sum("merge" in call for call in calls)
+            with self.assertRaises(GitHubBuildConflict):
+                client.update_build(str(root), "example/sample", "main", local_sha, remote_sha)
+            self.assertEqual(sum("merge" in call for call in calls), merge_count)
 
     def test_clone_uses_gh_and_requires_new_absolute_destination(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

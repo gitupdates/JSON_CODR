@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Literal
 from urllib.parse import quote, urlencode, urlparse
@@ -13,6 +14,11 @@ class GitHubCLIError(RuntimeError):
     def __init__(self, message: str, status_code: int = 502) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+class GitHubBuildConflict(GitHubCLIError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message, 409)
 
 
 class GitHubCLI:
@@ -382,6 +388,124 @@ class GitHubCLI:
             "status": status,
         }
 
+    def check_build(
+        self, project_root: str, repository: str, branch: str,
+    ) -> dict[str, object]:
+        root, local_repository = self._local_repository(project_root)
+        selected_repository = self._validated_repository(repository)
+        selected_branch = self._validated_branch(branch)
+        local_branch = self._git(root, "branch", "--show-current") or None
+        local_sha = self._git(root, "rev-parse", "HEAD")
+        dirty = bool(self._git(root, "status", "--porcelain", "--untracked-files=normal"))
+        tracking = self._tracking_status(root, local_branch)
+        result: dict[str, object] = {
+            "project_root": str(root),
+            "repository": selected_repository,
+            "local_repository": local_repository,
+            "branch": selected_branch,
+            "local_branch": local_branch,
+            "upstream": tracking["remote_branch"],
+            "local_commit": self._commit_details(root, "HEAD"),
+            "remote_commit": None,
+            "ahead": None,
+            "behind": None,
+            "dirty": dirty,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "status": "unavailable",
+            "detail": "Build status is unavailable.",
+            "update_allowed": False,
+            "update_blocked_reason": "Build status is unavailable.",
+        }
+        if local_repository.casefold() != selected_repository.casefold():
+            return self._blocked_build(
+                result, "repository_mismatch",
+                f"Local origin is {local_repository}, not {selected_repository}.",
+            )
+        if not local_branch:
+            return self._blocked_build(result, "detached", "The local checkout has a detached HEAD.")
+        if local_branch != selected_branch:
+            return self._blocked_build(
+                result, "branch_mismatch",
+                f"Local branch is {local_branch}, not {selected_branch}.",
+            )
+        advertised = self._git(
+            root, "ls-remote", "--heads", "origin", f"refs/heads/{selected_branch}",
+        )
+        if not advertised:
+            return self._blocked_build(
+                result, "remote_missing", f"Remote branch origin/{selected_branch} does not exist.",
+            )
+        remote_ref = f"refs/remotes/origin/{selected_branch}"
+        self._git(
+            root,
+            "fetch",
+            "origin",
+            f"+refs/heads/{selected_branch}:{remote_ref}",
+        )
+        remote_sha = self._git(root, "rev-parse", remote_ref)
+        ahead, behind = self._ahead_behind(root, remote_ref)
+        result.update({
+            "remote_commit": self._commit_details(root, remote_ref),
+            "ahead": ahead,
+            "behind": behind,
+        })
+        if dirty:
+            return self._blocked_build(
+                result, "local_changes", "Commit or remove local changes before updating.",
+            )
+        if ahead and behind:
+            return self._blocked_build(
+                result, "diverged", "Local and remote branches have diverged.",
+            )
+        if ahead:
+            return self._blocked_build(
+                result, "ahead", f"Local branch is {ahead} commit(s) ahead of origin/{selected_branch}.",
+            )
+        if behind:
+            result.update({
+                "status": "behind",
+                "detail": f"A newer build is available ({behind} commit(s) behind).",
+                "update_allowed": True,
+                "update_blocked_reason": None,
+            })
+            return result
+        result.update({
+            "status": "current",
+            "detail": "The local build matches the selected branch.",
+            "update_allowed": False,
+            "update_blocked_reason": "The local build is already current.",
+        })
+        return result
+
+    def update_build(
+        self,
+        project_root: str,
+        repository: str,
+        branch: str,
+        expected_local_sha: str,
+        expected_remote_sha: str,
+    ) -> dict[str, object]:
+        for name, value in (
+            ("local", expected_local_sha),
+            ("remote", expected_remote_sha),
+        ):
+            if not re.fullmatch(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})", value):
+                raise ValueError(f"Expected {name} commit is invalid")
+        current = self.check_build(project_root, repository, branch)
+        local_commit = current.get("local_commit")
+        remote_commit = current.get("remote_commit")
+        local_sha = local_commit.get("sha") if isinstance(local_commit, dict) else None
+        remote_sha = remote_commit.get("sha") if isinstance(remote_commit, dict) else None
+        if local_sha != expected_local_sha or remote_sha != expected_remote_sha:
+            raise GitHubBuildConflict("The local or remote build changed. Check the build again.")
+        if current.get("status") != "behind" or current.get("update_allowed") is not True:
+            reason = current.get("update_blocked_reason") or "This build cannot be updated safely."
+            raise GitHubBuildConflict(str(reason))
+        root = Path(str(current["project_root"]))
+        selected_branch = str(current["branch"])
+        self._git(root, "merge", "--ff-only", f"refs/remotes/origin/{selected_branch}")
+        return self.check_build(str(root), str(current["repository"]), selected_branch)
+
     def clone_local_repository(self, repository: str, destination: str) -> dict[str, object]:
         parts = repository.split("/")
         if len(parts) != 2:
@@ -412,6 +536,40 @@ class GitHubCLI:
             raise ValueError("Select the root folder of the Git repository")
         remote = self._git(root, "remote", "get-url", "origin")
         return root, self._github_slug(remote)
+
+    @classmethod
+    def _validated_repository(cls, repository: str) -> str:
+        parts = repository.split("/")
+        if len(parts) != 2:
+            raise ValueError("Repository must use the owner/repository format")
+        return cls._repository_path(parts[0], parts[1]).removeprefix("repos/")
+
+    def _commit_details(self, root: Path, reference: str) -> dict[str, object]:
+        output = self._git(
+            root, "show", "-s", "--format=%H%x00%h%x00%s%x00%an%x00%aI", reference,
+        )
+        fields = output.split("\0")
+        if len(fields) != 5:
+            raise GitHubCLIError("Git returned invalid commit details")
+        return {
+            "sha": fields[0],
+            "short_sha": fields[1],
+            "subject": fields[2],
+            "author_name": fields[3],
+            "authored_at": fields[4],
+        }
+
+    @staticmethod
+    def _blocked_build(
+        result: dict[str, object], status: str, detail: str,
+    ) -> dict[str, object]:
+        result.update({
+            "status": status,
+            "detail": detail,
+            "update_allowed": False,
+            "update_blocked_reason": detail,
+        })
+        return result
 
     def _repository_permissions(self, owner: str, repository: str) -> dict[str, object]:
         path = self._repository_path(owner, repository)
