@@ -217,10 +217,11 @@
 .appearance-editor .setting-select { width: min(100%, 420px); max-width: 420px; }
 .ui-preset-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 8px; }
 .ui-preset-card { min-height: 112px; display: flex; gap: 10px; align-items: flex-start; padding: 12px; color: var(--text); background: var(--surface-input); border: 1px solid var(--line); text-align: left; }
+:root[data-ui-controls] .ui-preset-card { height: auto; min-height: 112px; }
 .ui-preset-card[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
-.ui-preset-card-copy { display: grid; gap: 4px; }
-.ui-preset-card small { color: var(--text-subtle); }
-.ui-preset-meta { color: var(--muted); font-size: .72rem; line-height: 1.4; }
+.ui-preset-card-copy { display: grid; flex: 1; min-width: 0; gap: 4px; }
+.ui-preset-card small { color: var(--text-subtle); overflow-wrap: anywhere; }
+.ui-preset-meta { color: var(--muted); font-size: .72rem; line-height: 1.4; overflow-wrap: anywhere; }
 .preset-swatch { width: 32px; height: 32px; flex: 0 0 32px; border: 1px solid var(--line-strong); }
 [data-preset-swatch="gamma-operations"] { background: linear-gradient(135deg, #ff8a3d 0 35%, #12151a 35% 68%, #080a0d 68%); }
 [data-preset-swatch="json-codr-classic"] { background: linear-gradient(135deg, #c7ff4a 0 35%, #101319 35% 68%, #080a0d 68%); }

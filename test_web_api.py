@@ -278,6 +278,58 @@ class WebApiTests(unittest.TestCase):
         self.client = TestClient(create_app(self.service, self.workspace))
         self._core_clients = [self.client]
 
+    def test_github_routes_keep_authentication_server_side_and_require_write_confirmation(self):
+        class FakeGitHubCLI:
+            def __init__(self):
+                self.writes = []
+
+            def status(self):
+                return {"authenticated": True, "login": "test-user"}
+
+            def repositories(self):
+                return [{"full_name": "test-user/sample", "private": True}]
+
+            def branches(self, owner, repository):
+                return [{"name": "main", "protected": True}]
+
+            def commits(self, owner, repository):
+                return [{"sha": "abc123", "message": "Test commit"}]
+
+            def create_issue(self, owner, repository, title, body):
+                self.writes.append((owner, repository, title, body))
+                return {"number": 12, "title": title}
+
+        github = FakeGitHubCLI()
+        client = self.track_core_client(
+            TestClient(create_app(self.service, self.workspace, github_cli=github))
+        )
+        headers = {"X-JSON-CODR": "1"}
+
+        unauthorized = client.get("/api/github/status")
+        status = client.get("/api/github/status", headers=headers)
+        repositories = client.get("/api/github/repositories", headers=headers)
+        branches = client.get("/api/github/repos/test-user/sample/branches", headers=headers)
+        commits = client.get("/api/github/repos/test-user/sample/commits", headers=headers)
+        unconfirmed = client.post(
+            "/api/github/repos/test-user/sample/issues",
+            headers=headers,
+            json={"title": "Issue", "body": "Details"},
+        )
+        created = client.post(
+            "/api/github/repos/test-user/sample/issues",
+            headers=headers,
+            json={"confirmed": True, "title": "Issue", "body": "Details"},
+        )
+
+        self.assertEqual(unauthorized.status_code, 403)
+        self.assertEqual(status.json()["login"], "test-user")
+        self.assertEqual(repositories.json()[0]["full_name"], "test-user/sample")
+        self.assertEqual(branches.json()[0]["name"], "main")
+        self.assertEqual(commits.json()[0]["sha"], "abc123")
+        self.assertEqual(unconfirmed.status_code, 422)
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(github.writes, [("test-user", "sample", "Issue", "Details")])
+
     def track_core_client(self, client):
         self._core_clients.append(client)
         return client
@@ -409,7 +461,18 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(response.json()["id"], "terminal-1")
         with closing(sqlite3.connect(self.workspace.data_root / "core" / "tasks.sqlite")) as database:
             command = database.execute("SELECT command_json FROM tasks").fetchone()[0]
+            event_types = [
+                json.loads(row[0])["event_type"]
+                for row in database.execute("SELECT event_json FROM task_events ORDER BY sequence")
+            ]
         self.assertIn('"command_type":"terminal.session"', command)
+        self.assertIn("task.permission_required", event_types)
+        self.assertIn("terminal.session_started", event_types)
+        with closing(sqlite3.connect(self.workspace.data_root / "core" / "approvals.sqlite")) as database:
+            approval_status = database.execute(
+                "SELECT status FROM approval_proposals"
+            ).fetchone()[0]
+        self.assertEqual(approval_status, "consumed")
 
     def test_terminal_interrupt_and_close_are_recorded_by_core_service(self):
         class FakeTerminals:

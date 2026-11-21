@@ -713,7 +713,6 @@ function selectDestination(destination, { persist = true, focus = false } = {}) 
   elements.hardwareSubnavigation.hidden = destination !== "hardware";
   if (destination === "hardware") selectHardwareSection(activeHardwareSection, { persist: false });
   if (destination === "settings") {
-    uiCustomizationEditor.begin();
     loadRuntimeDiagnostics();
   }
   if (destination === "terminal") {

@@ -455,6 +455,19 @@ assert.deepStrictEqual(controller.getDraft().components, {});
         self.assertIn('id="ui-preset-details"', html)
         self.assertNotIn('id="setting-theme"', html)
 
+    def test_appearance_preview_survives_settings_reentry_and_cards_expand_for_content(self):
+        app = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+        css = (ROOT / "web" / "gamma.css").read_text(encoding="utf-8")
+        start = app.index("function selectDestination")
+        settings_start = app.index('if (destination === "settings") {', start)
+        settings_end = app.index('if (destination === "terminal")', settings_start)
+        settings_block = app[settings_start:settings_end]
+
+        self.assertNotIn("uiCustomizationEditor.begin()", settings_block)
+        self.assertIn(":root[data-ui-controls] .ui-preset-card { height: auto; min-height: 112px; }", css)
+        self.assertIn(".ui-preset-card-copy { display: grid; flex: 1; min-width: 0;", css)
+        self.assertIn(".ui-preset-meta { color: var(--muted); font-size: .72rem; line-height: 1.4; overflow-wrap: anywhere; }", css)
+
     def test_noc_navigation_collapse_preserves_destination_and_accessibility_contracts(self):
         app = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
         css = (ROOT / "web" / "gamma.css").read_text(encoding="utf-8")

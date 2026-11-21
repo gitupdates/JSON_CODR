@@ -678,6 +678,86 @@ class GithubSkillInstallRequest(BaseModel):
     preview_id: str
 
 
+class GitHubConfirmedWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmed: Literal[True]
+
+
+class GitHubIssueCreateRequest(GitHubConfirmedWrite):
+    title: str = Field(min_length=1, max_length=256)
+    body: str = Field(default="", max_length=65_536)
+
+
+class GitHubIssueUpdateRequest(GitHubConfirmedWrite):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    body: Optional[str] = Field(default=None, max_length=65_536)
+    state: Optional[Literal["open", "closed"]] = None
+
+    @model_validator(mode="after")
+    def require_issue_change(self):
+        if self.title is None and self.body is None and self.state is None:
+            raise ValueError("Provide at least one issue field to update")
+        return self
+
+
+class GitHubIssueCommentRequest(GitHubConfirmedWrite):
+    body: str = Field(min_length=1, max_length=65_536)
+
+
+class GitHubPullRequestCreateRequest(GitHubConfirmedWrite):
+    head: str = Field(min_length=1, max_length=256)
+    base: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1, max_length=256)
+    body: str = Field(default="", max_length=65_536)
+    draft: bool = False
+
+
+class GitHubPullRequestUpdateRequest(GitHubConfirmedWrite):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    body: Optional[str] = Field(default=None, max_length=65_536)
+    state: Optional[Literal["open", "closed"]] = None
+    base: Optional[str] = Field(default=None, min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def require_pull_request_change(self):
+        if all(value is None for value in (self.title, self.body, self.state, self.base)):
+            raise ValueError("Provide at least one pull request field to update")
+        return self
+
+
+class GitHubPullRequestMergeRequest(GitHubConfirmedWrite):
+    merge_method: Literal["merge", "squash", "rebase"] = "squash"
+
+
+class GitHubReleaseCreateRequest(GitHubConfirmedWrite):
+    tag_name: str = Field(min_length=1, max_length=256)
+    name: str = Field(min_length=1, max_length=256)
+    body: str = Field(default="", max_length=65_536)
+    target_commitish: Optional[str] = Field(default=None, max_length=256)
+    draft: bool = False
+    prerelease: bool = False
+
+
+class GitHubLocalBranchRequest(GitHubConfirmedWrite):
+    project_root: str = Field(min_length=1, max_length=1000)
+    branch: str = Field(min_length=1, max_length=200)
+
+
+class GitHubLocalStageRequest(GitHubConfirmedWrite):
+    project_root: str = Field(min_length=1, max_length=1000)
+    paths: List[str] = Field(min_length=1, max_length=100)
+
+
+class GitHubLocalCommitRequest(GitHubConfirmedWrite):
+    project_root: str = Field(min_length=1, max_length=1000)
+    message: str = Field(min_length=1, max_length=500)
+
+
+class GitHubLocalPushRequest(GitHubConfirmedWrite):
+    project_root: str = Field(min_length=1, max_length=1000)
+
+
 class SkillDiscovery(BaseModel):
     id: str
     name: str

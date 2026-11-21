@@ -4,96 +4,421 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark light">
-  <title>JSON_CODR · Source Control</title>
+  <title>JSON_CODR · GitHub and source control</title>
   <style>
     :root{color-scheme:dark;--bg:#080a0d;--panel:#101319;--input:#0c0f13;--line:#343b46;--text:#f4f6f8;--muted:#a3adba;--accent:#c7ff4a;--red:#ff9a9a;font:15px system-ui,sans-serif;color:var(--text);background:var(--bg)}
-    *{box-sizing:border-box}body{max-width:980px;margin:0 auto;padding:24px}header,.row,.actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}h1{margin:.25em 0}h2{font-size:1.15rem}p,.muted{color:var(--muted);line-height:1.55}.card{margin:16px 0;padding:20px;border:1px solid var(--line);background:var(--panel)}label{display:grid;gap:7px;flex:1;min-width:240px;font-size:.9rem}input{min-width:0;width:100%;height:42px;padding:0 12px;color:var(--text);background:var(--input);border:1px solid var(--line);font:inherit}button{min-height:40px;padding:0 14px;border:1px solid var(--line);background:#242a33;color:var(--text);font:inherit;font-weight:700;cursor:pointer}button.primary{background:var(--accent);color:#101319;border-color:var(--accent)}button:disabled{opacity:.55;cursor:wait}button:focus-visible,input:focus-visible,a:focus-visible{outline:3px solid var(--accent);outline-offset:2px}.status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}.status-item{padding:12px;background:var(--input);border:1px solid var(--line);overflow-wrap:anywhere}.status-item span{display:block;color:var(--muted);font-size:.76rem;text-transform:uppercase;letter-spacing:.08em}.status-item strong{display:block;margin-top:6px}.ok{color:var(--accent)}.error{color:var(--red)}pre{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted)}code{overflow-wrap:anywhere}a{color:var(--accent)}#notice{min-height:1.5em} @media(max-width:520px){body{padding:14px}.card{padding:15px}}
+    *{box-sizing:border-box}body{max-width:1100px;margin:0 auto;padding:24px}header,.row,.actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}h1{margin:.25em 0}h2{font-size:1.15rem;margin-top:0}h3{font-size:1rem;margin:.25em 0}p,.muted{color:var(--muted);line-height:1.55}.card{margin:16px 0;padding:20px;border:1px solid var(--line);background:var(--panel)}label{display:grid;gap:7px;flex:1;min-width:220px;font-size:.9rem}input,select,textarea{min-width:0;width:100%;padding:10px 12px;color:var(--text);background:var(--input);border:1px solid var(--line);font:inherit}input,select{height:42px}textarea{min-height:90px;resize:vertical}button{min-height:40px;padding:0 14px;border:1px solid var(--line);background:#242a33;color:var(--text);font:inherit;font-weight:700;cursor:pointer}button.primary{background:var(--accent);color:#101319;border-color:var(--accent)}button:disabled{opacity:.55;cursor:wait}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,a:focus-visible{outline:3px solid var(--accent);outline-offset:2px}.status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.status-item,.record{padding:12px;background:var(--input);border:1px solid var(--line);overflow-wrap:anywhere}.status-item span{display:block;color:var(--muted);font-size:.76rem;text-transform:uppercase;letter-spacing:.08em}.status-item strong{display:block;margin-top:6px}.record{margin:10px 0}.record p{margin:.5em 0}.record-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.record-actions button{min-height:34px}.ok{color:var(--accent)}.error{color:var(--red)}pre{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted)}code{overflow-wrap:anywhere}a{color:var(--accent)}#notice{min-height:1.5em}.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}.checkbox-row{display:flex;align-items:center;gap:8px;min-width:0}.checkbox-row input{width:auto;height:auto}.file-row{display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.file-row input{width:auto;height:auto;margin-top:4px}.section-title{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.notice{min-height:1.5em}.tab-note{font-size:.85rem}@media(max-width:520px){body{padding:14px}.card{padding:15px}}
   </style>
 </head>
 <body>
-  <header><div><p class="muted">JSON_CODR · LOCAL SOURCE CONTROL</p><h1>Git workspace</h1></div><a href="/">Back to workspace</a></header>
-  <p>This panel inspects a local Git checkout and can authorize JSON_CODR’s existing project-scoped Git broker. Ahead/behind values use the local upstream-tracking ref, which may be stale until fetched. This first version does not sign in to GitHub or create/clone repositories.</p>
-  <section class="card" aria-labelledby="project-heading">
-    <h2 id="project-heading">Select a local repository</h2>
-    <div class="row"><label for="project-root">Repository folder path<input id="project-root" type="text" placeholder="D:\\projects\\my-app" autocomplete="off" spellcheck="false"></label><div class="actions"><button id="inspect" class="primary" type="button">Inspect repository</button><button id="authorize" type="button">Authorize Git broker</button></div></div>
-    <p id="notice" role="status" aria-live="polite">Enter a local folder that already contains a Git repository.</p>
+  <header><div><p class="muted">JSON_CODR · LOCAL SOURCE CONTROL</p><h1>GitHub and Git workspace</h1></div><a href="/">Back to workspace</a></header>
+  <p>Uses the authenticated local GitHub CLI account; credentials remain on this machine. Reads cover repositories available to that account. Every change requires confirmation in this page and is independently gated by the API.</p>
+
+  <section class="card" aria-labelledby="account-heading">
+    <div class="section-title"><h2 id="account-heading">GitHub account and repositories</h2><button id="refresh-account" type="button">Refresh account and repositories</button></div>
+    <p id="account-status" class="notice" role="status" aria-live="polite">Checking local GitHub CLI authentication...</p>
+    <label for="repository-select">Repository<select id="repository-select" disabled><option value="">Authenticate and load repositories</option></select></label>
   </section>
-  <section class="card" aria-labelledby="status-heading">
-    <div class="row"><h2 id="status-heading">Repository status</h2><a id="github-link" href="https://github.com" target="_blank" rel="noopener noreferrer">Open GitHub</a></div>
-    <div id="status-grid" class="status-grid" aria-live="polite"><p class="muted">No repository inspected.</p></div>
-    <details><summary>Technical details</summary><pre id="technical"></pre></details>
+
+  <section class="card" aria-labelledby="github-data-heading">
+    <div class="section-title"><h2 id="github-data-heading">Repository activity</h2><button id="refresh-repository" type="button" disabled>Refresh repository data</button></div>
+    <div class="status-grid" id="repository-summary"><p class="muted">Select a repository to load issues, pull requests, releases, branches, and commits.</p></div>
+    <h3>Branches</h3><div id="branches-list"><p class="muted">No repository selected.</p></div>
+    <h3>Commits</h3><div id="commits-list"><p class="muted">No repository selected.</p></div>
   </section>
-  <section class="card"><h2>What this panel currently supports</h2><p>Local checkout inspection and granting/revoking the existing broker are connected to the JSON_CODR API. The broker supports reviewed status/read/patch/verification/commit/sync/push tasks through its existing APIs. GitHub OAuth, repository listing/creation, cloning, folder upload, branch switching, and pull UI still need to be implemented as separate workflows.</p></section>
+
+  <section class="card" aria-labelledby="issues-heading">
+    <div class="section-title"><h2 id="issues-heading">Issues</h2><button id="refresh-issues" type="button" disabled>Refresh issues</button></div>
+    <div class="form-grid">
+      <label for="issue-title">New issue title<input id="issue-title" maxlength="256"></label>
+      <label for="issue-body">Description<textarea id="issue-body" maxlength="65536"></textarea></label>
+    </div>
+    <button id="create-issue" class="primary" type="button" disabled>Create issue</button>
+    <div id="issues-list"><p class="muted">No repository selected.</p></div>
+  </section>
+
+  <section class="card" aria-labelledby="pulls-heading">
+    <div class="section-title"><h2 id="pulls-heading">Pull requests</h2><button id="refresh-pulls" type="button" disabled>Refresh pull requests</button></div>
+    <div class="form-grid">
+      <label for="pr-head">Head branch (owner:branch or branch)<input id="pr-head" maxlength="256"></label>
+      <label for="pr-base">Base branch<input id="pr-base" maxlength="256"></label>
+      <label for="pr-title">Title<input id="pr-title" maxlength="256"></label>
+      <label for="pr-body">Description<textarea id="pr-body" maxlength="65536"></textarea></label>
+      <label for="pr-draft" class="checkbox-row"><input id="pr-draft" type="checkbox"> Create as draft</label>
+      <label for="merge-method">Merge method<select id="merge-method"><option value="squash">Squash</option><option value="merge">Merge commit</option><option value="rebase">Rebase</option></select></label>
+    </div>
+    <button id="create-pr" class="primary" type="button" disabled>Create pull request</button>
+    <div id="pulls-list"><p class="muted">No repository selected.</p></div>
+  </section>
+
+  <section class="card" aria-labelledby="releases-heading">
+    <div class="section-title"><h2 id="releases-heading">Releases</h2><button id="refresh-releases" type="button" disabled>Refresh releases</button></div>
+    <div class="form-grid">
+      <label for="release-tag">Tag name<input id="release-tag" maxlength="256"></label>
+      <label for="release-name">Release name<input id="release-name" maxlength="256"></label>
+      <label for="release-target">Target branch or commit (optional)<input id="release-target" maxlength="256"></label>
+      <label for="release-body">Release notes<textarea id="release-body" maxlength="65536"></textarea></label>
+      <label for="release-draft" class="checkbox-row"><input id="release-draft" type="checkbox"> Draft release</label>
+      <label for="release-prerelease" class="checkbox-row"><input id="release-prerelease" type="checkbox"> Pre-release</label>
+    </div>
+    <button id="create-release" class="primary" type="button" disabled>Create release</button>
+    <div id="releases-list"><p class="muted">No repository selected.</p></div>
+  </section>
+
+  <section class="card" aria-labelledby="local-heading">
+    <h2 id="local-heading">Local repository actions</h2>
+    <p class="tab-note">Branch creation, staging, commits, and pushes affect only the selected local checkout. Stage only the displayed changed files. Push requires GitHub push permission.</p>
+    <div class="row"><label for="project-root">Repository folder path<input id="project-root" type="text" placeholder="D:\projects\my-app" autocomplete="off" spellcheck="false"></label><div class="actions"><button id="inspect" class="primary" type="button">Inspect repository</button><button id="authorize" type="button" disabled>Authorize Git broker</button></div></div>
+    <p id="local-notice" class="notice" role="status" aria-live="polite">Enter a local folder that already contains a Git repository.</p>
+    <div class="status-grid" id="local-summary"><p class="muted">No local repository inspected.</p></div>
+    <div class="form-grid">
+      <label for="branch-name">New local branch<input id="branch-name" maxlength="200" placeholder="feature/my-change"></label>
+      <label for="commit-message">Commit message<input id="commit-message" maxlength="500"></label>
+    </div>
+    <div class="actions"><button id="create-branch" type="button" disabled>Create branch</button><button id="stage-files" type="button" disabled>Stage selected files</button><button id="commit-files" type="button" disabled>Commit staged files</button><button id="push-files" type="button" disabled>Push current branch</button></div>
+    <div id="changed-files"><p class="muted">Inspect a local repository to see changed files.</p></div>
+    <details><summary>Git broker details</summary><pre id="broker-details"></pre></details>
+  </section>
+
+  <section class="card"><h2>Permission boundary</h2><p>Repository, issue, pull request, release, branch, and commit reads use the local GitHub CLI identity. Writes require browser confirmation and a request-level confirmation flag. This page does not create/delete repositories, manage account settings or secrets, or run unattended writes.</p></section>
+
 <script>
 (() => {
-  const root = document.querySelector("#project-root");
-  const notice = document.querySelector("#notice");
-  const grid = document.querySelector("#status-grid");
-  const technical = document.querySelector("#technical");
-  const inspectButton = document.querySelector("#inspect");
-  const authorizeButton = document.querySelector("#authorize");
-  let snapshot = null;
-  root.value = localStorage.getItem("json_codr_git_project_root") || localStorage.getItem("json_codr_workspace_project_root") || "";
-  function item(label, value, className = "") {
-    const article = document.createElement("div"); article.className = "status-item";
-    const caption = document.createElement("span"); caption.textContent = label;
-    const content = document.createElement("strong"); content.textContent = value;
-    if (className) content.className = className;
-    article.append(caption, content); return article;
+  const $ = (selector) => document.querySelector(selector);
+  const accountStatus = $("#account-status");
+  const repositorySelect = $("#repository-select");
+  const projectRoot = $("#project-root");
+  const localNotice = $("#local-notice");
+  const localSummary = $("#local-summary");
+  const changedFiles = $("#changed-files");
+  const brokerDetails = $("#broker-details");
+  let selectedRepository = null;
+  let brokerSnapshot = null;
+  let localSnapshot = null;
+  let githubRepositories = [];
+
+  projectRoot.value = localStorage.getItem("json_codr_git_project_root") || localStorage.getItem("json_codr_workspace_project_root") || "";
+
+  function element(tag, text, className) {
+    const node = document.createElement(tag);
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    if (className) node.className = className;
+    return node;
   }
-  async function responseJson(response, fallback) {
+  function card(label, value, className = "") {
+    const node = element("div", undefined, "status-item");
+    node.append(element("span", label), element("strong", value, className));
+    return node;
+  }
+  async function request(path, options = {}) {
+    const headers = {"X-JSON-CODR": "1", ...(options.headers || {})};
+    if (options.body) headers["Content-Type"] = "application/json";
+    const response = await fetch(path, {...options, headers});
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.detail || fallback);
+    if (!response.ok) throw new Error(payload.detail || `Request failed (${response.status})`);
     return payload;
   }
-  async function inspect() {
-    const path = root.value.trim();
-    if (!path) { notice.textContent = "Enter a repository folder path first."; root.focus(); return; }
-    localStorage.setItem("json_codr_git_project_root", path);
-    inspectButton.disabled = true; notice.textContent = "Inspecting local repository…";
+  async function write(path, method, data, message, confirmationFlag = true) {
+    if (!window.confirm(message)) return null;
+    return request(path, {method, body: JSON.stringify(confirmationFlag ? {...data, confirmed: true} : data)});
+  }
+  function repoPath(suffix) {
+    if (!selectedRepository) throw new Error("Select a repository first.");
+    const [owner, name] = selectedRepository.full_name.split("/");
+    return `/api/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}${suffix}`;
+  }
+  function safeGithubLink(url) {
     try {
-      const url = `/api/git-broker/status?project_root=${encodeURIComponent(path)}`;
-      const result = await responseJson(await fetch(url), "Unable to inspect repository");
-      snapshot = result.repository;
-      const ahead = snapshot.ahead == null ? "Unknown" : String(snapshot.ahead);
-      const behind = snapshot.behind == null ? "Unknown" : String(snapshot.behind);
-      const sync = snapshot.ahead == null || snapshot.behind == null ? "No upstream comparison" : snapshot.ahead === 0 && snapshot.behind === 0 ? "In sync with upstream" : `${ahead} ahead · ${behind} behind`;
-      grid.replaceChildren(
-        item("Working tree", snapshot.clean ? "Clean" : "Has uncommitted changes", snapshot.clean ? "ok" : "error"),
-        item("Current branch", snapshot.branch || "Detached HEAD"),
-        item("Upstream", snapshot.upstream || "Not configured"),
-        item("Commits ahead", ahead),
-        item("Commits behind", behind),
-        item("Relationship", sync),
-        item("HEAD", (snapshot.head || "").slice(0, 12)),
-        item("Tracked remote HEAD", (snapshot.remote_head || "Unavailable").slice(0, 12)),
+      const parsed = new URL(url);
+      return parsed.protocol === "https:" && parsed.hostname === "github.com" ? parsed.href : null;
+    } catch { return null; }
+  }
+  function recordList(target, records, emptyMessage, titleFor, urlFor, detailsFor) {
+    target.replaceChildren();
+    if (!records.length) { target.append(element("p", emptyMessage, "muted")); return; }
+    for (const record of records) {
+      const box = element("article", undefined, "record");
+      const title = element("h3", titleFor(record));
+      const url = safeGithubLink(urlFor(record));
+      if (url) {
+        const link = element("a", "Open on GitHub");
+        link.href = url; link.target = "_blank"; link.rel = "noopener noreferrer";
+        title.append(" ", link);
+      }
+      box.append(title);
+      const details = detailsFor(record);
+      if (details) box.append(element("p", details));
+      target.append(box);
+    }
+  }
+  function renderBranches(branches) {
+    const target = $("#branches-list"); target.replaceChildren();
+    if (!branches.length) { target.append(element("p", "No branches found.", "muted")); return; }
+    for (const branch of branches) target.append(element("div", `${branch.name}${branch.protected ? " · protected" : ""}`, "record"));
+  }
+  function renderCommits(commits) {
+    const target = $("#commits-list"); target.replaceChildren();
+    if (!commits.length) { target.append(element("p", "No commits found.", "muted")); return; }
+    for (const commit of commits) {
+      const box = element("article", undefined, "record");
+      const url = safeGithubLink(commit.url);
+      const heading = element("h3", (commit.sha || "").slice(0, 12));
+      if (url) { const link = element("a", "Open"); link.href = url; link.target = "_blank"; link.rel = "noopener noreferrer"; heading.append(" ", link); }
+      box.append(heading, element("p", commit.message || ""));
+      const author = commit.author || {};
+      if (author.name || author.date) box.append(element("p", [author.name, author.date].filter(Boolean).join(" · ")));
+      target.append(box);
+    }
+  }
+  async function loadRepositoryData() {
+    if (!selectedRepository) return;
+    $("#refresh-repository").disabled = true;
+    const prefix = repoPath("");
+    try {
+      const [branches, commits, issues, pulls, releases] = await Promise.all([
+        request(`${prefix}/branches`), request(`${prefix}/commits`),
+        request(`${prefix}/issues?state=open`), request(`${prefix}/pulls?state=open`),
+        request(`${prefix}/releases`),
+      ]);
+      $("#repository-summary").replaceChildren(
+        card("Repository", selectedRepository.full_name),
+        card("Visibility", selectedRepository.private ? "Private" : "Public"),
+        card("Default branch", selectedRepository.default_branch || "Unknown"),
+        card("Open issues", issues.length),
+        card("Open pull requests", pulls.length),
+        card("Releases", releases.length),
       );
-      technical.textContent = JSON.stringify(snapshot, null, 2);
-      notice.textContent = "Repository inspected. Ahead/behind counts compare the current branch with its configured upstream tracking ref; fetch before treating them as current.";
-      authorizeButton.disabled = false;
+      renderBranches(branches); renderCommits(commits); renderIssues(issues); renderPulls(pulls); renderReleases(releases);
     } catch (error) {
-      snapshot = null; grid.replaceChildren(item("Inspection error", error.message, "error")); technical.textContent = "";
-      notice.textContent = error.message; authorizeButton.disabled = true;
-    } finally { inspectButton.disabled = false; }
+      $("#repository-summary").replaceChildren(card("GitHub error", error.message, "error"));
+    } finally { $("#refresh-repository").disabled = false; }
   }
-  async function authorize() {
-    const path = root.value.trim();
-    if (!snapshot || snapshot.root !== path) { notice.textContent = "Inspect this exact repository path before authorizing it."; return; }
-    if (!window.confirm(`Grant JSON_CODR's Git broker access scoped to this project?\n\n${path}\n\nThe grant enables only broker-mediated Git operations; review and approve write operations separately.`)) return;
-    authorizeButton.disabled = true; notice.textContent = "Creating project-scoped broker grant…";
+  function renderIssues(issues) {
+    const target = $("#issues-list"); target.replaceChildren();
+    if (!issues.length) { target.append(element("p", "No open issues.", "muted")); return; }
+    for (const issue of issues) {
+      const box = element("article", undefined, "record");
+      const heading = element("h3", `#${issue.number} ${issue.title || ""}`);
+      const url = safeGithubLink(issue.html_url);
+      if (url) { const link = element("a", "Open"); link.href = url; link.target = "_blank"; link.rel = "noopener noreferrer"; heading.append(" ", link); }
+      box.append(heading, element("p", issue.body || "No description."));
+      const actions = element("div", undefined, "record-actions");
+      const comment = element("button", "Comment");
+      comment.addEventListener("click", async () => {
+        const body = window.prompt(`Comment on issue #${issue.number}`);
+        if (!body) return;
+        try { await write(repoPath(`/issues/${issue.number}/comments`), "POST", {body}, `Post this comment to issue #${issue.number}?`); await loadRepositoryData(); }
+        catch (error) { accountStatus.textContent = error.message; }
+      });
+      const close = element("button", "Close issue");
+      close.addEventListener("click", async () => {
+        try { await write(repoPath(`/issues/${issue.number}`), "PATCH", {state: "closed"}, `Close issue #${issue.number}?`); await loadRepositoryData(); }
+        catch (error) { accountStatus.textContent = error.message; }
+      });
+      actions.append(comment, close); box.append(actions); target.append(box);
+    }
+  }
+  function renderPulls(pulls) {
+    const target = $("#pulls-list"); target.replaceChildren();
+    if (!pulls.length) { target.append(element("p", "No open pull requests.", "muted")); return; }
+    for (const pull of pulls) {
+      const box = element("article", undefined, "record");
+      const heading = element("h3", `#${pull.number} ${pull.title || ""}${pull.draft ? " · draft" : ""}`);
+      const url = safeGithubLink(pull.html_url);
+      if (url) { const link = element("a", "Open"); link.href = url; link.target = "_blank"; link.rel = "noopener noreferrer"; heading.append(" ", link); }
+      box.append(heading, element("p", pull.body || "No description."));
+      const actions = element("div", undefined, "record-actions");
+      const merge = element("button", "Merge");
+      merge.addEventListener("click", async () => {
+        const method = $("#merge-method").value;
+        try { await write(repoPath(`/pulls/${pull.number}/merge`), "POST", {merge_method: method}, `Merge pull request #${pull.number} using ${method}? This cannot be undone.`); await loadRepositoryData(); }
+        catch (error) { accountStatus.textContent = error.message; }
+      });
+      const close = element("button", "Close pull request");
+      close.addEventListener("click", async () => {
+        try { await write(repoPath(`/pulls/${pull.number}`), "PATCH", {state: "closed"}, `Close pull request #${pull.number}?`); await loadRepositoryData(); }
+        catch (error) { accountStatus.textContent = error.message; }
+      });
+      actions.append(merge, close); box.append(actions); target.append(box);
+    }
+  }
+  function renderReleases(releases) {
+    recordList($("#releases-list"), releases, "No releases found.",
+      release => `${release.tag_name || "Release"}${release.name ? ` · ${release.name}` : ""}${release.draft ? " · draft" : ""}`,
+      release => release.html_url, release => release.body || "");
+  }
+  async function loadAccount() {
+    accountStatus.textContent = "Checking local GitHub CLI authentication...";
+    $("#refresh-account").disabled = true;
     try {
-      const result = await responseJson(await fetch("/api/git-broker/grants", {
-        method: "POST", headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
-        body: JSON.stringify({ project_root: path, profile: "broker" }),
-      }), "Unable to create Git broker grant");
-      notice.textContent = `Broker grant created for ${result.project_root}. Grant ID: ${result.id}`;
-    } catch (error) { notice.textContent = error.message; }
-    finally { authorizeButton.disabled = false; }
+      const [account, repositories] = await Promise.all([request("/api/github/status"), request("/api/github/repositories")]);
+      githubRepositories = repositories;
+      const previous = localStorage.getItem("json_codr_github_repository");
+      repositorySelect.replaceChildren(element("option", "Select a repository"));
+      for (const repository of repositories) {
+        const option = element("option", `${repository.full_name}${repository.private ? " · private" : ""}`);
+        option.value = repository.full_name; repositorySelect.append(option);
+      }
+      const remembered = repositories.find(repository => repository.full_name === previous);
+      repositorySelect.disabled = false;
+      accountStatus.textContent = `Authenticated as ${account.login} via the local GitHub CLI. ${repositories.length} repositories available.`;
+      if (remembered) { repositorySelect.value = remembered.full_name; selectRepository(); }
+    } catch (error) {
+      accountStatus.textContent = `GitHub is unavailable: ${error.message}. Install and authenticate the local GitHub CLI, then refresh.`;
+      repositorySelect.disabled = true;
+    } finally { $("#refresh-account").disabled = false; }
   }
-  authorizeButton.disabled = true;
-  inspectButton.addEventListener("click", inspect);
-  authorizeButton.addEventListener("click", authorize);
-  root.addEventListener("keydown", (event) => { if (event.key === "Enter") inspect(); });
+  function selectRepository() {
+    selectedRepository = githubRepositories.find(repository => repository.full_name === repositorySelect.value) || null;
+    if (selectedRepository) localStorage.setItem("json_codr_github_repository", selectedRepository.full_name);
+    for (const selector of ["#refresh-repository", "#refresh-issues", "#refresh-pulls", "#refresh-releases", "#create-issue", "#create-pr", "#create-release"]) $(selector).disabled = !selectedRepository;
+    if (selectedRepository) {
+      loadRepositoryData();
+    } else {
+      $("#repository-summary").replaceChildren(element("p", "Select a repository to load activity.", "muted"));
+      for (const selector of ["#branches-list", "#commits-list", "#issues-list", "#pulls-list", "#releases-list"]) {
+        $(selector).replaceChildren(element("p", "No repository selected.", "muted"));
+      }
+    }
+  }
+
+  $("#refresh-account").addEventListener("click", loadAccount);
+  $("#refresh-repository").addEventListener("click", loadRepositoryData);
+  repositorySelect.addEventListener("change", selectRepository);
+  $("#refresh-issues").addEventListener("click", loadRepositoryData);
+  $("#refresh-pulls").addEventListener("click", loadRepositoryData);
+  $("#refresh-releases").addEventListener("click", loadRepositoryData);
+  $("#create-issue").addEventListener("click", async () => {
+    const title = $("#issue-title").value.trim();
+    if (!title) { accountStatus.textContent = "Enter an issue title."; return; }
+    try {
+      const created = await write(repoPath("/issues"), "POST", {title, body: $("#issue-body").value}, `Create issue "${title}" in ${selectedRepository.full_name}?`);
+      if (!created) return;
+      $("#issue-title").value = ""; $("#issue-body").value = ""; await loadRepositoryData();
+    } catch (error) { accountStatus.textContent = error.message; }
+  });
+  $("#create-pr").addEventListener("click", async () => {
+    const head = $("#pr-head").value.trim(), base = $("#pr-base").value.trim(), title = $("#pr-title").value.trim();
+    if (!head || !base || !title) { accountStatus.textContent = "Enter a head branch, base branch, and pull request title."; return; }
+    try {
+      const created = await write(repoPath("/pulls"), "POST", {head, base, title, body: $("#pr-body").value, draft: $("#pr-draft").checked},
+        `Create pull request "${title}" in ${selectedRepository.full_name}?`);
+      if (!created) return;
+      $("#pr-head").value = ""; $("#pr-base").value = ""; $("#pr-title").value = ""; $("#pr-body").value = ""; $("#pr-draft").checked = false; await loadRepositoryData();
+    } catch (error) { accountStatus.textContent = error.message; }
+  });
+  $("#create-release").addEventListener("click", async () => {
+    const tag_name = $("#release-tag").value.trim(), name = $("#release-name").value.trim();
+    if (!tag_name || !name) { accountStatus.textContent = "Enter a release tag and name."; return; }
+    try {
+      const created = await write(repoPath("/releases"), "POST", {tag_name, name, body: $("#release-body").value,
+        target_commitish: $("#release-target").value.trim() || null, draft: $("#release-draft").checked, prerelease: $("#release-prerelease").checked},
+        `Create release ${tag_name} in ${selectedRepository.full_name}?`);
+      if (!created) return;
+      $("#release-tag").value = ""; $("#release-name").value = ""; $("#release-target").value = ""; $("#release-body").value = ""; await loadRepositoryData();
+    } catch (error) { accountStatus.textContent = error.message; }
+  });
+
+  async function inspectLocal() {
+    const path = projectRoot.value.trim();
+    if (!path) { localNotice.textContent = "Enter a repository folder path first."; projectRoot.focus(); return; }
+    localStorage.setItem("json_codr_git_project_root", path);
+    $("#inspect").disabled = true; localNotice.textContent = "Inspecting local repository...";
+    try {
+      const result = await request(`/api/git-broker/status?project_root=${encodeURIComponent(path)}`);
+      brokerSnapshot = result.repository;
+      brokerDetails.textContent = JSON.stringify(brokerSnapshot, null, 2);
+      $("#authorize").disabled = false;
+      localNotice.textContent = `Git broker inspection complete for ${brokerSnapshot.root}.`;
+    } catch (error) {
+      brokerSnapshot = null; brokerDetails.textContent = ""; $("#authorize").disabled = true;
+      localNotice.textContent = `Git broker inspection failed: ${error.message}`;
+    }
+    try {
+      localSnapshot = await request(`/api/github/local/status?project_root=${encodeURIComponent(path)}`);
+      const changes = localSnapshot.changes || [];
+      localSummary.replaceChildren(
+        card("Repository", localSnapshot.repository),
+        card("Branch", localSnapshot.branch || "Detached HEAD"),
+        card("Changed files", changes.length),
+        card("GitHub push permission", localSnapshot.push_allowed ? "Allowed" : "Not allowed", localSnapshot.push_allowed ? "ok" : "error"),
+      );
+      renderChangedFiles(changes);
+      $("#create-branch").disabled = false;
+      $("#stage-files").disabled = !changes.length;
+      $("#commit-files").disabled = !(localSnapshot.staged_paths || []).length;
+      $("#push-files").disabled = !localSnapshot.push_allowed || !localSnapshot.branch;
+      localNotice.textContent = `Inspected ${localSnapshot.repository} at ${localSnapshot.project_root}.`;
+    } catch (error) {
+      localSnapshot = null; localSummary.replaceChildren(card("GitHub status", error.message, "error"));
+      changedFiles.replaceChildren(element("p", "Unable to load changed files.", "muted"));
+      $("#create-branch").disabled = $("#stage-files").disabled = $("#commit-files").disabled = $("#push-files").disabled = true;
+      localNotice.textContent = `GitHub-backed local operations unavailable: ${error.message}`;
+    } finally { $("#inspect").disabled = false; }
+  }
+  function renderChangedFiles(changes) {
+    changedFiles.replaceChildren();
+    if (!changes.length) { changedFiles.append(element("p", "Working tree is clean.", "muted")); return; }
+    for (const change of changes) {
+      const label = element("label", undefined, "file-row");
+      const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.value = change.path;
+      const text = element("span", `${change.path}${change.staged ? " · staged" : ""}${change.unstaged ? " · modified" : ""}${change.untracked ? " · untracked" : ""}`);
+      label.append(checkbox, text); changedFiles.append(label);
+    }
+  }
+  async function refreshLocal() { await inspectLocal(); }
+  $("#inspect").addEventListener("click", inspectLocal);
+  projectRoot.addEventListener("keydown", event => { if (event.key === "Enter") inspectLocal(); });
+  $("#authorize").addEventListener("click", async () => {
+    const path = projectRoot.value.trim();
+    if (!brokerSnapshot || brokerSnapshot.root !== path) { localNotice.textContent = "Inspect this exact repository path before authorizing it."; return; }
+    try {
+      const result = await write("/api/git-broker/grants", "POST", {project_root: path, profile: "broker"},
+        `Grant JSON_CODR's Git broker access scoped to this project?\n\n${path}\n\nEach broker write still needs separate approval.`, false);
+      if (result) localNotice.textContent = `Broker grant created for ${result.project_root}.`;
+    } catch (error) { localNotice.textContent = error.message; }
+  });
+  $("#create-branch").addEventListener("click", async () => {
+    const branch = $("#branch-name").value.trim();
+    if (!branch || !localSnapshot) return;
+    try {
+      const result = await write("/api/github/local/branch", "POST", {project_root: localSnapshot.project_root, branch},
+        `Create local branch "${branch}" in ${localSnapshot.repository}?`);
+      if (!result) return;
+      $("#branch-name").value = ""; await refreshLocal();
+    } catch (error) { localNotice.textContent = error.message; }
+  });
+  $("#stage-files").addEventListener("click", async () => {
+    const paths = [...changedFiles.querySelectorAll("input:checked")].map(input => input.value);
+    if (!paths.length || !localSnapshot) { localNotice.textContent = "Select at least one changed file to stage."; return; }
+    try {
+      const result = await write("/api/github/local/stage", "POST", {project_root: localSnapshot.project_root, paths},
+        `Stage these ${paths.length} file(s) in ${localSnapshot.repository}?\n\n${paths.join("\n")}`);
+      if (!result) return;
+      await refreshLocal();
+    } catch (error) { localNotice.textContent = error.message; }
+  });
+  $("#commit-files").addEventListener("click", async () => {
+    const message = $("#commit-message").value.trim();
+    if (!message || !localSnapshot) { localNotice.textContent = "Enter a commit message first."; return; }
+    try {
+      const result = await write("/api/github/local/commit", "POST", {project_root: localSnapshot.project_root, message},
+        `Create commit "${message}" in ${localSnapshot.repository}?`);
+      if (!result) return;
+      $("#commit-message").value = ""; await refreshLocal();
+    } catch (error) { localNotice.textContent = error.message; }
+  });
+  $("#push-files").addEventListener("click", async () => {
+    if (!localSnapshot) return;
+    try {
+      const result = await write("/api/github/local/push", "POST", {project_root: localSnapshot.project_root},
+        `Push branch ${localSnapshot.branch} to ${localSnapshot.repository}? This publishes commits to GitHub.`);
+      if (!result) return;
+      await refreshLocal();
+    } catch (error) { localNotice.textContent = error.message; }
+  });
+
+  loadAccount();
 })();
 </script>
 </body>

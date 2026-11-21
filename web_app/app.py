@@ -5,13 +5,17 @@ from dataclasses import asdict
 import os
 import re
 import sys
+from typing import Callable, Literal
 from uuid import uuid7
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from ag_ui.core import RunAgentInput
+from ag_ui.encoder import EventEncoder
 
 from web_app.attachments import AttachmentService, AttachmentTooLarge
+from web_app.agui import build_prompt as build_agui_prompt, stream_events as stream_agui_events
 from web_app.actions import ActionProposalService
 from web_app.artifacts import ArtifactService
 from web_app.context import ContextAssembler
@@ -31,6 +35,7 @@ from web_app.localperf.storage import LocalPerfStorage
 from web_app.integrity_benchmark import IntegrityBenchmarkService
 from web_app.benchmark_baseline import BenchmarkBaselineService
 from web_app.coding_agents import CodingAgentService
+from web_app.github_cli import GitHubCLI, GitHubCLIError
 from web_app.git_broker import GitBrokerService
 from web_app.git_adapter import GitActionAdapter
 from web_app.core.adapters import CapabilityCall
@@ -67,7 +72,7 @@ from web_app.core.capability_discovery import discover_project_profile
 from web_app.core.canonical import canonical_digest
 from web_app.core.terminal_adapter import TerminalAdapter
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
+from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GitHubIssueCommentRequest, GitHubIssueCreateRequest, GitHubIssueUpdateRequest, GitHubLocalBranchRequest, GitHubLocalCommitRequest, GitHubLocalPushRequest, GitHubLocalStageRequest, GitHubPullRequestCreateRequest, GitHubPullRequestMergeRequest, GitHubPullRequestUpdateRequest, GitHubReleaseCreateRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
 from web_app.model_run_store import ModelRunStore, RequestKeyConflict
 from web_app.model_runs import ModelRunService, canonical_model_prompt
 from web_app.ollama_service import (
@@ -111,6 +116,7 @@ def create_app(
     coding_agents: CodingAgentService | None = None,
     git_broker: GitBrokerService | None = None,
     github_skills: GithubSkillService | None = None,
+    github_cli: GitHubCLI | None = None,
 ) -> FastAPI:
     application = FastAPI(title="JSON_CODR", version=APP_VERSION)
     workspace = workspace or WorkspaceService(default_data_root())
@@ -170,6 +176,7 @@ def create_app(
     recommendations = SkillRecommendationService(skill_library, skillsets, settings)
     skill_discovery = SkillDiscoveryService(skill_library, skill_converter, workspace.data_root)
     github_skills = github_skills or GithubSkillService(skill_library, skill_converter, workspace.data_root)
+    github_cli = github_cli or GitHubCLI()
     context_assembler = ContextAssembler(attachments, skills=skill_library)
     model_run_store = ModelRunStore(workspace.data_root)
     model_runs = ModelRunService(
@@ -1287,6 +1294,201 @@ def create_app(
         if x_json_codr != "1":
             raise HTTPException(status_code=403, detail="Terminal request header required")
 
+    async def github_call(operation: Callable[..., object], *args: object, **kwargs: object) -> object:
+        try:
+            return await asyncio.to_thread(operation, *args, **kwargs)
+        except GitHubCLIError as error:
+            raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @application.get("/api/github/status")
+    async def github_status(x_json_codr: str | None = Header(None)):
+        require_terminal_header(x_json_codr)
+        return await github_call(github_cli.status)
+
+    @application.get("/api/github/repositories")
+    async def github_repositories(x_json_codr: str | None = Header(None)):
+        require_terminal_header(x_json_codr)
+        return await github_call(github_cli.repositories)
+
+    @application.get("/api/github/repos/{owner}/{repository}/issues")
+    async def github_issues(
+        owner: str,
+        repository: str,
+        state: Literal["open", "closed", "all"] = "open",
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(github_cli.issues, owner, repository, state)
+
+    @application.post("/api/github/repos/{owner}/{repository}/issues", status_code=201)
+    async def github_create_issue(
+        owner: str,
+        repository: str,
+        request: GitHubIssueCreateRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(github_cli.create_issue, owner, repository, request.title, request.body)
+
+    @application.patch("/api/github/repos/{owner}/{repository}/issues/{number}")
+    async def github_update_issue(
+        owner: str,
+        repository: str,
+        number: int,
+        request: GitHubIssueUpdateRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(
+            github_cli.update_issue, owner, repository, number,
+            request.model_dump(exclude={"confirmed"}, exclude_none=True),
+        )
+
+    @application.post("/api/github/repos/{owner}/{repository}/issues/{number}/comments", status_code=201)
+    async def github_comment_issue(
+        owner: str,
+        repository: str,
+        number: int,
+        request: GitHubIssueCommentRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(github_cli.comment_issue, owner, repository, number, request.body)
+
+    @application.get("/api/github/repos/{owner}/{repository}/pulls")
+    async def github_pull_requests(
+        owner: str,
+        repository: str,
+        state: Literal["open", "closed", "all"] = "open",
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(github_cli.pull_requests, owner, repository, state)
+
+    @application.get("/api/github/repos/{owner}/{repository}/branches")
+    async def github_branches(
+        owner: str,
+        repository: str,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(github_cli.branches, owner, repository)
+
+    @application.get("/api/github/repos/{owner}/{repository}/commits")
+    async def github_commits(
+        owner: str,
+        repository: str,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(github_cli.commits, owner, repository)
+
+    @application.post("/api/github/repos/{owner}/{repository}/pulls", status_code=201)
+    async def github_create_pull_request(
+        owner: str,
+        repository: str,
+        request: GitHubPullRequestCreateRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(
+            github_cli.create_pull_request, owner, repository, request.head, request.base,
+            request.title, request.body, request.draft,
+        )
+
+    @application.patch("/api/github/repos/{owner}/{repository}/pulls/{number}")
+    async def github_update_pull_request(
+        owner: str,
+        repository: str,
+        number: int,
+        request: GitHubPullRequestUpdateRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(
+            github_cli.update_pull_request, owner, repository, number,
+            request.model_dump(exclude={"confirmed"}, exclude_none=True),
+        )
+
+    @application.post("/api/github/repos/{owner}/{repository}/pulls/{number}/merge")
+    async def github_merge_pull_request(
+        owner: str,
+        repository: str,
+        number: int,
+        request: GitHubPullRequestMergeRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(
+            github_cli.merge_pull_request, owner, repository, number, request.merge_method,
+        )
+
+    @application.get("/api/github/repos/{owner}/{repository}/releases")
+    async def github_releases(
+        owner: str,
+        repository: str,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(github_cli.releases, owner, repository)
+
+    @application.post("/api/github/repos/{owner}/{repository}/releases", status_code=201)
+    async def github_create_release(
+        owner: str,
+        repository: str,
+        request: GitHubReleaseCreateRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(
+            github_cli.create_release, owner, repository, request.tag_name, request.name,
+            request.body, request.target_commitish, request.draft, request.prerelease,
+        )
+
+    @application.get("/api/github/local/status")
+    async def github_local_status(
+        project_root: str,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(github_cli.local_status, project_root)
+
+    @application.post("/api/github/local/branch", status_code=201)
+    async def github_local_branch(
+        request: GitHubLocalBranchRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(github_cli.create_local_branch, request.project_root, request.branch)
+
+    @application.post("/api/github/local/stage")
+    async def github_local_stage(
+        request: GitHubLocalStageRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(github_cli.stage_local_files, request.project_root, request.paths)
+
+    @application.post("/api/github/local/commit", status_code=201)
+    async def github_local_commit(
+        request: GitHubLocalCommitRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(github_cli.commit_local_changes, request.project_root, request.message)
+
+    @application.post("/api/github/local/push")
+    async def github_local_push(
+        request: GitHubLocalPushRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(github_cli.push_local_changes, request.project_root)
+
     @application.get("/api/coding-agents/status")
     async def coding_agent_status():
         return coding_agents.status()
@@ -1568,10 +1770,21 @@ def create_app(
                 command_type="terminal.session",
                 payload=call.model_dump(mode="json"),
             ))
+            if record.events and record.events[-1].event_type == "task.permission_required":
+                proposal_id = record.events[-1].payload.get("proposal_id")
+                if not isinstance(proposal_id, str):
+                    raise ValueError("Terminal session approval proposal is missing")
+                # This endpoint is called from an explicit local terminal action; consume only its exact one-shot proposal.
+                record = await core_service.approve(
+                    task_id, principal="user", scope="project", proposal_id=proposal_id,
+                )
             if record.status is not TaskStatus.completed:
-                raise ValueError(record.events[-1].payload.get("reason", "Terminal creation failed"))
+                reason = record.events[-1].payload.get("reason") if record.events else None
+                raise ValueError(reason or "Terminal creation failed")
             started = next(event for event in reversed(record.events) if event.event_type == "terminal.session_started")
             return started.payload["record"]
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -1592,8 +1805,18 @@ def create_app(
             command_type=f"terminal.{operation}",
             payload=call.model_dump(mode="json"),
         ))
+        if record.events and record.events[-1].event_type == "task.permission_required":
+            proposal_id = record.events[-1].payload.get("proposal_id")
+            if not isinstance(proposal_id, str):
+                raise HTTPException(status_code=409, detail="Terminal operation approval proposal is missing")
+            try:
+                record = await core_service.approve(
+                    task_id, principal="user", scope="project", proposal_id=proposal_id,
+                )
+            except PermissionError as error:
+                raise HTTPException(status_code=403, detail=str(error)) from error
         if record.status is not TaskStatus.completed:
-            reason = record.events[-1].payload.get("reason", "Terminal operation failed")
+            reason = record.events[-1].payload.get("reason", "Terminal operation failed") if record.events else "Terminal operation failed"
             if reason == "capability target not found":
                 raise HTTPException(status_code=404, detail="Terminal not found")
             raise HTTPException(status_code=409, detail=reason)
@@ -1794,6 +2017,41 @@ def create_app(
             raise HTTPException(status_code=status, detail=reason)
         completed = next(event for event in reversed(record.events) if event.event_type == "inference.completed")
         return ChatResult.model_validate(completed.payload["result"])
+
+    @application.post("/api/ag-ui/run")
+    async def run_agui(run_input: RunAgentInput, http_request: Request):
+        try:
+            prompt = build_agui_prompt(run_input)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        forwarded_props = run_input.forwarded_props
+        requested_model = (
+            forwarded_props.get("model")
+            if isinstance(forwarded_props, dict)
+            else None
+        )
+        if requested_model is None:
+            requested_model = getattr(service, "config", {}).get("model")
+        if not isinstance(requested_model, str) or not requested_model.strip() or len(requested_model) > 200:
+            raise HTTPException(
+                status_code=422,
+                detail="Set a configured model or pass forwardedProps.model",
+            )
+        if any(ord(character) < 32 or ord(character) == 127 for character in requested_model):
+            raise HTTPException(status_code=422, detail="Invalid model name")
+        encoder = EventEncoder(accept=http_request.headers.get("accept"))
+        backend = inference_router or service
+        return StreamingResponse(
+            stream_agui_events(
+                run_input,
+                model=requested_model.strip(),
+                prompt=prompt,
+                backend=backend,
+                encoder=encoder,
+            ),
+            media_type=encoder.get_content_type(),
+            headers={"Cache-Control": "no-cache"},
+        )
 
     @application.post("/api/chat", response_model=ChatResult)
     async def chat(request: ChatRequest, http_request: Request):
