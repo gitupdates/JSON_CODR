@@ -684,6 +684,34 @@ class GitHubConfirmedWrite(BaseModel):
     confirmed: Literal[True]
 
 
+class GitHubRepositoryCreateRequest(GitHubConfirmedWrite):
+    owner: Optional[str] = Field(default=None, max_length=39)
+    name: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    description: str = Field(default="", max_length=350)
+    homepage: Optional[str] = Field(default=None, max_length=2048)
+    private: bool = True
+    auto_init: bool = True
+
+
+class GitHubRepositoryUpdateRequest(GitHubConfirmedWrite):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    description: Optional[str] = Field(default=None, max_length=350)
+    homepage: Optional[str] = Field(default=None, max_length=2048)
+    private: Optional[bool] = None
+    archived: Optional[bool] = None
+    default_branch: Optional[str] = Field(default=None, min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def require_repository_change(self):
+        if all(value is None for value in (self.name, self.description, self.homepage, self.private, self.archived, self.default_branch)):
+            raise ValueError("Provide at least one repository field to update")
+        return self
+
+
+class GitHubRepositoryDeleteRequest(GitHubConfirmedWrite):
+    confirm_name: str = Field(min_length=1, max_length=140)
+
+
 class GitHubIssueCreateRequest(GitHubConfirmedWrite):
     title: str = Field(min_length=1, max_length=256)
     body: str = Field(default="", max_length=65_536)
@@ -737,6 +765,33 @@ class GitHubReleaseCreateRequest(GitHubConfirmedWrite):
     target_commitish: Optional[str] = Field(default=None, max_length=256)
     draft: bool = False
     prerelease: bool = False
+
+
+class GitHubReleaseUpdateRequest(GitHubConfirmedWrite):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    body: Optional[str] = Field(default=None, max_length=65_536)
+    draft: Optional[bool] = None
+    prerelease: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def require_release_change(self):
+        if all(value is None for value in (self.name, self.body, self.draft, self.prerelease)):
+            raise ValueError("Provide at least one release field to update")
+        return self
+
+
+class GitHubLocalSyncRequest(GitHubConfirmedWrite):
+    project_root: str = Field(min_length=1, max_length=1000)
+
+
+class GitHubLocalCloneRequest(GitHubConfirmedWrite):
+    repository: str = Field(min_length=3, max_length=140)
+    destination: str = Field(min_length=1, max_length=1000)
+
+
+class GitHubRemoteBranchCreateRequest(GitHubConfirmedWrite):
+    branch: str = Field(min_length=1, max_length=200)
+    source_branch: str = Field(min_length=1, max_length=200)
 
 
 class GitHubLocalBranchRequest(GitHubConfirmedWrite):

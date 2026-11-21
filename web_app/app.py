@@ -72,7 +72,7 @@ from web_app.core.capability_discovery import discover_project_profile
 from web_app.core.canonical import canonical_digest
 from web_app.core.terminal_adapter import TerminalAdapter
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GitHubIssueCommentRequest, GitHubIssueCreateRequest, GitHubIssueUpdateRequest, GitHubLocalBranchRequest, GitHubLocalCommitRequest, GitHubLocalPushRequest, GitHubLocalStageRequest, GitHubPullRequestCreateRequest, GitHubPullRequestMergeRequest, GitHubPullRequestUpdateRequest, GitHubReleaseCreateRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
+from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GitHubConfirmedWrite, GitHubIssueCommentRequest, GitHubIssueCreateRequest, GitHubIssueUpdateRequest, GitHubLocalBranchRequest, GitHubLocalCloneRequest, GitHubLocalCommitRequest, GitHubLocalPushRequest, GitHubLocalStageRequest, GitHubLocalSyncRequest, GitHubPullRequestCreateRequest, GitHubPullRequestMergeRequest, GitHubPullRequestUpdateRequest, GitHubReleaseCreateRequest, GitHubReleaseUpdateRequest, GitHubRemoteBranchCreateRequest, GitHubRepositoryCreateRequest, GitHubRepositoryDeleteRequest, GitHubRepositoryUpdateRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
 from web_app.model_run_store import ModelRunStore, RequestKeyConflict
 from web_app.model_runs import ModelRunService, canonical_model_prompt
 from web_app.ollama_service import (
@@ -1314,6 +1314,49 @@ def create_app(
         require_terminal_header(x_json_codr)
         return await github_call(github_cli.repositories)
 
+    @application.post("/api/github/repositories", status_code=201)
+    async def github_create_repository(
+        request: GitHubRepositoryCreateRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(
+            github_cli.create_repository,
+            request.name,
+            request.description,
+            request.private,
+            request.auto_init,
+            request.owner,
+            request.homepage,
+        )
+
+    @application.patch("/api/github/repos/{owner}/{repository}")
+    async def github_update_repository(
+        owner: str,
+        repository: str,
+        request: GitHubRepositoryUpdateRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(
+            github_cli.update_repository,
+            owner,
+            repository,
+            request.model_dump(exclude={"confirmed"}, exclude_none=True),
+        )
+
+    @application.delete("/api/github/repos/{owner}/{repository}")
+    async def github_delete_repository(
+        owner: str,
+        repository: str,
+        request: GitHubRepositoryDeleteRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        if request.confirm_name.casefold() != f"{owner}/{repository}".casefold():
+            raise HTTPException(status_code=422, detail="Type the exact owner/repository name to confirm deletion")
+        return await github_call(github_cli.delete_repository, owner, repository)
+
     @application.get("/api/github/repos/{owner}/{repository}/issues")
     async def github_issues(
         owner: str,
@@ -1377,6 +1420,29 @@ def create_app(
     ):
         require_terminal_header(x_json_codr)
         return await github_call(github_cli.branches, owner, repository)
+
+    @application.post("/api/github/repos/{owner}/{repository}/branches", status_code=201)
+    async def github_create_branch(
+        owner: str,
+        repository: str,
+        request: GitHubRemoteBranchCreateRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(
+            github_cli.create_branch, owner, repository, request.branch, request.source_branch,
+        )
+
+    @application.delete("/api/github/repos/{owner}/{repository}/branches/{branch:path}")
+    async def github_delete_branch(
+        owner: str,
+        repository: str,
+        branch: str,
+        request: GitHubConfirmedWrite,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(github_cli.delete_branch, owner, repository, branch)
 
     @application.get("/api/github/repos/{owner}/{repository}/commits")
     async def github_commits(
@@ -1448,6 +1514,58 @@ def create_app(
             github_cli.create_release, owner, repository, request.tag_name, request.name,
             request.body, request.target_commitish, request.draft, request.prerelease,
         )
+
+    @application.patch("/api/github/repos/{owner}/{repository}/releases/{release_id}")
+    async def github_update_release(
+        owner: str,
+        repository: str,
+        release_id: int,
+        request: GitHubReleaseUpdateRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(
+            github_cli.update_release,
+            owner,
+            repository,
+            release_id,
+            request.model_dump(exclude={"confirmed"}, exclude_none=True),
+        )
+
+    @application.delete("/api/github/repos/{owner}/{repository}/releases/{release_id}")
+    async def github_delete_release(
+        owner: str,
+        repository: str,
+        release_id: int,
+        request: GitHubConfirmedWrite,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(github_cli.delete_release, owner, repository, release_id)
+
+    @application.post("/api/github/local/clone", status_code=201)
+    async def github_local_clone(
+        request: GitHubLocalCloneRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(github_cli.clone_local_repository, request.repository, request.destination)
+
+    @application.post("/api/github/local/fetch")
+    async def github_local_fetch(
+        request: GitHubLocalSyncRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(github_cli.fetch_local_changes, request.project_root)
+
+    @application.post("/api/github/local/pull")
+    async def github_local_pull(
+        request: GitHubLocalSyncRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_call(github_cli.pull_local_changes, request.project_root)
 
     @application.get("/api/github/local/status")
     async def github_local_status(

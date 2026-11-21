@@ -330,6 +330,138 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(created.status_code, 201)
         self.assertEqual(github.writes, [("test-user", "sample", "Issue", "Details")])
 
+    def test_expanded_github_routes_require_confirmation_and_validate_repository_deletion(self):
+        class FakeGitHubCLI:
+            def __init__(self):
+                self.writes = []
+
+            def create_repository(self, *args):
+                self.writes.append(("create_repository", args))
+                return {"full_name": "test-user/new-repo"}
+
+            def update_repository(self, *args):
+                self.writes.append(("update_repository", args))
+                return {"full_name": "test-user/sample"}
+
+            def delete_repository(self, *args):
+                self.writes.append(("delete_repository", args))
+                return {"deleted": True}
+
+            def create_branch(self, *args):
+                self.writes.append(("create_branch", args))
+                return {"branch": args[2]}
+
+            def delete_branch(self, *args):
+                self.writes.append(("delete_branch", args))
+                return {"deleted": True}
+
+            def update_release(self, *args):
+                self.writes.append(("update_release", args))
+                return {"id": args[2]}
+
+            def delete_release(self, *args):
+                self.writes.append(("delete_release", args))
+                return {"deleted": True}
+
+            def clone_local_repository(self, *args):
+                self.writes.append(("clone_local_repository", args))
+                return {"project_root": args[1], "status": "cloned"}
+
+            def fetch_local_changes(self, *args):
+                self.writes.append(("fetch_local_changes", args))
+                return {"status": "fetched"}
+
+            def pull_local_changes(self, *args):
+                self.writes.append(("pull_local_changes", args))
+                return {"status": "pulled"}
+
+        github = FakeGitHubCLI()
+        client = self.track_core_client(TestClient(create_app(self.service, self.workspace, github_cli=github)))
+        headers = {"X-JSON-CODR": "1"}
+
+        missing_confirmation = client.post(
+            "/api/github/repositories",
+            headers=headers,
+            json={"name": "new-repo"},
+        )
+        created = client.post(
+            "/api/github/repositories",
+            headers=headers,
+            json={"confirmed": True, "name": "new-repo"},
+        )
+        updated = client.patch(
+            "/api/github/repos/test-user/sample",
+            headers=headers,
+            json={"confirmed": True, "description": "Updated"},
+        )
+        wrong_delete_confirmation = client.request(
+            "DELETE",
+            "/api/github/repos/test-user/sample",
+            headers=headers,
+            json={"confirmed": True, "confirm_name": "test-user/other"},
+        )
+        deleted = client.request(
+            "DELETE",
+            "/api/github/repos/test-user/sample",
+            headers=headers,
+            json={"confirmed": True, "confirm_name": "test-user/sample"},
+        )
+        branch = client.post(
+            "/api/github/repos/test-user/sample/branches",
+            headers=headers,
+            json={"confirmed": True, "branch": "feature/one", "source_branch": "main"},
+        )
+        deleted_branch = client.request(
+            "DELETE",
+            "/api/github/repos/test-user/sample/branches/feature/one",
+            headers=headers,
+            json={"confirmed": True},
+        )
+        release = client.patch(
+            "/api/github/repos/test-user/sample/releases/7",
+            headers=headers,
+            json={"confirmed": True, "name": "Updated"},
+        )
+        deleted_release = client.request(
+            "DELETE",
+            "/api/github/repos/test-user/sample/releases/7",
+            headers=headers,
+            json={"confirmed": True},
+        )
+        cloned = client.post(
+            "/api/github/local/clone",
+            headers=headers,
+            json={"confirmed": True, "repository": "test-user/sample", "destination": "C:/work/sample"},
+        )
+        fetched = client.post(
+            "/api/github/local/fetch",
+            headers=headers,
+            json={"confirmed": True, "project_root": "C:/work/sample"},
+        )
+        pulled = client.post(
+            "/api/github/local/pull",
+            headers=headers,
+            json={"confirmed": True, "project_root": "C:/work/sample"},
+        )
+
+        self.assertEqual(missing_confirmation.status_code, 422)
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(wrong_delete_confirmation.status_code, 422)
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(branch.status_code, 201)
+        self.assertEqual(deleted_branch.status_code, 200)
+        self.assertEqual(release.status_code, 200)
+        self.assertEqual(deleted_release.status_code, 200)
+        self.assertEqual(cloned.status_code, 201)
+        self.assertEqual(fetched.status_code, 200)
+        self.assertEqual(pulled.status_code, 200)
+        self.assertEqual([name for name, _ in github.writes], [
+            "create_repository", "update_repository", "delete_repository", "create_branch",
+            "delete_branch", "update_release", "delete_release", "clone_local_repository",
+            "fetch_local_changes", "pull_local_changes",
+        ])
+
     def track_core_client(self, client):
         self._core_clients.append(client)
         return client

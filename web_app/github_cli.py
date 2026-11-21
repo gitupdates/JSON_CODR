@@ -6,7 +6,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Callable, Literal
-from urllib.parse import urlencode, urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 
 class GitHubCLIError(RuntimeError):
@@ -55,6 +55,9 @@ class GitHubCLI:
                 "full_name": item.get("full_name"),
                 "description": item.get("description"),
                 "private": bool(item.get("private")),
+                "archived": bool(item.get("archived")),
+                "visibility": item.get("visibility"),
+                "homepage": item.get("homepage"),
                 "url": item.get("html_url"),
                 "default_branch": item.get("default_branch"),
                 "permissions": item.get("permissions") or {},
@@ -83,10 +86,40 @@ class GitHubCLI:
         path = self._repository_path(owner, repository)
         items = self._api_pages(f"{path}/branches", {"per_page": "100"})
         return [
-            {"name": item.get("name"), "protected": item.get("protected")}
+            {
+                "name": item.get("name"),
+                "protected": item.get("protected"),
+                "sha": (item.get("commit") or {}).get("sha"),
+            }
             for item in items
             if isinstance(item, dict)
         ]
+
+    def create_branch(
+        self, owner: str, repository: str, branch: str, source_branch: str,
+    ) -> dict[str, object]:
+        path = self._repository_path(owner, repository)
+        branch = self._validated_branch(branch)
+        source_branch = self._validated_branch(source_branch)
+        source = self._api("GET", f"{path}/git/ref/heads/{quote(source_branch, safe='/')}")
+        source_object = source.get("object")
+        sha = source_object.get("sha") if isinstance(source_object, dict) else None
+        if not isinstance(sha, str) or not sha:
+            raise GitHubCLIError("GitHub did not return a source branch commit")
+        self._api("POST", f"{path}/git/refs", {"ref": f"refs/heads/{branch}", "sha": sha})
+        return {"repository": f"{owner}/{repository}", "branch": branch, "sha": sha}
+
+    def delete_branch(self, owner: str, repository: str, branch: str) -> dict[str, object]:
+        path = self._repository_path(owner, repository)
+        branch = self._validated_branch(branch)
+        details = self._api("GET", path)
+        if details.get("default_branch") == branch:
+            raise ValueError("The default branch cannot be deleted")
+        branch_details = self._api("GET", f"{path}/branches/{quote(branch, safe='/')}")
+        if branch_details.get("protected") is True:
+            raise ValueError("Protected branches cannot be deleted")
+        self._delete_api(f"{path}/git/refs/heads/{quote(branch, safe='/')}")
+        return {"repository": f"{owner}/{repository}", "branch": branch, "deleted": True}
 
     def commits(self, owner: str, repository: str) -> list[dict[str, object]]:
         path = self._repository_path(owner, repository)
@@ -108,7 +141,40 @@ class GitHubCLI:
     def releases(self, owner: str, repository: str):
         path = self._repository_path(owner, repository)
         items = self._api_pages(f"{path}/releases", {"per_page": "100"})
-        return [self._summary(item) for item in items if isinstance(item, dict)]
+        return [self._release_summary(item) for item in items if isinstance(item, dict)]
+
+    def create_repository(
+        self,
+        name: str,
+        description: str,
+        private: bool,
+        auto_init: bool,
+        owner: str | None = None,
+        homepage: str | None = None,
+    ) -> dict[str, object]:
+        if owner:
+            path = f"orgs/{self._validated_owner(owner)}/repos"
+        else:
+            path = "user/repos"
+        fields: dict[str, object] = {
+            "name": name,
+            "description": description,
+            "private": private,
+            "auto_init": auto_init,
+        }
+        if homepage:
+            fields["homepage"] = homepage
+        created = self._api("POST", path, fields)
+        return self._repository_summary(created)
+
+    def update_repository(self, owner: str, repository: str, fields: dict[str, object]) -> dict[str, object]:
+        updated = self._api("PATCH", self._repository_path(owner, repository), fields)
+        return self._repository_summary(updated)
+
+    def delete_repository(self, owner: str, repository: str) -> dict[str, object]:
+        full_name = f"{owner}/{repository}"
+        self._delete_api(self._repository_path(owner, repository))
+        return {"full_name": full_name, "deleted": True}
 
     def create_issue(self, owner: str, repository: str, title: str, body: str):
         return self._api(
@@ -178,6 +244,21 @@ class GitHubCLI:
             fields["target_commitish"] = target_commitish
         return self._api("POST", f"{self._repository_path(owner, repository)}/releases", fields)
 
+    def update_release(self, owner: str, repository: str, release_id: int, fields: dict[str, object]):
+        if release_id < 1:
+            raise ValueError("Release ID must be positive")
+        return self._api(
+            "PATCH",
+            f"{self._repository_path(owner, repository)}/releases/{release_id}",
+            fields,
+        )
+
+    def delete_release(self, owner: str, repository: str, release_id: int):
+        if release_id < 1:
+            raise ValueError("Release ID must be positive")
+        self._delete_api(f"{self._repository_path(owner, repository)}/releases/{release_id}")
+        return {"repository": f"{owner}/{repository}", "release_id": release_id, "deleted": True}
+
     def local_status(self, project_root: str) -> dict[str, object]:
         root, repository = self._local_repository(project_root)
         branch = self._git(root, "branch", "--show-current") or None
@@ -195,6 +276,7 @@ class GitHubCLI:
             "project_root": str(root),
             "repository": repository,
             "branch": branch,
+            **self._tracking_status(root, branch),
             "changes": list(statuses.values()),
             "staged_paths": staged,
             "push_allowed": self._repository_permissions(*repository.split("/")).get("push") is True,
@@ -243,6 +325,79 @@ class GitHubCLI:
         self._git(root, "push", "--set-upstream", "origin", branch)
         return {"project_root": str(root), "repository": repository, "branch": branch, "status": "pushed"}
 
+    def fetch_local_changes(self, project_root: str) -> dict[str, object]:
+        root, repository = self._local_repository(project_root)
+        self._git(root, "fetch", "origin")
+        branch = self._git(root, "branch", "--show-current") or None
+        return {
+            "project_root": str(root),
+            "repository": repository,
+            "branch": branch,
+            "status": "fetched",
+            **self._tracking_status(root, branch),
+        }
+
+    def pull_local_changes(self, project_root: str) -> dict[str, object]:
+        root, repository = self._local_repository(project_root)
+        branch = self._git(root, "branch", "--show-current")
+        if not branch:
+            raise ValueError("Cannot pull from a detached HEAD")
+        if self._git(root, "status", "--porcelain", "--untracked-files=normal"):
+            raise ValueError("Commit or remove local changes before pulling")
+        tracking = self._tracking_status(root, branch)
+        remote_branch = tracking["remote_branch"]
+        if not isinstance(remote_branch, str) or not remote_branch.startswith("origin/"):
+            raise ValueError("Current branch must track an origin branch before pulling")
+        remote_name = remote_branch.removeprefix("origin/")
+        advertised = self._git(root, "ls-remote", "--heads", "origin", f"refs/heads/{remote_name}")
+        if not advertised:
+            raise ValueError(f"Remote branch {remote_branch} no longer exists")
+        self._git(
+            root,
+            "fetch",
+            "origin",
+            f"+refs/heads/{remote_name}:refs/remotes/origin/{remote_name}",
+        )
+        remote_ref = f"refs/remotes/{remote_branch}"
+        ahead, behind = self._ahead_behind(root, remote_ref)
+        if ahead and behind:
+            raise ValueError("Local and remote branches have diverged; reconcile them before pulling")
+        if behind:
+            self._git(root, "merge", "--ff-only", remote_ref)
+            status = "pulled"
+        else:
+            status = "up_to_date"
+        return {
+            "project_root": str(root),
+            "repository": repository,
+            "branch": branch,
+            "remote_branch": f"origin/{branch}",
+            "ahead": ahead,
+            "behind": behind,
+            "status": status,
+        }
+
+    def clone_local_repository(self, repository: str, destination: str) -> dict[str, object]:
+        parts = repository.split("/")
+        if len(parts) != 2:
+            raise ValueError("Repository must use the owner/repository format")
+        full_name = self._repository_path(parts[0], parts[1]).removeprefix("repos/")
+        requested_path = Path(destination).expanduser()
+        if not requested_path.is_absolute():
+            raise ValueError("Choose an absolute destination folder")
+        target = requested_path.resolve()
+        if target.exists():
+            raise ValueError("Clone destination must not already exist")
+        if not target.parent.is_dir():
+            raise ValueError("Clone destination parent folder does not exist")
+        self._run("gh", ["repo", "clone", full_name, str(target)])
+        if not target.is_dir():
+            raise GitHubCLIError("GitHub CLI reported success but the clone folder was not created")
+        root, cloned_name = self._local_repository(str(target))
+        if cloned_name.casefold() != full_name.casefold():
+            raise GitHubCLIError("Cloned repository origin did not match the selected repository")
+        return {"project_root": str(root), "repository": cloned_name, "status": "cloned"}
+
     def _local_repository(self, project_root: str) -> tuple[Path, str]:
         root = Path(project_root).expanduser().resolve()
         if not root.is_dir():
@@ -258,6 +413,38 @@ class GitHubCLI:
         payload = self._api("GET", path)
         permissions = payload.get("permissions")
         return permissions if isinstance(permissions, dict) else {}
+
+    def _tracking_status(self, root: Path, branch: str | None) -> dict[str, object]:
+        if not branch:
+            return {"remote_branch": None, "ahead": None, "behind": None}
+        status = self._git(root, "status", "--porcelain=v2", "--branch")
+        upstream = next(
+            (line.removeprefix("# branch.upstream ") for line in status.splitlines() if line.startswith("# branch.upstream ")),
+            None,
+        )
+        if not upstream:
+            return {"remote_branch": None, "ahead": None, "behind": None}
+        ahead_behind = next(
+            (line for line in status.splitlines() if line.startswith("# branch.ab ")),
+            None,
+        )
+        match = re.fullmatch(r"# branch\.ab \+(\d+) -(\d+)", ahead_behind or "")
+        if not match:
+            raise GitHubCLIError("Git returned invalid upstream ahead/behind status")
+        return {
+            "remote_branch": upstream,
+            "ahead": int(match.group(1)),
+            "behind": int(match.group(2)),
+        }
+
+    def _ahead_behind(self, root: Path, remote_ref: str) -> tuple[int, int]:
+        counts = self._git(root, "rev-list", "--left-right", "--count", f"HEAD...{remote_ref}").split()
+        if len(counts) != 2 or not all(value.isdigit() for value in counts):
+            raise GitHubCLIError("Git returned invalid ahead/behind counts")
+        return int(counts[0]), int(counts[1])
+
+    def _delete_api(self, endpoint: str) -> None:
+        self._run("gh", ["api", "--method", "DELETE", endpoint])
 
     @staticmethod
     def _github_slug(remote: str) -> str:
@@ -296,6 +483,22 @@ class GitHubCLI:
         return f"repos/{owner}/{repository}"
 
     @staticmethod
+    def _validated_owner(owner: str) -> str:
+        GitHubCLI._repository_path(owner, "repository")
+        return owner
+
+    def _validated_branch(self, branch: str) -> str:
+        if not branch or len(branch) > 200 or any(ord(char) < 32 or ord(char) == 127 for char in branch):
+            raise ValueError("Branch name is invalid")
+        try:
+            self._run("git", ["check-ref-format", f"refs/heads/{branch}"])
+        except GitHubCLIError as error:
+            if error.status_code == 503:
+                raise
+            raise ValueError("Branch name is invalid") from error
+        return branch
+
+    @staticmethod
     def _number(number: int) -> int:
         if number < 1:
             raise ValueError("GitHub item number must be positive")
@@ -306,6 +509,35 @@ class GitHubCLI:
         return {
             key: item.get(key)
             for key in ("number", "title", "body", "state", "html_url", "user", "created_at", "updated_at", "draft", "merged")
+            if key in item
+        }
+
+    @staticmethod
+    def _repository_summary(item: dict[str, object]) -> dict[str, object]:
+        owner = item.get("owner")
+        owner_data = owner if isinstance(owner, dict) else {}
+        return {
+            "name": item.get("name"),
+            "full_name": item.get("full_name"),
+            "description": item.get("description"),
+            "private": bool(item.get("private")),
+            "archived": bool(item.get("archived")),
+            "visibility": item.get("visibility"),
+            "homepage": item.get("homepage"),
+            "default_branch": item.get("default_branch"),
+            "url": item.get("html_url"),
+            "owner": owner_data.get("login"),
+            "permissions": item.get("permissions") or {},
+        }
+
+    @staticmethod
+    def _release_summary(item: dict[str, object]) -> dict[str, object]:
+        return {
+            key: item.get(key)
+            for key in (
+                "id", "tag_name", "name", "body", "draft", "prerelease",
+                "html_url", "created_at", "published_at",
+            )
             if key in item
         }
 

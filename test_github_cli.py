@@ -79,7 +79,10 @@ class GitHubCLITests(unittest.TestCase):
 
         client = GitHubCLI(executable_finder=lambda name: f"{name}.exe", runner=runner)
 
-        self.assertEqual(client.branches("gitupdates", "sample"), [{"name": "main", "protected": True}])
+        self.assertEqual(
+            client.branches("gitupdates", "sample"),
+            [{"name": "main", "protected": True, "sha": "ignored"}],
+        )
         commits = client.commits("gitupdates", "sample")
         self.assertEqual(commits[0]["sha"], "abc123")
         self.assertEqual(commits[0]["message"], "A commit\nwith details")
@@ -138,6 +141,151 @@ class GitHubCLITests(unittest.TestCase):
 
             self.assertEqual(pushed["status"], "pushed")
             self.assertTrue(any("push" in arguments for arguments in calls))
+
+    def test_local_fetch_and_pull_report_tracking_and_block_unsafe_pulls(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory) / "project"
+            root.mkdir()
+            subprocess.run(["git", "init", "-b", "main"], cwd=root, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test User"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
+            subprocess.run(
+                ["git", "remote", "add", "origin", "https://github.com/gitupdates/sample.git"],
+                cwd=root,
+                check=True,
+            )
+            (root / "README.md").write_text("initial\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-m", "initial"], cwd=root, check=True, capture_output=True)
+
+            calls = []
+            counts = ["1\t1\n"]
+
+            def runner(arguments, **kwargs):
+                calls.append(arguments)
+                if "fetch" in arguments:
+                    return subprocess.CompletedProcess(arguments, 0, "", "")
+                if "--porcelain=v2" in arguments:
+                    return subprocess.CompletedProcess(
+                        arguments, 0,
+                        "# branch.oid abc123\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +1 -1\n",
+                        "",
+                    )
+                if "ls-remote" in arguments:
+                    return subprocess.CompletedProcess(arguments, 0, "abc123\trefs/heads/main\n", "")
+                if "rev-list" in arguments:
+                    return subprocess.CompletedProcess(arguments, 0, counts[0], "")
+                if "merge" in arguments:
+                    return subprocess.CompletedProcess(arguments, 0, "", "")
+                if Path(arguments[0]).name == "gh.exe":
+                    return subprocess.CompletedProcess(arguments, 0, '{"permissions":{"push":true}}', "")
+                return subprocess.run(arguments, **kwargs)
+
+            client = GitHubCLI(
+                executable_finder=lambda name: f"{name}.exe" if name == "gh" else shutil.which(name),
+                runner=runner,
+            )
+
+            fetched = client.fetch_local_changes(str(root))
+            self.assertEqual((fetched["ahead"], fetched["behind"]), (1, 1))
+            self.assertEqual(fetched["remote_branch"], "origin/main")
+            with self.assertRaisesRegex(ValueError, "diverged"):
+                client.pull_local_changes(str(root))
+            self.assertFalse(any("merge" in arguments for arguments in calls))
+
+            counts[0] = "0\t1\n"
+            pulled = client.pull_local_changes(str(root))
+            self.assertEqual(pulled["status"], "pulled")
+            self.assertTrue(any("merge" in arguments and "--ff-only" in arguments for arguments in calls))
+
+            (root / "README.md").write_text("uncommitted\n", encoding="utf-8")
+            fetch_count = sum("fetch" in arguments for arguments in calls)
+            with self.assertRaisesRegex(ValueError, "local changes"):
+                client.pull_local_changes(str(root))
+            self.assertEqual(sum("fetch" in arguments for arguments in calls), fetch_count)
+
+    def test_clone_uses_gh_and_requires_new_absolute_destination(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            destination = root / "clone"
+            calls = []
+
+            def runner(arguments, **kwargs):
+                calls.append(arguments)
+                if Path(arguments[0]).name == "gh.exe":
+                    self.assertEqual(arguments[1:4], ["repo", "clone", "gitupdates/sample"])
+                    target = Path(arguments[4])
+                    target.mkdir()
+                    subprocess.run(["git", "init", "-b", "main"], cwd=target, check=True, capture_output=True)
+                    subprocess.run(
+                        ["git", "remote", "add", "origin", "https://github.com/gitupdates/sample.git"],
+                        cwd=target,
+                        check=True,
+                    )
+                    return subprocess.CompletedProcess(arguments, 0, "Cloned\n", "")
+                return subprocess.run(arguments, **kwargs)
+
+            client = GitHubCLI(
+                executable_finder=lambda name: f"{name}.exe" if name == "gh" else shutil.which(name),
+                runner=runner,
+            )
+            result = client.clone_local_repository("gitupdates/sample", str(destination))
+            self.assertEqual(result["repository"], "gitupdates/sample")
+            self.assertEqual(result["status"], "cloned")
+            self.assertEqual(calls[0][1:4], ["repo", "clone", "gitupdates/sample"])
+            with self.assertRaisesRegex(ValueError, "must not already exist"):
+                client.clone_local_repository("gitupdates/sample", str(destination))
+            with self.assertRaisesRegex(ValueError, "absolute"):
+                client.clone_local_repository("gitupdates/sample", "relative/path")
+
+    def test_repository_branch_and_release_lifecycle_use_gh_api(self):
+        calls = []
+
+        def runner(arguments, **kwargs):
+            calls.append(arguments)
+            target = next(
+                (argument for argument in arguments if argument.startswith(("repos/", "orgs/"))),
+                arguments[-1],
+            )
+            if target == "orgs/example/repos":
+                output = {"name": "new-project", "full_name": "example/new-project", "private": True}
+            elif target == "repos/example/new-project":
+                output = {"name": "renamed", "full_name": "example/renamed", "archived": True}
+            elif target.endswith("/git/ref/heads/main"):
+                output = {"object": {"sha": "abc123"}}
+            elif target.endswith("/git/refs"):
+                output = {"ref": "refs/heads/feature/change"}
+            elif "releases?per_page=" in target:
+                output = [[{"id": 7, "tag_name": "v1", "name": "First", "body": "Notes"}]]
+            elif target.endswith("/releases/7") and "PATCH" in arguments:
+                output = {"id": 7, "tag_name": "v1", "name": "Updated"}
+            elif "DELETE" in arguments:
+                output = ""
+            else:
+                output = {}
+            return subprocess.CompletedProcess(arguments, 0, json.dumps(output) if output else "", "")
+
+        client = GitHubCLI(executable_finder=lambda name: f"{name}.exe", runner=runner)
+        created = client.create_repository("new-project", "Description", True, True, "example")
+        updated = client.update_repository("example", "new-project", {"name": "renamed", "archived": True})
+        deleted = client.delete_repository("example", "renamed")
+        branch = client.create_branch("example", "renamed", "feature/change", "main")
+        removed_branch = client.delete_branch("example", "renamed", "feature/change")
+        releases = client.releases("example", "renamed")
+        updated_release = client.update_release("example", "renamed", 7, {"name": "Updated"})
+        deleted_release = client.delete_release("example", "renamed", 7)
+
+        self.assertEqual(created["full_name"], "example/new-project")
+        self.assertEqual(updated["full_name"], "example/renamed")
+        self.assertTrue(deleted["deleted"])
+        self.assertEqual(branch["sha"], "abc123")
+        self.assertTrue(removed_branch["deleted"])
+        self.assertEqual(releases[0]["id"], 7)
+        self.assertEqual(releases[0]["tag_name"], "v1")
+        self.assertEqual(updated_release["name"], "Updated")
+        self.assertTrue(deleted_release["deleted"])
+        self.assertTrue(any("orgs/example/repos" in call for call in calls))
+        self.assertTrue(any("DELETE" in call and "repos/example/renamed" in call[-1] for call in calls))
 
     def test_invalid_repo_and_git_paths_fail_before_remote_actions(self):
         client = GitHubCLI(executable_finder=lambda _name: None)

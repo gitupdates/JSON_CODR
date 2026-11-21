@@ -1,0 +1,4 @@
+{
+    "terminal.integrated.defaultProfile.windows": "PowerShell",
+    "opilot.experimental.webSearch": true
+}
