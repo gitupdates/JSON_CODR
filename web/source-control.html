@@ -40,7 +40,7 @@
       <p id="build-status" class="build-banner" data-state="idle" role="status" aria-live="polite">Connect a matching checkout to check its build.</p>
       <div class="status-grid"><div id="local-build-details" class="status-item"><span>Local build</span><strong>Not checked</strong></div><div id="remote-build-details" class="status-item"><span>Selected branch</span><strong>Not checked</strong></div></div>
     </div>
-    <div class="connect-step actions"><button id="check-build" type="button" disabled>Check build</button><button id="update-build" class="primary" type="button" disabled>Update to latest</button></div>
+    <div class="connect-step actions"><button id="check-build" class="primary" type="button" disabled>Check for updates</button></div>
   </section>
 
   <section class="card" aria-labelledby="account-heading">
@@ -139,6 +139,7 @@
 
   <section class="card"><h2>Permission boundary</h2><p>GitHub operations use the local GitHub CLI identity; Git uses the local Git executable. Every write and local sync operation requires browser confirmation and a request-level confirmation flag. Repository deletion additionally requires typing its exact owner/repository name. Account credentials, secrets, and workflow administration remain outside this page.</p></section>
 
+<script src="/static/source_control_updates.js"></script>
 <script>
 (() => {
   const $ = (selector) => document.querySelector(selector);
@@ -154,12 +155,12 @@
   let selectedBranch = null;
   let brokerSnapshot = null;
   let localSnapshot = null;
-  let buildSnapshot = null;
   let githubRepositories = [];
   let githubBranches = [];
   let authenticatedLogin = null;
   let activeLoginSession = null;
   let connectionGeneration = 0;
+  let buildCheckInFlight = false;
 
   projectRoot.value = localStorage.getItem("json_codr_git_project_root") || localStorage.getItem("json_codr_workspace_project_root") || "";
 
@@ -404,8 +405,6 @@
     }));
   }
   function clearBuildResult(message = "Check the build after connecting this exact scope.") {
-    buildSnapshot = null;
-    $("#update-build").disabled = true;
     $("#build-status").dataset.state = "idle";
     $("#build-status").textContent = message;
     $("#local-build-details").replaceChildren(element("span", "Local build"), element("strong", "Not checked"));
@@ -423,7 +422,7 @@
   function updateConnectionControls() {
     const hasScope = Boolean(selectedRepository && selectedBranch);
     $("#connect-checkout").disabled = !hasScope || !projectRoot.value.trim();
-    $("#check-build").disabled = !scopeMatchesLocal();
+    $("#check-build").disabled = buildCheckInFlight || !scopeMatchesLocal();
   }
   async function loadAccount() {
     const generation = ++connectionGeneration;
@@ -790,7 +789,6 @@
     return `${commit.short_sha || commit.sha?.slice(0, 12) || "Unknown"} · ${commit.subject || "No subject"}`;
   }
   function renderBuildResult(result) {
-    buildSnapshot = result;
     const banner = $("#build-status");
     banner.dataset.state = result.status === "current" ? "current" : result.status === "behind" ? "behind" : "blocked";
     banner.textContent = result.detail || "Build check complete.";
@@ -808,50 +806,42 @@
       element("p", remote ? `${remote.author_name || "Unknown author"} · ${remote.authored_at || "Unknown time"}` : "No remote commit details."),
       element("p", result.ahead === null ? "Ahead / behind: unavailable" : `Ahead / behind: ${result.ahead} / ${result.behind}`),
     );
-    $("#update-build").disabled = !result.update_allowed;
     updateConnectionControls();
   }
   $("#check-build").addEventListener("click", async () => {
     if (!scopeMatchesLocal()) return;
     const generation = connectionGeneration;
-    $("#check-build").disabled = true;
-    $("#update-build").disabled = true;
     $("#build-status").dataset.state = "idle";
     $("#build-status").textContent = "Fetching the selected branch and comparing commits...";
     try {
-      const result = await write(
-        "/api/github/local/check-build", "POST",
-        {project_root: localSnapshot.project_root, repository: selectedRepository.full_name, branch: selectedBranch.name},
-        `Fetch and check ${selectedRepository.full_name} / ${selectedBranch.name} against ${localSnapshot.project_root}?`,
-      );
-      if (result && generation === connectionGeneration) renderBuildResult(result);
-    } catch (error) {
-      $("#build-status").dataset.state = "error";
-      $("#build-status").textContent = error.message;
-    } finally { updateConnectionControls(); }
-  });
-  $("#update-build").addEventListener("click", async () => {
-    if (!buildSnapshot?.update_allowed || !scopeMatchesLocal()) return;
-    const localCommit = buildSnapshot.local_commit;
-    const remoteCommit = buildSnapshot.remote_commit;
-    if (!localCommit?.sha || !remoteCommit?.sha) return;
-    const generation = connectionGeneration;
-    $("#update-build").disabled = true;
-    try {
-      const result = await write(
-        "/api/github/local/update-build", "POST",
-        {
-          project_root: localSnapshot.project_root,
-          repository: selectedRepository.full_name,
-          branch: selectedBranch.name,
-          expected_local_sha: localCommit.sha,
-          expected_remote_sha: remoteCommit.sha,
-          expected_login: buildSnapshot.authenticated_login,
-          expected_host: buildSnapshot.authenticated_host,
+      const outcome = await JSONCodrSourceUpdates.checkAndMaybeUpdate({
+        setBusy: busy => { buildCheckInFlight = busy; updateConnectionControls(); },
+        isCurrent: () => generation === connectionGeneration && scopeMatchesLocal(),
+        check: () => JSONCodrSourceUpdates.checkBuild(
+          request,
+          {project_root: localSnapshot.project_root, repository: selectedRepository.full_name, branch: selectedBranch.name},
+        ),
+        update: checked => {
+          renderBuildResult(checked);
+          const localCommit = checked.local_commit;
+          const remoteCommit = checked.remote_commit;
+          if (!localCommit?.sha || !remoteCommit?.sha) return null;
+          return write(
+            "/api/github/local/update-build", "POST",
+            {
+              project_root: localSnapshot.project_root,
+              repository: selectedRepository.full_name,
+              branch: selectedBranch.name,
+              expected_local_sha: localCommit.sha,
+              expected_remote_sha: remoteCommit.sha,
+              expected_login: checked.authenticated_login,
+              expected_host: checked.authenticated_host,
+            },
+            `A newer version is available. Fast-forward ${selectedRepository.full_name} / ${selectedBranch.name} at ${localSnapshot.project_root}?\n\nCurrent: ${localCommit.short_sha || localCommit.sha}\nTarget: ${remoteCommit.short_sha || remoteCommit.sha}\n\nLocal changes, divergence, or stale commits will block the update.`,
+          );
         },
-        `Fast-forward ${selectedRepository.full_name} / ${selectedBranch.name} at ${localSnapshot.project_root}?\n\nCurrent: ${localCommit.short_sha || localCommit.sha}\nTarget: ${remoteCommit.short_sha || remoteCommit.sha}\n\nLocal changes, divergence, or stale commits will block the update.`,
-      );
-      if (result && generation === connectionGeneration) renderBuildResult(result);
+      });
+      if (outcome.result && generation === connectionGeneration) renderBuildResult(outcome.result);
     } catch (error) {
       clearBuildResult("The build changed or could not be updated safely. Check it again.");
       $("#build-status").dataset.state = "error";

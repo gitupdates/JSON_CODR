@@ -1,4 +1,6 @@
 import unittest
+import json
+import subprocess
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -32,6 +34,7 @@ class IdCollector(HTMLParser):
 class WebStaticTests(unittest.TestCase):
     def test_source_control_guides_github_login_scope_build_check_and_safe_update(self):
         html = Path("web/source-control.html").read_text(encoding="utf-8")
+        update_runtime = Path("web/source_control_updates.js").read_text(encoding="utf-8")
         parser = IdCollector()
         parser.feed(html)
         self.assertTrue({
@@ -46,14 +49,14 @@ class WebStaticTests(unittest.TestCase):
             "connect-checkout",
             "connection-summary",
             "check-build",
-            "update-build",
             "build-status",
             "local-build-details",
             "remote-build-details",
         }.issubset(parser.ids))
+        self.assertNotIn("update-build", parser.ids)
         self.assertIn('aria-live="polite"', html)
         self.assertIn("/api/github/auth/login", html)
-        self.assertIn("/api/github/local/check-build", html)
+        self.assertIn("/api/github/local/check-build", update_runtime)
         self.assertIn("/api/github/local/update-build", html)
         self.assertIn("json_codr_github_connection_", html)
         self.assertIn("commits?branch=", html)
@@ -63,6 +66,75 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("inspectionGeneration", html)
         self.assertNotIn("example/sample", html)
         self.assertNotIn("gitupdates/JSON_CODR", html)
+
+    def test_self_update_flow_updates_only_confirmed_behind_snapshot(self):
+        script = r'''
+const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_updates.js");
+(async () => {
+  const behind = {
+    status: "behind", update_allowed: true,
+    local_commit: {sha: "a".repeat(40)}, remote_commit: {sha: "b".repeat(40)},
+    authenticated_login: "octocat", authenticated_host: "github.com"
+  };
+  const current = {...behind, status: "current", update_allowed: false};
+  const unsafeCalls = [];
+  const unsafe = await checkAndMaybeUpdate({
+    check: async () => current,
+    update: async snapshot => { unsafeCalls.push(snapshot); return snapshot; },
+  });
+  const declinedCalls = [];
+  const declined = await checkAndMaybeUpdate({
+    check: async () => behind,
+    update: async snapshot => { declinedCalls.push(snapshot); return null; },
+  });
+  const confirmedCalls = [];
+  const updatedSnapshot = {...behind, status: "current", update_allowed: false};
+  const confirmed = await checkAndMaybeUpdate({
+    check: async () => behind,
+    update: async snapshot => { confirmedCalls.push(snapshot); return updatedSnapshot; },
+  });
+  const requestCalls = [];
+  const checkedViaRequest = await checkBuild(
+    async (...args) => { requestCalls.push(args); return current; },
+    {project_root: "C:/work/app", repository: "octocat/app", branch: "main"},
+  );
+  let releaseUpdate;
+  const busyStates = [];
+  const pendingUpdate = checkAndMaybeUpdate({
+    check: async () => behind,
+    update: async () => new Promise(resolve => { releaseUpdate = resolve; }),
+    setBusy: value => busyStates.push(value),
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const busyWhilePending = [...busyStates];
+  releaseUpdate(updatedSnapshot);
+  await pendingUpdate;
+  process.stdout.write(JSON.stringify({unsafe, unsafeCalls, declined, declinedCalls, confirmed, confirmedCalls, checkedViaRequest, requestCalls, busyWhilePending, busyStates}));
+})().catch(error => { console.error(error); process.exit(1); });
+'''
+        result = subprocess.run(
+            ["node", "-e", script], capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["unsafe"]["status"], "checked")
+        self.assertEqual(payload["unsafeCalls"], [])
+        self.assertEqual(payload["declined"]["status"], "checked")
+        self.assertEqual(payload["declinedCalls"], [payload["declined"]["result"]])
+        self.assertEqual(payload["confirmed"]["status"], "updated")
+        self.assertEqual(payload["confirmedCalls"], [payload["confirmed"]["checked"]])
+        self.assertEqual(payload["checkedViaRequest"]["status"], "current")
+        self.assertEqual(payload["requestCalls"], [[
+            "/api/github/local/check-build",
+            {"method": "POST", "body": json.dumps({
+                "project_root": "C:/work/app",
+                "repository": "octocat/app",
+                "branch": "main",
+                "confirmed": True,
+            }, separators=(",", ":"))},
+        ]])
+        self.assertEqual(payload["busyWhilePending"], [True])
+        self.assertEqual(payload["busyStates"], [True, False])
 
     def test_all_model_search_is_additive_and_exposes_jury_controls(self):
         html = Path("web/index.html").read_text(encoding="utf-8")
