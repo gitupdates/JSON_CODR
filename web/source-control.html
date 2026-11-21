@@ -17,7 +17,7 @@
     body{min-height:100vh;max-width:none;margin:0;padding:0;background:var(--bg);color:var(--text)}
     .app-layout{min-height:100vh;display:grid;grid-template-columns:var(--sidebar-width,260px) minmax(0,1fr)}
     .app-sidebar{position:sticky;top:0;height:100vh;overflow:auto;padding:20px 13px;background:var(--surface-panel-solid,var(--panel));border-right:1px solid var(--line)}
-    .sidebar-brand{display:flex;align-items:center;gap:10px;color:var(--text);text-decoration:none;margin-bottom:18px}.sidebar-brand strong{font-size:1.05rem}.sidebar-destinations{display:grid;gap:4px}.sidebar-destination{display:flex;align-items:center;gap:10px;min-height:44px;padding:0 11px;color:var(--text-soft,var(--muted));text-decoration:none;border:0;background:transparent;font:inherit;cursor:pointer}.sidebar-destination:hover,.sidebar-destination.is-active{color:var(--accent-contrast,#fff);background:var(--accent)}.nav-icon{width:18px;height:18px;flex:none}.shell{min-width:0}.source-content{max-width:1100px;margin:0 auto;padding:24px}
+    .sidebar-brand{display:flex;align-items:center;gap:10px;color:var(--text);text-decoration:none;margin-bottom:18px}.sidebar-brand strong{font-size:1.05rem}.sidebar-destinations{display:grid;gap:4px}.sidebar-destination{display:flex;align-items:center;gap:10px;min-height:44px;padding:0 11px;color:var(--text-soft,var(--muted));text-decoration:none;border:0;background:transparent;font:inherit;cursor:pointer}.sidebar-destination:hover,.sidebar-destination.is-active{color:var(--accent-contrast,#fff);background:var(--accent)}.nav-icon{width:18px;height:18px;flex:none}.shell{min-width:0}.source-content{max-width:1100px;margin:0 auto;padding:0 24px 40px}.source-topbar{min-height:86px;display:flex;align-items:center;gap:14px;border-bottom:1px solid var(--line);margin-bottom:24px}.source-topbar .brand-mark{width:38px;height:38px;display:grid;place-items:center;border:1px solid var(--accent-line);color:var(--accent);font:700 13px ui-monospace,monospace}.source-topbar h1{font-size:1.35rem;line-height:1.15;margin:0}.source-topbar p{margin:4px 0 0;font-size:.82rem}.source-topbar a{margin-left:auto}.source-content>.card{border-radius:var(--ui-radius,0);box-shadow:none}.source-content .connect-panel{background:var(--surface-panel,var(--panel));border-color:var(--line)}
     @media(max-width:900px){.app-layout{display:block}.app-sidebar{position:relative;height:auto}.sidebar-destinations{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}.source-content{padding:16px}}
   </style>
 </head>
@@ -26,16 +26,16 @@
   <nav class="app-sidebar" aria-label="Primary navigation">
     <a class="sidebar-brand" href="/" aria-label="JSON CODR home"><span class="brand-mark">{ }</span><strong>JSON_CODR</strong></a>
     <div class="sidebar-destinations">
-      <a class="sidebar-destination" href="/" title="Workspace"><span>Workspace</span></a>
-      <a class="sidebar-destination" href="/?view=context" title="Context and files"><span>Context &amp; files</span></a>
-      <a class="sidebar-destination" href="/?view=skills" title="Skills"><span>Skills</span></a>
-      <a class="sidebar-destination" href="/?view=hardware" title="Hardware"><span>Hardware</span></a>
-      <a class="sidebar-destination is-active" href="/static/source-control.html" aria-current="page" title="GitHub and source control"><span>GitHub</span></a>
-      <a class="sidebar-destination" href="/?view=settings" title="Settings"><span>Settings</span></a>
+      <a class="sidebar-destination" href="/" title="Workspace"><span>▣</span><span>Workspace</span></a>
+      <a class="sidebar-destination" href="/?view=context" title="Context and files"><span>▤</span><span>Context &amp; files</span></a>
+      <a class="sidebar-destination" href="/?view=skills" title="Skills"><span>✦</span><span>Skills</span></a>
+      <a class="sidebar-destination" href="/?view=hardware" title="Hardware"><span>⌁</span><span>Hardware</span></a>
+      <a class="sidebar-destination is-active" href="/static/source-control.html" aria-current="page" title="GitHub and source control"><span>〈〉</span><span>GitHub</span></a>
+      <a class="sidebar-destination" href="/?view=settings" title="Settings"><span>⚙</span><span>Settings</span></a>
     </div>
   </nav>
   <main class="shell"><div class="source-content">
-  <header><div><p class="muted">JSON_CODR · LOCAL SOURCE CONTROL</p><h1>GitHub and Git workspace</h1></div><a href="/">Back to workspace</a></header>
+  <header class="source-topbar"><span class="brand-mark">{ }</span><div><h1>JSON_CODR</h1><p class="muted">V1.3.0 · unified local agent</p></div><a href="/">Back to workspace</a></header>
   <p>Connect an authenticated GitHub account, choose the repository and branch you intend to use, then compare and safely update an explicit local checkout. Credentials remain in GitHub CLI on this machine.</p>
 
   <section class="card connect-panel" id="github-connect-panel" aria-labelledby="connect-heading">
