@@ -684,6 +684,14 @@ class GitHubConfirmedWrite(BaseModel):
     confirmed: Literal[True]
 
 
+class GitHubAuthLoginRequest(GitHubConfirmedWrite):
+    pass
+
+
+class GitHubAuthCancelRequest(GitHubConfirmedWrite):
+    pass
+
+
 class GitHubRepositoryCreateRequest(GitHubConfirmedWrite):
     owner: Optional[str] = Field(default=None, max_length=39)
     name: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")

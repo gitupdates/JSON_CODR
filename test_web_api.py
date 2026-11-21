@@ -340,6 +340,75 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(created.status_code, 201)
         self.assertEqual(github.writes, [("test-user", "sample", "Issue", "Details")])
 
+    def test_github_authentication_session_routes_are_confirmed_and_server_managed(self):
+        from web_app.github_auth import GitHubAuthSessionConflict, GitHubAuthSessionNotFound
+
+        class FakeGitHubAuth:
+            def __init__(self):
+                self.started = 0
+                self.cancelled = []
+                self.closed = False
+
+            def start(self):
+                self.started += 1
+                if self.started > 1:
+                    raise GitHubAuthSessionConflict("A GitHub login is already active")
+                return {"session_id": "login-1", "state": "starting", "detail": "Starting"}
+
+            def status(self, session_id):
+                if session_id == "missing":
+                    raise GitHubAuthSessionNotFound(session_id)
+                return {
+                    "session_id": session_id,
+                    "state": "waiting",
+                    "detail": "Complete sign-in",
+                    "device_code": "ABCD-1234",
+                    "verification_url": "https://github.com/login/device",
+                }
+
+            def cancel(self, session_id):
+                self.cancelled.append(session_id)
+                return {"session_id": session_id, "state": "cancelled", "detail": "Cancelled"}
+
+            def close(self):
+                self.closed = True
+
+        auth = FakeGitHubAuth()
+        headers = {"X-JSON-CODR": "1"}
+        with TestClient(create_app(self.service, self.workspace, github_auth=auth)) as client:
+            self.assertEqual(
+                client.post("/api/github/auth/login", json={"confirmed": True}).status_code,
+                403,
+            )
+            self.assertEqual(client.post("/api/github/auth/login", headers=headers, json={}).status_code, 422)
+            started = client.post(
+                "/api/github/auth/login", headers=headers, json={"confirmed": True},
+            )
+            conflict = client.post(
+                "/api/github/auth/login", headers=headers, json={"confirmed": True},
+            )
+            self.assertEqual(client.get("/api/github/auth/login/login-1").status_code, 403)
+            waiting = client.get("/api/github/auth/login/login-1", headers=headers)
+            missing = client.get("/api/github/auth/login/missing", headers=headers)
+            self.assertEqual(
+                client.post("/api/github/auth/login/login-1/cancel", headers=headers, json={}).status_code,
+                422,
+            )
+            cancelled = client.post(
+                "/api/github/auth/login/login-1/cancel",
+                headers=headers,
+                json={"confirmed": True},
+            )
+
+            self.assertEqual(started.status_code, 200)
+            self.assertEqual(conflict.status_code, 409)
+            self.assertEqual(waiting.json()["device_code"], "ABCD-1234")
+            self.assertEqual(waiting.json()["verification_url"], "https://github.com/login/device")
+            self.assertEqual(missing.status_code, 404)
+            self.assertEqual(cancelled.json()["state"], "cancelled")
+            self.assertEqual(auth.cancelled, ["login-1"])
+        self.assertTrue(auth.closed)
+
     def test_expanded_github_routes_require_confirmation_and_validate_repository_deletion(self):
         class FakeGitHubCLI:
             def __init__(self):

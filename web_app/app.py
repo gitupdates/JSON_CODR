@@ -36,6 +36,7 @@ from web_app.integrity_benchmark import IntegrityBenchmarkService
 from web_app.benchmark_baseline import BenchmarkBaselineService
 from web_app.coding_agents import CodingAgentService
 from web_app.github_cli import GitHubCLI, GitHubCLIError
+from web_app.github_auth import GitHubAuthSessionConflict, GitHubAuthSessionNotFound, GitHubAuthSessionService
 from web_app.git_broker import GitBrokerService
 from web_app.git_adapter import GitActionAdapter
 from web_app.core.adapters import CapabilityCall
@@ -72,7 +73,7 @@ from web_app.core.capability_discovery import discover_project_profile
 from web_app.core.canonical import canonical_digest
 from web_app.core.terminal_adapter import TerminalAdapter
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GitHubConfirmedWrite, GitHubIssueCommentRequest, GitHubIssueCreateRequest, GitHubIssueUpdateRequest, GitHubLocalBranchRequest, GitHubLocalCloneRequest, GitHubLocalCommitRequest, GitHubLocalPushRequest, GitHubLocalStageRequest, GitHubLocalSyncRequest, GitHubPullRequestCreateRequest, GitHubPullRequestMergeRequest, GitHubPullRequestUpdateRequest, GitHubReleaseCreateRequest, GitHubReleaseUpdateRequest, GitHubRemoteBranchCreateRequest, GitHubRepositoryCreateRequest, GitHubRepositoryDeleteRequest, GitHubRepositoryUpdateRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
+from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GitHubAuthCancelRequest, GitHubAuthLoginRequest, GitHubConfirmedWrite, GitHubIssueCommentRequest, GitHubIssueCreateRequest, GitHubIssueUpdateRequest, GitHubLocalBranchRequest, GitHubLocalCloneRequest, GitHubLocalCommitRequest, GitHubLocalPushRequest, GitHubLocalStageRequest, GitHubLocalSyncRequest, GitHubPullRequestCreateRequest, GitHubPullRequestMergeRequest, GitHubPullRequestUpdateRequest, GitHubReleaseCreateRequest, GitHubReleaseUpdateRequest, GitHubRemoteBranchCreateRequest, GitHubRepositoryCreateRequest, GitHubRepositoryDeleteRequest, GitHubRepositoryUpdateRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
 from web_app.model_run_store import ModelRunStore, RequestKeyConflict
 from web_app.model_runs import ModelRunService, canonical_model_prompt
 from web_app.ollama_service import (
@@ -117,6 +118,7 @@ def create_app(
     git_broker: GitBrokerService | None = None,
     github_skills: GithubSkillService | None = None,
     github_cli: GitHubCLI | None = None,
+    github_auth: GitHubAuthSessionService | None = None,
 ) -> FastAPI:
     application = FastAPI(title="JSON_CODR", version=APP_VERSION)
     workspace = workspace or WorkspaceService(default_data_root())
@@ -177,6 +179,8 @@ def create_app(
     skill_discovery = SkillDiscoveryService(skill_library, skill_converter, workspace.data_root)
     github_skills = github_skills or GithubSkillService(skill_library, skill_converter, workspace.data_root)
     github_cli = github_cli or GitHubCLI()
+    github_auth = github_auth or GitHubAuthSessionService(status_probe=github_cli.status)
+    application.router.add_event_handler("shutdown", github_auth.close)
     context_assembler = ContextAssembler(attachments, skills=skill_library)
     model_run_store = ModelRunStore(workspace.data_root)
     model_runs = ModelRunService(
@@ -1308,6 +1312,41 @@ def create_app(
     async def github_status(x_json_codr: str | None = Header(None)):
         require_terminal_header(x_json_codr)
         return await github_call(github_cli.status)
+
+    async def github_auth_call(operation: Callable[..., object], *args: object) -> object:
+        try:
+            return await asyncio.to_thread(operation, *args)
+        except GitHubAuthSessionNotFound as error:
+            raise HTTPException(status_code=404, detail="GitHub login session not found") from error
+        except GitHubAuthSessionConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @application.post("/api/github/auth/login")
+    async def github_auth_login(
+        request: GitHubAuthLoginRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_auth_call(github_auth.start)
+
+    @application.get("/api/github/auth/login/{session_id}")
+    async def github_auth_login_status(
+        session_id: str,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_auth_call(github_auth.status, session_id)
+
+    @application.post("/api/github/auth/login/{session_id}/cancel")
+    async def github_auth_login_cancel(
+        session_id: str,
+        request: GitHubAuthCancelRequest,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_terminal_header(x_json_codr)
+        return await github_auth_call(github_auth.cancel, session_id)
 
     @application.get("/api/github/repositories")
     async def github_repositories(x_json_codr: str | None = Header(None)):
