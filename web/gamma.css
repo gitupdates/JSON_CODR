@@ -38,6 +38,15 @@
   --terminal-panel: #f8fafb;
   --terminal-text: #172a36;
   --ui-space: 8px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 18px;
+  --space-6: 22px;
+  --content-gutter: var(--space-4);
+  --section-gap: var(--space-5);
+  --panel-inset: var(--space-6);
   --ui-radius: 4px;
   --sidebar-width: 260px;
 }
@@ -138,7 +147,7 @@
 :root[data-ui-shell="operations-light"] { --shell-max: 1440px; --ui-radius: 4px; }
 :root[data-ui-shell="focus"] { --shell-max: 1560px; --ui-radius: 2px; }
 :root[data-ui-shell="accessible"] { --shell-max: 1180px; --ui-radius: 6px; }
-.shell { width: min(var(--shell-max, 1440px), calc(100% - 32px)); }
+.shell { width: min(var(--shell-max, 1440px), calc(100% - (2 * var(--content-gutter, 16px)))); margin-inline: var(--content-gutter, 16px); }
 
 /* Navigation variants */
 :root[data-ui-navigation="classic"] .app-sidebar { border-right-color: var(--line); }

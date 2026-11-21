@@ -5,42 +5,41 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark light">
   <title>JSON_CODR · GitHub and source control</title>
-  <script src="/static/ui_catalog.js?v=1.3.0"></script>
-  <script src="/static/ui_bootstrap.js?v=1.3.0"></script>
-  <link rel="stylesheet" href="/static/app.css?v=1.3.0">
-  <link rel="stylesheet" href="/static/gamma.css?v=1.3.0">
-  <style>
-    :root{color-scheme:dark;--bg:#080a0d;--panel:#101319;--input:#0c0f13;--line:#343b46;--text:#f4f6f8;--muted:#a3adba;--accent:#c7ff4a;--red:#ff9a9a;font:15px system-ui,sans-serif;color:var(--text);background:var(--bg)}
-    *{box-sizing:border-box}body{max-width:1100px;margin:0 auto;padding:24px}header,.row,.actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}h1{margin:.25em 0}h2{font-size:1.15rem;margin-top:0}h3{font-size:1rem;margin:.25em 0}p,.muted{color:var(--muted);line-height:1.55}.card{margin:16px 0;padding:20px;border:1px solid var(--line);background:var(--panel)}label{display:grid;gap:7px;flex:1;min-width:220px;font-size:.9rem}input,select,textarea{min-width:0;width:100%;padding:10px 12px;color:var(--text);background:var(--input);border:1px solid var(--line);font:inherit}input,select{height:42px}textarea{min-height:90px;resize:vertical}button{min-height:40px;padding:0 14px;border:1px solid var(--line);background:#242a33;color:var(--text);font:inherit;font-weight:700;cursor:pointer}button.primary{background:var(--accent);color:#101319;border-color:var(--accent)}button:disabled{opacity:.55;cursor:not-allowed}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,a:focus-visible{outline:3px solid var(--accent);outline-offset:2px}.status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.status-item,.record{padding:12px;background:var(--input);border:1px solid var(--line);overflow-wrap:anywhere}.status-item span{display:block;color:var(--muted);font-size:.76rem;text-transform:uppercase;letter-spacing:.08em}.status-item strong{display:block;margin-top:6px}.record{margin:10px 0}.record p{margin:.5em 0}.record-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.record-actions button{min-height:34px}.ok{color:var(--accent)}.error{color:var(--red)}pre{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted)}code{overflow-wrap:anywhere}a{color:var(--accent)}#notice{min-height:1.5em}.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}.checkbox-row{display:flex;align-items:center;gap:8px;min-width:0}.checkbox-row input{width:auto;height:auto}.file-row{display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.file-row input{width:auto;height:auto;margin-top:4px}.section-title{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.notice{min-height:1.5em}.tab-note{font-size:.85rem}.connect-panel{border-color:#71823d;background:linear-gradient(145deg,#151b16,var(--panel))}.connect-step{padding:14px 0;border-top:1px solid var(--line)}.connect-step:first-of-type{border-top:0}.step-label{margin:0 0 8px;color:var(--accent);font-size:.78rem;font-weight:800;letter-spacing:.09em;text-transform:uppercase}.build-banner{padding:14px;border-left:4px solid var(--line);background:var(--input);font-weight:700}.build-banner[data-state="current"]{border-color:var(--accent)}.build-banner[data-state="behind"]{border-color:#ffd36a}.build-banner[data-state="blocked"],.build-banner[data-state="error"]{border-color:var(--red)}.device-code{padding:12px;border:1px dashed var(--accent);background:var(--input)}.hidden{display:none!important}@media(max-width:520px){body{padding:14px}.card{padding:15px}.actions button{width:100%}}
-    :root[data-theme="light"]{color-scheme:light;--bg:var(--surface-page,#f4f7fb);--panel:var(--surface-panel,#fff);--input:var(--surface-input,#eef3f8);--line:var(--line,#c5d0dc);--text:var(--text,#17212b);--muted:var(--text-soft,#526170);--accent:var(--accent,#1769aa)}
-    :root[data-theme="dark"]{color-scheme:dark}
-    body{min-height:100vh;max-width:none;margin:0;padding:0;background:var(--bg);color:var(--text)}
-    .app-layout{min-height:100vh;display:grid;grid-template-columns:var(--sidebar-width,260px) minmax(0,1fr)}
-    .app-sidebar{position:sticky;top:0;height:100vh;overflow:auto;padding:20px 13px;background:var(--surface-panel-solid,var(--panel));border-right:1px solid var(--line)}
-    .sidebar-head{display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid var(--line);padding:0 8px 14px;margin-bottom:18px}.sidebar-collapse{width:34px;min-height:34px;padding:0;background:var(--surface-input,var(--input));color:var(--text);font-weight:800}.sidebar-collapse:hover{background:var(--accent);color:var(--accent-contrast)}
-    .sidebar-brand{display:flex;align-items:center;gap:10px;color:var(--text);text-decoration:none;margin-bottom:18px}.sidebar-brand strong{font-size:1.05rem}.sidebar-destinations{display:grid;gap:4px}.sidebar-destination{display:flex;align-items:center;gap:10px;min-height:44px;padding:0 11px;color:var(--text-soft,var(--muted));text-decoration:none;border:0;background:transparent;font:inherit;cursor:pointer}.sidebar-destination:hover,.sidebar-destination.is-active{color:var(--accent-contrast,#fff);background:var(--accent)}.nav-icon{width:18px;height:18px;flex:none}.shell{min-width:0}.source-content{max-width:1100px;margin:0 auto;padding:0 24px 40px}.source-topbar{min-height:86px;display:flex;align-items:center;gap:14px;border-bottom:1px solid var(--line);margin-bottom:24px}.source-topbar .brand-mark{width:38px;height:38px;display:grid;place-items:center;border:1px solid var(--accent-line);color:var(--accent);font:700 13px ui-monospace,monospace}.source-topbar h1{font-size:1.35rem;line-height:1.15;margin:0}.source-topbar p{margin:4px 0 0;font-size:.82rem}.source-topbar a{margin-left:auto}.source-content>.card{border-radius:var(--ui-radius,0);box-shadow:none}.source-content .connect-panel{background:var(--surface-panel,var(--panel));border-color:var(--line)}
-    body.sidebar-collapsed .app-layout{grid-template-columns:68px minmax(0,1fr)}body.sidebar-collapsed .app-sidebar{padding-inline:8px}body.sidebar-collapsed .sidebar-brand strong,body.sidebar-collapsed .sidebar-destination span:last-child{display:none}body.sidebar-collapsed .sidebar-brand{justify-content:center}body.sidebar-collapsed .sidebar-destination{justify-content:center;padding-inline:0}body.sidebar-collapsed .sidebar-head{justify-content:center}
-    @media(max-width:900px){.app-layout{display:block}.app-sidebar{position:relative;height:auto}.sidebar-destinations{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}.source-content{padding:16px}}
-  </style>
+  <script src="/static/ui_catalog.js?v=1.3.1"></script>
+  <script src="/static/ui_bootstrap.js?v=1.3.1"></script>
+  <link rel="stylesheet" href="/static/app.css?v=1.3.1-unified">
+  <link rel="stylesheet" href="/static/fonts/fonts.css?v=1.3.1">
+  <link rel="stylesheet" href="/static/gamma.css?v=1.3.1-unified">
+  <link rel="stylesheet" href="/static/source-control.css?v=1.3.1-unified">
 </head>
 <body>
+<div class="ambient ambient-one"></div>
+<div class="ambient ambient-two"></div>
+<svg class="nav-symbols" aria-hidden="true">
+  <symbol id="icon-chat" viewBox="0 0 24 24"><path d="M5 5h14v11H9l-4 3V5Z"/><path d="M8 9h8M8 12h5"/></symbol>
+  <symbol id="icon-context" viewBox="0 0 24 24"><path d="M4 6h6l2 2h8v10H4V6Z"/><path d="M8 12h8M8 15h5"/></symbol>
+  <symbol id="icon-skills" viewBox="0 0 24 24"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3Z"/><path d="m18 15 .8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8L18 15Z"/></symbol>
+  <symbol id="icon-hardware" viewBox="0 0 24 24"><path d="M4 12h4l2-6 4 12 2-6h4"/><path d="M4 4v16h16"/></symbol>
+  <symbol id="icon-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1a7 7 0 0 0-1.7-1L14.5 3h-5l-.4 3.1a7 7 0 0 0-1.7 1l-2.4-1-2 3.4L5.1 11a7 7 0 0 0 0 2L3 14.5l2 3.4 2.4-1a7 7 0 0 0 1.7 1l.4 3.1h5l.4-3.1a7 7 0 0 0 1.7-1l2.4 1 2-3.4-2.1-1.5c.1-.3.1-.7.1-1Z"/></symbol>
+</svg>
+<div id="navigation-backdrop" class="navigation-backdrop" hidden></div>
 <div class="app-layout">
-  <nav class="app-sidebar" aria-label="Primary navigation">
-    <div class="sidebar-head"><a class="sidebar-brand" href="/" aria-label="JSON CODR home"><span class="brand-mark">{ }</span><strong>JSON_CODR</strong></a><button class="sidebar-collapse" id="sidebar-collapse" type="button" aria-label="Collapse navigation" aria-expanded="true">‹</button></div>
+  <nav id="app-sidebar" class="app-sidebar" aria-label="Primary navigation">
+    <div class="sidebar-brand"><span class="sidebar-brand-mark">{ }</span><strong>JSON_CODR</strong><button id="sidebar-collapse" class="sidebar-icon-button" type="button" aria-label="Collapse navigation" aria-expanded="true">‹</button></div>
     <div class="sidebar-destinations">
-      <a class="sidebar-destination" href="/" title="Workspace"><span>▣</span><span>Workspace</span></a>
-      <a class="sidebar-destination" href="/?view=context" title="Context and files"><span>▤</span><span>Context &amp; files</span></a>
-      <a class="sidebar-destination" href="/?view=skills" title="Skills"><span>✦</span><span>Skills</span></a>
-      <a class="sidebar-destination" href="/?view=hardware" title="Hardware"><span>⌁</span><span>Hardware</span></a>
-      <a class="sidebar-destination is-active" href="/static/source-control.html" aria-current="page" title="GitHub and source control"><span>〈〉</span><span>GitHub</span></a>
-      <a class="sidebar-destination" href="/?view=settings" title="Settings"><span>⚙</span><span>Settings</span></a>
+      <a class="sidebar-destination" href="/?view=workspace" title="Workspace"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-chat"/></svg><span>Workspace</span></a>
+      <a class="sidebar-destination" href="/?view=context" title="Context &amp; files"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-context"/></svg><span>Context &amp; files</span></a>
+      <a class="sidebar-destination" href="/?view=skills" title="Skills"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-skills"/></svg><span>Skills</span></a>
+      <a class="sidebar-destination" href="/?view=hardware" title="Hardware"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-hardware"/></svg><span>Hardware</span></a>
+      <a class="sidebar-destination is-active" href="/static/source-control.html" aria-current="page" title="GitHub and source control"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 6 3 12l5 6M16 6l5 6-5 6M14 4l-4 16"/></svg><span>GitHub</span></a>
+      <a class="sidebar-destination" href="/?view=settings" title="Settings"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-settings"/></svg><span>Settings</span></a>
     </div>
+    <div id="sidebar-resize-handle" class="sidebar-resize-handle" role="separator" aria-label="Resize navigation" aria-orientation="vertical" aria-valuemin="220" aria-valuemax="380" aria-valuenow="260" tabindex="0"></div>
   </nav>
-  <main class="shell"><div class="source-content">
-  <header class="source-topbar"><span class="brand-mark">{ }</span><div><h1>JSON_CODR</h1><p class="muted">V1.3.0 · unified local agent</p></div><a href="/">Back to workspace</a></header>
-  <p>Connect an authenticated GitHub account, choose the repository and branch you intend to use, then compare and safely update an explicit local checkout. Credentials remain in GitHub CLI on this machine.</p>
-
-  <section class="card connect-panel" id="github-connect-panel" aria-labelledby="connect-heading">
+<main class="shell"><div class="source-content">
+  <header class="topbar"><a class="brand" href="/" aria-label="JSON CODR home"><span class="brand-mark">{ }</span><span><strong>JSON_CODR</strong><small>V1.3.1 · unified local agent</small></span></a><div class="source-topbar-actions"><a class="source-back-link" href="/">Back to workspace</a><button id="mobile-navigation-toggle" class="panel-toggle mobile-navigation-toggle" type="button" aria-controls="app-sidebar" aria-expanded="false">Menu</button></div></header>
+  <section class="context-panel source-card connect-panel" id="github-connect-panel" aria-labelledby="connect-heading">
+    <p class="source-intro">Connect an authenticated GitHub account, choose the repository and branch you intend to use, then compare and safely update an explicit local checkout. Credentials remain in GitHub CLI on this machine.</p>
     <div class="section-title"><div><p class="step-label">Guided connection</p><h2 id="connect-heading">Connect GitHub and check your build</h2></div><button id="refresh-account" type="button">Refresh account</button></div>
     <div class="connect-step">
       <p class="step-label">1 · GitHub account</p>
@@ -69,7 +68,7 @@
     <div class="connect-step actions"><button id="check-build" class="primary" type="button" disabled>Check for updates</button></div>
   </section>
 
-  <section class="card" aria-labelledby="account-heading">
+  <section class="context-panel source-card" aria-labelledby="account-heading">
     <h2 id="account-heading">Repository administration</h2>
     <details>
       <summary>Create repository</summary>
@@ -85,7 +84,7 @@
     </details>
   </section>
 
-  <section class="card" aria-labelledby="github-data-heading">
+  <section class="context-panel source-card" aria-labelledby="github-data-heading">
     <div class="section-title"><h2 id="github-data-heading">Repository activity</h2><button id="refresh-repository" type="button" disabled>Refresh repository data</button></div>
     <div class="status-grid" id="repository-summary"><p class="muted">Select a repository to load issues, pull requests, releases, branches, and commits.</p></div>
     <details>
@@ -109,7 +108,7 @@
     <h3>Commits</h3><div id="commits-list"><p class="muted">No repository selected.</p></div>
   </section>
 
-  <section class="card" aria-labelledby="issues-heading">
+  <section class="context-panel source-card" aria-labelledby="issues-heading">
     <div class="section-title"><h2 id="issues-heading">Issues</h2><label for="issue-state">State<select id="issue-state"><option value="open">Open</option><option value="closed">Closed</option><option value="all">All</option></select></label><button id="refresh-issues" type="button" disabled>Refresh issues</button></div>
     <div class="form-grid">
       <label for="issue-title">New issue title<input id="issue-title" maxlength="256"></label>
@@ -119,7 +118,7 @@
     <div id="issues-list"><p class="muted">No repository selected.</p></div>
   </section>
 
-  <section class="card" aria-labelledby="pulls-heading">
+  <section class="context-panel source-card" aria-labelledby="pulls-heading">
     <div class="section-title"><h2 id="pulls-heading">Pull requests</h2><label for="pull-state">State<select id="pull-state"><option value="open">Open</option><option value="closed">Closed</option><option value="all">All</option></select></label><button id="refresh-pulls" type="button" disabled>Refresh pull requests</button></div>
     <div class="form-grid">
       <label for="pr-head">Head branch (owner:branch or branch)<input id="pr-head" maxlength="256"></label>
@@ -133,7 +132,7 @@
     <div id="pulls-list"><p class="muted">No repository selected.</p></div>
   </section>
 
-  <section class="card" aria-labelledby="releases-heading">
+  <section class="context-panel source-card" aria-labelledby="releases-heading">
     <div class="section-title"><h2 id="releases-heading">Releases</h2><button id="refresh-releases" type="button" disabled>Refresh releases</button></div>
     <div class="form-grid">
       <label for="release-tag">Tag name<input id="release-tag" maxlength="256"></label>
@@ -147,7 +146,7 @@
     <div id="releases-list"><p class="muted">No repository selected.</p></div>
   </section>
 
-  <section class="card" aria-labelledby="local-heading">
+  <section class="context-panel source-card" aria-labelledby="local-heading">
     <h2 id="local-heading">Local repository actions</h2>
     <p class="tab-note">Clone, fetch, fast-forward pull, branch creation, staging, commits, and pushes operate on the selected local checkout. Pull requires a clean working tree and refuses divergent branches.</p>
     <div class="row"><label for="clone-destination">Clone selected GitHub repository into<input id="clone-destination" type="text" placeholder="D:\projects\my-app" autocomplete="off" spellcheck="false"></label><button id="clone-repository" type="button" disabled>Clone repository</button></div>
@@ -163,7 +162,7 @@
     <details><summary>Git broker details</summary><pre id="broker-details"></pre></details>
   </section>
 
-  <section class="card"><h2>Permission boundary</h2><p>GitHub operations use the local GitHub CLI identity; Git uses the local Git executable. Every write and local sync operation requires browser confirmation and a request-level confirmation flag. Repository deletion additionally requires typing its exact owner/repository name. Account credentials, secrets, and workflow administration remain outside this page.</p></section>
+  <section class="context-panel source-card"><h2>Permission boundary</h2><p>GitHub operations use the local GitHub CLI identity; Git uses the local Git executable. Every write and local sync operation requires browser confirmation and a request-level confirmation flag. Repository deletion additionally requires typing its exact owner/repository name. Account credentials, secrets, and workflow administration remain outside this page.</p></section>
 
 <script src="/static/source_control_updates.js"></script>
 <script>
@@ -948,17 +947,8 @@
   loadAccount();
 })();
 </script>
-<script>
-  (() => {
-    const button = document.getElementById("sidebar-collapse");
-    if (!button) return;
-    button.addEventListener("click", () => {
-      const collapsed = document.body.classList.toggle("sidebar-collapsed");
-      button.setAttribute("aria-expanded", String(!collapsed));
-      button.textContent = collapsed ? "›" : "‹";
-    });
-  })();
-</script>
+<script src="/static/disclosure_groups.js?v=1.3.1"></script>
+<script src="/static/source_navigation.js?v=1.3.1"></script>
 </div></main></div>
 </body>
 </html>

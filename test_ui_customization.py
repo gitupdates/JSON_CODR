@@ -202,7 +202,9 @@ const reloaded = createController({catalog, load: key => key === catalog.STORAGE
 assert.strictEqual(reloaded.getState().components.navigation, "rail");
 reloaded.begin();
 reloaded.selectPreset("gamma-operations");
-assert.strictEqual(reloaded.getDraft().mode, persisted.mode);
+assert.strictEqual(reloaded.getDraft().mode, "dark");
+assert.strictEqual(reloaded.getDraft().density, "compact");
+assert.strictEqual(reloaded.getDraft().typography, "system");
 assert.deepStrictEqual(reloaded.getDraft().components, {});
 '''
         self.run_node(source, CATALOG_MODULE, [CONTROLLER_MODULE])
@@ -275,9 +277,9 @@ assert.strictEqual(root.dataset.theme, "dark");
         html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
         catalog = '/static/ui_catalog.js?v=1.2.0'
         bootstrap = '/static/ui_bootstrap.js?v=1.2.0'
-        stylesheet = '/static/app.css?v=1.2.0'
-        controller = '/static/ui_customization.js?v=1.2.0'
-        application = '/static/app.js?v=1.2.0'
+        stylesheet = '/static/app.css?v=1.3.1-unified'
+        controller = '/static/ui_customization.js?v=1.3.1'
+        application = '/static/app.js?v=1.3.1-model-install'
         self.assertIn(catalog, html)
         self.assertIn(bootstrap, html)
         self.assertIn(controller, html)
@@ -335,9 +337,9 @@ console.log(JSON.stringify({presets: Object.keys(catalog.PRESETS), components: c
         self.assertIn("SHA-256", notice)
         self.assertFalse(any("ibm-plex" in name.lower() for name in actual))
         html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
-        app_css = '/static/app.css?v=1.2.0'
+        app_css = '/static/app.css?v=1.3.1-unified'
         fonts_css = '/static/fonts/fonts.css?v=1.2.0'
-        gamma_css = '/static/gamma.css?v=1.2.0'
+        gamma_css = '/static/gamma.css?v=1.3.1-unified'
         self.assertLess(html.index(app_css), html.index(fonts_css))
         self.assertLess(html.index(fonts_css), html.index(gamma_css))
 

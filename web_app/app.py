@@ -73,7 +73,7 @@ from web_app.core.capability_discovery import discover_project_profile
 from web_app.core.canonical import canonical_digest
 from web_app.core.terminal_adapter import TerminalAdapter
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GitHubAuthCancelRequest, GitHubAuthLoginRequest, GitHubBuildCheckRequest, GitHubBuildUpdateRequest, GitHubConfirmedWrite, GitHubIssueCommentRequest, GitHubIssueCreateRequest, GitHubIssueUpdateRequest, GitHubLocalBranchRequest, GitHubLocalCloneRequest, GitHubLocalCommitRequest, GitHubLocalPushRequest, GitHubLocalStageRequest, GitHubLocalSyncRequest, GitHubPullRequestCreateRequest, GitHubPullRequestMergeRequest, GitHubPullRequestUpdateRequest, GitHubReleaseCreateRequest, GitHubReleaseUpdateRequest, GitHubRemoteBranchCreateRequest, GitHubRepositoryCreateRequest, GitHubRepositoryDeleteRequest, GitHubRepositoryUpdateRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
+from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GitHubAuthCancelRequest, GitHubAuthLoginRequest, GitHubBuildCheckRequest, GitHubBuildUpdateRequest, GitHubConfirmedWrite, GitHubIssueCommentRequest, GitHubIssueCreateRequest, GitHubIssueUpdateRequest, GitHubLocalBranchRequest, GitHubLocalCloneRequest, GitHubLocalCommitRequest, GitHubLocalPushRequest, GitHubLocalStageRequest, GitHubLocalSyncRequest, GitHubPullRequestCreateRequest, GitHubPullRequestMergeRequest, GitHubPullRequestUpdateRequest, GitHubReleaseCreateRequest, GitHubReleaseUpdateRequest, GitHubRemoteBranchCreateRequest, GitHubRepositoryCreateRequest, GitHubRepositoryDeleteRequest, GitHubRepositoryUpdateRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, OptimizedModelInstallRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
 from web_app.model_run_store import ModelRunStore, RequestKeyConflict
 from web_app.model_runs import ModelRunService, canonical_model_prompt
 from web_app.ollama_service import (
@@ -600,6 +600,28 @@ def create_app(
             return await asyncio.to_thread(optimized_search.search, provider.value, q, limit)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @application.post("/api/inference/models/install")
+    async def install_optimized_model(request: OptimizedModelInstallRequest):
+        if not request.confirmed:
+            raise HTTPException(status_code=409, detail="Model download requires confirmation")
+        try:
+            model = catalog.get(request.model_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Only approved catalog models can be installed") from error
+        try:
+            path = await asyncio.to_thread(environment_manager.install_model, model)
+            probe = await inference_router.probe(model.id) if inference_router else None
+        except (OSError, RuntimeError, ValueError) as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+        return {
+            "model_id": model.id,
+            "provider": model.provider.value,
+            "path": str(path),
+            "installed": path.is_dir(),
+            "verified": bool(probe and probe.success),
+            "probe_error": probe.error if probe and not probe.success else None,
+        }
 
     @application.get("/api/inference/environments")
     async def inference_environments():

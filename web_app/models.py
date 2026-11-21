@@ -19,6 +19,11 @@ class HardwareProbeRequest(BaseModel):
     model: str = Field(min_length=1, max_length=200)
 
 
+class OptimizedModelInstallRequest(BaseModel):
+    model_id: str = Field(min_length=3, max_length=500)
+    confirmed: bool = False
+
+
 class HardwareBenchmarkRequest(BaseModel):
     suite: Literal["quick", "thorough"] = "quick"
     model: str = Field(min_length=1, max_length=200)

@@ -8,6 +8,7 @@ import io
 import os
 import zipfile
 import subprocess
+from unittest.mock import patch
 from contextlib import closing
 from pathlib import Path
 
@@ -1405,6 +1406,30 @@ class WebApiTests(unittest.TestCase):
         search = client.get("/api/inference/models/search", params={"provider":"openvino", "q":"Qwen", "limit":5})
         self.assertEqual(search.status_code, 200)
         self.assertLessEqual(len(search.json()), 5)
+
+    def test_approved_optimized_model_install_requires_confirmation_and_registers_local_path(self):
+        model_id = "openvino/OpenVINO/Qwen2.5-Coder-1.5B-Instruct-fp16-ov"
+        target = self.workspace.data_root / "models" / "qwen-openvino"
+        target.mkdir(parents=True)
+
+        denied = self.client.post("/api/inference/models/install", json={"model_id": model_id})
+        self.assertEqual(denied.status_code, 409)
+        unknown = self.client.post(
+            "/api/inference/models/install",
+            json={"model_id": "openvino/unapproved/model", "confirmed": True},
+        )
+        self.assertEqual(unknown.status_code, 404)
+
+        with patch("web_app.inference.environments.EnvironmentManager.install_model", return_value=target):
+            installed = self.client.post(
+                "/api/inference/models/install",
+                json={"model_id": model_id, "confirmed": True},
+            )
+
+        self.assertEqual(installed.status_code, 200)
+        self.assertTrue(installed.json()["installed"])
+        self.assertEqual(installed.json()["path"], str(target))
+        self.assertEqual(installed.json()["provider"], "openvino")
 
     def test_models_keep_missing_configured_entries_disabled(self):
         response = self.client.get("/api/models")

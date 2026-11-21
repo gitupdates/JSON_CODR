@@ -31,7 +31,175 @@ class IdCollector(HTMLParser):
             self.ids.add(attributes["id"])
 
 
+class SidebarCollector(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self._sidebar_depth = 0
+        self._current_item = None
+        self._current_item_depth = 0
+        self.items = []
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if attributes.get("id") == "app-sidebar":
+            self._sidebar_depth = 1
+            return
+        if not self._sidebar_depth:
+            return
+        self._sidebar_depth += 1
+        classes = set(attributes.get("class", "").split())
+        if "sidebar-destination" in classes:
+            self._current_item = {
+                "label": "",
+                "href": attributes.get("href"),
+                "destination": attributes.get("data-destination"),
+                "current": attributes.get("aria-current"),
+                "has_svg_icon": False,
+            }
+            self.items.append(self._current_item)
+            self._current_item_depth = self._sidebar_depth
+        elif tag == "svg" and self._current_item is not None:
+            self._current_item["has_svg_icon"] = "nav-icon" in classes
+
+    def handle_endtag(self, tag):
+        if not self._sidebar_depth:
+            return
+        if self._current_item is not None and self._sidebar_depth == self._current_item_depth:
+            self._current_item["label"] = " ".join(self._current_item["label"].split())
+            self._current_item = None
+            self._current_item_depth = 0
+        self._sidebar_depth -= 1
+
+    def handle_data(self, data):
+        if self._current_item is not None:
+            self._current_item["label"] += data
+
+
 class WebStaticTests(unittest.TestCase):
+    def test_disclosure_controller_keeps_only_the_active_tree_item_open(self):
+        script = r'''
+const { bindExclusiveDisclosures } = require("./web/disclosure_groups.js");
+class Detail { constructor(open=false) { this.open=open; } }
+const first = new Detail(true), second = new Detail(true), third = new Detail(false);
+const listeners = {};
+const document = {
+  addEventListener(name, callback, capture) { listeners[name] = callback; },
+  querySelectorAll(selector) { return selector === "details[open]" ? [first, second].filter(item => item.open) : []; },
+};
+bindExclusiveDisclosures(document);
+listeners.toggle({target: second});
+const afterToggle = [first.open, second.open, third.open];
+first.open = true;
+listeners.click({target: {closest: selector => selector === ".sidebar-destination" ? {} : null}});
+process.stdout.write(JSON.stringify({afterToggle, afterNavigation: [first.open, second.open, third.open]}));
+'''
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {
+            "afterToggle": [False, True, False],
+            "afterNavigation": [False, False, False],
+        })
+
+    def test_source_control_uses_the_canonical_workspace_navigation_shell(self):
+        workspace_html = Path("web/index.html").read_text(encoding="utf-8")
+        source_html = Path("web/source-control.html").read_text(encoding="utf-8")
+        workspace_navigation = SidebarCollector()
+        source_navigation = SidebarCollector()
+        workspace_navigation.feed(workspace_html)
+        source_navigation.feed(source_html)
+
+        self.assertEqual(
+            [item["label"] for item in source_navigation.items],
+            [item["label"] for item in workspace_navigation.items],
+        )
+        self.assertTrue(all(item["has_svg_icon"] for item in source_navigation.items))
+        self.assertEqual(
+            [item["label"] for item in source_navigation.items if item["current"] == "page"],
+            ["GitHub"],
+        )
+
+        source_ids = IdCollector()
+        source_ids.feed(source_html)
+        self.assertTrue({
+            "app-sidebar", "sidebar-collapse", "sidebar-resize-handle",
+            "mobile-navigation-toggle", "navigation-backdrop",
+        }.issubset(source_ids.ids))
+
+    def test_workspace_query_routes_select_only_known_navigation_destinations(self):
+        script = r'''
+const { destinationFromSearch } = require("./web/navigation_routes.js");
+const allowed = new Set(["workspace", "context", "skills", "hardware", "settings"]);
+process.stdout.write(JSON.stringify({
+  settings: destinationFromSearch("?view=settings", allowed),
+  hardware: destinationFromSearch("?view=hardware", allowed),
+  missing: destinationFromSearch("", allowed),
+  invalid: destinationFromSearch("?view=admin", allowed),
+}));
+'''
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {
+            "settings": "settings",
+            "hardware": "hardware",
+            "missing": None,
+            "invalid": None,
+        })
+
+    def test_source_navigation_controller_matches_workspace_collapse_and_drawer_behavior(self):
+        script = r'''
+const { bindSourceNavigation } = require("./web/source_navigation.js");
+class Classes {
+  constructor() { this.values = new Set(); }
+  add(value) { this.values.add(value); }
+  remove(value) { this.values.delete(value); }
+  toggle(value, force) {
+    const next = force === undefined ? !this.values.has(value) : force;
+    if (next) this.values.add(value); else this.values.delete(value);
+    return next;
+  }
+  contains(value) { return this.values.has(value); }
+}
+class Element {
+  constructor() { this.attrs = {}; this.hidden = false; this.listeners = {}; this.classList = new Classes(); }
+  addEventListener(name, callback) { this.listeners[name] = callback; }
+  setAttribute(name, value) { this.attrs[name] = value; }
+  focus() { this.focused = true; }
+}
+const body = new Element();
+const root = {style: {setProperty(name, value) { this[name] = value; }}};
+const elements = Object.fromEntries(["app-sidebar", "sidebar-collapse", "sidebar-resize-handle", "mobile-navigation-toggle", "navigation-backdrop"].map(id => [id, new Element()]));
+const document = {body, documentElement: root, getElementById: id => elements[id]};
+const window = {matchMedia: () => ({matches: false}), addEventListener() {}, removeEventListener() {}};
+const controller = bindSourceNavigation({document, window, persist: async () => {}});
+controller.openNavigationDrawer();
+const opened = {body: body.classList.contains("navigation-open"), hidden: elements["navigation-backdrop"].hidden, expanded: elements["mobile-navigation-toggle"].attrs["aria-expanded"]};
+controller.closeNavigationDrawer({restoreFocus: true});
+controller.setSidebarCollapsed(true, {persist: false});
+const width = controller.applySidebarWidth(500);
+process.stdout.write(JSON.stringify({
+  opened,
+  closed: !body.classList.contains("navigation-open"),
+  restoredFocus: elements["mobile-navigation-toggle"].focused,
+  collapsed: body.classList.contains("sidebar-collapsed"),
+  collapseExpanded: elements["sidebar-collapse"].attrs["aria-expanded"],
+  collapseLabel: elements["sidebar-collapse"].attrs["aria-label"],
+  width,
+  cssWidth: root.style["--sidebar-width"],
+}));
+'''
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {
+            "opened": {"body": True, "hidden": False, "expanded": "true"},
+            "closed": True,
+            "restoredFocus": True,
+            "collapsed": True,
+            "collapseExpanded": "false",
+            "collapseLabel": "Expand navigation",
+            "width": 380,
+            "cssWidth": "380px",
+        })
+
     def test_source_control_guides_github_login_scope_build_check_and_safe_update(self):
         html = Path("web/source-control.html").read_text(encoding="utf-8")
         update_runtime = Path("web/source_control_updates.js").read_text(encoding="utf-8")
@@ -350,7 +518,7 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.2.0", response.text)
+        self.assertIn("V1.3.1", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -375,7 +543,7 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         html = self.client.get("/").text
         css = self.client.get("/static/app.css")
         javascript = self.client.get("/static/app.js")
-        self.assertIn('/static/app.css?v=1.2.0', html)
+        self.assertIn('/static/app.css?v=1.3.1-unified', html)
         self.assertEqual(css.status_code, 200)
         self.assertIn("text/css", css.headers["content-type"])
         self.assertEqual(javascript.status_code, 200)
@@ -522,7 +690,7 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         javascript = self.client.get("/static/app.js").text
 
         self.assertIn('/static/terminal_keyboard.js?v=1.2.0', html)
-        self.assertIn('/static/app.js?v=1.2.0', html)
+        self.assertIn('/static/app.js?v=1.3.1-model-install', html)
         self.assertLess(html.index("terminal_keyboard.js"), html.index("app.js"))
         self.assertIn("createTerminalKeyboardController", javascript)
         self.assertIn("attachCustomKeyEventHandler", javascript)
@@ -692,6 +860,9 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         self.assertIn("candidate.compatible_models", javascript)
         self.assertNotIn('fetch("/api/hardware/model-compatibility")', javascript)
         self.assertIn('/api/inference/models/search', javascript)
+        self.assertIn('/api/inference/models/install', javascript)
+        self.assertIn("Download and install", javascript)
+        self.assertNotIn("Review download source", javascript)
         self.assertIn('model.status === "accelerated"', javascript)
         self.assertIn("candidate.compatible_models", javascript)
         self.assertIn("Compatible models (", javascript)

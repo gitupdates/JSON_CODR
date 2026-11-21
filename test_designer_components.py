@@ -6,7 +6,7 @@ from web_app.designer.json_codr_manifest import (
     PROTECTED_REGION_IDS,
     create_json_codr_overlay,
 )
-from web_app.designer.templates import TEMPLATE_IDS, create_template
+from web_app.designer.templates import TEMPLATE_IDS, UNIFIED_VISUAL_POLICY, create_template
 
 
 EXPECTED_COMPONENTS = {
@@ -26,6 +26,16 @@ EXPECTED_REGIONS = {
 class ComponentRegistryTests(unittest.TestCase):
     def setUp(self):
         self.registry = ComponentRegistry.builtins()
+
+    def test_templates_carry_the_unified_visual_system_for_new_ui_work(self):
+        document = create_template("dashboard", "Unified dashboard")
+
+        self.assertEqual(document.tokens["spacing_scale"], (4, 8, 12, 16, 18, 22))
+        self.assertEqual(document.tokens["content_gutter"], 16)
+        self.assertEqual(document.tokens["section_gap"], 18)
+        self.assertEqual(document.tokens["panel_inset"], 22)
+        self.assertEqual(document.model_dump()["metadata"]["visual_policy"], UNIFIED_VISUAL_POLICY)
+        self.assertEqual(UNIFIED_VISUAL_POLICY["planning_order"][0], "canonical_page")
 
     def test_catalog_is_complete_and_definitions_are_data_only(self):
         self.assertEqual(set(BUILTIN_COMPONENT_TYPES), EXPECTED_COMPONENTS)

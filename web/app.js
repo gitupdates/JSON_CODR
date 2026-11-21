@@ -210,6 +210,10 @@ const TERMINAL_SESSIONS_KEY = "json_codr_terminal_sessions";
 const TERMINAL_COMMAND_HISTORY_KEY = "json_codr_terminal_command_history";
 const NAVIGATION_DESTINATIONS = new Set(["workspace", "context", "skills", "hardware", "settings"]);
 const HARDWARE_SECTIONS = new Set(["overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "leaderboard", "history", "localperf"]);
+const requestedNavigationDestination = window.JSONCodrNavigationRoutes?.destinationFromSearch(
+  window.location.search,
+  NAVIGATION_DESTINATIONS,
+);
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 const narrowNavigationQuery = window.matchMedia("(max-width: 700px)");
 
@@ -1294,7 +1298,7 @@ async function loadSettings() {
     applySidebarWidth(settingsState.ui.sidebar_width);
     setSidebarCollapsed(settingsState.ui.sidebar_collapsed, { persist: false });
     selectHardwareSection(settingsState.ui.hardware_section, { persist: false });
-    selectDestination(settingsState.ui.primary_destination, { persist: false });
+    selectDestination(requestedNavigationDestination || settingsState.ui.primary_destination, { persist: false });
   }
   if (skillsRevisionAtStart === skillsChangeRevision) {
     elements.settingSkillsOpen.checked = settingsState.ui.primary_destination === "skills";
@@ -2009,9 +2013,28 @@ async function searchOptimizedModels() {
       const name = document.createElement("strong"); name.textContent = model.repository;
       const detail = document.createElement("p"); detail.className = "meta";
       detail.textContent = `${model.provider} · ${model.device} · ${model.format} · ${model.license} · ${model.source}`;
-      const link = document.createElement("a"); link.className = "secondary file-button"; link.href = model.source_url;
-      link.target = "_blank"; link.rel = "noopener noreferrer"; link.textContent = "Review download source";
-      label.append(name, detail); row.append(label, link); elements.optimizedModelSearchResults.append(row);
+      const install = document.createElement("button"); install.className = "secondary"; install.type = "button";
+      install.textContent = model.source === "pinned" ? "Download and install" : "Not approved for install";
+      install.disabled = model.source !== "pinned";
+      install.addEventListener("click", async () => {
+        if (!window.confirm(`Download ${model.repository} from its pinned Hugging Face revision, install its local runtime, and register it for JSON_CODR?`)) return;
+        install.disabled = true; install.textContent = "Downloading and installing…";
+        try {
+          const response = await fetch("/api/inference/models/install", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({model_id: model.id, confirmed: true}),
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.detail || "Model installation failed");
+          install.textContent = result.verified ? "Installed and verified" : "Installed · probe required";
+          detail.textContent = `${model.provider} · installed locally · ${result.verified ? "available" : result.probe_error || "restart optimized routing to probe"}`;
+          await Promise.all([loadModels(), detectHardware()]);
+        } catch (error) {
+          install.disabled = false; install.textContent = "Retry download and install";
+          detail.textContent = `${model.provider} · installation failed · ${error.message}`;
+        }
+      });
+      label.append(name, detail); row.append(label, install); elements.optimizedModelSearchResults.append(row);
     }
   } finally { elements.optimizedModelSearchRun.disabled = false; }
 }

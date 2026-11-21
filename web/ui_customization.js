@@ -70,7 +70,15 @@
 
     function selectPreset(preset) {
       if (!Object.hasOwn(catalog.PRESETS, preset)) return clone(draftState);
-      return replaceDraft({ schema: 1, preset, mode: draftState.mode, components: {} });
+      const definition = catalog.PRESETS[preset];
+      return replaceDraft({
+        schema: 1,
+        preset,
+        mode: definition.defaultMode,
+        density: definition.defaultDensity,
+        typography: definition.defaultTypography,
+        components: {},
+      });
     }
 
     function setMode(mode) {
