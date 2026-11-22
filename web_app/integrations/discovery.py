@@ -6,6 +6,8 @@ from web_app.version import APP_VERSION
 
 
 def _http_origin(value: str) -> str:
+    if "://" not in value:
+        value = f"http://{value}"
     parsed = urlsplit(value.rstrip("/"))
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError("discovery URLs must use http or https")
@@ -18,7 +20,10 @@ def build_discovery_document(base_url: str, ollama_url: str) -> dict:
     service_origin = _http_origin(base_url)
     ollama_origin = _http_origin(ollama_url)
     command = ["python", "-m", "web_app.integrations.mcp_server"]
-    environment = {"JSON_CODR_URL": service_origin}
+    environment = {
+        "JSON_CODR_URL": service_origin,
+        "PYTHONPATH": "${JSON_CODR_ROOT}",
+    }
     return {
         "schema_version": 1,
         "service": {
@@ -30,7 +35,7 @@ def build_discovery_document(base_url: str, ollama_url: str) -> dict:
             "transport": "http",
             "health_url": f"{service_origin}/api/health",
             "models_url": f"{service_origin}/api/models",
-            "workspace_task_url": f"{service_origin}/api/workspace/run",
+            "workspace_task_url": f"{service_origin}/api/workspace/tasks",
         },
         "mcp": {
             "transport": "stdio",
@@ -38,6 +43,7 @@ def build_discovery_document(base_url: str, ollama_url: str) -> dict:
             "command": command,
             "environment": environment,
             "tools": [tool["name"] for tool in TOOLS],
+            "requirements": ["Set JSON_CODR_ROOT to the JSON_CODR installation directory"],
         },
         "ollama": {
             "base_url": ollama_origin,

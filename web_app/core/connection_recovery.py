@@ -80,6 +80,8 @@ class RecoveryInProgress(RuntimeError):
 
 
 class ConnectionAdapter(Protocol):
+    descriptor: ConnectionDescriptor
+
     async def describe(self) -> ConnectionDescriptor: ...
     async def probe(self) -> ConnectionStatus: ...
     async def plan(self, status: ConnectionStatus) -> RecoveryPlan: ...
@@ -125,7 +127,13 @@ class ConnectionRecoveryService:
         adapter = self._adapter(connection_id)
         return await adapter.plan(self._normalize(await adapter.probe()))
 
-    async def recover(self, connection_id: str, action_ids: frozenset[str]) -> RecoveryResult:
+    async def recover(
+        self,
+        connection_id: str,
+        action_ids: frozenset[str],
+        *,
+        approved_action_ids: frozenset[str] = frozenset(),
+    ) -> RecoveryResult:
         adapter = self._adapter(connection_id)
         lock = self._locks[connection_id]
         if lock.locked():
@@ -137,9 +145,21 @@ class ConnectionRecoveryService:
             unknown = sorted(action_ids - known_actions)
             if unknown:
                 raise ValueError(f"unknown recovery action: {', '.join(unknown)}")
+            approval_required = {
+                action.action_id
+                for action in plan.actions
+                if action.action_class == RecoveryActionClass.approval_required
+            }
+            unapproved = sorted((action_ids & approval_required) - approved_action_ids)
+            if unapproved:
+                raise PermissionError(f"recovery action requires approval: {', '.join(unapproved)}")
             action_results = await adapter.recover(action_ids)
             final_status = self._normalize(await adapter.verify())
-            return RecoveryResult(connection_id, action_results, final_status)
+            sanitized_results = tuple(
+                replace(result, detail=sanitize_detail(result.detail))
+                for result in action_results
+            )
+            return RecoveryResult(connection_id, sanitized_results, final_status)
 
     @staticmethod
     def _normalize(status: ConnectionStatus) -> ConnectionStatus:

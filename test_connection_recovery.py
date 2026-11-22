@@ -11,6 +11,7 @@ class _Adapter:
         self.started = asyncio.Event()
         self.release = asyncio.Event()
         self.block_recovery = False
+        self.action_detail = "repaired"
 
     async def describe(self):
         return self.descriptor
@@ -28,7 +29,7 @@ class _Adapter:
         if self.block_recovery:
             await self.release.wait()
         return tuple(
-            RecoveryActionResult(action_id=action_id, status="completed", detail="repaired")
+            RecoveryActionResult(action_id=action_id, status="completed", detail=self.action_detail)
             for action_id in sorted(action_ids)
         )
 
@@ -115,11 +116,38 @@ class ConnectionRecoveryTests(unittest.IsolatedAsyncioTestCase):
             diagnostic_code="port_only",
         )
         service = types["service"]([adapter])
-
         result = await service.recover("ollama:default", frozenset({"repair-config"}))
 
         self.assertEqual(result.final_status.state, types["state"].degraded)
         self.assertFalse(result.final_status.functional_probe)
+
+    async def test_recovery_requires_explicit_approval_and_redacts_action_output(self):
+        types = self._types()
+        adapter = self._adapter()
+        adapter.recovery_plan = types["plan"](
+            connection_id="ollama:default",
+            revision="plan-2",
+            actions=(types["action"](
+                action_id="restart-owned-process",
+                label="Restart owned process",
+                action_class=types["action_class"].approval_required,
+            ),),
+        )
+        service = types["service"]([adapter])
+        adapter.action_detail = "ghp_abcdefghijklmnopqrstuvwxyz123456 at C:\\Users\\BLACK\\secret.txt"
+
+        with self.assertRaisesRegex(PermissionError, "requires approval"):
+            await service.recover("ollama:default", frozenset({"restart-owned-process"}))
+
+        result = await service.recover(
+            "ollama:default",
+            frozenset({"restart-owned-process"}),
+            approved_action_ids=frozenset({"restart-owned-process"}),
+        )
+        self.assertEqual(
+            result.action_results[0].detail,
+            "[redacted-token] at C:\\Users\\[redacted-user]\\secret.txt",
+        )
 
     async def test_recovery_rejects_a_second_run_for_the_same_connection(self):
         types = self._types()

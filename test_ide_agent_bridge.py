@@ -228,9 +228,18 @@ class AdapterPackageTests(unittest.TestCase):
         self.assertEqual(document["ollama"]["base_url"], "http://127.0.0.1:11434")
         self.assertFalse(document["ollama"]["provides_borg_tools"])
         self.assertEqual(document["borg"]["transport"], "http")
+        self.assertEqual(document["borg"]["workspace_task_url"], "https://agent.example/api/workspace/tasks")
         self.assertEqual(document["mcp"]["transport"], "stdio")
+        self.assertEqual(document["mcp"]["environment"]["PYTHONPATH"], "${JSON_CODR_ROOT}")
         self.assertNotIn("C:\\", json.dumps(document))
         self.assertNotIn("token", json.dumps(document).casefold())
+
+    def test_discovery_normalizes_scheme_less_ollama_host(self):
+        from web_app.integrations.discovery import build_discovery_document
+
+        document = build_discovery_document("http://127.0.0.1:8874", "127.0.0.1:11435")
+
+        self.assertEqual(document["ollama"]["base_url"], "http://127.0.0.1:11435")
 
 
 if __name__ == "__main__":

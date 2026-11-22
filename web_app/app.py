@@ -498,8 +498,16 @@ def create_app(
 
     @application.get("/.well-known/json-codr")
     async def json_codr_discovery(request: Request):
+        requested_origin = str(request.base_url).rstrip("/")
+        requested_host = request.url.hostname
+        configured_origin = os.environ.get("JSON_CODR_PUBLIC_URL")
+        service_origin = configured_origin or (
+            requested_origin
+            if requested_host in {"127.0.0.1", "localhost", "::1"}
+            else "http://127.0.0.1:8874"
+        )
         return build_discovery_document(
-            str(request.base_url),
+            service_origin,
             os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"),
         )
 
