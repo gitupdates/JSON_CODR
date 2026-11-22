@@ -13,6 +13,8 @@ from pydantic import BaseModel, ConfigDict
 
 from web_app.designer.access import DesignPolicyContext, resolve_design_capability
 from web_app.designer.contracts import DesignDocument
+from web_app.designer.components import ComponentRegistry
+from web_app.designer.continuity import validate_runtime_continuity
 from web_app.designer.store import DesignerStore, ProjectConflict
 
 
@@ -52,7 +54,12 @@ class PublicationService:
         before_swap: Callable[[str], object] | None = None,
     ) -> None:
         self.store = store
-        self.validator = validator or (lambda _document: ())
+        registry = ComponentRegistry.builtins()
+        self.validator = validator or (
+            lambda document: tuple(
+                violation.message for violation in validate_runtime_continuity(document, registry)
+            ) if document.mode == "json_codr" else ()
+        )
         self.materializer = materializer or (lambda _snapshot: None)
         self.before_swap = before_swap or (lambda _project_id: None)
 

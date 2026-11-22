@@ -6,6 +6,7 @@ from web_app.designer.access import DesignPolicyContext
 from web_app.designer.contracts import DesignDocument
 from web_app.designer.publication import PublicationRejected, PublicationService
 from web_app.designer.store import DesignerStore, ProjectConflict
+from web_app.designer.json_codr_manifest import create_json_codr_overlay
 
 
 class DesignerPublicationTests(unittest.TestCase):
@@ -86,6 +87,19 @@ class DesignerPublicationTests(unittest.TestCase):
         self.assertEqual(observed, [first])
         self.assertEqual(service.current(self.document.project_id), second)
         self.assertNotEqual(first.revision_id, second.revision_id)
+
+    def test_default_publication_rejects_a_design_without_core_routes(self):
+        overlay = create_json_codr_overlay()
+        overlay_store = DesignerStore(Path(self.temporary_directory.name) / "overlay")
+        overlay_store._initialize_project(overlay)
+        payload = overlay.model_dump(mode="json", exclude={"canonical_digest"})
+        payload["nodes"] = [node for node in payload["nodes"] if node["node_id"] != "primary-navigation"]
+        shell = next(node for node in payload["nodes"] if node["node_id"] == "application-shell")
+        shell["children"] = [node_id for node_id in shell["children"] if node_id != "primary-navigation"]
+        invalid = DesignDocument.model_validate(payload)
+
+        with self.assertRaises(PublicationRejected):
+            PublicationService(overlay_store).publish(overlay.project_id, invalid, None, self.context)
 
 
 if __name__ == "__main__":

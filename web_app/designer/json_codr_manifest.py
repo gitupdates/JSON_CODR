@@ -8,6 +8,7 @@ from web_app.designer.templates import NOC_LIGHT_TOKENS
 
 
 JSON_CODR_MANIFEST_VERSION = 1
+FIXED_RUNTIME_CAPABILITIES = frozenset({"recovery.open", "safe_mode.open"})
 PROTECTED_REGION_IDS = (
     "application-shell", "primary-navigation", "top-bar", "workspace", "context-files-panel",
     "skills-panel", "hardware-panel", "settings-panel", "composer", "response-cards",
@@ -38,6 +39,12 @@ _ESSENTIAL = {
     "application-shell", "primary-navigation", "settings-panel", "designer-exit",
     "recovery-controls", "approval-controls",
 }
+_CORE_CAPABILITIES = {
+    "primary-navigation": "workspace.navigation",
+    "top-bar": "identity.auth",
+    "composer": "task.execute",
+    "settings-panel": "settings.open",
+}
 
 
 def create_json_codr_overlay(appearance_state: Mapping[str, Any] | None = None) -> DesignDocument:
@@ -52,7 +59,10 @@ def create_json_codr_overlay(appearance_state: Mapping[str, Any] | None = None) 
             component_type=_COMPONENT_TYPES[node_id],
             parent_id=None if node_id == "application-shell" else "application-shell",
             children=children if node_id == "application-shell" else (),
-            properties={"label": node_id.replace("-", " ").title()},
+            properties={
+                "label": node_id.replace("-", " ").title(),
+                **({"core_capability": _CORE_CAPABILITIES[node_id]} if node_id in _CORE_CAPABILITIES else {}),
+            },
             locked_capabilities=locks,
         ))
     appearance = dict(appearance_state or {})

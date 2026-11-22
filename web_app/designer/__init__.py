@@ -19,6 +19,12 @@ from web_app.designer.publication import (
     PublishedSnapshot,
     ValidationReport,
 )
+from web_app.designer.continuity import (
+    CoreCapability,
+    ContinuityViolation,
+    REQUIRED_CORE_CAPABILITIES,
+    validate_runtime_continuity,
+)
 
 __all__ = [
     "DesignDocument",
@@ -40,4 +46,8 @@ __all__ = [
     "PublicationService",
     "PublishedSnapshot",
     "ValidationReport",
+    "CoreCapability",
+    "ContinuityViolation",
+    "REQUIRED_CORE_CAPABILITIES",
+    "validate_runtime_continuity",
 ]
