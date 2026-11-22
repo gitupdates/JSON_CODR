@@ -30,6 +30,12 @@ class BorgClient:
             raise BorgClientError("JSON_CODR health response is not an object")
         return result
 
+    def discovery(self) -> dict:
+        result = self._request("GET", "/.well-known/json-codr")
+        if not isinstance(result, dict) or result.get("schema_version") != 1:
+            raise BorgClientError("JSON_CODR discovery response is invalid")
+        return result
+
     def models(self) -> list[dict]:
         result = self._request("GET", "/api/models")
         if not isinstance(result, list) or not all(isinstance(item, dict) for item in result):

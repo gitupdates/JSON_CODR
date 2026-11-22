@@ -14,6 +14,11 @@ PROTOCOL_VERSION = "2025-06-18"
 
 TOOLS = [
     {
+        "name": "json_codr.discovery",
+        "description": "Discover JSON_CODR, BORG, native Ollama, and portable IDE/MCP connection metadata.",
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
         "name": "json_codr.health",
         "description": "Read the live JSON_CODR service status and version.",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
@@ -73,7 +78,9 @@ class McpServer:
         if tool is None or not isinstance(arguments, Mapping) or not self._valid_arguments(tool, arguments):
             return self._error(request_id, -32602, "Invalid tool name or arguments")
         try:
-            if name == "json_codr.health":
+            if name == "json_codr.discovery":
+                result = self.client.discovery()
+            elif name == "json_codr.health":
                 result = self.client.health()
             elif name == "json_codr.models":
                 result = {"models": self.client.models()}

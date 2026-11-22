@@ -16,6 +16,8 @@ class _FixtureOpener:
         self.requests.append((outgoing.method, path, body))
         if path == "/api/health":
             return io.BytesIO(json.dumps({"status": "ready", "app_version": "V1.3.2"}).encode())
+        if path == "/.well-known/json-codr":
+            return io.BytesIO(json.dumps({"schema_version": 1, "service": {"name": "JSON_CODR"}}).encode())
         if path == "/api/models":
             return io.BytesIO(json.dumps([{"name": "qwen3.5:9b", "installed": True}]).encode())
         if path == "/api/workspace/tasks":
@@ -46,6 +48,7 @@ class BorgClientTests(unittest.TestCase):
         client = BorgClient(self.base_url, opener=_FixtureOpener())
 
         self.assertEqual(client.health()["app_version"], "V1.3.2")
+        self.assertEqual(client.discovery()["service"]["name"], "JSON_CODR")
         self.assertEqual(client.models()[0]["name"], "qwen3.5:9b")
 
     def test_workspace_task_preserves_async_approval_state(self):
@@ -85,6 +88,9 @@ class BorgClientTests(unittest.TestCase):
 
 
 class _FakeBorgClient:
+    def discovery(self):
+        return {"schema_version": 1, "service": {"name": "JSON_CODR"}}
+
     def health(self):
         return {"status": "ready", "app_version": "V1.3.2"}
 
@@ -103,7 +109,7 @@ class McpServerTests(unittest.TestCase):
             self.fail(f"MCP bridge is missing: {error}")
         return McpServer(_FakeBorgClient())
 
-    def test_initializes_and_lists_three_bounded_tools(self):
+    def test_initializes_and_lists_bounded_tools(self):
         server = self._server()
 
         initialized = server.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
@@ -112,8 +118,21 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(initialized["result"]["protocolVersion"], "2025-06-18")
         self.assertEqual(
             [tool["name"] for tool in listed["result"]["tools"]],
-            ["json_codr.health", "json_codr.models", "json_codr.run_workspace_task"],
+            [
+                "json_codr.discovery",
+                "json_codr.health",
+                "json_codr.models",
+                "json_codr.run_workspace_task",
+            ],
         )
+
+    def test_discovery_tool_exposes_canonical_connection_metadata(self):
+        response = self._server().handle({
+            "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": {"name": "json_codr.discovery", "arguments": {}},
+        })
+
+        self.assertEqual(response["result"]["structuredContent"]["schema_version"], 1)
 
     def test_calls_real_client_methods_and_preserves_task_state(self):
         server = self._server()
@@ -198,6 +217,20 @@ class AdapterPackageTests(unittest.TestCase):
         self.assertEqual(manifest["transports"], ["stdio"])
         self.assertEqual(manifest["command"][1:3], ["-m", "web_app.integrations.mcp_server"])
         self.assertEqual(manifest["tools"], [tool["name"] for tool in TOOLS])
+
+    def test_discovery_document_separates_ollama_inference_from_borg_tools(self):
+        from web_app.integrations.discovery import build_discovery_document
+
+        document = build_discovery_document("https://agent.example", "http://127.0.0.1:11434")
+
+        self.assertEqual(document["schema_version"], 1)
+        self.assertEqual(document["service"]["base_url"], "https://agent.example")
+        self.assertEqual(document["ollama"]["base_url"], "http://127.0.0.1:11434")
+        self.assertFalse(document["ollama"]["provides_borg_tools"])
+        self.assertEqual(document["borg"]["transport"], "http")
+        self.assertEqual(document["mcp"]["transport"], "stdio")
+        self.assertNotIn("C:\\", json.dumps(document))
+        self.assertNotIn("token", json.dumps(document).casefold())
 
 
 if __name__ == "__main__":

@@ -280,6 +280,18 @@ class WebApiTests(unittest.TestCase):
         self.client = TestClient(create_app(self.service, self.workspace))
         self._core_clients = [self.client]
 
+    def test_well_known_discovery_uses_request_origin(self):
+        response = self.client.get(
+            "/.well-known/json-codr",
+            headers={"host": "json-codr.example"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        document = response.json()
+        self.assertEqual(document["service"]["base_url"], "http://json-codr.example")
+        self.assertEqual(document["borg"]["health_url"], "http://json-codr.example/api/health")
+        self.assertNotIn("authorization", json.dumps(document).casefold())
+
     def test_github_routes_keep_authentication_server_side_and_require_write_confirmation(self):
         class FakeGitHubCLI:
             def __init__(self):

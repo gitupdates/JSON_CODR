@@ -32,6 +32,7 @@ from web_app.inference.compatibility import attach_agent_compatibility, ollama_m
 from web_app.inference.search import OptimizedModelSearch
 from web_app.localperf.package import LocalPerfPackageError, LocalPerfPackageService
 from web_app.localperf.storage import LocalPerfStorage
+from web_app.integrations.discovery import build_discovery_document
 from web_app.integrity_benchmark import IntegrityBenchmarkService
 from web_app.benchmark_baseline import BenchmarkBaselineService
 from web_app.coding_agents import CodingAgentService
@@ -494,6 +495,13 @@ def create_app(
     async def health():
         result = await service.health()
         return {"status": "ready" if result["ollama"] else "degraded", "app_version": APP_VERSION, **result}
+
+    @application.get("/.well-known/json-codr")
+    async def json_codr_discovery(request: Request):
+        return build_discovery_document(
+            str(request.base_url),
+            os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"),
+        )
 
     @application.post("/api/benchmarks/baseline")
     async def export_benchmark_baseline():

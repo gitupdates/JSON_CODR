@@ -6,5 +6,5 @@
   "transports": ["stdio"],
   "command": ["python", "-m", "web_app.integrations.mcp_server"],
   "environment": {"JSON_CODR_URL": "http://127.0.0.1:8874"},
-  "tools": ["json_codr.health", "json_codr.models", "json_codr.run_workspace_task"]
+  "tools": ["json_codr.discovery", "json_codr.health", "json_codr.models", "json_codr.run_workspace_task"]
 }
