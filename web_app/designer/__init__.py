@@ -13,6 +13,12 @@ from web_app.designer.access import (
     ProfileAssignment,
     resolve_design_capability,
 )
+from web_app.designer.publication import (
+    PublicationRejected,
+    PublicationService,
+    PublishedSnapshot,
+    ValidationReport,
+)
 
 __all__ = [
     "DesignDocument",
@@ -30,4 +36,8 @@ __all__ = [
     "PolicyDecision",
     "ProfileAssignment",
     "resolve_design_capability",
+    "PublicationRejected",
+    "PublicationService",
+    "PublishedSnapshot",
+    "ValidationReport",
 ]
