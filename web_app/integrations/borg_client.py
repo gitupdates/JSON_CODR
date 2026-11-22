@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from urllib import error, parse, request
 
 
@@ -9,13 +10,19 @@ class BorgClientError(RuntimeError):
 
 
 class BorgClient:
-    def __init__(self, base_url: str, timeout_seconds: float = 30.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        timeout_seconds: float = 30.0,
+        opener: Callable[..., object] = request.urlopen,
+    ) -> None:
         normalized = base_url.rstrip("/")
         parsed = parse.urlsplit(normalized)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ValueError("JSON_CODR base URL must be an HTTP or HTTPS origin")
         self.base_url = normalized
         self.timeout_seconds = timeout_seconds
+        self._open = opener
 
     def health(self) -> dict:
         result = self._request("GET", "/api/health")
@@ -59,7 +66,7 @@ class BorgClient:
             headers={"Accept": "application/json", "Content-Type": "application/json"},
         )
         try:
-            with request.urlopen(outgoing, timeout=self.timeout_seconds) as response:
+            with self._open(outgoing, timeout=self.timeout_seconds) as response:
                 return json.loads(response.read().decode("utf-8"))
         except error.HTTPError as exc:
             detail = self._error_detail(exc)

@@ -199,6 +199,7 @@ class ContextService:
                     event_type=event.event_type,
                     global_sequence=event.global_sequence,
                     mandatory=event.event_type in {
+                        "agent.action_completed",
                         "agent.goal_registered",
                         "agent.verification_failed",
                         "task.steered",

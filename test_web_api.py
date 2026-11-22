@@ -20,6 +20,7 @@ from cli import parse_response_content
 from web_app.models import ActionSuggestion, ChatResult, ConversionBundle, GeneratedFile
 from web_app.ollama_service import ModelOutputError, ModelTimeoutError, OllamaService, OllamaUnavailableError
 from web_app.workspace import WorkspaceService
+from web_app.version import APP_VERSION
 from web_app.coding_agents import CodingAgentService
 from web_app.git_broker import GitBrokerService
 
@@ -1226,9 +1227,9 @@ class WebApiTests(unittest.TestCase):
     def test_health_reports_ollama_readiness(self):
         self.assertEqual(
             self.client.get("/api/health").json(),
-                {"status": "ready", "ollama": True, "app_version": "V1.2.0"},
+                {"status": "ready", "ollama": True, "app_version": APP_VERSION},
         )
-        self.assertEqual(self.client.app.version, "V1.2.0")
+        self.assertEqual(self.client.app.version, APP_VERSION)
         self.service.available = False
         self.assertEqual(self.client.get("/api/health").json()["status"], "degraded")
 
