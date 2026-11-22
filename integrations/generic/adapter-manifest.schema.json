@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://json-codr.local/schemas/adapter-manifest-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "adapter_id", "protocol", "protocol_version", "transports", "command", "environment", "tools"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "adapter_id": {"type": "string", "minLength": 1},
+    "protocol": {"const": "mcp"},
+    "protocol_version": {"type": "string", "minLength": 1},
+    "transports": {"type": "array", "items": {"enum": ["stdio", "streamable-http"]}, "minItems": 1, "uniqueItems": true},
+    "command": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "environment": {"type": "object", "additionalProperties": {"type": "string"}},
+    "tools": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true}
+  }
+}

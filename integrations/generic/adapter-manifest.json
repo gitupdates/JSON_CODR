@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "adapter_id": "json-codr-borg",
+  "protocol": "mcp",
+  "protocol_version": "2025-06-18",
+  "transports": ["stdio"],
+  "command": ["python", "-m", "web_app.integrations.mcp_server"],
+  "environment": {"JSON_CODR_URL": "http://127.0.0.1:8874"},
+  "tools": ["json_codr.health", "json_codr.models", "json_codr.run_workspace_task"]
+}
