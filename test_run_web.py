@@ -28,7 +28,7 @@ class RunWebTests(unittest.TestCase):
         self.assertEqual(payload["host"], "127.0.0.1")
         self.assertEqual(payload["port"], 8765)
         self.assertEqual(payload["url"], "http://127.0.0.1:8765")
-        self.assertEqual(payload["version"], "V1.3.1")
+        self.assertEqual(payload["version"], "V1.3.2")
         self.assertTrue(payload["python"])
         subprocess.run(
             [payload["python"], "-c", "from uuid import uuid7"],

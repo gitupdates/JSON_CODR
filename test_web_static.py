@@ -520,7 +520,7 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.3.1", response.text)
+        self.assertIn("V1.3.2", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -545,7 +545,7 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         html = self.client.get("/").text
         css = self.client.get("/static/app.css")
         javascript = self.client.get("/static/app.js")
-        self.assertIn('/static/app.css?v=1.3.1-unified', html)
+        self.assertIn('/static/app.css?v=1.3.2', html)
         self.assertEqual(css.status_code, 200)
         self.assertIn("text/css", css.headers["content-type"])
         self.assertEqual(javascript.status_code, 200)
@@ -692,7 +692,7 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         javascript = self.client.get("/static/app.js").text
 
         self.assertIn('/static/terminal_keyboard.js?v=1.2.0', html)
-        self.assertIn('/static/app.js?v=1.3.1-model-install', html)
+        self.assertIn('/static/app.js?v=1.3.2', html)
         self.assertLess(html.index("terminal_keyboard.js"), html.index("app.js"))
         self.assertIn("createTerminalKeyboardController", javascript)
         self.assertIn("attachCustomKeyEventHandler", javascript)
@@ -765,6 +765,20 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
             }.issubset(parser.ids)
         )
         self.assertIn("markOllamaReady();", self.client.get("/static/app.js").text)
+
+    def test_installed_skill_packs_are_collapsed_editable_disclosures(self):
+        html = self.client.get("/").text
+        javascript = self.client.get("/static/app.js").text
+
+        self.assertIn('/static/app.css?v=1.3.2', html)
+        self.assertIn('/static/app.js?v=1.3.2', html)
+        self.assertIn('const group = document.createElement("details")', javascript)
+        self.assertIn('const summary = document.createElement("summary")', javascript)
+        self.assertIn('summary.textContent = `${pack.name} · ${pack.source_format} · ${pack.skills.length} skills`', javascript)
+        self.assertIn('group.append(summary, packBody)', javascript)
+        self.assertNotIn('group.open = true', javascript)
+        self.assertIn('packBody.append(packHead)', javascript)
+        self.assertIn('packBody.append(row)', javascript)
 
     def test_github_skill_installer_controls_and_runtime_are_present(self):
         html = self.client.get("/").text

@@ -328,6 +328,8 @@ footer { padding: 22px 0 34px; color: var(--text-subtle); font: 600 10px ui-mono
 .runtime-model-select { height: 38px; }
 .skill-list { display: grid; gap: 12px; margin-top: 14px; }
 .skill-pack { padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.skill-pack > summary { cursor: pointer; font-weight: 700; }
+.skill-pack-body { padding-top: 10px; }
 .skill-pack-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .skill-pack-head button { height: 32px; padding: 0 10px; color: var(--text); background: var(--surface-raised); }
 .skill-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 8px; }

@@ -2142,10 +2142,14 @@ async function loadSkills() {
     content.append(empty);
   }
   for (const pack of packs) {
-    const group = document.createElement("section");
+    const group = document.createElement("details");
     group.className = "skill-pack";
+    const summary = document.createElement("summary");
+    summary.textContent = `${pack.name} · ${pack.source_format} · ${pack.skills.length} skills`;
+    const packBody = document.createElement("div");
+    packBody.className = "skill-pack-body";
     const heading = document.createElement("strong");
-    heading.textContent = `${pack.name} · ${pack.source_format}`;
+    heading.textContent = "Pack controls";
     const packHead = document.createElement("div"); packHead.className = "skill-pack-head";
     const rename = document.createElement("button"); rename.type = "button"; rename.textContent = "Rename pack";
     rename.addEventListener("click", async () => {
@@ -2159,7 +2163,7 @@ async function loadSkills() {
       elements.skillConversionStatus.textContent = `Renamed pack to ${result.name}`;
       await loadSkills();
     });
-    packHead.append(heading, rename); group.append(packHead);
+    packHead.append(heading, rename); packBody.append(packHead);
     for (const skill of pack.skills) {
       const row = document.createElement("div");
       row.className = "skill-row";
@@ -2189,8 +2193,9 @@ async function loadSkills() {
       details.addEventListener("click", () => showSkillDetails(pack, skill, selected.has(checkbox.value)));
       const actions = document.createElement("div"); actions.className = "skill-actions"; actions.append(details, edit);
       row.append(label, actions);
-      group.append(row);
+      packBody.append(row);
     }
+    group.append(summary, packBody);
     content.append(group);
   }
   if (generation !== skillLoadGeneration) return;
