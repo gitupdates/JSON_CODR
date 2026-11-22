@@ -201,6 +201,7 @@ class AdapterPackageTests(unittest.TestCase):
         self.assertEqual(server["type"], "stdio")
         self.assertEqual(server["args"][:2], ["-m", "web_app.integrations.mcp_server"])
         self.assertIn("JSON_CODR_URL", server["env"])
+        self.assertEqual(server["env"].get("PYTHONPATH"), "${PLUGIN_ROOT}/../..")
         self.assertTrue((plugin_root / "com.github.copilot/agents/json-codr.agent.md").is_file())
         skill = (plugin_root / "skills/json-codr-workspace/SKILL.md").read_text(encoding="utf-8")
         self.assertIn("name: json-codr-workspace", skill)

@@ -6,7 +6,8 @@
       "command": "python",
       "args": ["-m", "web_app.integrations.mcp_server"],
       "env": {
-        "JSON_CODR_URL": "http://127.0.0.1:8874"
+        "JSON_CODR_URL": "http://127.0.0.1:8874",
+        "PYTHONPATH": "${PLUGIN_ROOT}/../.."
       }
     }
   }
