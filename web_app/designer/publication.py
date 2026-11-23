@@ -7,6 +7,7 @@ import threading
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict
@@ -16,7 +17,9 @@ from web_app.designer.contracts import DesignDocument
 from web_app.designer.components import ComponentRegistry
 from web_app.designer.continuity import validate_runtime_continuity
 from web_app.designer.store import DesignerStore, ProjectConflict
-from web_app.core.identity import AuthenticatedPrincipal, IdentityService
+
+if TYPE_CHECKING:
+    from web_app.core.identity import AuthenticatedPrincipal, IdentityService
 
 
 class PublicationRejected(ValueError):

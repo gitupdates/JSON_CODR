@@ -278,6 +278,17 @@ class IdentityService:
             )
         return BootstrapResult(created=True, user=user, temporary_credential=temporary)
 
+    def bootstrap_state(self) -> BootstrapState:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT completed, mode, administrator_user_id FROM identity_bootstrap_state WHERE singleton=1"
+            ).fetchone()
+        return BootstrapState(
+            completed=bool(row["completed"]),
+            mode=row["mode"],
+            administrator_user_id=row["administrator_user_id"],
+        )
+
     def bootstrap_migrated(self, administrator_name: str = "Administrator") -> BootstrapResult:
         existing = self._user_by_normalized(self._normalize(administrator_name))
         if existing:

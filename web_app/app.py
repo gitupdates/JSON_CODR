@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import asdict
 import os
 import re
+import secrets
 import sys
 import time
 from typing import Callable, Literal
@@ -135,6 +136,38 @@ def create_app(
     workspace = workspace or WorkspaceService(default_data_root())
     identity = IdentityService(workspace.data_root)
     application.state.identity = identity
+
+    def identity_cookie_names(request: Request) -> tuple[str, str, bool]:
+        secure = request.url.scheme == "https"
+        prefix = "__Host-" if secure else ""
+        return f"{prefix}json_codr_session", f"{prefix}json_codr_csrf", secure
+
+    def identity_user_view(user):
+        return {
+            "user_id": user.user_id,
+            "username": user.username,
+            "display_name": user.display_name,
+            "status": user.status,
+            "require_password_change": user.require_password_change,
+            "roles": list(user.roles),
+        }
+
+    def require_csrf(request: Request) -> None:
+        _, csrf_name, _ = identity_cookie_names(request)
+        cookie = request.cookies.get(csrf_name, "")
+        header = request.headers.get("x-csrf-token", "")
+        if not cookie or not header or not secrets.compare_digest(cookie, header):
+            raise HTTPException(status_code=403, detail="CSRF validation failed")
+
+    def session_principal(request: Request):
+        session_name, _, _ = identity_cookie_names(request)
+        token = request.cookies.get(session_name)
+        if not token:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        try:
+            return identity.resolve_credential(token, required_kind="browser_session")
+        except PermissionError as error:
+            raise HTTPException(status_code=401, detail="Authentication required") from error
     component_manager = None
     component_root = workspace.data_root / "core" / "component-registry"
 
@@ -707,6 +740,89 @@ def create_app(
             return await service.tool_compatibility(model)
         except ValueError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @application.get("/api/identity/bootstrap")
+    async def identity_bootstrap_state(request: Request, response: Response):
+        _, csrf_name, secure = identity_cookie_names(request)
+        csrf = request.cookies.get(csrf_name) or secrets.token_urlsafe(32)
+        response.set_cookie(
+            csrf_name,
+            csrf,
+            secure=secure,
+            httponly=False,
+            samesite="strict",
+            path="/",
+        )
+        state = identity.bootstrap_state()
+        bypass = identity.development_bypass()
+        return {
+            "completed": state.completed,
+            "mode": state.mode,
+            "development_bypass": {
+                "enabled": bypass.enabled,
+                "do_not_expire": bypass.do_not_expire,
+                "expires_at": bypass.expires_at.isoformat() if bypass.expires_at else None,
+            },
+        }
+
+    @application.post("/api/identity/login")
+    async def identity_login(request: Request, response: Response):
+        require_csrf(request)
+        payload = await request.json()
+        username = str(payload.get("username", ""))
+        password = str(payload.get("password", ""))
+        if not identity.authenticate_password(username, password):
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+        user = next(
+            (candidate for candidate in identity.list_users() if candidate.normalized_username == username.strip().casefold()),
+            None,
+        )
+        if user is None:
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+        credential = identity.issue_credential(
+            user.user_id,
+            "browser_session",
+            f"browser session · {request.client.host if request.client else 'local'}",
+            identity.lesson_scopes(user.user_id),
+        )
+        session_name, _, secure = identity_cookie_names(request)
+        response.set_cookie(
+            session_name,
+            credential.token,
+            secure=secure,
+            httponly=True,
+            samesite="strict",
+            path="/",
+            expires=credential.expires_at,
+        )
+        return identity_user_view(user)
+
+    @application.get("/api/identity/account")
+    async def identity_account(request: Request):
+        principal = session_principal(request)
+        return identity_user_view(identity.get_user(principal.user_id))
+
+    @application.get("/api/identity/users")
+    async def identity_users(request: Request):
+        principal = session_principal(request)
+        if not set(principal.roles) & {"owner", "administrator"}:
+            raise HTTPException(status_code=403, detail="Administrator authority required")
+        return {
+            "users": [identity_user_view(user) for user in identity.list_users()],
+            "roles": [{"name": role.name, "grants": list(role.grants)} for role in identity.list_roles()],
+        }
+
+    @application.post("/api/identity/logout", status_code=204)
+    async def identity_logout(request: Request, response: Response):
+        require_csrf(request)
+        principal = session_principal(request)
+        identity.revoke_credential(
+            principal.credential_id,
+            actor_id=principal.user_id,
+            reason="browser logout",
+        )
+        session_name, _, secure = identity_cookie_names(request)
+        response.delete_cookie(session_name, path="/", secure=secure, httponly=True, samesite="strict")
 
     @application.get("/api/settings")
     async def get_settings():

@@ -51,6 +51,7 @@
           <button class="sidebar-destination" type="button" data-destination="settings" title="Settings"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-settings"/></svg><span>Settings</span></button>
           <div id="settings-subnavigation" class="sidebar-subnavigation" hidden>
             <button type="button" data-settings-section="interface" aria-current="page">Interface</button>
+            <button type="button" data-settings-section="access">Users &amp; Access</button>
             <button type="button" data-settings-section="memory">Memory &amp; RAG</button>
             <button type="button" data-settings-section="skills">Skills</button>
             <button type="button" data-settings-section="components">Components</button>
@@ -354,6 +355,29 @@
             </div>
           </div>
           <label class="setting-row"><input id="setting-skills-open" type="checkbox" disabled /> Reopen Skills panel on startup</label>
+        </section>
+        <section class="dependency-review identity-settings" data-settings-view="access" hidden>
+          <div class="section-heading-row">
+            <div><p class="eyebrow">Identity</p><h2>Users &amp; Access</h2></div>
+            <span id="identity-session-status" class="status-pill">Signed out</span>
+          </div>
+          <div id="identity-development-warning" class="identity-warning" role="status" hidden>
+            Development password bypass is active on this direct local connection.
+          </div>
+          <form id="identity-login-form" class="identity-login-form">
+            <label>Username<input id="identity-username" autocomplete="username" value="Administrator"></label>
+            <label>Password<input id="identity-password" type="password" autocomplete="current-password"></label>
+            <button class="primary" type="submit">Sign in</button>
+          </form>
+          <div id="identity-account-panel" hidden>
+            <div class="section-heading-row">
+              <div><h3 id="identity-account-name">Administrator</h3><p id="identity-account-roles" class="meta"></p></div>
+              <button id="identity-logout" type="button">Sign out</button>
+            </div>
+            <p class="meta">Roles and capability profiles are server-derived. Tokens are stored only in HTTP-only cookies.</p>
+            <div id="identity-users" class="identity-user-grid" aria-live="polite"></div>
+          </div>
+          <p id="identity-status" class="meta" role="status" aria-live="polite"></p>
         </section>
         <section class="dependency-review" data-settings-view="memory" hidden>
           <div class="dependency-head"><div><span class="eyebrow">LOCAL RETRIEVAL</span><strong>Memory &amp; RAG</strong></div></div>

@@ -41,6 +41,17 @@ const elements = {
   contextPanel: document.querySelector("#context-panel"),
   skillsPanel: document.querySelector("#skills-panel"),
   settingsPanel: document.querySelector("#settings-panel"),
+  identityLoginForm: document.querySelector("#identity-login-form"),
+  identityUsername: document.querySelector("#identity-username"),
+  identityPassword: document.querySelector("#identity-password"),
+  identityAccountPanel: document.querySelector("#identity-account-panel"),
+  identityAccountName: document.querySelector("#identity-account-name"),
+  identityAccountRoles: document.querySelector("#identity-account-roles"),
+  identitySessionStatus: document.querySelector("#identity-session-status"),
+  identityDevelopmentWarning: document.querySelector("#identity-development-warning"),
+  identityUsers: document.querySelector("#identity-users"),
+  identityLogout: document.querySelector("#identity-logout"),
+  identityStatus: document.querySelector("#identity-status"),
   runtimeDiagnostics: document.querySelector("#runtime-diagnostics"),
   contextCount: document.querySelector("#context-count"),
   attachmentInput: document.querySelector("#attachment-input"),
@@ -2825,9 +2836,77 @@ document.addEventListener("keydown", (event) => {
 for (const button of elements.hardwareSectionButtons) {
   button.addEventListener("click", () => selectHardwareSection(button.dataset.hardwareSection));
 }
-for (const button of elements.settingsSectionButtons) {
-  button.addEventListener("click", () => selectSettingsSection(button.dataset.settingsSection, { focus: true }));
+
+function identityCsrfToken() {
+  const item = document.cookie.split("; ").find((value) => value.startsWith("json_codr_csrf=") || value.startsWith("__Host-json_codr_csrf="));
+  return item ? decodeURIComponent(item.slice(item.indexOf("=") + 1)) : "";
 }
+
+async function loadIdentityAccess() {
+  const bootstrap = await fetch("/api/identity/bootstrap").then((response) => response.json());
+  elements.identityDevelopmentWarning.hidden = !bootstrap.development_bypass?.enabled;
+  const accountResponse = await fetch("/api/identity/account");
+  const signedIn = accountResponse.ok;
+  elements.identityLoginForm.hidden = signedIn;
+  elements.identityAccountPanel.hidden = !signedIn;
+  elements.identitySessionStatus.textContent = signedIn ? "Signed in" : "Signed out";
+  if (!signedIn) return;
+  const account = await accountResponse.json();
+  elements.identityAccountName.textContent = account.display_name;
+  elements.identityAccountRoles.textContent = account.roles.join(" · ");
+  const usersResponse = await fetch("/api/identity/users");
+  if (!usersResponse.ok) return;
+  const users = await usersResponse.json();
+  elements.identityUsers.replaceChildren(...users.users.map((user) => {
+    const card = document.createElement("article");
+    card.className = "identity-user-card";
+    const name = document.createElement("strong");
+    name.textContent = user.display_name;
+    const details = document.createElement("p");
+    details.className = "meta";
+    details.textContent = `${user.username} · ${user.roles.join(", ")} · ${user.status}`;
+    card.append(name, details);
+    return card;
+  }));
+}
+for (const button of elements.settingsSectionButtons) {
+  button.addEventListener("click", () => {
+    selectSettingsSection(button.dataset.settingsSection, { focus: true });
+    if (button.dataset.settingsSection === "access") loadIdentityAccess().catch((error) => { elements.identityStatus.textContent = error.message; });
+  });
+}
+
+elements.identityLoginForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  elements.identityStatus.textContent = "Signing in…";
+  try {
+    await fetch("/api/identity/bootstrap");
+    const response = await fetch("/api/identity/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": identityCsrfToken() },
+      body: JSON.stringify({ username: elements.identityUsername.value, password: elements.identityPassword.value }),
+    });
+    if (!response.ok) throw new Error((await response.json()).detail || "Unable to sign in");
+    elements.identityPassword.value = "";
+    elements.identityStatus.textContent = "Signed in";
+    await loadIdentityAccess();
+  } catch (error) {
+    elements.identityStatus.textContent = error.message;
+  }
+});
+
+elements.identityLogout?.addEventListener("click", async () => {
+  const response = await fetch("/api/identity/logout", {
+    method: "POST",
+    headers: { "X-CSRF-Token": identityCsrfToken() },
+  });
+  if (!response.ok) {
+    elements.identityStatus.textContent = (await response.json()).detail || "Unable to sign out";
+    return;
+  }
+  elements.identityStatus.textContent = "Signed out";
+  await loadIdentityAccess();
+});
 elements.sidebarCollapse.addEventListener("click", () => {
   setSidebarCollapsed(!document.body.classList.contains("sidebar-collapsed"));
 });
