@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, TextIO
 from uuid import uuid4
 
-from web_app.core.cli_identity import CliIdentityService, DpapiTokenStore
+from web_app.core.cli_identity import CliIdentityService, DpapiTokenStore, normalize_server_origin
 
 
 Submitter = Callable[[Mapping[str, Any]], Mapping[str, Any]]
@@ -35,7 +35,12 @@ def run_cli(
         auth_service = auth_service or _default_auth_service()
         try:
             if args.auth_action == "login":
-                result = auth_service.login(args.username, args.password, requested_scopes=tuple(args.scopes))
+                result = auth_service.login(
+                    args.username,
+                    args.password,
+                    requested_scopes=tuple(args.scopes),
+                    server_origin=args.url,
+                )
                 print(f"Signed in as {result.account} · {result.label} · expires {result.expires_at.isoformat()}", file=stdout)
             elif args.auth_action == "status":
                 principal = auth_service.status()
@@ -94,12 +99,17 @@ def run_cli(
         else:
             active_auth = auth_service or _default_auth_service()
             try:
-                token = active_auth.store.load().get("token")
-            except PermissionError as error:
+                document = active_auth.store.load()
+                target_origin = normalize_server_origin(args.url)
+            except (PermissionError, ValueError) as error:
                 print(f"JSON_CODR authentication failed: {error}", file=stderr)
                 return 1
+            token = document.get("token")
             if not isinstance(token, str) or not token:
                 print("JSON_CODR authentication failed: CLI credential storage is unavailable or corrupt", file=stderr)
+                return 1
+            if document.get("server_origin") != target_origin:
+                print("JSON_CODR authentication failed: CLI credential is bound to a different server origin", file=stderr)
                 return 1
             result = dict(_http_submitter(args.url, token)(command))
     except (OSError, ValueError, urllib.error.HTTPError) as error:
@@ -210,6 +220,7 @@ def _parser() -> argparse.ArgumentParser:
     login.add_argument("--username", default="Administrator")
     login.add_argument("--password", default="")
     login.add_argument("--scope", dest="scopes", action="append", default=[])
+    login.add_argument("--url", default="http://127.0.0.1:8772")
     auth_subparsers.add_parser("status")
     auth_subparsers.add_parser("logout")
     return parser

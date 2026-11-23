@@ -18,6 +18,7 @@ from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
 from web_app.core.auth import require_identity_scope
 from web_app.core.identity import IdentityService
+from web_app.core.http_identity import MutationAuthorizer
 
 
 class RecordingAdapter:
@@ -47,6 +48,9 @@ class CoreApiTests(unittest.TestCase):
             approval_store=self.approvals,
             project_fingerprint=lambda _root: "sha256:" + "1" * 64,
         )
+        self.identity = IdentityService(root / "identity")
+        self.user = self.identity.bootstrap("production", "Administrator").user
+        self.cli = self.identity.issue_credential(self.user.user_id, "cli", "test cli", ("agent.launch",))
         app = FastAPI()
         app.include_router(
             create_core_router(
@@ -55,9 +59,13 @@ class CoreApiTests(unittest.TestCase):
                 capabilities=lambda: ({"capability_id": "project.read"},),
                 memory_store=lambda: self.memory,
                 memory_settings=lambda: self.memory_settings,
+                mutation_authorizer=MutationAuthorizer(
+                    self.identity,
+                    lambda _request: ("json_codr_session", "json_codr_csrf", False),
+                ),
             )
         )
-        self.client = TestClient(app)
+        self.client = TestClient(app, headers={"Authorization": f"Bearer {self.cli.token}"})
 
     def tearDown(self) -> None:
         self.client.close()
@@ -102,6 +110,38 @@ class CoreApiTests(unittest.TestCase):
         self.assertEqual(permission.status_code, 202)
         self.assertEqual(permission.json()["status"], "pending")
         self.assertEqual(permission.json()["events"][-1]["event_type"], "task.permission_required")
+
+    def test_task_submission_uses_verified_agent_launch_principal_not_caller_header(self):
+        missing = self.client.post(
+            "/api/tasks",
+            json=self.command(command_id="missing", task_id="missing"),
+            headers={"Authorization": "", "X-JSON-CODR-Principal": "administrator"},
+        )
+        browser = self.identity.issue_credential(self.user.user_id, "browser_session", "browser", ("agent.launch",))
+        wrong_kind = self.client.post(
+            "/api/tasks",
+            json=self.command(command_id="browser", task_id="browser"),
+            headers={"Authorization": f"Bearer {browser.token}"},
+        )
+        wrong_scope = self.identity.issue_credential(self.user.user_id, "cli", "wrong", ("git.commit",))
+        forbidden = self.client.post(
+            "/api/tasks",
+            json=self.command(command_id="scope", task_id="scope"),
+            headers={"Authorization": f"Bearer {wrong_scope.token}"},
+        )
+        allowed = self.client.post(
+            "/api/tasks",
+            json=self.command(command_id="cli", task_id="cli"),
+            headers={
+                "Authorization": f"Bearer {self.cli.token}",
+                "X-JSON-CODR-Principal": "spoofed-administrator",
+            },
+        )
+
+        self.assertEqual(missing.status_code, 401)
+        self.assertEqual(wrong_kind.status_code, 401)
+        self.assertEqual(forbidden.status_code, 403)
+        self.assertEqual(allowed.status_code, 200)
 
     def test_permission_required_task_has_explicit_approval_route(self):
         command = self.command(operation="install", command_id="command-install", task_id="task-install")
@@ -182,9 +222,8 @@ class CoreApiTests(unittest.TestCase):
         self.assertEqual(status.json()["telemetry"][0]["kind"], "runtime.started")
 
     def test_privileged_scope_dependency_rejects_legacy_principal_header(self):
-        identity = IdentityService(Path(self.temporary.name) / "identity")
-        user = identity.bootstrap("production", "Administrator").user
-        credential = identity.issue_credential(user.user_id, "browser_session", "test", ("lesson.edit",))
+        identity = self.identity
+        credential = identity.issue_credential(self.user.user_id, "browser_session", "test", ("lesson.edit",))
         app = FastAPI()
 
         @app.get("/protected")

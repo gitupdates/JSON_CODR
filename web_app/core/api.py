@@ -96,6 +96,13 @@ def create_core_router(
         mutation_authorizer.principal(request, "component.install")
         mutation_authorizer.csrf(request)
 
+    def require_agent_mutation(request: Request):
+        if mutation_authorizer is None:
+            raise HTTPException(status_code=503, detail="mutation authorization is unavailable")
+        principal = mutation_authorizer.principal(request, "agent.launch")
+        mutation_authorizer.csrf(request)
+        return principal
+
     @router.post("/api/components/plan")
     def plan_component(request: ComponentRequest, http_request: Request):
         require_component_mutation(http_request)
@@ -198,9 +205,10 @@ def create_core_router(
     async def submit_task(
         command: TaskCommand,
         response: Response,
-        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+        http_request: Request,
     ):
-        record = await runtime()[0].submit(command, principal=principal)
+        principal = require_agent_mutation(http_request)
+        record = await runtime()[0].submit(command, principal=principal.user_id)
         if record.events and record.events[-1].event_type == "task.permission_required":
             response.status_code = 202
         return record
@@ -316,12 +324,13 @@ def create_core_router(
     async def approve_task(
         task_id: str,
         request: TaskApprovalRequest,
-        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+        http_request: Request,
     ):
         try:
+            principal = require_agent_mutation(http_request)
             return await runtime()[0].approve(
                 task_id,
-                principal=principal,
+                principal=principal.user_id,
                 scope=request.scope,
                 proposal_id=request.proposal_id,
             )

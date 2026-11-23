@@ -9,9 +9,36 @@ import json
 import os
 from pathlib import Path
 import socket
+from urllib.parse import urlsplit
 
 from web_app.core.auth import CredentialKind, IssuedCredential
 from web_app.core.identity import AuthenticatedPrincipal, IdentityService
+
+
+def normalize_server_origin(value: str) -> str:
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme.casefold() not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("JSON_CODR server origin is invalid")
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError("JSON_CODR server origin is invalid") from error
+    scheme = parsed.scheme.casefold()
+    host = parsed.hostname.encode("idna").decode("ascii").casefold().rstrip(".")
+    if not host:
+        raise ValueError("JSON_CODR server origin is invalid")
+    rendered_host = f"[{host}]" if ":" in host else host
+    if port is None or (scheme == "http" and port == 80) or (scheme == "https" and port == 443):
+        return f"{scheme}://{rendered_host}"
+    return f"{scheme}://{rendered_host}:{port}"
 
 
 class _DataBlob(ctypes.Structure):
@@ -62,7 +89,7 @@ class DpapiTokenStore:
         self.path = Path(path)
         self._entropy = b"JSON_CODR:credential:cli:v1"
 
-    def save(self, credential: IssuedCredential) -> None:
+    def save(self, credential: IssuedCredential, *, server_origin: str | None = None) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         document = {
             "schema_version": 1,
@@ -70,6 +97,8 @@ class DpapiTokenStore:
             "token": credential.token,
             "expires_at": credential.expires_at.isoformat(),
         }
+        if server_origin is not None:
+            document["server_origin"] = normalize_server_origin(server_origin)
         encrypted = _protect(json.dumps(document).encode("utf-8"), self._entropy)
         temporary = self.path.with_suffix(".tmp")
         temporary.write_text(base64.b64encode(encrypted).decode("ascii"), encoding="ascii")
@@ -107,6 +136,7 @@ class CliIdentityService:
         password: str,
         machine: str | None = None,
         requested_scopes: tuple[str, ...] = (),
+        server_origin: str = "http://127.0.0.1:8772",
     ) -> CliLoginResult:
         if not self.identity.authenticate_password(username, password):
             raise PermissionError("Invalid username or password")
@@ -122,7 +152,7 @@ class CliIdentityService:
             self.identity.cli_scopes(user.user_id, requested_scopes),
             lifetime=timedelta(days=30),
         )
-        self.store.save(credential)
+        self.store.save(credential, server_origin=server_origin)
         return CliLoginResult(user.username, label, credential.expires_at)
 
     def status(self) -> AuthenticatedPrincipal:

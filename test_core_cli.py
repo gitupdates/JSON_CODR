@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from web_app.core.cli import run_cli
+from web_app.core.cli_identity import normalize_server_origin
 
 
 class CoreCliTests(unittest.TestCase):
@@ -13,9 +14,11 @@ class CoreCliTests(unittest.TestCase):
         class Auth:
             def __init__(self):
                 self.requested_scopes = None
+                self.server_origin = None
 
-            def login(self, username, password, requested_scopes=()):
+            def login(self, username, password, requested_scopes=(), server_origin=None):
                 self.requested_scopes = requested_scopes
+                self.server_origin = server_origin
                 return SimpleNamespace(account=username, label="WORKSTATION · issued", expires_at=datetime(2030, 1, 1, tzinfo=UTC))
 
             def status(self):
@@ -28,13 +31,17 @@ class CoreCliTests(unittest.TestCase):
         auth = Auth()
         self.assertEqual(
             run_cli(
-                ["auth", "login", "--scope", "git.commit", "--scope", "terminal.write"],
+                [
+                    "auth", "login", "--scope", "git.commit", "--scope", "terminal.write",
+                    "--url", "https://127.0.0.1:8772",
+                ],
                 auth_service=auth,
                 stdout=output,
             ),
             0,
         )
         self.assertEqual(auth.requested_scopes, ("git.commit", "terminal.write"))
+        self.assertEqual(auth.server_origin, "https://127.0.0.1:8772")
         self.assertNotIn("token", output.getvalue().casefold())
         self.assertEqual(run_cli(["auth", "status"], auth_service=auth, stdout=output), 0)
         self.assertEqual(run_cli(["auth", "logout"], auth_service=auth, stdout=output), 0)
@@ -42,7 +49,7 @@ class CoreCliTests(unittest.TestCase):
     def test_run_loads_the_current_cli_token_only_for_bearer_authorization(self):
         class Store:
             def load(self):
-                return {"token": "cli-secret"}
+                return {"token": "cli-secret", "server_origin": "http://127.0.0.1:8772"}
 
         request_headers = {}
 
@@ -67,6 +74,35 @@ class CoreCliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(request_headers["Authorization"], "Bearer cli-secret")
         self.assertNotIn("cli-secret", output.getvalue())
+
+    def test_cli_rejects_server_origin_mismatches_before_network_access(self):
+        class Store:
+            def load(self):
+                return {"token": "cli-secret", "server_origin": "http://127.0.0.1:8772"}
+
+        calls = []
+        for url in (
+            "https://127.0.0.1:8772",
+            "http://localhost:8772",
+            "http://127.0.0.1:8773",
+            "http://127.0.0.1:8772@evil.example",
+        ):
+            with self.subTest(url=url), patch("web_app.core.cli.urllib.request.urlopen", lambda _request: calls.append(url)):
+                self.assertEqual(
+                    run_cli(
+                        ["run", "--project", ".", "--url", url, "inspect"],
+                        auth_service=SimpleNamespace(store=Store()),
+                        stderr=io.StringIO(),
+                    ),
+                    1,
+                )
+        self.assertEqual(calls, [])
+
+    def test_server_origin_normalization_is_exact_and_safe(self):
+        self.assertEqual(normalize_server_origin("HTTP://LOCALHOST:80/"), "http://localhost")
+        self.assertEqual(normalize_server_origin("https://Example.COM:443"), "https://example.com")
+        with self.assertRaises(ValueError):
+            normalize_server_origin("http://user@localhost:8772")
 
     def test_run_fails_closed_when_the_current_cli_token_is_missing(self):
         class Store:
