@@ -5,6 +5,20 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "type": "PowerShell",
+            "request": "launch",
+            "name": "PowerShell: Interactive Session",
+            "createTemporaryIntegratedConsole": true
+        },
+        {
+            "type": "PowerShell",
+            "request": "launch",
+            "name": "JSON_CODR: Run web server",
+            "script": "${workspaceFolder}/run_web.ps1",
+            "args": [],
+            "createTemporaryIntegratedConsole": true
+        },
+        {
             "type": "editor-browser",
             "request": "launch",
             "name": "Launch Integrated Browser against localhost",

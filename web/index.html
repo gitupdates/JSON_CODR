@@ -56,7 +56,7 @@
       <header class="topbar">
         <a class="brand" href="/" aria-label="JSON CODR home">
           <span class="brand-mark">{ }</span>
-          <span><strong>JSON_CODR</strong><small>V1.3.3 · unified local agent</small></span>
+          <span><strong>JSON_CODR</strong><small>V1.3.4 · unified local agent</small></span>
         </a>
         <div id="health-status" class="health" role="status" aria-live="polite">
           <span class="health-dot"></span><span>Connecting</span>
@@ -498,14 +498,14 @@
               <label>Model<select id="leaderboard-model-filter"><option value="all">All models</option></select></label>
               <label>Backend<select id="leaderboard-backend-filter"><option value="all">All backends</option></select></label>
               <label>Suite<select id="leaderboard-suite-filter"><option value="all">All suites</option></select></label>
-              <label>Rank by<select id="leaderboard-metric"><option value="holistic_capability" selected>Holistic capability</option><option value="tokens_per_second">Throughput</option><option value="ttft_ms">Time to first token</option><option value="average_total_seconds">Total duration</option><option value="peak_vram_mb">Peak VRAM</option><option value="performance_index">Performance index</option><option value="integrity_overall">Integrity &amp; comprehension</option><option value="combined_score">Weighted quality + performance</option></select></label>
+              <label>Rank by<select id="leaderboard-metric"><option value="holistic_capability" selected>Holistic capability</option><option value="base_log_perplexity">Base log-perplexity</option><option value="tokens_per_second">Throughput</option><option value="ttft_ms">Time to first token</option><option value="average_total_seconds">Total duration</option><option value="peak_vram_mb">Peak VRAM</option><option value="performance_index">Performance index</option><option value="integrity_overall">Integrity &amp; comprehension</option><option value="combined_score">Weighted quality + performance</option></select></label>
             </div>
             <div id="leaderboard-kpis" class="leaderboard-kpis" aria-label="Benchmark key performance indicators"></div>
             <div class="leaderboard-table-wrap">
               <table class="leaderboard-table">
                 <caption class="sr-only">Local inference performance leaderboard</caption>
-                <thead><tr><th scope="col"><button type="button" data-sort-key="rank">Rank</button></th><th scope="col"><button type="button" data-sort-key="model">Model / backend</button></th><th scope="col"><button type="button" data-sort-key="performance_index">Index</button></th><th scope="col"><button type="button" data-sort-key="integrity_overall">Integrity</button></th><th scope="col"><button type="button" data-sort-key="combined_score">Combined</button></th><th scope="col"><button type="button" data-sort-key="tokens_per_second">Tokens/s</button></th><th scope="col"><button type="button" data-sort-key="ttft_ms">TTFT</button></th><th scope="col"><button type="button" data-sort-key="average_total_seconds">Duration</button></th><th scope="col"><button type="button" data-sort-key="peak_vram_mb">Peak VRAM</button></th><th scope="col"><button type="button" data-sort-key="speedup_vs_cpu">CPU speed</button></th><th scope="col"><button type="button" data-sort-key="status">Status</button></th></tr></thead>
-                <tbody id="leaderboard-table"><tr><td colspan="11" class="meta">No benchmark history loaded.</td></tr></tbody>
+                <thead><tr><th scope="col"><button type="button" data-sort-key="rank">Rank</button></th><th scope="col"><button type="button" data-sort-key="model">Model / backend</button></th><th scope="col"><button type="button" data-sort-key="performance_index">Index</button></th><th scope="col"><button type="button" data-sort-key="integrity_overall">Integrity</button></th><th scope="col"><button type="button" data-sort-key="base_log_perplexity">Log-PPL</button></th><th scope="col"><button type="button" data-sort-key="combined_score">Combined</button></th><th scope="col"><button type="button" data-sort-key="tokens_per_second">Tokens/s</button></th><th scope="col"><button type="button" data-sort-key="ttft_ms">TTFT</button></th><th scope="col"><button type="button" data-sort-key="average_total_seconds">Duration</button></th><th scope="col"><button type="button" data-sort-key="peak_vram_mb">Peak VRAM</button></th><th scope="col"><button type="button" data-sort-key="speedup_vs_cpu">CPU speed</button></th><th scope="col"><button type="button" data-sort-key="status">Status</button></th></tr></thead>
+                <tbody id="leaderboard-table"><tr><td colspan="12" class="meta">No benchmark history loaded.</td></tr></tbody>
               </table>
             </div>
             <div class="leaderboard-charts">

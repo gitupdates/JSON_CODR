@@ -9,7 +9,7 @@ $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $HostAddress = '127.0.0.1'
 $Port = 8765
 $Url = "http://${HostAddress}:$Port"
-$Version = 'V1.3.3'
+$Version = 'V1.3.4'
 $PythonCandidates = @()
 if ($env:JSON_CODR_PYTHON) {
   $PythonCandidates += $env:JSON_CODR_PYTHON

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import re
+import secrets
+import time
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Protocol, Sequence
@@ -107,6 +111,7 @@ class ConnectionRecoveryService:
         self._adapters = {adapter.descriptor.connection_id: adapter for adapter in adapters}
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._locks = {connection_id: asyncio.Lock() for connection_id in self._adapters}
+        self._confirmations: dict[tuple[str, str], tuple[str, float]] = {}
 
     def _adapter(self, connection_id: str) -> ConnectionAdapter:
         try:
@@ -122,6 +127,41 @@ class ConnectionRecoveryService:
     async def inventory(self) -> tuple[ConnectionInventoryItem, ...]:
         items = await asyncio.gather(*(self._inventory_item(adapter) for adapter in self._adapters.values()))
         return tuple(sorted(items, key=lambda item: item.connection_id))
+
+    async def status(self, connection_id: str) -> ConnectionInventoryItem:
+        return await self._inventory_item(self._adapter(connection_id))
+
+    async def preview(self, connection_id: str, action_id: str) -> dict:
+        adapter = self._adapter(connection_id)
+        plan = await self.plan(connection_id)
+        if action_id not in {action.action_id for action in plan.actions}:
+            raise ValueError(f"unknown recovery action: {action_id}")
+        preview = getattr(adapter, "preview", None)
+        if not callable(preview):
+            raise ValueError(f"connection does not support previews: {connection_id}")
+        result = await preview(action_id)
+        code = secrets.token_hex(4).upper()
+        self._confirmations[(connection_id, action_id)] = (
+            hashlib.sha256(code.encode("ascii")).hexdigest(),
+            time.monotonic() + 300,
+        )
+        return {**result, "confirmation_code": code, "expires_in": 300}
+
+    async def recover_confirmed(
+        self,
+        connection_id: str,
+        action_id: str,
+        confirmation_code: str,
+    ) -> RecoveryResult:
+        record = self._confirmations.pop((connection_id, action_id), None)
+        supplied = hashlib.sha256(confirmation_code.strip().upper().encode("ascii", errors="ignore")).hexdigest()
+        if record is None or time.monotonic() >= record[1] or not hmac.compare_digest(supplied, record[0]):
+            raise PermissionError("connection confirmation is invalid or expired")
+        return await self.recover(
+            connection_id,
+            frozenset({action_id}),
+            approved_action_ids=frozenset({action_id}),
+        )
 
     async def plan(self, connection_id: str) -> RecoveryPlan:
         adapter = self._adapter(connection_id)

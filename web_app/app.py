@@ -34,8 +34,9 @@ from web_app.localperf.package import LocalPerfPackageError, LocalPerfPackageSer
 from web_app.localperf.storage import LocalPerfStorage
 from web_app.integrations.discovery import build_discovery_document, build_vscode_language_model_config
 from web_app.integrations.borg_client import BorgClient
-from web_app.integrations.mcp_http import create_mcp_http_router
+from web_app.integrations.mcp_http import create_mcp_http_router, is_loopback_host
 from web_app.integrations.mcp_server import McpServer
+from web_app.integrations.connection_adapters import build_program_connection_adapters
 from web_app.integrity_benchmark import IntegrityBenchmarkService
 from web_app.benchmark_baseline import BenchmarkBaselineService
 from web_app.coding_agents import CodingAgentService
@@ -60,6 +61,7 @@ from web_app.core.contracts import CompletionCriterion, CriterionKind, GoalSpec,
 from web_app.core.git_adapter import GitExecutionAdapter
 from web_app.core.inference_adapter import InferenceAdapter
 from web_app.core.context_service import ContextService
+from web_app.core.connection_recovery import ConnectionRecoveryService
 from web_app.core.memory import MemoryStore
 from web_app.core.model_conformance import ModelConformanceStore
 from web_app.core.mcp_stdio_backend import build_mcp_adapters
@@ -77,7 +79,7 @@ from web_app.core.capability_discovery import discover_project_profile
 from web_app.core.canonical import canonical_digest
 from web_app.core.terminal_adapter import TerminalAdapter
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GitHubAuthCancelRequest, GitHubAuthLoginRequest, GitHubBuildCheckRequest, GitHubBuildUpdateRequest, GitHubConfirmedWrite, GitHubIssueCommentRequest, GitHubIssueCreateRequest, GitHubIssueUpdateRequest, GitHubLocalBranchRequest, GitHubLocalCloneRequest, GitHubLocalCommitRequest, GitHubLocalPushRequest, GitHubLocalStageRequest, GitHubLocalSyncRequest, GitHubPullRequestCreateRequest, GitHubPullRequestMergeRequest, GitHubPullRequestUpdateRequest, GitHubReleaseCreateRequest, GitHubReleaseUpdateRequest, GitHubRemoteBranchCreateRequest, GitHubRepositoryCreateRequest, GitHubRepositoryDeleteRequest, GitHubRepositoryUpdateRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, OptimizedModelInstallRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
+from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, ConnectionPreviewRequest, ConnectionRecoveryRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GitHubAuthCancelRequest, GitHubAuthLoginRequest, GitHubBuildCheckRequest, GitHubBuildUpdateRequest, GitHubConfirmedWrite, GitHubIssueCommentRequest, GitHubIssueCreateRequest, GitHubIssueUpdateRequest, GitHubLocalBranchRequest, GitHubLocalCloneRequest, GitHubLocalCommitRequest, GitHubLocalPushRequest, GitHubLocalStageRequest, GitHubLocalSyncRequest, GitHubPullRequestCreateRequest, GitHubPullRequestMergeRequest, GitHubPullRequestUpdateRequest, GitHubReleaseCreateRequest, GitHubReleaseUpdateRequest, GitHubRemoteBranchCreateRequest, GitHubRepositoryCreateRequest, GitHubRepositoryDeleteRequest, GitHubRepositoryUpdateRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, OptimizedModelInstallRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
 from web_app.model_run_store import ModelRunStore, RequestKeyConflict
 from web_app.model_runs import ModelRunService, canonical_model_prompt
 from web_app.ollama_service import (
@@ -147,6 +149,22 @@ def create_app(
     skill_library.ensure_envelopes()
     skill_converter = SkillConverterService()
     settings = SettingsService(workspace.data_root)
+    async def probe_json_codr_service() -> bool:
+        try:
+            return bool((await service.health()).get("ollama"))
+        except Exception:
+            return False
+
+    connection_recovery = ConnectionRecoveryService(build_program_connection_adapters(
+        data_root=workspace.data_root,
+        service_url=os.environ.get("JSON_CODR_URL", "http://127.0.0.1:8765"),
+        functional_probe=probe_json_codr_service,
+    ))
+    application.state.connection_recovery = connection_recovery
+
+    def require_local_connection_request(request: Request) -> None:
+        if not is_loopback_host(request.client.host if request.client else None):
+            raise HTTPException(status_code=403, detail="Connection management is available only on this computer")
     if hasattr(service, "set_optimization_provider"):
         service.set_optimization_provider(settings.optimization_for)
     catalog = OptimizedModelCatalog()
@@ -175,10 +193,12 @@ def create_app(
         if generator is None:
             raise RuntimeError("Integrity benchmarks are unavailable for this model service")
         return await generator(model, messages, temperature)
+    base_log_perplexity_scorer = getattr(service, "score_base_log_perplexity", None)
     integrity = integrity or IntegrityBenchmarkService(
         workspace.data_root,
         generate_integrity,
         response_timeout_seconds=int(getattr(service, "timeout_seconds", 180)),
+        score_base_log_perplexity=base_log_perplexity_scorer if callable(base_log_perplexity_scorer) else None,
     )
     optimized_search = OptimizedModelSearch(catalog=catalog)
     skillsets = SkillsetService(workspace.data_root, skill_library)
@@ -501,6 +521,56 @@ def create_app(
     async def health():
         result = await service.health()
         return {"status": "ready" if result["ollama"] else "degraded", "app_version": APP_VERSION, **result}
+
+    @application.get("/api/connections")
+    async def connection_inventory(http_request: Request):
+        require_local_connection_request(http_request)
+        return {"connections": [asdict(item) for item in await connection_recovery.inventory()]}
+
+    @application.post("/api/connections/scan")
+    async def scan_connections(http_request: Request):
+        require_local_connection_request(http_request)
+        return {"connections": [asdict(item) for item in await connection_recovery.inventory()]}
+
+    @application.get("/api/connections/{connection_id:path}/plan")
+    async def connection_plan(connection_id: str, http_request: Request):
+        require_local_connection_request(http_request)
+        try:
+            return asdict(await connection_recovery.plan(connection_id))
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @application.post("/api/connections/{connection_id:path}/preview")
+    async def preview_connection(connection_id: str, request: ConnectionPreviewRequest, http_request: Request):
+        require_local_connection_request(http_request)
+        try:
+            return await connection_recovery.preview(connection_id, request.action_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @application.post("/api/connections/{connection_id:path}/test")
+    async def test_connection(connection_id: str, http_request: Request):
+        require_local_connection_request(http_request)
+        try:
+            return asdict(await connection_recovery.status(connection_id))
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @application.post("/api/connections/{connection_id:path}/recover")
+    async def recover_connection(connection_id: str, request: ConnectionRecoveryRequest, http_request: Request):
+        require_local_connection_request(http_request)
+        try:
+            return asdict(await connection_recovery.recover_confirmed(
+                connection_id, request.action_id, request.confirmation_code,
+            ))
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except (OSError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.get("/.well-known/json-codr")
     async def json_codr_discovery(request: Request):

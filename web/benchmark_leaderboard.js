@@ -117,7 +117,7 @@
     const latest = new Map();
     for (const evaluation of [...(Array.isArray(history) ? history : [])]
       .sort((a, b) => String(b?.created_at || "").localeCompare(String(a?.created_at || "")))) {
-      if (evaluation?.suite_version === "Integrity-Comprehension-v2" && evaluation?.model && evaluation?.scores
+      if (["Integrity-Comprehension-v2", "Integrity-Comprehension-v3"].includes(evaluation?.suite_version) && evaluation?.model && evaluation?.scores
         && !latest.has(evaluation.model)) latest.set(evaluation.model, evaluation);
     }
     const baseRows = [...(Array.isArray(rows) ? rows : [])];
@@ -161,15 +161,27 @@
         ? Number((Number(row.performance_index) * 100 / performanceMaximum).toFixed(3)) : null;
       const combinedScore = integrityOverall === null || performanceScore === null
         ? null : Number(((integrityOverall + performanceScore) / 2).toFixed(3));
+      const languageMetric = evaluation?.language_model_metrics;
+      const canonicalLogPerplexity = languageMetric?.status === "measured" && languageMetric?.comparable === true
+        && languageMetric?.dataset_id === "json-codr-base-language"
+        && languageMetric?.dataset_version === "1.0"
+        && languageMetric?.method === "teacher_forced_loglikelihood"
+        ? numberOrNull(languageMetric?.base_log_perplexity) : null;
       return { ...row, integrity_overall: integrityOverall, integrity_score: integrityScore,
         comprehension_score: comprehensionScore, integrity_evaluation_id: evaluation?.id || null,
-        integrity_suite: evaluation?.suite || null, combined_score: combinedScore };
+        integrity_suite: evaluation?.suite || null, combined_score: combinedScore,
+        base_log_perplexity: canonicalLogPerplexity,
+        log_perplexity_comparable: canonicalLogPerplexity !== null,
+        log_perplexity_status: languageMetric?.status || "unavailable",
+        log_perplexity_dataset: languageMetric?.dataset_id && languageMetric?.dataset_version
+          ? `${languageMetric.dataset_id}@${languageMetric.dataset_version}` : null,
+        log_perplexity_reason: languageMetric?.unavailable_reason || null };
     });
   }
 
   function filterAndRank(rows, filters = {}) {
     const metric = filters.metric || "tokens_per_second";
-    const lowerIsBetter = new Set(["ttft_ms", "average_total_seconds", "peak_vram_mb"]);
+    const lowerIsBetter = new Set(["ttft_ms", "average_total_seconds", "peak_vram_mb", "base_log_perplexity"]);
     const search = String(filters.search || "").trim().toLowerCase();
     const filtered = (Array.isArray(rows) ? rows : []).filter((row) => {
       if (filters.model && filters.model !== "all" && row.model !== filters.model) return false;
@@ -225,7 +237,8 @@
     });
     let rank = 0;
     return ordered.map(({ row }) => {
-      const metricEligible = row.eligible_rank && numberOrNull(row[metric]) !== null;
+      const metricEligible = row.eligible_rank && numberOrNull(row[metric]) !== null
+        && (metric !== "base_log_perplexity" || row.log_perplexity_comparable === true);
       return { ...row, rank: metricEligible ? ++rank : null };
     });
   }

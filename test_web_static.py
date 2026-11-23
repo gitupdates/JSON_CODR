@@ -520,7 +520,7 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.3.3", response.text)
+        self.assertIn("V1.3.4", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -882,7 +882,7 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         self.assertIn('model.status === "accelerated"', javascript)
         self.assertIn("candidate.compatible_models", javascript)
         self.assertIn("Compatible models (", javascript)
-        for sort_key in ("rank", "model", "performance_index", "integrity_overall", "combined_score", "tokens_per_second", "ttft_ms", "average_total_seconds", "peak_vram_mb", "speedup_vs_cpu", "status"):
+        for sort_key in ("rank", "model", "performance_index", "integrity_overall", "base_log_perplexity", "combined_score", "tokens_per_second", "ttft_ms", "average_total_seconds", "peak_vram_mb", "speedup_vs_cpu", "status"):
             self.assertIn(f'data-sort-key="{sort_key}"', html)
         self.assertIn("buildAllRows", javascript)
         self.assertIn("sortRows", javascript)
@@ -924,6 +924,8 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         ):
             self.assertIn(contract, javascript)
         self.assertIn("Weighted quality + performance", html)
+        self.assertIn("Base log-perplexity", html)
+        self.assertIn("teacher-forced evaluation", javascript)
 
     def test_integrity_and_comprehension_benchmark_controls_and_runtime_contract(self):
         html = self.client.get("/").text

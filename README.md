@@ -1,6 +1,6 @@
 # JSON_CODR
 
-JSON_CODR V1.3.3 is a localhost-only, unified project agent for local Ollama models.
+JSON_CODR V1.3.4 is a localhost-only, unified project agent for local Ollama models.
 
 ## Unified project workflow
 
@@ -8,7 +8,7 @@ Choose a model, describe the outcome in **Chat**, and run it. JSON_CODR creates 
 
 The response panel shows live activity and the requested and effective model identities. Use **Steer** by entering more direction while a task is active, **Stop** to request cancellation, **Retry** to create a linked retry, and **Undo** when the task produced a checkpoint. Execution details stay collapsed until needed. The **Live CLI** is the terminal view of the same local system, with command history, clipboard support, resize/reconnect, and the Ctrl+X then Ctrl+C interrupt chord.
 
-V1.3.3 provides one responsive **Workspace** for chat, task context, skills, activity, files, and the persistent ConPTY terminal. NOC Light is the default appearance, with five selectable themes, collapsible navigation, licensed OpenDyslexic assets, and developer-editable component mappings. Installed skills now default to compact pack disclosures and retain their rename, selection, detail, and editing controls when expanded. Saved appearance selections are reloaded whenever Settings is reopened instead of reverting to the startup interface. The Agent and Model controls use one canonical task route with explicit automatic, multi-model, and exact-model selections; fallback routing is reported rather than hidden. VS Code can now obtain one truthful, independently selectable Custom Endpoint entry per installed Ollama model from `/api/integrations/vscode/language-models`, while BORG remains the MCP tool authority. GitHub sign-in is idempotent when the local GitHub CLI is already authenticated. Layout presets and dock placement persist locally while narrow screens preserve the active task and terminal session. Verified global components with an MCP server can contribute mode-specific agent capabilities, and the production agent loop now resolves trusted project context, plans through local inference, verifies persisted evidence, and resumes durable work after restart. Craft Anything 0.6.1 remains independently available in Clean Room and Deep/Ghidra modes when installed through the component registry.
+V1.3.4 adds bounded program-connection adapters, explicit recovery previews, and a repaired VS Code PowerShell launch profile. Integrity & Comprehension v3 can persist evidence-backed base log-perplexity from a teacher-forced evaluator and rank comparable models globally on one fixed corpus; unsupported runtimes remain visibly unranked instead of receiving inferred scores. V1.3.3 introduced the responsive **Workspace**, compact skill packs, persistent appearance and layout profiles, independently selectable Ollama models, and the durable BORG agent loop.
 
 Local reads, searches, tests, bounded edits, and inference can run automatically inside the selected project boundary. Network access, installation, Git publication, destructive changes, and budget overrides require policy approval. Persistent grants remain project-scoped and can be revoked. A model without native tool calling may use a verified brokered route; JSON_CODR always displays the requested and effective model and never labels that route as native.
 

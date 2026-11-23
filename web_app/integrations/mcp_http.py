@@ -13,7 +13,7 @@ from web_app.integrations.mcp_server import McpServer
 ServerFactory = Callable[[Request], McpServer]
 
 
-def _is_loopback(host: str | None) -> bool:
+def is_loopback_host(host: str | None) -> bool:
     if not host:
         return False
     try:
@@ -27,7 +27,7 @@ def create_mcp_http_router(server_factory: ServerFactory, *, loopback_only: bool
 
     @router.post("/mcp")
     async def handle_mcp(request: Request) -> Response:
-        if loopback_only and not _is_loopback(request.client.host if request.client else None):
+        if loopback_only and not is_loopback_host(request.client.host if request.client else None):
             return Response(status_code=403)
         if request.headers.get("mcp-session-id"):
             return Response(status_code=404)

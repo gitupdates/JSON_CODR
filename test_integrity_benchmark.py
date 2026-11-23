@@ -23,6 +23,71 @@ def scenario_id(messages):
 
 
 class IntegrityBenchmarkTests(unittest.IsolatedAsyncioTestCase):
+    async def test_records_comparable_base_log_perplexity_evidence_once(self):
+        score_calls = []
+
+        async def generate(model, messages, temperature):
+            return PASSING_OUTPUTS[scenario_id(messages)]
+
+        async def score(model):
+            score_calls.append(model)
+            return {
+                "base_log_perplexity": 0.8125,
+                "dataset_id": "json-codr-base-language",
+                "dataset_version": "1.0",
+                "token_count": 4096,
+                "backend": "openvino",
+                "method": "teacher_forced_loglikelihood",
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            result = await IntegrityBenchmarkService(
+                Path(directory), generate, score_base_log_perplexity=score
+            ).run("quick", "model:1b")
+
+        self.assertEqual(score_calls, ["model:1b"])
+        self.assertEqual(result["suite_version"], "Integrity-Comprehension-v3")
+        self.assertEqual(result["language_model_metrics"], {
+            "base_log_perplexity": 0.8125,
+            "status": "measured",
+            "comparable": True,
+            "dataset_id": "json-codr-base-language",
+            "dataset_version": "1.0",
+            "token_count": 4096,
+            "backend": "openvino",
+            "method": "teacher_forced_loglikelihood",
+            "unavailable_reason": None,
+        })
+
+    async def test_missing_log_perplexity_capability_is_explicitly_unavailable(self):
+        async def generate(model, messages, temperature):
+            return PASSING_OUTPUTS[scenario_id(messages)]
+
+        with tempfile.TemporaryDirectory() as directory:
+            result = await IntegrityBenchmarkService(Path(directory), generate).run("quick", "model:1b")
+
+        metric = result["language_model_metrics"]
+        self.assertEqual(metric["status"], "unavailable")
+        self.assertFalse(metric["comparable"])
+        self.assertIsNone(metric["base_log_perplexity"])
+        self.assertEqual(metric["unavailable_reason"], "teacher_forced_loglikelihood_not_supported")
+
+    async def test_invalid_log_perplexity_evidence_is_never_marked_comparable(self):
+        async def generate(model, messages, temperature):
+            return PASSING_OUTPUTS[scenario_id(messages)]
+
+        async def score(model):
+            return {"base_log_perplexity": float("nan"), "dataset_id": "other", "token_count": 0}
+
+        with tempfile.TemporaryDirectory() as directory:
+            result = await IntegrityBenchmarkService(
+                Path(directory), generate, score_base_log_perplexity=score
+            ).run("quick", "model:1b")
+
+        self.assertEqual(result["language_model_metrics"]["status"], "invalid")
+        self.assertFalse(result["language_model_metrics"]["comparable"])
+        self.assertIsNone(result["language_model_metrics"]["base_log_perplexity"])
+
     async def test_quick_scores_five_scenarios_over_three_repetitions(self):
         calls = []
 

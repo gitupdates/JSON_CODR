@@ -1590,6 +1590,7 @@ const LEADERBOARD_METRICS = {
   speedup_vs_cpu: ["CPU-relative speed", "×"],
   performance_index: ["Performance index", ""],
   integrity_overall: ["Integrity & comprehension", "%"],
+  base_log_perplexity: ["Base log-perplexity", ""],
   combined_score: ["Combined quality + performance", ""],
 };
 
@@ -1661,9 +1662,11 @@ function renderLeaderboardTrend(row) {
   }
   const metric = elements.leaderboardMetric.value;
   const [metricLabel, metricUnit] = LEADERBOARD_METRICS[metric] || [metric, ""];
-  if (metric === "holistic_capability" || metric === "integrity_overall" || metric === "combined_score") {
+  if (metric === "holistic_capability" || metric === "integrity_overall" || metric === "combined_score" || metric === "base_log_perplexity") {
     const note = document.createElement("p"); note.className = "meta";
-    note.textContent = "Quality ranks use the latest strict v2 integrity evaluation. Review its per-scenario history in Performance benchmarks.";
+    note.textContent = metric === "base_log_perplexity"
+      ? "Base log-perplexity uses the latest comparable v3 teacher-forced evaluation on the fixed JSON_CODR corpus; unsupported runtimes remain unranked."
+      : "Quality ranks use the latest strict integrity evaluation. Review its per-scenario history in Performance benchmarks.";
     elements.leaderboardTrendChart.append(note); return;
   }
   const trend = window.JSONCodrLeaderboard.buildTrend(leaderboardHistoryCache, row, metric);
@@ -1723,6 +1726,11 @@ function renderLeaderboardDetails(row) {
     ? "Integrity evaluation unavailable for this model."
     : `Integrity ${formatLeaderboardValue(row.integrity_score, "%", 1)} · Comprehension ${formatLeaderboardValue(row.comprehension_score, "%", 1)} · Overall ${formatLeaderboardValue(row.integrity_overall, "%", 1)} · Combined ${formatLeaderboardValue(row.combined_score, "", 1)}`;
   elements.leaderboardDetails.append(quality);
+  const languageMetric = document.createElement("p");
+  languageMetric.textContent = row.log_perplexity_comparable
+    ? `Base log-perplexity ${formatLeaderboardValue(row.base_log_perplexity, "", 4)} · ${row.log_perplexity_dataset} · lower is better`
+    : `Base log-perplexity unavailable${row.log_perplexity_reason ? `: ${row.log_perplexity_reason}` : "."}`;
+  elements.leaderboardDetails.append(languageMetric);
   const metricNames = [["tokens_per_second", "Throughput"], ["ttft_ms", "TTFT"], ["total_seconds", "Duration"], ["peak_vram_mb", "Peak VRAM"]];
   const stats = document.createElement("ul");
   for (const [key, label] of metricNames) {
@@ -1741,7 +1749,7 @@ function renderLeaderboardDetails(row) {
 
 function renderBenchmarkLeaderboard() {
   if (!leaderboardHistoryCache.length && !integrityHistoryCache.length) {
-    elements.leaderboardTable.replaceChildren(); const row = document.createElement("tr"); const cell = document.createElement("td"); cell.colSpan = 11; cell.className = "meta"; cell.textContent = "No benchmark history. Run Performance benchmarks first."; row.append(cell); elements.leaderboardTable.append(row);
+    elements.leaderboardTable.replaceChildren(); const row = document.createElement("tr"); const cell = document.createElement("td"); cell.colSpan = 12; cell.className = "meta"; cell.textContent = "No benchmark history. Run Performance benchmarks first."; row.append(cell); elements.leaderboardTable.append(row);
     elements.leaderboardKpis.replaceChildren(); elements.leaderboardStatus.textContent = "No saved benchmark results."; renderLeaderboardScatter([]); renderLeaderboardTrend(null); renderLeaderboardDetails(null); return;
   }
   const allRows = window.JSONCodrLeaderboard.joinIntegrity(window.JSONCodrLeaderboard.buildAllRows(leaderboardHistoryCache), integrityHistoryCache);
@@ -1763,7 +1771,7 @@ function renderBenchmarkLeaderboard() {
   for (const row of rows) {
     const tableRow = document.createElement("tr"); tableRow.tabIndex = 0; tableRow.classList.toggle("is-selected", row.id === selectedLeaderboardRowId);
     const evidenceStatus = row.status === "not_tested" ? "Not tested" : row.status === "completed" && row.conforming === true ? "Conforming" : row.status === "completed" && row.conforming === false ? "Nonconforming" : row.status === "completed" ? "Unverified evidence" : row.status;
-    const values = [row.rank || "—", `${row.model} · ${row.name}`, formatLeaderboardValue(row.performance_index, "", 0), formatLeaderboardValue(row.integrity_overall, "%", 1), formatLeaderboardValue(row.combined_score, "", 1), formatLeaderboardValue(row.tokens_per_second), formatLeaderboardValue(row.ttft_ms, " ms", 0), formatLeaderboardValue(row.average_total_seconds, " s"), formatLeaderboardValue(row.peak_vram_mb, " MiB", 0), formatLeaderboardValue(row.speedup_vs_cpu, "×"), evidenceStatus];
+    const values = [row.rank || "—", `${row.model} · ${row.name}`, formatLeaderboardValue(row.performance_index, "", 0), formatLeaderboardValue(row.integrity_overall, "%", 1), formatLeaderboardValue(row.base_log_perplexity, "", 4), formatLeaderboardValue(row.combined_score, "", 1), formatLeaderboardValue(row.tokens_per_second), formatLeaderboardValue(row.ttft_ms, " ms", 0), formatLeaderboardValue(row.average_total_seconds, " s"), formatLeaderboardValue(row.peak_vram_mb, " MiB", 0), formatLeaderboardValue(row.speedup_vs_cpu, "×"), evidenceStatus];
     for (const value of values) { const cell = document.createElement("td"); cell.textContent = value; tableRow.append(cell); }
     const choose = () => { selectedLeaderboardRowId = row.id; renderBenchmarkLeaderboard(); };
     tableRow.addEventListener("click", choose); tableRow.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); choose(); } }); elements.leaderboardTable.append(tableRow);
@@ -1902,6 +1910,19 @@ function renderIntegrityBenchmark(benchmark) {
     card.append(caption, score);
     elements.integrityBenchmarkScores.append(card);
   }
+  const languageMetric = benchmark.language_model_metrics;
+  if (languageMetric) {
+    const card = document.createElement("article");
+    const caption = document.createElement("span"); caption.className = "meta"; caption.textContent = "Base log-perplexity";
+    const score = document.createElement("strong");
+    score.textContent = languageMetric.status === "measured" && languageMetric.comparable
+      ? Number(languageMetric.base_log_perplexity).toFixed(4) : "Unavailable";
+    const evidence = document.createElement("span"); evidence.className = "meta";
+    evidence.textContent = languageMetric.status === "measured" && languageMetric.comparable
+      ? `${languageMetric.dataset_id}@${languageMetric.dataset_version} · ${languageMetric.token_count} tokens · lower is better`
+      : languageMetric.unavailable_reason || languageMetric.status;
+    card.append(caption, score, evidence); elements.integrityBenchmarkScores.append(card);
+  }
   for (const scenario of benchmark.scenarios) {
     const details = document.createElement("details");
     details.className = "dependency-row";
@@ -1957,7 +1978,11 @@ async function runIntegrityBenchmark() {
     if (!response.ok) throw new Error(benchmark.detail || "Integrity evaluation failed");
     renderIntegrityBenchmark(benchmark);
     await loadIntegrityBenchmarkHistory();
-    elements.integrityBenchmarkStatus.textContent = `Evaluation complete · ${Number(benchmark.scores.overall).toFixed(1)}% overall`;
+    const logPerplexity = benchmark.language_model_metrics;
+    const metricStatus = logPerplexity?.status === "measured" && logPerplexity?.comparable
+      ? ` · ${Number(logPerplexity.base_log_perplexity).toFixed(4)} base log-perplexity`
+      : " · base log-perplexity unavailable";
+    elements.integrityBenchmarkStatus.textContent = `Evaluation complete · ${Number(benchmark.scores.overall).toFixed(1)}% overall${metricStatus}`;
   } finally {
     elements.integrityBenchmarkRun.disabled = false;
   }

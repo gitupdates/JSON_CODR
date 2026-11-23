@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -11,6 +12,10 @@ from uuid import uuid4
 
 
 Generate = Callable[[str, list[dict[str, str]], float], Awaitable[str]]
+ScoreBaseLogPerplexity = Callable[[str], Awaitable[dict]]
+BASE_LANGUAGE_DATASET_ID = "json-codr-base-language"
+BASE_LANGUAGE_DATASET_VERSION = "1.0"
+BASE_LANGUAGE_METHOD = "teacher_forced_loglikelihood"
 
 
 @dataclass(frozen=True)
@@ -67,11 +72,13 @@ SCENARIOS = (
 
 
 class IntegrityBenchmarkService:
-    def __init__(self, data_root: Path, generate: Generate, response_timeout_seconds: int = 180) -> None:
+    def __init__(self, data_root: Path, generate: Generate, response_timeout_seconds: int = 180,
+                 score_base_log_perplexity: ScoreBaseLogPerplexity | None = None) -> None:
         self.path = Path(data_root) / "integrity-benchmarks.json"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.generate = generate
         self.response_timeout_seconds = response_timeout_seconds
+        self.score_base_log_perplexity = score_base_log_perplexity
         self._lock = asyncio.Lock()
 
     def history(self) -> list[dict]:
@@ -130,9 +137,10 @@ class IntegrityBenchmarkService:
                 values = [item["score"] for item in scenarios if axis in item["axes"]]
                 scores[axis] = round(sum(values) / len(values), 3)
             scores["overall"] = round((scores["integrity"] + scores["comprehension"]) / 2, 3)
+            language_model_metrics = await self._score_language_model(model)
             completed_at = datetime.now(timezone.utc)
             result = {
-                "id": uuid4().hex, "schema_version": "1.0", "suite_version": "Integrity-Comprehension-v2",
+                "id": uuid4().hex, "schema_version": "1.1", "suite_version": "Integrity-Comprehension-v3",
                 "created_at": completed_at.isoformat(), "started_at": started_at.isoformat(),
                 "completed_at": completed_at.isoformat(),
                 "duration_seconds": round(time.perf_counter() - run_started, 3), "suite": suite, "model": model,
@@ -145,10 +153,53 @@ class IntegrityBenchmarkService:
                     "timeout_purpose": "runtime safety; timeouts are recorded as failed attempts",
                 },
                 "repetitions": repetitions, "status": "completed_with_failures" if any_failure else "completed",
-                "scores": scores, "scenarios": scenarios,
+                "scores": scores, "language_model_metrics": language_model_metrics, "scenarios": scenarios,
             }
             self._save(result)
             return result
+
+    async def _score_language_model(self, model: str) -> dict:
+        unavailable = {
+            "base_log_perplexity": None,
+            "status": "unavailable",
+            "comparable": False,
+            "dataset_id": BASE_LANGUAGE_DATASET_ID,
+            "dataset_version": BASE_LANGUAGE_DATASET_VERSION,
+            "token_count": 0,
+            "backend": None,
+            "method": BASE_LANGUAGE_METHOD,
+            "unavailable_reason": "teacher_forced_loglikelihood_not_supported",
+        }
+        if self.score_base_log_perplexity is None:
+            return unavailable
+        try:
+            evidence = await self.score_base_log_perplexity(model)
+        except Exception as error:
+            return {**unavailable, "status": "error", "unavailable_reason": str(error)[:500]}
+        if not isinstance(evidence, dict):
+            return {**unavailable, "status": "invalid", "unavailable_reason": "invalid_evaluator_evidence"}
+        value = evidence.get("base_log_perplexity")
+        valid = (
+            isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+            and evidence.get("dataset_id") == BASE_LANGUAGE_DATASET_ID
+            and evidence.get("dataset_version") == BASE_LANGUAGE_DATASET_VERSION
+            and evidence.get("method") == BASE_LANGUAGE_METHOD
+            and isinstance(evidence.get("token_count"), int) and evidence["token_count"] > 0
+            and isinstance(evidence.get("backend"), str) and bool(evidence["backend"].strip())
+        )
+        if not valid:
+            return {**unavailable, "status": "invalid", "unavailable_reason": "invalid_evaluator_evidence"}
+        return {
+            "base_log_perplexity": float(value),
+            "status": "measured",
+            "comparable": True,
+            "dataset_id": BASE_LANGUAGE_DATASET_ID,
+            "dataset_version": BASE_LANGUAGE_DATASET_VERSION,
+            "token_count": evidence["token_count"],
+            "backend": evidence["backend"],
+            "method": BASE_LANGUAGE_METHOD,
+            "unavailable_reason": None,
+        }
 
     @staticmethod
     def _evaluate(scenario: Scenario, output: str) -> tuple[bool, str]:
@@ -194,6 +245,12 @@ class IntegrityBenchmarkService:
             return False
         if not isinstance(scenarios, list) or not scenarios:
             return False
+        if item.get("suite_version") == "Integrity-Comprehension-v3":
+            metric = item.get("language_model_metrics")
+            if not isinstance(metric, dict) or not {"base_log_perplexity", "status", "comparable",
+                                                    "dataset_id", "dataset_version", "token_count",
+                                                    "method"}.issubset(metric):
+                return False
         for scenario in scenarios:
             if not isinstance(scenario, dict) or not isinstance(scenario.get("evidence"), list):
                 return False

@@ -191,6 +191,37 @@ class BenchmarkLeaderboardTests(unittest.TestCase):
         self.assertIsNone(quality_only["performance_index"])
         self.assertIsNone(quality_only["combined_score"])
 
+    def test_base_log_perplexity_ranks_only_same_canonical_evidence_lower_first(self):
+        integrity = [
+            {"id": "best", "suite_version": "Integrity-Comprehension-v3", "model": "best:7b",
+             "created_at": "2026-11-22T12:00:00Z", "suite": "quick", "status": "completed",
+             "scores": {"integrity": 90, "comprehension": 90, "overall": 90},
+             "language_model_metrics": {"base_log_perplexity": 0.75, "status": "measured",
+                 "comparable": True, "dataset_id": "json-codr-base-language", "dataset_version": "1.0",
+                 "method": "teacher_forced_loglikelihood", "token_count": 4096}},
+            {"id": "second", "suite_version": "Integrity-Comprehension-v3", "model": "second:7b",
+             "created_at": "2026-11-22T12:00:00Z", "suite": "quick", "status": "completed",
+             "scores": {"integrity": 80, "comprehension": 80, "overall": 80},
+             "language_model_metrics": {"base_log_perplexity": 0.9, "status": "measured",
+                 "comparable": True, "dataset_id": "json-codr-base-language", "dataset_version": "1.0",
+                 "method": "teacher_forced_loglikelihood", "token_count": 4096}},
+            {"id": "wrong-corpus", "suite_version": "Integrity-Comprehension-v3", "model": "wrong:7b",
+             "created_at": "2026-11-22T12:00:00Z", "suite": "quick", "status": "completed",
+             "scores": {"integrity": 100, "comprehension": 100, "overall": 100},
+             "language_model_metrics": {"base_log_perplexity": 0.1, "status": "measured",
+                 "comparable": True, "dataset_id": "different-corpus", "dataset_version": "1.0",
+                 "method": "teacher_forced_loglikelihood", "token_count": 4096}},
+        ]
+
+        ranked = run_helper(
+            "globalThis.JSONCodrLeaderboard.filterAndRank(globalThis.JSONCodrLeaderboard.joinIntegrity([],input.integrity),{metric:'base_log_perplexity'})",
+            {"integrity": integrity},
+        )
+
+        self.assertEqual([row["model"] for row in ranked], ["best:7b", "second:7b", "wrong:7b"])
+        self.assertEqual([row["rank"] for row in ranked], [1, 2, None])
+        self.assertFalse(ranked[2]["log_perplexity_comparable"])
+
     def test_holistic_capability_ranks_capability_tiers_before_performance(self):
         rows = [
             {"id": "high-unmeasured", "model": "high", "eligible_rank": True,

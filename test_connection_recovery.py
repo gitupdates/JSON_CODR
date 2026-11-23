@@ -1,5 +1,8 @@
 import asyncio
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 
 class _Adapter:
@@ -35,6 +38,9 @@ class _Adapter:
 
     async def verify(self):
         return self.verified
+
+    async def preview(self, action_id):
+        return {"action_id": action_id, "before": {"status": "degraded"}, "after": {"status": "ready"}}
 
 
 class ConnectionRecoveryTests(unittest.IsolatedAsyncioTestCase):
@@ -173,6 +179,110 @@ class ConnectionRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(plan.revision, "plan-1")
         with self.assertRaisesRegex(ValueError, "unknown recovery action"):
             await service.recover("ollama:default", frozenset({"not-in-plan"}))
+
+    async def test_confirmed_recovery_is_action_bound_and_one_time(self):
+        types = self._types()
+        adapter = self._adapter()
+        service = types["service"]([adapter])
+
+        preview = await service.preview("ollama:default", "repair-config")
+        result = await service.recover_confirmed(
+            "ollama:default", "repair-config", preview["confirmation_code"],
+        )
+
+        self.assertEqual(result.action_results[0].status, "completed")
+        with self.assertRaisesRegex(PermissionError, "confirmation"):
+            await service.recover_confirmed(
+                "ollama:default", "repair-config", preview["confirmation_code"],
+            )
+
+
+class ProgramConnectionAdapterTests(unittest.IsolatedAsyncioTestCase):
+    def _adapter(self, root: Path, *, probe=True):
+        try:
+            from web_app.integrations.connection_adapters import FileConnectionAdapter, ProgramConnectionSpec
+        except ImportError as error:
+            self.fail(f"Program connection adapters are missing: {error}")
+        config = root / "client" / "mcp.json"
+        spec = ProgramConnectionSpec(
+            connection_id="vscode:json-codr",
+            display_name="VS Code / Copilot",
+            kind="mcp",
+            credential_mode="none",
+            capabilities=("tools", "models"),
+            config_paths=(config,),
+            generated_config={"servers": {"json-codr": {"type": "http", "url": "http://127.0.0.1:8765/mcp"}}},
+        )
+        return FileConnectionAdapter(spec, functional_probe=lambda: probe), config
+
+    async def test_scan_is_bounded_and_does_not_overwrite_malformed_configuration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            adapter, config = self._adapter(root)
+            config.parent.mkdir(parents=True)
+            config.write_text('{"servers":', encoding="utf-8")
+            decoy = root / "unbounded" / "deep" / "mcp.json"
+            decoy.parent.mkdir(parents=True)
+            decoy.write_text("{}", encoding="utf-8")
+
+            status = await adapter.probe()
+
+            self.assertEqual(status.diagnostic_code, "config_malformed")
+            self.assertEqual(config.read_text(encoding="utf-8"), '{"servers":')
+            self.assertNotIn(str(decoy), status.detail or "")
+
+    async def test_preview_configure_backup_and_restore_are_reversible(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            adapter, config = self._adapter(root)
+            config.parent.mkdir(parents=True)
+            original = {"existing": True}
+            config.write_text(json.dumps(original), encoding="utf-8")
+
+            preview = await adapter.preview("configure")
+            configured = await adapter.recover(frozenset({"configure"}))
+            restored = await adapter.recover(frozenset({"restore"}))
+
+            self.assertEqual(preview["target_name"], "mcp.json")
+            self.assertEqual(preview["before"], {"status": "valid", "keys": ["existing"]})
+            self.assertEqual(preview["after"], {"status": "generated", "keys": ["servers"]})
+            self.assertEqual(configured[0].status, "completed")
+            self.assertEqual(restored[0].status, "completed")
+            self.assertEqual(json.loads(config.read_text(encoding="utf-8")), original)
+
+    async def test_ready_requires_a_real_functional_probe(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            adapter, config = self._adapter(Path(temporary), probe=False)
+            config.parent.mkdir(parents=True)
+            config.write_text(json.dumps(adapter.spec.generated_config), encoding="utf-8")
+
+            status = await adapter.probe()
+
+            self.assertFalse(status.functional_probe)
+            self.assertEqual(status.diagnostic_code, "functional_probe_failed")
+
+    async def test_factory_exposes_each_supported_program_without_unbounded_search(self):
+        from web_app.integrations.connection_adapters import build_program_connection_adapters
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            adapters = build_program_connection_adapters(
+                data_root=root / "data",
+                home=root / "home",
+                appdata=root / "appdata",
+                localappdata=root / "localappdata",
+                service_url="http://127.0.0.1:8765",
+                functional_probe=lambda: False,
+            )
+
+        self.assertEqual(
+            {adapter.descriptor.connection_id for adapter in adapters},
+            {
+                "claude:desktop", "codex:plugin", "cursor:global", "generic:mcp",
+                "generic:openai", "ollama:native", "visualstudio:2022",
+                "vscode:copilot", "windsurf:global",
+            },
+        )
 
 
 if __name__ == "__main__":

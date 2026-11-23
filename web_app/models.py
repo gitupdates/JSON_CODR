@@ -856,3 +856,12 @@ class SkillScanResult(BaseModel):
     discoveries: List[SkillDiscovery] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
     fallback_token: Optional[str] = None
+
+
+class ConnectionPreviewRequest(BaseModel):
+    action_id: Literal["configure", "disable", "remove", "restore"]
+
+
+class ConnectionRecoveryRequest(BaseModel):
+    action_id: Literal["configure", "disable", "remove", "restore"]
+    confirmation_code: str = Field(min_length=8, max_length=32, pattern=r"^[A-Fa-f0-9]+$")
