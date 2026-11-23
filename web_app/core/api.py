@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Header, HTTPException, Response, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Header, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -17,6 +17,7 @@ from web_app.core.store import TaskStore
 from web_app.core.component_manager import ComponentManager
 from web_app.core.component_registry import ComponentRequest, ComponentScope
 from web_app.core.memory import MemoryDraft, MemoryPolicyError, MemoryStore
+from web_app.core.http_identity import MutationAuthorizer
 from web_app.models import MemorySettings
 
 
@@ -85,17 +86,26 @@ def create_core_router(
     components: Callable[[], ComponentManager] | None = None,
     memory_store: Callable[[], MemoryStore] | None = None,
     memory_settings: Callable[[], MemorySettings] = MemorySettings,
+    mutation_authorizer: MutationAuthorizer | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
+    def require_component_mutation(request: Request) -> None:
+        if mutation_authorizer is None:
+            raise HTTPException(status_code=503, detail="mutation authorization is unavailable")
+        mutation_authorizer.principal(request, "component.install")
+        mutation_authorizer.csrf(request)
+
     @router.post("/api/components/plan")
-    def plan_component(request: ComponentRequest):
+    def plan_component(request: ComponentRequest, http_request: Request):
+        require_component_mutation(http_request)
         if components is None:
             raise HTTPException(status_code=503, detail="component registry unavailable")
         return components().plan(request)
 
     @router.post("/api/components/install/{plan_id}")
-    def install_component(plan_id: str, approval: ComponentInstallApproval):
+    def install_component(plan_id: str, approval: ComponentInstallApproval, http_request: Request):
+        require_component_mutation(http_request)
         if components is None:
             raise HTTPException(status_code=503, detail="component registry unavailable")
         try:
@@ -170,14 +180,16 @@ def create_core_router(
             raise HTTPException(status_code=404, detail="collective memory not found") from error
 
     @router.post("/api/components/{component_id}/disable")
-    def disable_component(component_id: str, scope: ComponentScope = ComponentScope.global_, project_id: str | None = None):
+    def disable_component(component_id: str, http_request: Request, scope: ComponentScope = ComponentScope.global_, project_id: str | None = None):
+        require_component_mutation(http_request)
         if components is None:
             raise HTTPException(status_code=503, detail="component registry unavailable")
         components().disable(component_id, scope, project_id)
         return {"status": "disabled", "component_id": component_id}
 
     @router.post("/api/components/{component_id}/rollback")
-    def rollback_component(component_id: str, scope: ComponentScope = ComponentScope.global_, project_id: str | None = None):
+    def rollback_component(component_id: str, http_request: Request, scope: ComponentScope = ComponentScope.global_, project_id: str | None = None):
+        require_component_mutation(http_request)
         if components is None:
             raise HTTPException(status_code=503, detail="component registry unavailable")
         return components().rollback(component_id, scope, project_id)

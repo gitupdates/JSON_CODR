@@ -63,6 +63,7 @@ from web_app.core.contracts import CompletionCriterion, CriterionKind, GoalSpec,
 from web_app.core.git_adapter import GitExecutionAdapter
 from web_app.core.inference_adapter import InferenceAdapter
 from web_app.core.identity import IdentityService
+from web_app.core.http_identity import MutationAuthorizer
 from web_app.core.context_service import ContextService
 from web_app.core.connection_recovery import ConnectionRecoveryService
 from web_app.core.memory import MemoryStore
@@ -168,6 +169,13 @@ def create_app(
             return identity.resolve_credential(token, required_kind="browser_session")
         except PermissionError as error:
             raise HTTPException(status_code=401, detail="Authentication required") from error
+
+    mutation_authorizer = MutationAuthorizer(identity, identity_cookie_names)
+
+    def mutation_principal(request: Request, scope: str):
+        principal = mutation_authorizer.principal(request, scope)
+        mutation_authorizer.csrf(request)
+        return principal
     component_manager = None
     component_root = workspace.data_root / "core" / "component-registry"
 
@@ -546,6 +554,7 @@ def create_app(
             components=get_component_manager,
             memory_store=lambda: core_memory if get_core_runtime() else None,
             memory_settings=lambda: settings.get().memory,
+            mutation_authorizer=mutation_authorizer,
         )
     )
     action_proposals = ActionProposalService()
@@ -783,7 +792,7 @@ def create_app(
             user.user_id,
             "browser_session",
             f"browser session · {request.client.host if request.client else 'local'}",
-            identity.lesson_scopes(user.user_id),
+            identity.browser_session_scopes(user.user_id),
         )
         session_name, _, secure = identity_cookie_names(request)
         response.set_cookie(
@@ -1542,23 +1551,32 @@ def create_app(
             raise HTTPException(status_code=404, detail="Session not found") from error
 
     @application.patch("/api/sessions/{session_id}/attachments/{attachment_id}")
-    async def update_attachment(session_id: str, attachment_id: str, request: AttachmentUpdate):
+    async def update_attachment(
+        session_id: str,
+        attachment_id: str,
+        request: AttachmentUpdate,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "session.write")
         try:
             return attachments.set_included(session_id, attachment_id, request.included)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Attachment not found") from error
 
     @application.delete("/api/sessions/{session_id}/attachments/{attachment_id}", status_code=204)
-    async def delete_attachment(session_id: str, attachment_id: str):
+    async def delete_attachment(session_id: str, attachment_id: str, http_request: Request):
+        mutation_principal(http_request, "session.write")
         try:
             attachments.remove(session_id, attachment_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Attachment not found") from error
         return Response(status_code=204)
 
-    def require_terminal_header(x_json_codr: str | None) -> None:
-        if x_json_codr != "1":
-            raise HTTPException(status_code=403, detail="Terminal request header required")
+    def require_github_read(request: Request, response: Response, x_json_codr: str | None) -> None:
+        if x_json_codr == "1":
+            response.headers["Deprecation"] = "true"
+            return
+        mutation_authorizer.principal(request, "git.read")
 
     async def github_call(operation: Callable[..., object], *args: object, **kwargs: object) -> object:
         try:
@@ -1571,8 +1589,8 @@ def create_app(
             raise HTTPException(status_code=422, detail=str(error)) from error
 
     @application.get("/api/github/status")
-    async def github_status(x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def github_status(request: Request, response: Response, x_json_codr: str | None = Header(None)):
+        require_github_read(request, response, x_json_codr)
         return await github_call(github_cli.status)
 
     async def github_auth_call(operation: Callable[..., object], *args: object) -> object:
@@ -1588,39 +1606,41 @@ def create_app(
     @application.post("/api/github/auth/login")
     async def github_auth_login(
         request: GitHubAuthLoginRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_auth_call(github_auth.start)
 
     @application.get("/api/github/auth/login/{session_id}")
     async def github_auth_login_status(
         session_id: str,
+        request: Request,
+        response: Response,
         x_json_codr: str | None = Header(None),
     ):
-        require_terminal_header(x_json_codr)
+        require_github_read(request, response, x_json_codr)
         return await github_auth_call(github_auth.status, session_id)
 
     @application.post("/api/github/auth/login/{session_id}/cancel")
     async def github_auth_login_cancel(
         session_id: str,
         request: GitHubAuthCancelRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_auth_call(github_auth.cancel, session_id)
 
     @application.get("/api/github/repositories")
-    async def github_repositories(x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def github_repositories(request: Request, response: Response, x_json_codr: str | None = Header(None)):
+        require_github_read(request, response, x_json_codr)
         return await github_call(github_cli.repositories)
 
     @application.post("/api/github/repositories", status_code=201)
     async def github_create_repository(
         request: GitHubRepositoryCreateRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_call(
             github_cli.create_repository,
             request.name,
@@ -1636,9 +1656,9 @@ def create_app(
         owner: str,
         repository: str,
         request: GitHubRepositoryUpdateRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_call(
             github_cli.update_repository,
             owner,
@@ -1651,9 +1671,9 @@ def create_app(
         owner: str,
         repository: str,
         request: GitHubRepositoryDeleteRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         if request.confirm_name.casefold() != f"{owner}/{repository}".casefold():
             raise HTTPException(status_code=422, detail="Type the exact owner/repository name to confirm deletion")
         return await github_call(github_cli.delete_repository, owner, repository)
@@ -1662,10 +1682,12 @@ def create_app(
     async def github_issues(
         owner: str,
         repository: str,
+        request: Request,
+        response: Response,
         state: Literal["open", "closed", "all"] = "open",
         x_json_codr: str | None = Header(None),
     ):
-        require_terminal_header(x_json_codr)
+        require_github_read(request, response, x_json_codr)
         return await github_call(github_cli.issues, owner, repository, state)
 
     @application.post("/api/github/repos/{owner}/{repository}/issues", status_code=201)
@@ -1673,9 +1695,9 @@ def create_app(
         owner: str,
         repository: str,
         request: GitHubIssueCreateRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_call(github_cli.create_issue, owner, repository, request.title, request.body)
 
     @application.patch("/api/github/repos/{owner}/{repository}/issues/{number}")
@@ -1684,9 +1706,9 @@ def create_app(
         repository: str,
         number: int,
         request: GitHubIssueUpdateRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_call(
             github_cli.update_issue, owner, repository, number,
             request.model_dump(exclude={"confirmed"}, exclude_none=True),
@@ -1698,28 +1720,32 @@ def create_app(
         repository: str,
         number: int,
         request: GitHubIssueCommentRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_call(github_cli.comment_issue, owner, repository, number, request.body)
 
     @application.get("/api/github/repos/{owner}/{repository}/pulls")
     async def github_pull_requests(
         owner: str,
         repository: str,
+        request: Request,
+        response: Response,
         state: Literal["open", "closed", "all"] = "open",
         x_json_codr: str | None = Header(None),
     ):
-        require_terminal_header(x_json_codr)
+        require_github_read(request, response, x_json_codr)
         return await github_call(github_cli.pull_requests, owner, repository, state)
 
     @application.get("/api/github/repos/{owner}/{repository}/branches")
     async def github_branches(
         owner: str,
         repository: str,
+        request: Request,
+        response: Response,
         x_json_codr: str | None = Header(None),
     ):
-        require_terminal_header(x_json_codr)
+        require_github_read(request, response, x_json_codr)
         return await github_call(github_cli.branches, owner, repository)
 
     @application.post("/api/github/repos/{owner}/{repository}/branches", status_code=201)
@@ -1727,9 +1753,9 @@ def create_app(
         owner: str,
         repository: str,
         request: GitHubRemoteBranchCreateRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_call(
             github_cli.create_branch, owner, repository, request.branch, request.source_branch,
         )
@@ -1740,19 +1766,21 @@ def create_app(
         repository: str,
         branch: str,
         request: GitHubConfirmedWrite,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_call(github_cli.delete_branch, owner, repository, branch)
 
     @application.get("/api/github/repos/{owner}/{repository}/commits")
     async def github_commits(
         owner: str,
         repository: str,
+        request: Request,
+        response: Response,
         branch: str | None = None,
         x_json_codr: str | None = Header(None),
     ):
-        require_terminal_header(x_json_codr)
+        require_github_read(request, response, x_json_codr)
         return await github_call(github_cli.commits, owner, repository, branch)
 
     @application.post("/api/github/repos/{owner}/{repository}/pulls", status_code=201)
@@ -1760,9 +1788,9 @@ def create_app(
         owner: str,
         repository: str,
         request: GitHubPullRequestCreateRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_call(
             github_cli.create_pull_request, owner, repository, request.head, request.base,
             request.title, request.body, request.draft,
@@ -1774,9 +1802,9 @@ def create_app(
         repository: str,
         number: int,
         request: GitHubPullRequestUpdateRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_call(
             github_cli.update_pull_request, owner, repository, number,
             request.model_dump(exclude={"confirmed"}, exclude_none=True),
@@ -1788,9 +1816,9 @@ def create_app(
         repository: str,
         number: int,
         request: GitHubPullRequestMergeRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_call(
             github_cli.merge_pull_request, owner, repository, number, request.merge_method,
         )
@@ -1799,9 +1827,11 @@ def create_app(
     async def github_releases(
         owner: str,
         repository: str,
+        request: Request,
+        response: Response,
         x_json_codr: str | None = Header(None),
     ):
-        require_terminal_header(x_json_codr)
+        require_github_read(request, response, x_json_codr)
         return await github_call(github_cli.releases, owner, repository)
 
     @application.post("/api/github/repos/{owner}/{repository}/releases", status_code=201)
@@ -1809,9 +1839,9 @@ def create_app(
         owner: str,
         repository: str,
         request: GitHubReleaseCreateRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_call(
             github_cli.create_release, owner, repository, request.tag_name, request.name,
             request.body, request.target_commitish, request.draft, request.prerelease,
@@ -1823,9 +1853,9 @@ def create_app(
         repository: str,
         release_id: int,
         request: GitHubReleaseUpdateRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_call(
             github_cli.update_release,
             owner,
@@ -1840,41 +1870,41 @@ def create_app(
         repository: str,
         release_id: int,
         request: GitHubConfirmedWrite,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_call(github_cli.delete_release, owner, repository, release_id)
 
     @application.post("/api/github/local/clone", status_code=201)
     async def github_local_clone(
         request: GitHubLocalCloneRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_call(github_cli.clone_local_repository, request.repository, request.destination)
 
     @application.post("/api/github/local/fetch")
     async def github_local_fetch(
         request: GitHubLocalSyncRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_call(github_cli.fetch_local_changes, request.project_root)
 
     @application.post("/api/github/local/pull")
     async def github_local_pull(
         request: GitHubLocalSyncRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_call(github_cli.pull_local_changes, request.project_root)
 
     @application.post("/api/github/local/check-build")
     async def github_local_check_build(
         request: GitHubBuildCheckRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_call(
             github_cli.check_build,
             request.project_root,
@@ -1885,9 +1915,9 @@ def create_app(
     @application.post("/api/github/local/update-build")
     async def github_local_update_build(
         request: GitHubBuildUpdateRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_call(
             github_cli.update_build,
             request.project_root,
@@ -1902,41 +1932,43 @@ def create_app(
     @application.get("/api/github/local/status")
     async def github_local_status(
         project_root: str,
+        request: Request,
+        response: Response,
         x_json_codr: str | None = Header(None),
     ):
-        require_terminal_header(x_json_codr)
+        require_github_read(request, response, x_json_codr)
         return await github_call(github_cli.local_status, project_root)
 
     @application.post("/api/github/local/branch", status_code=201)
     async def github_local_branch(
         request: GitHubLocalBranchRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_call(github_cli.create_local_branch, request.project_root, request.branch)
 
     @application.post("/api/github/local/stage")
     async def github_local_stage(
         request: GitHubLocalStageRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.edit")
         return await github_call(github_cli.stage_local_files, request.project_root, request.paths)
 
     @application.post("/api/github/local/commit", status_code=201)
     async def github_local_commit(
         request: GitHubLocalCommitRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.commit")
         return await github_call(github_cli.commit_local_changes, request.project_root, request.message)
 
     @application.post("/api/github/local/push")
     async def github_local_push(
         request: GitHubLocalPushRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "git.push")
         return await github_call(github_cli.push_local_changes, request.project_root)
 
     @application.get("/api/coding-agents/status")
@@ -1952,16 +1984,16 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     @application.post("/api/git-broker/grants", status_code=201)
-    async def create_git_broker_grant(request: BrokerGrantRequest, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def create_git_broker_grant(request: BrokerGrantRequest, http_request: Request):
+        mutation_principal(http_request, "agent.launch")
         try:
             return coding_agents.grant(request.project_root, request.profile)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     @application.delete("/api/git-broker/grants/{grant_id}")
-    async def revoke_git_broker_grant(grant_id: str, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def revoke_git_broker_grant(grant_id: str, http_request: Request):
+        mutation_principal(http_request, "agent.launch")
         try:
             return coding_agents.revoke(grant_id)
         except KeyError as error:
@@ -2000,8 +2032,8 @@ def create_app(
         return completed.payload["result"]
 
     @application.post("/api/git-broker/tasks", status_code=201)
-    async def execute_git_broker_task(request: BrokerTaskRequest, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def execute_git_broker_task(request: BrokerTaskRequest, http_request: Request):
+        mutation_principal(http_request, "agent.launch")
         def authorized():
             return coding_agents.authorized_grant(request.grant_id, request.request.project_root, "broker")
         if not authorized():
@@ -2012,8 +2044,8 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.post("/api/git-broker/adapter", status_code=201)
-    async def execute_git_broker_adapter(request: BrokerAdapterRunRequest, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def execute_git_broker_adapter(request: BrokerAdapterRunRequest, http_request: Request):
+        mutation_principal(http_request, "agent.launch")
         def authorized():
             return coding_agents.authorized_grant(request.grant_id, request.project_root, "broker")
         if not authorized():
@@ -2056,8 +2088,8 @@ def create_app(
         }
 
     @application.post("/api/project-workspace/run", status_code=201)
-    async def run_project_workspace(request: ProjectWorkspaceRunRequest, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def run_project_workspace(request: ProjectWorkspaceRunRequest, http_request: Request):
+        mutation_principal(http_request, "agent.launch")
         try:
             executed = await execute_project_workspace(request.project_root, request.model, request.outcome)
             return {**executed, "requested_model": request.model}
@@ -2067,7 +2099,8 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.post("/api/workspace/tasks", response_model=WorkspaceTaskResponse, status_code=201)
-    async def submit_workspace_task(request: WorkspaceTaskRequest, response: Response):
+    async def submit_workspace_task(request: WorkspaceTaskRequest, response: Response, http_request: Request):
+        mutation_principal(http_request, "agent.launch")
         if request.engine_id != "borg":
             raise HTTPException(status_code=409, detail="Requested engine is not a verified Workspace engine")
         try:
@@ -2168,24 +2201,24 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.post("/api/coding-agents/grants", status_code=201)
-    async def create_coding_agent_grant(request: CodingAgentGrantRequest, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def create_coding_agent_grant(request: CodingAgentGrantRequest, http_request: Request):
+        mutation_principal(http_request, "agent.launch")
         try:
             return coding_agents.grant(request.project_root, request.tool)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     @application.delete("/api/coding-agents/grants/{grant_id}")
-    async def revoke_coding_agent_grant(grant_id: str, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def revoke_coding_agent_grant(grant_id: str, http_request: Request):
+        mutation_principal(http_request, "agent.launch")
         try:
             return coding_agents.revoke(grant_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Coding agent grant not found") from error
 
     @application.post("/api/coding-agents/launch", status_code=201)
-    async def launch_coding_agent(request: CodingAgentLaunchRequest, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def launch_coding_agent(request: CodingAgentLaunchRequest, http_request: Request):
+        mutation_principal(http_request, "agent.launch")
         try:
             compatibility = await service.tool_compatibility(request.model)
             if not compatibility["available"]:
@@ -2215,8 +2248,8 @@ def create_app(
         return terminals.list()
 
     @application.post("/api/terminals", status_code=201)
-    async def create_terminal(request: TerminalCreateRequest, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def create_terminal(request: TerminalCreateRequest, http_request: Request):
+        mutation_principal(http_request, "terminal.write")
         cwd = Path(request.cwd).resolve() if request.cwd else Path(__file__).resolve().parent.parent
         try:
             core_service, _, _ = get_core_runtime()
@@ -2287,14 +2320,14 @@ def create_app(
             raise HTTPException(status_code=409, detail=reason)
 
     @application.post("/api/terminals/{terminal_id}/interrupt", status_code=204)
-    async def interrupt_terminal(terminal_id: str, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def interrupt_terminal(terminal_id: str, http_request: Request):
+        mutation_principal(http_request, "terminal.write")
         await submit_terminal_mutation("interrupt", terminal_id)
         return Response(status_code=204)
 
     @application.delete("/api/terminals/{terminal_id}", status_code=204)
-    async def close_terminal(terminal_id: str, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def close_terminal(terminal_id: str, http_request: Request):
+        mutation_principal(http_request, "terminal.write")
         await submit_terminal_mutation("close", terminal_id)
         return Response(status_code=204)
 
@@ -2312,9 +2345,9 @@ def create_app(
         session_id: str,
         proposal_id: str,
         request: ActionApprovalRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "terminal.write")
         try:
             proposal = action_proposals.get(session_id, proposal_id)
             validate_action_terminal(proposal, request.terminal_id)
@@ -2329,9 +2362,9 @@ def create_app(
         session_id: str,
         proposal_id: str,
         request: DestructiveConfirmationRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "terminal.write")
         try:
             proposal = action_proposals.get(session_id, proposal_id)
             validate_action_terminal(proposal, request.terminal_id)
@@ -2344,7 +2377,8 @@ def create_app(
             raise HTTPException(status_code=403, detail=str(error)) from error
 
     @application.post("/api/sessions/{session_id}/action-proposals/{proposal_id}/reject")
-    async def reject_action(session_id: str, proposal_id: str):
+    async def reject_action(session_id: str, proposal_id: str, http_request: Request):
+        mutation_principal(http_request, "terminal.write")
         try:
             return action_proposals.reject(session_id, proposal_id)
         except KeyError as error:

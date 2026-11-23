@@ -4,7 +4,24 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+from fastapi.testclient import TestClient
+
+from web_app.app import create_app
 from web_app.coding_agents import CodingAgentService
+from web_app.workspace import WorkspaceService
+
+
+class FakeService:
+    async def health(self):
+        return {"ollama": True}
+
+    async def tool_compatibility(self, model: str):
+        return {"available": True, "effective_tool_model": model, "route": "native"}
+
+
+class FakeTerminals:
+    def create_agent(self, plan):
+        return {"id": "agent-terminal", "cwd": str(plan.cwd), "status": "running"}
 
 
 class CodingAgentAuthorizationTests(unittest.TestCase):
@@ -88,6 +105,94 @@ class CodingAgentAuthorizationTests(unittest.TestCase):
                 self.skipTest("Directory symlinks are unavailable")
             with self.assertRaisesRegex(ValueError, "reparse"):
                 service.grant(link, "aider")
+
+
+class CodingAgentApiAuthorizationTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.project = self.root / "project"
+        self.project.mkdir()
+        workspace = WorkspaceService(self.root / "data")
+        self.agents = CodingAgentService(self.root / "agents", executable_finder=lambda name: f"C:/tools/{name}.exe")
+        self.app = create_app(
+            FakeService(),
+            workspace=workspace,
+            coding_agents=self.agents,
+            terminals=FakeTerminals(),
+        )
+        self.identity = self.app.state.identity
+        self.user_id = self.identity.bootstrap("development", "Administrator").user.user_id
+        self.client = TestClient(self.app)
+
+    def tearDown(self):
+        self.client.close()
+        self.temporary.cleanup()
+
+    def credential(self, kind: str, scopes: tuple[str, ...]):
+        return self.identity.issue_credential(self.user_id, kind, f"test {kind}", scopes)
+
+    def browser_headers(self, scopes: tuple[str, ...]):
+        credential = self.credential("browser_session", scopes)
+        self.client.cookies.set("json_codr_session", credential.token)
+        csrf = self.client.get("/api/identity/bootstrap").cookies["json_codr_csrf"]
+        return {"X-CSRF-Token": csrf}
+
+    def test_broker_and_coding_agent_grants_require_agent_launch_scope(self):
+        """Removing authentication from either grant path must fail this endpoint contract."""
+        cases = (
+            ("/api/git-broker/grants", {"project_root": str(self.project), "profile": "broker"}),
+            ("/api/coding-agents/grants", {"project_root": str(self.project), "tool": "aider"}),
+        )
+        for path, payload in cases:
+            with self.subTest(path=path):
+                self.client.cookies.clear()
+                self.assertEqual(self.client.post(path, json=payload).status_code, 401)
+                wrong_scope = self.credential("service", ("terminal.write",))
+                self.assertEqual(
+                    self.client.post(path, json=payload, headers={"Authorization": f"Bearer {wrong_scope.token}"}).status_code,
+                    403,
+                )
+                accepted = self.client.post(path, json=payload, headers=self.browser_headers(("agent.launch",)))
+                self.assertEqual(accepted.status_code, 201)
+
+    def test_launch_and_terminal_write_reject_wrong_scope_and_static_header(self):
+        """A valid credential with the wrong scope must not unlock launch or terminal mutation."""
+        self.agents.grant(self.project, "aider")
+        launch = {
+            "project_root": str(self.project),
+            "tool": "aider",
+            "model": "qwen2.5-coder:7b",
+            "mode": "interactive",
+        }
+        self.assertEqual(self.client.post("/api/coding-agents/launch", json=launch).status_code, 401)
+        wrong_scope = self.credential("service", ("terminal.write",))
+        self.assertEqual(
+            self.client.post(
+                "/api/coding-agents/launch",
+                json=launch,
+                headers={"Authorization": f"Bearer {wrong_scope.token}"},
+            ).status_code,
+            403,
+        )
+        launch_credential = self.credential("service", ("agent.launch",))
+        self.assertEqual(
+            self.client.post(
+                "/api/coding-agents/launch",
+                json=launch,
+                headers={"Authorization": f"Bearer {launch_credential.token}"},
+            ).status_code,
+            201,
+        )
+
+        terminal_path = "/api/terminals/missing/interrupt"
+        self.assertEqual(self.client.post(terminal_path).status_code, 401)
+        self.assertEqual(self.client.post(terminal_path, headers={"X-JSON-CODR": "1"}).status_code, 401)
+        wrong_terminal_scope = self.credential("service", ("agent.launch",))
+        self.assertEqual(
+            self.client.post(terminal_path, headers={"Authorization": f"Bearer {wrong_terminal_scope.token}"}).status_code,
+            403,
+        )
 
 
 class CodingAgentAdapterTests(unittest.TestCase):

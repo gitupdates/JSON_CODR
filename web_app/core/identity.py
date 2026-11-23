@@ -36,6 +36,21 @@ IdentityRoleName = Literal[
 ]
 
 
+MUTATION_SCOPES = (
+    "git.read",
+    "git.edit",
+    "git.commit",
+    "git.push",
+    "agent.launch",
+    "terminal.write",
+    "session.write",
+    "component.install",
+    "system.update",
+    "system.activate",
+    "system.rollback",
+)
+
+
 @dataclass(frozen=True)
 class PasswordPolicy:
     memory_cost_kib: int = 65_536
@@ -677,6 +692,12 @@ class IdentityService:
                 "lesson.remove", "lesson.verify", "lesson.verification.record", "lesson.promote_global",
             )
         return ("lesson.read",)
+
+    def browser_session_scopes(self, user_id: str) -> tuple[str, ...]:
+        user = self.get_user(user_id)
+        if not set(user.roles) & {"owner", "administrator"}:
+            return self.lesson_scopes(user_id)
+        return tuple(dict.fromkeys((*self.lesson_scopes(user_id), *MUTATION_SCOPES)))
 
     @staticmethod
     def require_distinct_accounts(*user_ids: str) -> None:
