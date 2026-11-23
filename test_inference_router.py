@@ -50,7 +50,51 @@ class FakeRegistry:
         return self.provider
 
 
+class CanonicalFakeOllama(FakeOllama):
+    def __init__(self):
+        super().__init__()
+        self.requests = []
+
+    async def generate(self, request):
+        from web_app.inference.protocol import InferenceEvent
+
+        self.requests.append(request)
+        yield InferenceEvent(
+            type="content",
+            text="live",
+            requested_model=request.model,
+            effective_model=request.model,
+            route="ollama",
+        )
+        yield InferenceEvent(
+            type="completed",
+            requested_model=request.model,
+            effective_model=request.model,
+            route="ollama",
+            finish_reason="stop",
+        )
+
+
 class InferenceRouterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_generate_forwards_the_ordered_canonical_request(self):
+        from web_app.inference.protocol import ContentPart, InferenceMessage, InferenceRequest
+
+        ollama = CanonicalFakeOllama()
+        router = InferenceRouter(ollama, OptimizedModelCatalog(), FakeRegistry(FakeProvider()), set())
+        request = InferenceRequest(
+            model="qwen3:4b",
+            messages=(
+                InferenceMessage(role="system", content=(ContentPart(type="text", text="Be exact."),)),
+                InferenceMessage(role="user", content=(ContentPart(type="text", text="Answer."),)),
+            ),
+        )
+
+        events = [event async for event in router.generate(request)]
+
+        self.assertIs(ollama.requests[0], request)
+        self.assertEqual([message.role for message in ollama.requests[0].messages], ["system", "user"])
+        self.assertEqual([event.type for event in events], ["content", "completed"])
+
     async def test_vision_capability_uses_ollama_and_treats_optimized_catalog_as_text_only(self):
         router = InferenceRouter(FakeOllama(), OptimizedModelCatalog(), FakeRegistry(FakeProvider()), set())
 

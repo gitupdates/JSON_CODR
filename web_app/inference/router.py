@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from web_app.inference.catalog import OptimizedModelCatalog
+from web_app.inference.protocol import InferenceRequest
 
 
 class InferenceRouter:
@@ -30,6 +31,18 @@ class InferenceRouter:
         except KeyError:
             return await self.ollama.supports_vision(model_id)
         return False
+
+    async def generate(self, request: InferenceRequest):
+        try:
+            self.catalog.get(request.model)
+        except KeyError:
+            generate = getattr(self.ollama, "generate", None)
+            if callable(generate):
+                async for event in generate(request):
+                    yield event
+                return
+            raise ValueError("Native provider does not support canonical inference")
+        raise ValueError("Optimized providers do not yet support canonical inference")
 
     async def probe(self, model_id: str):
         model = self.catalog.get(model_id)
