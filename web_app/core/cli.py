@@ -18,6 +18,12 @@ Submitter = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 _SENSITIVE = {"api_key", "authorization", "cookie", "credential", "credential_refs", "password", "secret", "token"}
 
 
+class _RejectAuthenticatedRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, _message, _headers, _new_url):
+        response.close()
+        raise ValueError("authenticated request refused redirect")
+
+
 def run_cli(
     argv: Sequence[str] | None = None,
     *,
@@ -154,7 +160,8 @@ def _http_submitter(base_url: str, token: str) -> Submitter:
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
             method="POST",
         )
-        with urllib.request.urlopen(request) as response:
+        opener = urllib.request.build_opener(_RejectAuthenticatedRedirects())
+        with opener.open(request) as response:
             return json.load(response)
 
     return submit

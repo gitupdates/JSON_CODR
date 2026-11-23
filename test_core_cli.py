@@ -1,12 +1,57 @@
 import io
 import json
 import unittest
+import urllib.request
+from contextlib import contextmanager
 from datetime import UTC, datetime
+from email.message import Message
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.response import addinfourl
 
 from web_app.core.cli import run_cli
 from web_app.core.cli_identity import normalize_server_origin
+
+
+def _memory_http_response(url, status, reason, body=b"", headers=None):
+    stream = io.BytesIO(body)
+    stream.msg = reason
+    return addinfourl(stream, headers or Message(), url, status)
+
+
+class _RedirectTransport(urllib.request.BaseHandler):
+    handler_order = 100
+
+    def __init__(self, source_url, status, location):
+        self.source_url = source_url
+        self.status = status
+        self.location = location
+        self.redirected_requests = []
+
+    def http_open(self, request):
+        if request.full_url == self.source_url:
+            headers = Message()
+            headers["Location"] = self.location
+            headers["Content-Length"] = "0"
+            return _memory_http_response(request.full_url, self.status, "Redirect", headers=headers)
+        self.redirected_requests.append(dict(request.header_items()))
+        body = b'{"task_id":"task-1","status":"completed","events":[]}'
+        return _memory_http_response(request.full_url, 200, "OK", body=body)
+
+
+@contextmanager
+def _use_http_transport(transport):
+    build_opener = urllib.request.build_opener
+    default_opener = build_opener(transport)
+
+    def build_authenticated_opener(*handlers):
+        return build_opener(*handlers, transport)
+
+    with (
+        patch("web_app.core.cli.urllib.request.urlopen", default_opener.open),
+        patch("web_app.core.cli.urllib.request.build_opener", side_effect=build_authenticated_opener),
+    ):
+        yield
 
 
 class CoreCliTests(unittest.TestCase):
@@ -47,10 +92,6 @@ class CoreCliTests(unittest.TestCase):
         self.assertEqual(run_cli(["auth", "logout"], auth_service=auth, stdout=output), 0)
 
     def test_run_loads_the_current_cli_token_only_for_bearer_authorization(self):
-        class Store:
-            def load(self):
-                return {"token": "cli-secret", "server_origin": "http://127.0.0.1:8772"}
-
         request_headers = {}
 
         class Response(io.BytesIO):
@@ -60,12 +101,17 @@ class CoreCliTests(unittest.TestCase):
             def __exit__(self, *args):
                 return False
 
-        def urlopen(request):
-            request_headers.update(dict(request.header_items()))
-            return Response(b'{"task_id":"task-1","status":"completed","events":[]}')
+        class Opener:
+            def open(self, request):
+                request_headers.update(dict(request.header_items()))
+                return Response(b'{"task_id":"task-1","status":"completed","events":[]}')
+
+        class Store:
+            def load(self):
+                return {"token": "cli-secret", "server_origin": "http://127.0.0.1:8772"}
 
         output = io.StringIO()
-        with patch("web_app.core.cli.urllib.request.urlopen", urlopen):
+        with patch("web_app.core.cli.urllib.request.build_opener", return_value=Opener()):
             code = run_cli(
                 ["run", "--project", ".", "inspect"],
                 auth_service=SimpleNamespace(store=Store()),
@@ -74,6 +120,83 @@ class CoreCliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(request_headers["Authorization"], "Bearer cli-secret")
         self.assertNotIn("cli-secret", output.getvalue())
+
+    def test_authenticated_submission_rejects_cross_origin_redirects_without_a_second_request(self):
+        for status in (301, 302, 303, 307, 308):
+            with self.subTest(status=status):
+                source_origin = "http://source.test"
+                transport = _RedirectTransport(
+                    f"{source_origin}/api/tasks",
+                    status,
+                    "http://target.test/capture",
+                )
+
+                class Store:
+                    def load(self):
+                        return {"token": "cli-secret", "server_origin": source_origin}
+
+                stderr = io.StringIO()
+                with _use_http_transport(transport):
+                    code = run_cli(
+                        ["run", "--project", ".", "--url", source_origin, "inspect"],
+                        auth_service=SimpleNamespace(store=Store()),
+                        stderr=stderr,
+                    )
+                self.assertEqual(code, 1)
+                self.assertEqual(transport.redirected_requests, [])
+                self.assertNotIn("cli-secret", stderr.getvalue())
+                self.assertIn("authenticated request refused redirect", stderr.getvalue())
+
+    def test_authenticated_submission_rejects_same_origin_redirects(self):
+        source_origin = "http://source.test"
+        transport = _RedirectTransport(
+            f"{source_origin}/api/tasks",
+            302,
+            f"{source_origin}/redirected",
+        )
+
+        class Store:
+            def load(self):
+                return {"token": "cli-secret", "server_origin": source_origin}
+
+        stderr = io.StringIO()
+        with _use_http_transport(transport):
+            code = run_cli(
+                ["run", "--project", ".", "--url", source_origin, "inspect"],
+                auth_service=SimpleNamespace(store=Store()),
+                stderr=stderr,
+            )
+
+        self.assertEqual(code, 1)
+        self.assertEqual(transport.redirected_requests, [])
+        self.assertNotIn("cli-secret", stderr.getvalue())
+        self.assertIn("authenticated request refused redirect", stderr.getvalue())
+
+    def test_redirect_failure_does_not_output_location_credentials(self):
+        source_origin = "http://source.test"
+        transport = _RedirectTransport(
+            f"{source_origin}/api/tasks",
+            302,
+            "http://redirect-user:redirect-password@target.test/capture",
+        )
+
+        class Store:
+            def load(self):
+                return {"token": "cli-secret", "server_origin": source_origin}
+
+        stderr = io.StringIO()
+        with _use_http_transport(transport):
+            code = run_cli(
+                ["run", "--project", ".", "--url", source_origin, "inspect"],
+                auth_service=SimpleNamespace(store=Store()),
+                stderr=stderr,
+            )
+
+        self.assertEqual(code, 1)
+        self.assertNotIn("cli-secret", stderr.getvalue())
+        self.assertNotIn("redirect-user", stderr.getvalue())
+        self.assertNotIn("redirect-password", stderr.getvalue())
+        self.assertIn("authenticated request refused redirect", stderr.getvalue())
 
     def test_cli_rejects_server_origin_mismatches_before_network_access(self):
         class Store:
