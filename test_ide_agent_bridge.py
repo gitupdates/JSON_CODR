@@ -7,6 +7,9 @@ from unittest.mock import patch
 from pathlib import Path
 from urllib import error, parse
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 
 class InstallationResolverTests(unittest.TestCase):
     def _resolver(self, *, environment=None, manifest_path=None, plugin_root=None, known_roots=()):
@@ -187,6 +190,13 @@ class _FakeBorgClient:
         return {"status": "approval_required", "arguments": arguments}
 
 
+class _UnavailableBorgClient(_FakeBorgClient):
+    def health(self):
+        from web_app.integrations.borg_client import BorgClientError
+
+        raise BorgClientError("JSON_CODR service is unavailable")
+
+
 class McpServerTests(unittest.TestCase):
     def _server(self):
         try:
@@ -254,6 +264,106 @@ class McpServerTests(unittest.TestCase):
         response = self._server().handle({"jsonrpc": "2.0", "id": 6, "params": {}})
 
         self.assertEqual(response["error"]["code"], -32600)
+
+
+class McpHttpTests(unittest.TestCase):
+    def _client(self):
+        try:
+            from web_app.integrations.mcp_http import create_mcp_http_router
+            from web_app.integrations.mcp_server import McpServer
+        except ImportError as error:
+            self.fail(f"Streamable HTTP MCP bridge is missing: {error}")
+        application = FastAPI()
+        server = McpServer(_FakeBorgClient())
+        application.include_router(create_mcp_http_router(lambda _request: server, loopback_only=False))
+        return TestClient(application)
+
+    def test_http_initialization_and_tool_catalog_match_stdio(self):
+        client = self._client()
+
+        initialized = client.post("/mcp", json={
+            "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {},
+        })
+        listed = client.post("/mcp", json={
+            "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {},
+        })
+
+        self.assertEqual(initialized.status_code, 200)
+        self.assertEqual(initialized.json()["result"]["protocolVersion"], "2025-06-18")
+        self.assertEqual(
+            [tool["name"] for tool in listed.json()["result"]["tools"]],
+            [tool["name"] for tool in self._server_tools()],
+        )
+
+    @staticmethod
+    def _server_tools():
+        from web_app.integrations.mcp_server import TOOLS
+
+        return TOOLS
+
+    def test_http_calls_health_and_models_with_structured_results(self):
+        client = self._client()
+
+        health = client.post("/mcp", json={
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": {"name": "json_codr.health", "arguments": {}},
+        })
+        models = client.post("/mcp", json={
+            "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "params": {"name": "json_codr.models", "arguments": {}},
+        })
+
+        self.assertEqual(health.json()["result"]["structuredContent"]["status"], "ready")
+        self.assertEqual(models.json()["result"]["structuredContent"]["models"][0]["name"], "qwen3.5:9b")
+
+    def test_http_notification_is_accepted_without_a_response_body(self):
+        response = self._client().post("/mcp", json={
+            "jsonrpc": "2.0", "method": "notifications/initialized", "params": {},
+        })
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.content, b"")
+
+    def test_http_preserves_bounded_unavailable_service_error(self):
+        from web_app.integrations.mcp_http import create_mcp_http_router
+        from web_app.integrations.mcp_server import McpServer
+
+        application = FastAPI()
+        application.include_router(create_mcp_http_router(
+            lambda _request: McpServer(_UnavailableBorgClient()), loopback_only=False,
+        ))
+        response = TestClient(application).post("/mcp", json={
+            "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": {"name": "json_codr.health", "arguments": {}},
+        })
+
+        result = response.json()["result"]
+        self.assertTrue(result["isError"])
+        self.assertEqual(result["structuredContent"]["error"], "JSON_CODR service is unavailable")
+
+    def test_http_rejects_sessions_and_non_json_requests(self):
+        client = self._client()
+
+        session = client.post("/mcp", headers={"Mcp-Session-Id": "unknown"}, json={
+            "jsonrpc": "2.0", "id": 5, "method": "tools/list", "params": {},
+        })
+        content_type = client.post("/mcp", content="not-json", headers={"content-type": "text/plain"})
+
+        self.assertEqual(session.status_code, 404)
+        self.assertEqual(content_type.status_code, 415)
+
+    def test_http_is_loopback_only_by_default(self):
+        from web_app.integrations.mcp_http import create_mcp_http_router
+        from web_app.integrations.mcp_server import McpServer
+
+        application = FastAPI()
+        application.include_router(create_mcp_http_router(lambda _request: McpServer(_FakeBorgClient())))
+
+        response = TestClient(application).post("/mcp", json={
+            "jsonrpc": "2.0", "id": 6, "method": "tools/list", "params": {},
+        })
+
+        self.assertEqual(response.status_code, 403)
 
 
 class AdapterPackageTests(unittest.TestCase):

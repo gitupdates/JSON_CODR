@@ -33,6 +33,9 @@ from web_app.inference.search import OptimizedModelSearch
 from web_app.localperf.package import LocalPerfPackageError, LocalPerfPackageService
 from web_app.localperf.storage import LocalPerfStorage
 from web_app.integrations.discovery import build_discovery_document, build_vscode_language_model_config
+from web_app.integrations.borg_client import BorgClient
+from web_app.integrations.mcp_http import create_mcp_http_router
+from web_app.integrations.mcp_server import McpServer
 from web_app.integrity_benchmark import IntegrityBenchmarkService
 from web_app.benchmark_baseline import BenchmarkBaselineService
 from web_app.coding_agents import CodingAgentService
@@ -122,6 +125,9 @@ def create_app(
     github_auth: GitHubAuthSessionService | None = None,
 ) -> FastAPI:
     application = FastAPI(title="JSON_CODR", version=APP_VERSION)
+    application.include_router(create_mcp_http_router(
+        lambda request: McpServer(BorgClient(str(request.base_url).rstrip("/")))
+    ))
     workspace = workspace or WorkspaceService(default_data_root())
     component_manager = None
     component_root = workspace.data_root / "core" / "component-registry"
