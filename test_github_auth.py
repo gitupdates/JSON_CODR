@@ -79,6 +79,31 @@ def _wait_for(service, session_id, state):
 
 
 class GitHubAuthSessionTests(unittest.TestCase):
+    def test_start_is_idempotent_when_github_cli_is_already_authenticated(self):
+        process_started = False
+
+        def factory(*args, **kwargs):
+            nonlocal process_started
+            process_started = True
+            return _Process()
+
+        service = GitHubAuthSessionService(
+            executable_finder=lambda name: "gh.exe",
+            process_factory=factory,
+            status_probe=lambda: {
+                "authenticated": True,
+                "login": "octocat",
+                "url": "https://github.com/octocat",
+            },
+        )
+
+        started = service.start()
+
+        self.assertEqual(started["state"], "authenticated")
+        self.assertEqual(started["login"], "octocat")
+        self.assertIn("already authenticated", started["detail"].lower())
+        self.assertFalse(process_started)
+
     def test_start_uses_github_web_flow_and_rejects_duplicate_active_login(self):
         calls = []
         process = _Process()
@@ -187,8 +212,13 @@ class GitHubAuthSessionTests(unittest.TestCase):
         process = _Process(["Authentication complete.\n"])
         probe_started = threading.Event()
         release_probe = threading.Event()
+        probe_calls = 0
 
         def blocked_probe():
+            nonlocal probe_calls
+            probe_calls += 1
+            if probe_calls == 1:
+                return {"authenticated": False}
             probe_started.set()
             release_probe.wait(2)
             return {"authenticated": True, "login": "octocat"}

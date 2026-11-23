@@ -32,7 +32,7 @@ from web_app.inference.compatibility import attach_agent_compatibility, ollama_m
 from web_app.inference.search import OptimizedModelSearch
 from web_app.localperf.package import LocalPerfPackageError, LocalPerfPackageService
 from web_app.localperf.storage import LocalPerfStorage
-from web_app.integrations.discovery import build_discovery_document
+from web_app.integrations.discovery import build_discovery_document, build_vscode_language_model_config
 from web_app.integrity_benchmark import IntegrityBenchmarkService
 from web_app.benchmark_baseline import BenchmarkBaselineService
 from web_app.coding_agents import CodingAgentService
@@ -510,6 +510,32 @@ def create_app(
             service_origin,
             os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"),
         )
+
+    @application.get("/api/integrations/vscode/language-models")
+    async def vscode_language_models():
+        try:
+            models = await service.list_models()
+            installed = [model for model in models if model.get("installed") is True]
+            if hasattr(service, "model_metadata"):
+                metadata = await asyncio.gather(*(
+                    service.model_metadata(str(model["name"])) for model in installed
+                ))
+                enriched = [{**model, **details} for model, details in zip(installed, metadata)]
+            else:
+                tool_support, vision_support = await asyncio.gather(
+                    asyncio.gather(*(service.supports_tools(str(model["name"])) for model in installed)),
+                    asyncio.gather(*(service.supports_vision(str(model["name"])) for model in installed)),
+                )
+                enriched = [
+                    {**model, "tool_calling": tools, "vision": vision}
+                    for model, tools, vision in zip(installed, tool_support, vision_support)
+                ]
+            return build_vscode_language_model_config(
+                os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"),
+                enriched,
+            )
+        except OllamaUnavailableError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
 
     @application.post("/api/benchmarks/baseline")
     async def export_benchmark_baseline():

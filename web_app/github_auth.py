@@ -48,6 +48,26 @@ class GitHubAuthSessionService:
             self._cleanup_locked()
             if any(session["state"] in self._ACTIVE_STATES for session in self._sessions.values()):
                 raise GitHubAuthSessionConflict("A GitHub login is already active")
+            try:
+                account = self._status_probe()
+            except Exception:
+                account = {}
+            if account.get("authenticated") is True and account.get("login"):
+                session_id = str(uuid4())
+                session: dict[str, object] = {
+                    "session_id": session_id,
+                    "state": "authenticated",
+                    "detail": "GitHub CLI is already authenticated.",
+                    "started_at": self._clock(),
+                    "finished_at": self._clock(),
+                    "device_code": None,
+                    "process": None,
+                    "cancel_requested": False,
+                    "worker": None,
+                    "login": account["login"],
+                }
+                self._sessions[session_id] = session
+                return self._public(session)
             executable = self._executable_finder("gh")
             if not executable:
                 raise RuntimeError("GitHub CLI is not installed")

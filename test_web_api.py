@@ -289,6 +289,16 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(document["service"]["base_url"], "http://127.0.0.1:8874")
         self.assertNotIn("authorization", json.dumps(document).casefold())
 
+    def test_vscode_language_model_config_exposes_each_installed_model(self):
+        response = self.client.get("/api/integrations/vscode/language-models")
+
+        self.assertEqual(response.status_code, 200)
+        provider = response.json()[0]
+        self.assertEqual(provider["name"], "JSON_CODR")
+        self.assertEqual(provider["vendor"], "customendpoint")
+        self.assertTrue(provider["models"])
+        self.assertTrue(all(model["id"] and model["name"] for model in provider["models"]))
+
     def test_github_routes_keep_authentication_server_side_and_require_write_confirmation(self):
         class FakeGitHubCLI:
             def __init__(self):
@@ -1491,6 +1501,22 @@ class WebApiTests(unittest.TestCase):
 
         self.assertTrue(supported)
         self.assertFalse(advertised_but_unverified)
+
+    def test_model_metadata_reads_real_context_and_verified_capabilities(self):
+        class MetadataClient:
+            async def show(self, model):
+                return {
+                    "capabilities": ["completion", "tools", "vision"],
+                    "model_info": {"qwen3.context_length": 262144},
+                }
+
+        metadata = asyncio.run(OllamaService(client=MetadataClient()).model_metadata("qwen3.5:9b"))
+
+        self.assertEqual(metadata, {
+            "context_length": 262144,
+            "tool_calling": True,
+            "vision": True,
+        })
 
     def test_tool_compatibility_distinguishes_advertised_native_and_delegated(self):
         class CapabilityClient:

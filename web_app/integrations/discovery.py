@@ -14,6 +14,38 @@ def _http_origin(value: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def build_vscode_language_model_config(ollama_url: str, models: list[dict]) -> list[dict]:
+    ollama_origin = _http_origin(ollama_url)
+    configured_models = []
+    for model in models:
+        model_id = model.get("name")
+        if model.get("installed") is not True or not isinstance(model_id, str) or not model_id:
+            continue
+        capabilities = set(model.get("capabilities") or ())
+        context_window = model.get("context_length")
+        if not isinstance(context_window, int) or context_window < 4096:
+            context_window = 32768
+        max_output_tokens = min(16384, max(2048, context_window // 8))
+        configured_models.append({
+            "id": model_id,
+            "name": model_id,
+            "url": f"{ollama_origin}/v1/chat/completions",
+            "apiType": "chat-completions",
+            "toolCalling": bool(model.get("tool_calling", "tools" in capabilities)),
+            "vision": bool(model.get("vision", "vision" in capabilities)),
+            "contextWindow": context_window,
+            "maxInputTokens": context_window - max_output_tokens,
+            "maxOutputTokens": max_output_tokens,
+        })
+    return [{
+        "name": "JSON_CODR",
+        "vendor": "customendpoint",
+        "apiKey": "ollama",
+        "apiType": "chat-completions",
+        "models": configured_models,
+    }]
+
+
 def build_discovery_document(base_url: str, ollama_url: str) -> dict:
     from web_app.integrations.mcp_server import PROTOCOL_VERSION, TOOLS
 
@@ -52,6 +84,7 @@ def build_discovery_document(base_url: str, ollama_url: str) -> dict:
         },
         "configurations": {
             "vscode": {
+                "language_models_url": f"{service_origin}/api/integrations/vscode/language-models",
                 "servers": {
                     "json-codr-borg": {
                         "type": "stdio",

@@ -241,6 +241,43 @@ class AdapterPackageTests(unittest.TestCase):
 
         self.assertEqual(document["ollama"]["base_url"], "http://127.0.0.1:11435")
 
+    def test_vscode_language_models_are_independently_selectable_and_truthful(self):
+        from web_app.integrations.discovery import build_vscode_language_model_config
+
+        config = build_vscode_language_model_config(
+            "http://127.0.0.1:11434",
+            [
+                {
+                    "name": "qwen3.5:9b",
+                    "installed": True,
+                    "context_length": 262144,
+                    "capabilities": ["tools", "vision"],
+                },
+                {
+                    "name": "qwen2.5-coder:7b",
+                    "installed": True,
+                    "context_length": 32768,
+                    "capabilities": ["tools"],
+                },
+                {"name": "missing:latest", "installed": False, "capabilities": ["tools"]},
+            ],
+        )
+
+        self.assertEqual(len(config), 1)
+        provider = config[0]
+        self.assertEqual((provider["name"], provider["vendor"], provider["apiType"]), (
+            "JSON_CODR", "customendpoint", "chat-completions",
+        ))
+        self.assertEqual(provider["apiKey"], "ollama")
+        self.assertEqual([model["id"] for model in provider["models"]], [
+            "qwen3.5:9b", "qwen2.5-coder:7b",
+        ])
+        self.assertEqual(provider["models"][0]["url"], "http://127.0.0.1:11434/v1/chat/completions")
+        self.assertTrue(provider["models"][0]["toolCalling"])
+        self.assertTrue(provider["models"][0]["vision"])
+        self.assertFalse(provider["models"][1]["vision"])
+        self.assertEqual(provider["models"][0]["contextWindow"], 262144)
+
 
 if __name__ == "__main__":
     unittest.main()
