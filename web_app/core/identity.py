@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+import hashlib
+import hmac
+import json
 import secrets
 import sqlite3
 from typing import Literal
@@ -12,6 +15,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
 
 from web_app.designer.access import _ROLE_GRANTS
+from web_app.core.auth import CredentialKind, IssuedCredential, load_or_create_protected_key
 
 
 IdentityRoleName = Literal[
@@ -93,7 +97,13 @@ class _ClosingConnection(sqlite3.Connection):
 
 
 class IdentityService:
-    def __init__(self, data_root: Path, *, now=lambda: datetime.now(UTC)):
+    def __init__(
+        self,
+        data_root: Path,
+        *,
+        now=lambda: datetime.now(UTC),
+        security_root: Path | None = None,
+    ):
         self.data_root = Path(data_root)
         self.database_path = self.data_root / "core" / "identity.sqlite"
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -106,6 +116,16 @@ class IdentityService:
         )
         self._initialize()
         self._dummy_hash = self._hasher.hash(secrets.token_urlsafe(24))
+        security_root = security_root or self.data_root.parent / f".{self.data_root.name}-identity"
+        self.protected_key_path = Path(security_root) / "identity.key.dpapi"
+        self.audit_anchor_path = Path(security_root) / "identity.audit.anchor"
+        self._hmac_key_cache: bytes | None = None
+
+    @property
+    def _hmac_key(self) -> bytes:
+        if self._hmac_key_cache is None:
+            self._hmac_key_cache = load_or_create_protected_key(self.protected_key_path)
+        return self._hmac_key_cache
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, factory=_ClosingConnection)
@@ -194,8 +214,6 @@ class IdentityService:
             updated_at TEXT NOT NULL
         );
         """
-        import json
-
         with self._connect() as connection:
             connection.executescript(schema)
             for name, grants in _ROLE_GRANTS.items():
@@ -340,8 +358,6 @@ class IdentityService:
         return tuple(self.get_user(user_id) for user_id in ids)
 
     def list_roles(self) -> tuple[IdentityRole, ...]:
-        import json
-
         with self._connect() as connection:
             rows = connection.execute("SELECT role_name, grants_json FROM identity_roles ORDER BY role_name").fetchall()
         return tuple(IdentityRole(name=row[0], grants=tuple(json.loads(row[1]))) for row in rows)
@@ -383,6 +399,8 @@ class IdentityService:
             ).rowcount
         if not updated:
             raise KeyError(username)
+        user = self._user_by_normalized(normalized)
+        self.revoke_user_credentials(user.user_id, actor_id=user.user_id, reason="password changed")
 
     def _recovery_count(self, *, excluding: str | None = None) -> int:
         query = """SELECT COUNT(DISTINCT u.user_id) FROM identity_users u
@@ -413,3 +431,189 @@ class IdentityService:
         with self._connect() as connection:
             self._replace_roles(connection, user_id, roles, self._iso(self._now()))
         return self.get_user(user_id)
+
+    def _token_digest(self, token: str) -> str:
+        return hmac.new(self._hmac_key, token.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    def _audit(
+        self,
+        operation: str,
+        *,
+        actor_id: str | None,
+        target_id: str | None,
+        reason: str,
+        changed_fields: dict[str, object] | None = None,
+    ) -> None:
+        created_at = self._iso(self._now())
+        previous_hash = self.audit_anchor_path.read_text("ascii").strip() if self.audit_anchor_path.exists() else ""
+        payload = json.dumps(
+            {
+                "actor_id": actor_id,
+                "target_id": target_id,
+                "operation": operation,
+                "changed_fields": changed_fields or {},
+                "reason": reason,
+                "created_at": created_at,
+                "previous_hash": previous_hash,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        entry_hash = hmac.new(self._hmac_key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO identity_audit(
+                    audit_id, actor_id, target_id, operation, changed_fields_json, reason,
+                    previous_hash, entry_hash, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    str(uuid4()), actor_id, target_id, operation,
+                    json.dumps(changed_fields or {}, sort_keys=True), reason,
+                    previous_hash or None, entry_hash, created_at,
+                ),
+            )
+        temporary = self.audit_anchor_path.with_suffix(".anchor.tmp")
+        temporary.write_text(entry_hash, encoding="ascii")
+        temporary.replace(self.audit_anchor_path)
+
+    def issue_credential(
+        self,
+        user_id: str,
+        kind: CredentialKind | str,
+        label: str,
+        scopes: tuple[str, ...],
+        *,
+        lifetime: timedelta | None = None,
+    ) -> IssuedCredential:
+        user = self.get_user(user_id)
+        if user.status != "active":
+            raise PermissionError("user is disabled")
+        credential_kind = CredentialKind(kind)
+        now = self._now()
+        lifetime = lifetime or timedelta(days=30)
+        expires_at = now + lifetime
+        idle_expires_at = now + timedelta(hours=12) if credential_kind is CredentialKind.browser_session else None
+        token = secrets.token_urlsafe(48)
+        credential_id = str(uuid4())
+        normalized_scopes = tuple(dict.fromkeys(scopes))
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO identity_sessions(
+                    credential_id, user_id, kind, label, token_hash, scopes_json, issued_at,
+                    expires_at, idle_expires_at, last_used_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    credential_id, user_id, credential_kind.value, label.strip(), self._token_digest(token),
+                    json.dumps(normalized_scopes), self._iso(now), self._iso(expires_at),
+                    self._iso(idle_expires_at) if idle_expires_at else None, self._iso(now),
+                ),
+            )
+        self._audit(
+            "credential.issued",
+            actor_id=user_id,
+            target_id=credential_id,
+            reason="credential issued",
+            changed_fields={"kind": credential_kind.value, "label": label, "scopes": normalized_scopes},
+        )
+        return IssuedCredential(
+            credential_id=credential_id,
+            user_id=user_id,
+            kind=credential_kind,
+            label=label,
+            scopes=normalized_scopes,
+            issued_at=now,
+            expires_at=expires_at,
+            idle_expires_at=idle_expires_at,
+            token=token,
+        )
+
+    def resolve_credential(
+        self,
+        raw_token: str,
+        *,
+        required_kind: CredentialKind | str | None = None,
+        required_scope: str | None = None,
+    ) -> AuthenticatedPrincipal:
+        token_hash = self._token_digest(raw_token)
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT s.*, u.username, u.status FROM identity_sessions s
+                    JOIN identity_users u ON u.user_id=s.user_id WHERE s.token_hash=?""",
+                (token_hash,),
+            ).fetchone()
+            if not row:
+                raise PermissionError("invalid credential")
+            if row["revoked_at"]:
+                raise PermissionError("credential is revoked")
+            if row["status"] != "active":
+                raise PermissionError("user is disabled")
+            now = self._now()
+            if datetime.fromisoformat(row["expires_at"]) <= now:
+                raise PermissionError("credential is expired")
+            if row["idle_expires_at"] and datetime.fromisoformat(row["idle_expires_at"]) <= now:
+                raise PermissionError("credential is expired")
+            kind = CredentialKind(row["kind"])
+            if required_kind is not None and kind is not CredentialKind(required_kind):
+                raise PermissionError("credential kind is not allowed")
+            scopes = tuple(json.loads(row["scopes_json"]))
+            if required_scope and required_scope not in scopes:
+                raise PermissionError("credential scope is not allowed")
+            if kind is CredentialKind.browser_session:
+                next_idle = min(now + timedelta(hours=12), datetime.fromisoformat(row["expires_at"]))
+                connection.execute(
+                    "UPDATE identity_sessions SET last_used_at=?, idle_expires_at=? WHERE credential_id=?",
+                    (self._iso(now), self._iso(next_idle), row["credential_id"]),
+                )
+            else:
+                connection.execute(
+                    "UPDATE identity_sessions SET last_used_at=? WHERE credential_id=?",
+                    (self._iso(now), row["credential_id"]),
+                )
+        user = self.get_user(row["user_id"])
+        return AuthenticatedPrincipal(
+            user_id=user.user_id,
+            username=user.username,
+            roles=user.roles,
+            credential_id=row["credential_id"],
+            credential_kind=kind.value,
+            scopes=scopes,
+            authentication_source=kind.value,
+        )
+
+    def revoke_credential(self, credential_id: str, *, actor_id: str | None, reason: str) -> None:
+        now = self._iso(self._now())
+        with self._connect() as connection:
+            changed = connection.execute(
+                "UPDATE identity_sessions SET revoked_at=COALESCE(revoked_at, ?) WHERE credential_id=?",
+                (now, credential_id),
+            ).rowcount
+        if not changed:
+            raise KeyError(credential_id)
+        self._audit("credential.revoked", actor_id=actor_id, target_id=credential_id, reason=reason)
+
+    def revoke_kind(self, user_id: str, kind: CredentialKind | str, *, actor_id: str | None, reason: str) -> int:
+        now = self._iso(self._now())
+        with self._connect() as connection:
+            changed = connection.execute(
+                "UPDATE identity_sessions SET revoked_at=? WHERE user_id=? AND kind=? AND revoked_at IS NULL",
+                (now, user_id, CredentialKind(kind).value),
+            ).rowcount
+        self._audit(
+            "credential.kind_revoked", actor_id=actor_id, target_id=user_id, reason=reason,
+            changed_fields={"kind": CredentialKind(kind).value, "count": changed},
+        )
+        return changed
+
+    def revoke_user_credentials(self, user_id: str, *, actor_id: str | None, reason: str) -> int:
+        now = self._iso(self._now())
+        with self._connect() as connection:
+            changed = connection.execute(
+                "UPDATE identity_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
+                (now, user_id),
+            ).rowcount
+        if changed:
+            self._audit(
+                "credential.user_revoked", actor_id=actor_id, target_id=user_id, reason=reason,
+                changed_fields={"count": changed},
+            )
+        return changed
