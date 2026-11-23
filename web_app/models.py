@@ -651,6 +651,18 @@ class MemorySettings(BaseModel):
     detailed_retention_enabled: bool = False
     search_limit: int = Field(default=20, ge=1, le=100)
 
+
+class IdentitySettings(BaseModel):
+    development_mode: bool = False
+    do_not_expire: bool = False
+    configured_host: str = Field(default="127.0.0.1:8765", min_length=1, max_length=255)
+
+    @model_validator(mode="after")
+    def validate_atomic_development_mode(self) -> "IdentitySettings":
+        if self.do_not_expire and not self.development_mode:
+            raise ValueError("do_not_expire requires development_mode")
+        return self
+
 class SystemSettings(BaseModel):
     version: int = 3
     app_version: str = APP_VERSION
@@ -660,6 +672,7 @@ class SystemSettings(BaseModel):
     gpu_optimization: GpuOptimizationSettings = Field(default_factory=GpuOptimizationSettings)
     designer: DesignerSettings = Field(default_factory=DesignerSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
+    identity: IdentitySettings = Field(default_factory=IdentitySettings)
 
 
 class SettingsUpdate(BaseModel):
@@ -669,6 +682,7 @@ class SettingsUpdate(BaseModel):
     gpu_optimization: Optional[GpuOptimizationSettings] = None
     designer: Optional[DesignerSettings] = None
     memory: Optional[MemorySettings] = None
+    identity: Optional[IdentitySettings] = None
 
 
 class SkillScanRequest(BaseModel):

@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from web_app.app import create_app
-from web_app.models import DesignerSettings, MemorySettings, SettingsUpdate, SkillRoutingSettings, SkillScanSettings, UiSettingsUpdate
+from web_app.models import DesignerSettings, IdentitySettings, MemorySettings, SettingsUpdate, SkillRoutingSettings, SkillScanSettings, UiSettingsUpdate
 from web_app.settings import SettingsService
 from web_app.version import APP_VERSION
 from web_app.workspace import WorkspaceService
@@ -18,6 +18,10 @@ class FakeService:
 
 
 class SettingsTests(unittest.TestCase):
+    def test_identity_settings_reject_non_expiring_without_development_mode(self):
+        with self.assertRaises(ValueError):
+            IdentitySettings(development_mode=False, do_not_expire=True)
+
     def setUp(self):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary_directory.name)

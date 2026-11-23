@@ -7,6 +7,7 @@ from pathlib import Path
 import ctypes
 from ctypes import wintypes
 import os
+import ipaddress
 
 
 class CredentialKind(StrEnum):
@@ -27,6 +28,49 @@ class CredentialScope(StrEnum):
     lesson_verify = "lesson.verify"
     lesson_verification_record = "lesson.verification.record"
     lesson_promote_global = "lesson.promote_global"
+
+
+@dataclass(frozen=True)
+class DevelopmentBypassSettings:
+    enabled: bool = False
+    do_not_expire: bool = False
+    expires_at: datetime | None = None
+
+    def __post_init__(self):
+        if self.do_not_expire and not self.enabled:
+            raise ValueError("do_not_expire requires enabled development bypass")
+        if self.enabled and not self.do_not_expire and self.expires_at is None:
+            raise ValueError("expiring development bypass requires expires_at")
+        if self.do_not_expire and self.expires_at is not None:
+            raise ValueError("non-expiring development bypass cannot have expires_at")
+
+
+@dataclass(frozen=True)
+class LocalRequestEvidence:
+    peer_host: str
+    host: str
+    server_host: str
+    headers: dict[str, str]
+    connection_mode: str = "local"
+
+    def require_direct_loopback(self, configured_host: str) -> None:
+        try:
+            peer_loopback = ipaddress.ip_address(self.peer_host).is_loopback
+            server_loopback = ipaddress.ip_address(self.server_host).is_loopback
+        except ValueError as error:
+            raise PermissionError("local identity recovery requires numeric loopback addresses") from error
+        if not peer_loopback or not server_loopback:
+            raise PermissionError("local identity recovery requires a direct loopback connection")
+        if self.host.casefold() != configured_host.casefold():
+            raise PermissionError("local identity recovery rejected the Host header")
+        if self.connection_mode != "local":
+            raise PermissionError("local identity recovery is unavailable through relays or IDE webviews")
+        forbidden = {
+            "forwarded", "via", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto",
+            "x-real-ip", "x-t3-relay", "x-json-codr-relay", "x-envoy-external-address",
+        }
+        if forbidden & {name.casefold() for name in self.headers}:
+            raise PermissionError("forwarded or relayed requests cannot use local identity recovery")
 
 
 @dataclass(frozen=True)

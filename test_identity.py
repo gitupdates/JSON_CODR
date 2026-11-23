@@ -2,11 +2,13 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from web_app.designer.access import DESIGN_ACTIONS
 from web_app.app import create_app
 from web_app.workspace import WorkspaceService
+from web_app.core.auth import DevelopmentBypassSettings, LocalRequestEvidence
 
 
 class FakeService:
@@ -18,6 +20,14 @@ class FakeService:
 
     async def generate_deterministic(self, model, messages, temperature=0.0):
         return ""
+
+
+class MutableClock:
+    def __init__(self):
+        self.value = datetime(2026, 11, 23, 12, 0, tzinfo=UTC)
+
+    def now(self):
+        return self.value
 
 
 class IdentityServiceTests(unittest.TestCase):
@@ -106,6 +116,71 @@ class IdentityServiceTests(unittest.TestCase):
         app = create_app(FakeService(), workspace=workspace)
 
         self.assertEqual(app.state.identity.database_path, self.root / "core" / "identity.sqlite")
+
+    def test_development_bypass_requires_atomic_settings(self):
+        with self.assertRaises(ValueError):
+            DevelopmentBypassSettings(enabled=False, do_not_expire=True)
+
+    def test_migrated_install_keeps_blank_login_off_until_direct_local_confirmation(self):
+        from web_app.core.identity import IdentityService
+
+        clock = MutableClock()
+        service = IdentityService(self.root, now=clock.now)
+        service.bootstrap_migrated("Administrator")
+        evidence = LocalRequestEvidence(
+            peer_host="127.0.0.1",
+            host="127.0.0.1:8765",
+            server_host="127.0.0.1",
+            headers={},
+        )
+
+        self.assertFalse(service.development_bypass().enabled)
+        status = service.confirm_development_bypass(evidence, configured_host="127.0.0.1:8765")
+        self.assertTrue(status.enabled)
+        self.assertEqual(status.expires_at, clock.now() + timedelta(days=30))
+        self.assertTrue(service.authenticate_password("Administrator", ""))
+
+        cli = service.issue_credential(service.list_users()[0].user_id, "cli", "cli", ("lesson.read",))
+        non_expiring = service.renew_development_bypass(
+            evidence, configured_host="127.0.0.1:8765", do_not_expire=True
+        )
+        self.assertIsNone(non_expiring.expires_at)
+        self.assertEqual(cli.expires_at, clock.now() + timedelta(days=30))
+
+    def test_blank_login_rejects_forwarding_relay_host_rebinding_and_non_loopback(self):
+        from web_app.core.identity import IdentityService
+
+        service = IdentityService(self.root)
+        service.bootstrap_migrated("Administrator")
+        invalid = (
+            LocalRequestEvidence("192.168.1.10", "127.0.0.1:8765", "127.0.0.1", {}),
+            LocalRequestEvidence("127.0.0.1", "evil.example", "127.0.0.1", {}),
+            LocalRequestEvidence("127.0.0.1", "127.0.0.1:8765", "0.0.0.0", {}),
+            LocalRequestEvidence("127.0.0.1", "127.0.0.1:8765", "127.0.0.1", {"x-forwarded-for": "127.0.0.1"}),
+            LocalRequestEvidence("127.0.0.1", "127.0.0.1:8765", "127.0.0.1", {"via": "proxy"}),
+            LocalRequestEvidence("127.0.0.1", "127.0.0.1:8765", "127.0.0.1", {}, connection_mode="ide_webview"),
+        )
+
+        for evidence in invalid:
+            with self.subTest(evidence=evidence):
+                with self.assertRaises(PermissionError):
+                    service.confirm_development_bypass(evidence, configured_host="127.0.0.1:8765")
+
+    def test_expired_bypass_disables_blank_login_and_opens_local_recovery(self):
+        from web_app.core.identity import IdentityService
+
+        clock = MutableClock()
+        service = IdentityService(self.root, now=clock.now)
+        service.bootstrap_migrated("Administrator")
+        evidence = LocalRequestEvidence("::1", "localhost:8765", "::1", {})
+        service.confirm_development_bypass(evidence, configured_host="localhost:8765")
+        clock.value += timedelta(days=31)
+
+        self.assertFalse(service.development_bypass().enabled)
+        self.assertFalse(service.authenticate_password("Administrator", ""))
+        recovery = service.begin_local_recovery(evidence, configured_host="localhost:8765")
+        self.assertEqual(recovery.expires_in_seconds, 1800)
+        self.assertTrue(service.authenticate_password("Administrator", recovery.secret))
 
 
 if __name__ == "__main__":

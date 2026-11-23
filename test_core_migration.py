@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from web_app.core.migration import MigrationService
+from web_app.core.identity import IdentityService
 
 
 def tree_digest(root: Path) -> str:
@@ -66,6 +67,9 @@ class MigrationServiceTests(unittest.TestCase):
         self.assertFalse((self.destination / "coding-agent-grants.json").exists())
         self.assertFalse((self.destination / "secrets").exists())
         self.assertTrue(any("manifest.json" in item for item in report.malformed))
+        identity = IdentityService(self.destination)
+        self.assertEqual(identity.list_users()[0].username, "Administrator")
+        self.assertFalse(identity.development_bypass().enabled)
 
         service.rollback(report)
         self.assertFalse(self.destination.exists())

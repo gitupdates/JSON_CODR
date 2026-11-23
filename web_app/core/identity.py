@@ -15,7 +15,13 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
 
 from web_app.designer.access import _ROLE_GRANTS
-from web_app.core.auth import CredentialKind, IssuedCredential, load_or_create_protected_key
+from web_app.core.auth import (
+    CredentialKind,
+    DevelopmentBypassSettings,
+    IssuedCredential,
+    LocalRequestEvidence,
+    load_or_create_protected_key,
+)
 
 
 IdentityRoleName = Literal[
@@ -271,6 +277,119 @@ class IdentityService:
             )
         return BootstrapResult(created=True, user=user, temporary_credential=temporary)
 
+    def bootstrap_migrated(self, administrator_name: str = "Administrator") -> BootstrapResult:
+        existing = self._user_by_normalized(self._normalize(administrator_name))
+        if existing:
+            return BootstrapResult(created=False, user=existing)
+        user = self.create_user(
+            administrator_name,
+            administrator_name,
+            password_hash=None,
+            require_password_change=True,
+            roles=("administrator",),
+            bootstrap_account=True,
+        )
+        with self._connect() as connection:
+            connection.execute(
+                """UPDATE identity_bootstrap_state SET completed=1, mode='migration',
+                    administrator_user_id=?, development_expires_at=NULL,
+                    development_do_not_expire=0, updated_at=? WHERE singleton=1""",
+                (user.user_id, self._iso(self._now())),
+            )
+        return BootstrapResult(created=True, user=user)
+
+    def development_bypass(self) -> DevelopmentBypassSettings:
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT development_expires_at, development_do_not_expire
+                    FROM identity_bootstrap_state WHERE singleton=1"""
+            ).fetchone()
+        do_not_expire = bool(row["development_do_not_expire"])
+        expires_at = datetime.fromisoformat(row["development_expires_at"]) if row["development_expires_at"] else None
+        enabled = do_not_expire or bool(expires_at and expires_at > self._now())
+        return DevelopmentBypassSettings(
+            enabled=enabled,
+            do_not_expire=do_not_expire if enabled else False,
+            expires_at=None if do_not_expire else expires_at if enabled else None,
+        )
+
+    def confirm_development_bypass(
+        self,
+        evidence: LocalRequestEvidence,
+        *,
+        configured_host: str,
+        do_not_expire: bool = False,
+    ) -> DevelopmentBypassSettings:
+        evidence.require_direct_loopback(configured_host)
+        with self._connect() as connection:
+            state = connection.execute(
+                "SELECT administrator_user_id FROM identity_bootstrap_state WHERE singleton=1"
+            ).fetchone()
+            if not state or not state["administrator_user_id"]:
+                raise RuntimeError("identity bootstrap is incomplete")
+            expires_at = None if do_not_expire else self._now() + timedelta(days=30)
+            connection.execute(
+                """UPDATE identity_users SET password_hash=?, password_expires_at=NULL,
+                    require_password_change=0, updated_at=? WHERE user_id=?""",
+                (self._hasher.hash(""), self._iso(self._now()), state["administrator_user_id"]),
+            )
+            connection.execute(
+                """UPDATE identity_bootstrap_state SET development_expires_at=?,
+                    development_do_not_expire=?, updated_at=? WHERE singleton=1""",
+                (self._iso(expires_at) if expires_at else None, int(do_not_expire), self._iso(self._now())),
+            )
+        self._audit(
+            "development_bypass.confirmed",
+            actor_id=state["administrator_user_id"],
+            target_id=state["administrator_user_id"],
+            reason="direct local operator confirmation",
+            changed_fields={"do_not_expire": do_not_expire, "expires_at": self._iso(expires_at) if expires_at else None},
+        )
+        return self.development_bypass()
+
+    def renew_development_bypass(
+        self,
+        evidence: LocalRequestEvidence,
+        *,
+        configured_host: str,
+        do_not_expire: bool = False,
+    ) -> DevelopmentBypassSettings:
+        if not self.development_bypass().enabled:
+            raise PermissionError("development bypass must be confirmed before renewal")
+        return self.confirm_development_bypass(
+            evidence, configured_host=configured_host, do_not_expire=do_not_expire
+        )
+
+    def begin_local_recovery(
+        self,
+        evidence: LocalRequestEvidence,
+        *,
+        configured_host: str,
+    ) -> TemporaryCredential:
+        evidence.require_direct_loopback(configured_host)
+        if self.development_bypass().enabled:
+            raise PermissionError("recovery is unavailable while development bypass is active")
+        with self._connect() as connection:
+            state = connection.execute(
+                "SELECT administrator_user_id FROM identity_bootstrap_state WHERE singleton=1"
+            ).fetchone()
+            if not state or not state["administrator_user_id"]:
+                raise RuntimeError("identity bootstrap is incomplete")
+            secret = secrets.token_urlsafe(32)
+            expires_at = self._now() + timedelta(minutes=30)
+            connection.execute(
+                """UPDATE identity_users SET password_hash=?, password_expires_at=?,
+                    require_password_change=1, updated_at=? WHERE user_id=?""",
+                (self._hasher.hash(secret), self._iso(expires_at), self._iso(self._now()), state["administrator_user_id"]),
+            )
+        self._audit(
+            "identity.recovery_issued",
+            actor_id=state["administrator_user_id"],
+            target_id=state["administrator_user_id"],
+            reason="direct local recovery",
+        )
+        return TemporaryCredential(secret=secret, expires_at=expires_at)
+
     def create_user(
         self,
         username: str,
@@ -375,6 +494,8 @@ class IdentityService:
         except (VerificationError, InvalidHashError):
             verified = False
         if not row or row["status"] != "active":
+            return False
+        if password == "" and not self.development_bypass().enabled:
             return False
         if row["password_expires_at"] and datetime.fromisoformat(row["password_expires_at"]) <= self._now():
             return False

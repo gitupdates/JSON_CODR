@@ -124,6 +124,9 @@ class MigrationService:
                 archived.append(str(target.relative_to(staging)))
 
             os.replace(staging, destination_root)
+            from web_app.core.identity import IdentityService
+
+            IdentityService(destination_root).bootstrap_migrated("Administrator")
         except Exception:
             shutil.rmtree(staging, ignore_errors=True)
             raise
