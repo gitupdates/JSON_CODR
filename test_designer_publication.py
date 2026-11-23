@@ -7,6 +7,7 @@ from web_app.designer.contracts import DesignDocument
 from web_app.designer.publication import PublicationRejected, PublicationService
 from web_app.designer.store import DesignerStore, ProjectConflict
 from web_app.designer.json_codr_manifest import create_json_codr_overlay
+from web_app.core.identity import AuthenticatedPrincipal, IdentityService
 
 
 class DesignerPublicationTests(unittest.TestCase):
@@ -100,6 +101,25 @@ class DesignerPublicationTests(unittest.TestCase):
 
         with self.assertRaises(PublicationRejected):
             PublicationService(overlay_store).publish(overlay.project_id, invalid, None, self.context)
+
+    def test_authenticated_publication_uses_server_derived_roles(self):
+        identity = IdentityService(Path(self.temporary_directory.name) / "identity")
+        administrator = identity.bootstrap("production", "Administrator").user
+        principal = AuthenticatedPrincipal(
+            user_id=administrator.user_id,
+            username=administrator.username,
+            roles=("viewer",),
+        )
+
+        published = self.service().publish_authenticated(
+            self.document.project_id,
+            self.document,
+            None,
+            identity,
+            principal,
+        )
+
+        self.assertEqual(published.project_id, self.document.project_id)
 
 
 if __name__ == "__main__":

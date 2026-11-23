@@ -15,6 +15,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
 
 from web_app.designer.access import _ROLE_GRANTS
+from web_app.designer.access import CapabilityProfile, DesignPolicyContext, ProfileAssignment
 from web_app.core.auth import (
     CredentialKind,
     DevelopmentBypassSettings,
@@ -552,6 +553,124 @@ class IdentityService:
         with self._connect() as connection:
             self._replace_roles(connection, user_id, roles, self._iso(self._now()))
         return self.get_user(user_id)
+
+    def create_profile(
+        self,
+        profile_id: str,
+        label: str,
+        grants: tuple[str, ...],
+        denies: tuple[str, ...],
+    ) -> CapabilityProfile:
+        profile = CapabilityProfile(profile_id=profile_id, label=label, grants=grants, denies=denies)
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO identity_profiles(profile_id, label, grants_json, denies_json)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(profile_id) DO UPDATE SET label=excluded.label,
+                    grants_json=excluded.grants_json, denies_json=excluded.denies_json""",
+                (profile.profile_id, profile.label, json.dumps(profile.grants), json.dumps(profile.denies)),
+            )
+        return profile
+
+    def assign_profile(self, user_id: str, profile_id: str, resource: str) -> ProfileAssignment:
+        self.get_user(user_id)
+        assignment = ProfileAssignment(
+            assignment_id=str(uuid4()), subject_id=user_id, profile_id=profile_id, resource=resource
+        )
+        with self._connect() as connection:
+            if not connection.execute(
+                "SELECT 1 FROM identity_profiles WHERE profile_id=?", (profile_id,)
+            ).fetchone():
+                raise KeyError(profile_id)
+            connection.execute(
+                """INSERT INTO identity_profile_assignments(assignment_id, user_id, profile_id, resource)
+                    VALUES (?, ?, ?, ?)""",
+                (assignment.assignment_id, user_id, profile_id, resource),
+            )
+        return assignment
+
+    def create_group(self, name: str, roles: tuple[str, ...] = ()) -> str:
+        group_id = str(uuid4())
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO identity_groups(group_id, name, created_at) VALUES (?, ?, ?)",
+                (group_id, name.strip(), self._iso(self._now())),
+            )
+            for role in roles:
+                connection.execute(
+                    "INSERT INTO identity_group_roles(group_id, role_name) VALUES (?, ?)", (group_id, role)
+                )
+        return group_id
+
+    def add_group_member(self, group_id: str, user_id: str) -> None:
+        self.get_user(user_id)
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO identity_group_members(group_id, user_id) VALUES (?, ?)",
+                (group_id, user_id),
+            )
+
+    def design_policy_context(
+        self,
+        principal: AuthenticatedPrincipal,
+        resource: str,
+    ) -> DesignPolicyContext:
+        user = self.get_user(principal.user_id)
+        precedence = ("owner", "administrator", "designer", "editor", "contributor", "reviewer", "viewer")
+        with self._connect() as connection:
+            group_roles = {
+                row[0]
+                for row in connection.execute(
+                    """SELECT gr.role_name FROM identity_group_members gm
+                        JOIN identity_group_roles gr ON gr.group_id=gm.group_id WHERE gm.user_id=?""",
+                    (user.user_id,),
+                )
+            }
+            rows = connection.execute(
+                """SELECT p.profile_id, p.label, p.grants_json, p.denies_json,
+                    a.assignment_id, a.resource
+                    FROM identity_profile_assignments a
+                    JOIN identity_profiles p ON p.profile_id=a.profile_id
+                    WHERE a.user_id=?""",
+                (user.user_id,),
+            ).fetchall()
+        effective_roles = set(user.roles) | group_roles
+        role = next(name for name in precedence if name in effective_roles)
+        profiles = tuple(
+            CapabilityProfile(
+                profile_id=row["profile_id"], label=row["label"],
+                grants=tuple(json.loads(row["grants_json"])), denies=tuple(json.loads(row["denies_json"])),
+            )
+            for row in rows
+        )
+        assignments = tuple(
+            ProfileAssignment(
+                assignment_id=row["assignment_id"], subject_id=user.user_id,
+                profile_id=row["profile_id"], resource=row["resource"],
+            )
+            for row in rows
+        )
+        return DesignPolicyContext(
+            subject_id=user.user_id,
+            role=role,
+            profiles=profiles,
+            assignments=assignments,
+            resource_rules=(),
+        )
+
+    def lesson_scopes(self, user_id: str) -> tuple[str, ...]:
+        user = self.get_user(user_id)
+        if set(user.roles) & {"owner", "administrator"}:
+            return (
+                "lesson.read", "lesson.audit", "lesson.edit", "lesson.disable", "lesson.supersede",
+                "lesson.remove", "lesson.verify", "lesson.verification.record", "lesson.promote_global",
+            )
+        return ("lesson.read",)
+
+    @staticmethod
+    def require_distinct_accounts(*user_ids: str) -> None:
+        if len(set(user_ids)) != len(user_ids):
+            raise PermissionError("global promotion requires distinct accounts")
 
     def _token_digest(self, token: str) -> str:
         return hmac.new(self._hmac_key, token.encode("utf-8"), hashlib.sha256).hexdigest()

@@ -9,6 +9,7 @@ from web_app.designer.access import DESIGN_ACTIONS
 from web_app.app import create_app
 from web_app.workspace import WorkspaceService
 from web_app.core.auth import DevelopmentBypassSettings, LocalRequestEvidence
+from web_app.core.identity import AuthenticatedPrincipal
 
 
 class FakeService:
@@ -181,6 +182,34 @@ class IdentityServiceTests(unittest.TestCase):
         recovery = service.begin_local_recovery(evidence, configured_host="localhost:8765")
         self.assertEqual(recovery.expires_in_seconds, 1800)
         self.assertTrue(service.authenticate_password("Administrator", recovery.secret))
+
+    def test_design_context_is_derived_from_persisted_roles_and_profile_denies(self):
+        service = self.service()
+        bootstrap = service.bootstrap("production", "Administrator")
+        principal = AuthenticatedPrincipal(
+            user_id=bootstrap.user.user_id,
+            username="Administrator",
+            roles=("viewer",),
+        )
+        service.create_profile("no-publish", "No publishing", (), ("design.publish",))
+        service.assign_profile(bootstrap.user.user_id, "no-publish", "project:demo")
+
+        context = service.design_policy_context(principal, "project:demo")
+
+        self.assertEqual(context.role, "administrator")
+        self.assertEqual(context.profiles[0].profile_id, "no-publish")
+        self.assertEqual(context.assignments[0].resource, "project:demo")
+
+    def test_lesson_scope_matrix_and_two_account_rule_use_account_ids(self):
+        service = self.service()
+        bootstrap = service.bootstrap("production", "Administrator")
+        viewer = service.create_user("viewer", "Viewer")
+
+        self.assertIn("lesson.promote_global", service.lesson_scopes(bootstrap.user.user_id))
+        self.assertEqual(service.lesson_scopes(viewer.user_id), ("lesson.read",))
+        with self.assertRaisesRegex(PermissionError, "distinct accounts"):
+            service.require_distinct_accounts(bootstrap.user.user_id, bootstrap.user.user_id)
+        service.require_distinct_accounts(bootstrap.user.user_id, viewer.user_id)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,8 @@ import ctypes
 from ctypes import wintypes
 import os
 import ipaddress
+from collections.abc import Callable
+from fastapi import HTTPException, Request
 
 
 class CredentialKind(StrEnum):
@@ -149,3 +151,17 @@ def load_or_create_protected_key(path: Path, size: int = 32) -> bytes:
     finally:
         os.close(descriptor)
     return key
+
+
+def require_identity_scope(identity: Callable[[], object], scope: str):
+    async def dependency(request: Request):
+        authorization = request.headers.get("authorization", "")
+        scheme, separator, token = authorization.partition(" ")
+        if not separator or scheme.casefold() != "bearer" or not token.strip():
+            raise HTTPException(status_code=401, detail="authenticated credential required")
+        try:
+            return identity().resolve_credential(token.strip(), required_scope=scope)
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+
+    return dependency

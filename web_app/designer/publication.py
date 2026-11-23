@@ -16,6 +16,7 @@ from web_app.designer.contracts import DesignDocument
 from web_app.designer.components import ComponentRegistry
 from web_app.designer.continuity import validate_runtime_continuity
 from web_app.designer.store import DesignerStore, ProjectConflict
+from web_app.core.identity import AuthenticatedPrincipal, IdentityService
 
 
 class PublicationRejected(ValueError):
@@ -112,6 +113,17 @@ class PublicationService:
             self.before_swap(project_id)
             self._atomic_json(publication_root / "current.json", {"revision_id": snapshot.revision_id})
             return snapshot
+
+    def publish_authenticated(
+        self,
+        project_id: str,
+        draft: DesignDocument,
+        expected_revision: str | None,
+        identity: IdentityService,
+        principal: AuthenticatedPrincipal,
+    ) -> PublishedSnapshot:
+        context = identity.design_policy_context(principal, f"project:{project_id}")
+        return self.publish(project_id, draft, expected_revision, context)
 
     def _current_or_none(self, project_id: str) -> PublishedSnapshot | None:
         pointer = self._publication_root(project_id) / "current.json"

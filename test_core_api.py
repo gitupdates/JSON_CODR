@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 from web_app.core.adapters import AdapterEvent, CapabilityCall
@@ -16,6 +16,8 @@ from web_app.models import MemorySettings
 from web_app.core.policy import PolicyService
 from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
+from web_app.core.auth import require_identity_scope
+from web_app.core.identity import IdentityService
 
 
 class RecordingAdapter:
@@ -178,6 +180,23 @@ class CoreApiTests(unittest.TestCase):
         self.assertTrue(status.json()["local_only"])
         self.assertEqual(status.json()["health"], "healthy")
         self.assertEqual(status.json()["telemetry"][0]["kind"], "runtime.started")
+
+    def test_privileged_scope_dependency_rejects_legacy_principal_header(self):
+        identity = IdentityService(Path(self.temporary.name) / "identity")
+        user = identity.bootstrap("production", "Administrator").user
+        credential = identity.issue_credential(user.user_id, "browser_session", "test", ("lesson.edit",))
+        app = FastAPI()
+
+        @app.get("/protected")
+        def protected(_principal=Depends(require_identity_scope(lambda: identity, "lesson.edit"))):
+            return {"ok": True}
+
+        with TestClient(app) as client:
+            legacy = client.get("/protected", headers={"X-JSON-CODR-Principal": "Administrator"})
+            allowed = client.get("/protected", headers={"Authorization": f"Bearer {credential.token}"})
+
+        self.assertEqual(legacy.status_code, 401)
+        self.assertEqual(allowed.status_code, 200)
 
     def test_plan_and_step_revisions_are_editable_rejectable_and_stale_safe(self):
         self.client.post("/api/tasks", json=self.command())
