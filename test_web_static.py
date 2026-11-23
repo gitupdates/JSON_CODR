@@ -520,7 +520,7 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.3.8", response.text)
+        self.assertIn("V1.3.9", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -675,8 +675,8 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         javascript = self.client.get("/static/app.js").text
 
         self.assertIn('/static/vendor/xterm.css', html)
-        self.assertIn('/static/vendor/xterm.js?v=1.3.8', html)
-        self.assertIn('/static/vendor/xterm-addon-fit.js?v=1.3.8', html)
+        self.assertIn('/static/vendor/xterm.js?v=1.3.9', html)
+        self.assertIn('/static/vendor/xterm-addon-fit.js?v=1.3.9', html)
         self.assertIn('id="terminal-tabs"', html)
         self.assertIn('data-terminal-profile="powershell"', html)
         self.assertEqual(html.count('data-terminal-profile="powershell"'), 1)
