@@ -5,6 +5,7 @@ from dataclasses import asdict
 import os
 import re
 import sys
+import time
 from typing import Callable, Literal
 from uuid import uuid7
 
@@ -2380,6 +2381,57 @@ def create_app(
             media_type=encoder.get_content_type(),
             headers={"Cache-Control": "no-cache"},
         )
+
+    @application.get("/v1/models")
+    async def openai_models():
+        models = await (inference_router.list_models() if inference_router else service.list_models())
+        return {
+            "object": "list",
+            "data": [
+                {"id": item["name"], "object": "model", "owned_by": "json-codr"}
+                for item in models
+                if item.get("installed", True)
+            ],
+        }
+
+    @application.post("/v1/chat/completions")
+    async def openai_chat_completions(payload: dict):
+        model = payload.get("model")
+        messages = payload.get("messages")
+        if not isinstance(model, str) or not model.strip():
+            raise HTTPException(status_code=422, detail="model is required")
+        if not isinstance(messages, list) or not messages:
+            raise HTTPException(status_code=422, detail="messages must be a non-empty list")
+        if payload.get("stream"):
+            raise HTTPException(status_code=400, detail="Streaming OpenAI responses are not supported yet")
+        prompt_parts = []
+        for message in messages:
+            if not isinstance(message, dict) or not isinstance(message.get("content"), str):
+                raise HTTPException(status_code=422, detail="Each message must contain string content")
+            role = str(message.get("role", "user")).strip() or "user"
+            prompt_parts.append(f"{role.upper()}: {message['content']}")
+        prompt = "\n\n".join(prompt_parts)
+        if len(messages) == 1 and messages[0].get("role") == "user":
+            prompt = messages[0]["content"]
+        try:
+            result = await service.chat(model.strip(), prompt)
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except OllamaUnavailableError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        except ModelTimeoutError as error:
+            raise HTTPException(status_code=504, detail=str(error)) from error
+        return {
+            "id": f"chatcmpl-{uuid7()}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": result.model,
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": result.content},
+                "finish_reason": "stop",
+            }],
+        }
 
     @application.post("/api/chat", response_model=ChatResult)
     async def chat(request: ChatRequest, http_request: Request):

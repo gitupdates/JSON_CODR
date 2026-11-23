@@ -12,6 +12,21 @@ from fastapi.testclient import TestClient
 
 
 class InstallationResolverTests(unittest.TestCase):
+    def test_vscode_workspace_launches_json_codr_and_pins_compatible_pylint_runtime(self):
+        root = Path(__file__).resolve().parent
+        launch_text = (root / ".vscode" / "launch.json").read_text(encoding="utf-8")
+        launch = json.loads("\n".join(
+            line for line in launch_text.splitlines() if not line.lstrip().startswith("//")
+        ))
+        settings = json.loads((root / ".vscode" / "settings.json").read_text(encoding="utf-8"))
+
+        browser = next(item for item in launch["configurations"] if item["type"] == "editor-browser")
+        self.assertEqual(browser["url"], "http://127.0.0.1:8765")
+        self.assertEqual(
+            settings["pylint.interpreter"],
+            ["${env:LOCALAPPDATA}\\Programs\\Python\\Python311\\python.exe"],
+        )
+
     def _resolver(self, *, environment=None, manifest_path=None, plugin_root=None, known_roots=()):
         try:
             from web_app.integrations.installation import InstallationResolver

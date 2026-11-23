@@ -21,8 +21,8 @@
         {
             "type": "editor-browser",
             "request": "launch",
-            "name": "Launch Integrated Browser against localhost",
-            "url": "http://localhost:8080",
+            "name": "JSON_CODR: Open web interface",
+            "url": "http://127.0.0.1:8765",
             "webRoot": "${workspaceFolder}"
         }
     ]

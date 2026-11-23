@@ -178,6 +178,24 @@ class FakeIntegrityBenchmark:
 
 
 class WebApiTests(unittest.TestCase):
+    def test_openai_compatible_models_and_chat_routes_use_live_service(self):
+        models = self.client.get("/v1/models")
+        self.assertEqual(models.status_code, 200)
+        self.assertEqual(models.json()["object"], "list")
+        self.assertEqual(models.json()["data"][0]["id"], "qwen2.5-coder:7b-instruct-q4_K_M")
+
+        response = self.client.post("/v1/chat/completions", json={
+            "model": "qwen",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": False,
+        })
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["object"], "chat.completion")
+        self.assertEqual(body["model"], "qwen2.5-coder:7b-instruct-q4_K_M")
+        self.assertEqual(body["choices"][0]["message"]["content"], "Answered: hello")
+        self.assertNotIn("usage", body)
+
     def test_all_model_run_routes_create_poll_cancel_export_search_and_protect_originals(self):
         session = self.workspace.create_session()
         created = self.client.post("/api/model-runs", json={

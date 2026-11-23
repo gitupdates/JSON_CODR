@@ -1,6 +1,6 @@
 # JSON_CODR
 
-JSON_CODR V1.3.4 is a localhost-only, unified project agent for local Ollama models.
+JSON_CODR V1.3.5 is a localhost-only, unified project agent for local Ollama models.
 
 ## Unified project workflow
 
@@ -8,7 +8,7 @@ Choose a model, describe the outcome in **Chat**, and run it. JSON_CODR creates 
 
 The response panel shows live activity and the requested and effective model identities. Use **Steer** by entering more direction while a task is active, **Stop** to request cancellation, **Retry** to create a linked retry, and **Undo** when the task produced a checkpoint. Execution details stay collapsed until needed. The **Live CLI** is the terminal view of the same local system, with command history, clipboard support, resize/reconnect, and the Ctrl+X then Ctrl+C interrupt chord.
 
-V1.3.4 adds bounded program-connection adapters, explicit recovery previews, and a repaired VS Code PowerShell launch profile. Integrity & Comprehension v3 can persist evidence-backed base log-perplexity from a teacher-forced evaluator and rank comparable models globally on one fixed corpus; unsupported runtimes remain visibly unranked instead of receiving inferred scores. V1.3.3 introduced the responsive **Workspace**, compact skill packs, persistent appearance and layout profiles, independently selectable Ollama models, and the durable BORG agent loop.
+V1.3.5 repairs the VS Code browser and Pylint launch paths and provides real OpenAI-compatible model discovery and chat completion routes over the configured local Ollama service. V1.3.4 added bounded program-connection adapters, explicit recovery previews, and a repaired VS Code PowerShell launch profile. Integrity & Comprehension v3 can persist evidence-backed base log-perplexity from a teacher-forced evaluator and rank comparable models globally on one fixed corpus; unsupported runtimes remain visibly unranked instead of receiving inferred scores. V1.3.3 introduced the responsive **Workspace**, compact skill packs, persistent appearance and layout profiles, independently selectable Ollama models, and the durable BORG agent loop.
 
 Local reads, searches, tests, bounded edits, and inference can run automatically inside the selected project boundary. Network access, installation, Git publication, destructive changes, and budget overrides require policy approval. Persistent grants remain project-scoped and can be revoked. A model without native tool calling may use a verified brokered route; JSON_CODR always displays the requested and effective model and never labels that route as native.
 
