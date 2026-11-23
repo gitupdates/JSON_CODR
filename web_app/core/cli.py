@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, TextIO
 from uuid import uuid4
 
+from web_app.core.cli_identity import CliIdentityService, DpapiTokenStore
+
 
 Submitter = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 _SENSITIVE = {"api_key", "authorization", "cookie", "credential", "credential_refs", "password", "secret", "token"}
@@ -22,12 +24,39 @@ def run_cli(
     submit: Submitter | None = None,
     stdout: TextIO = sys.stdout,
     stderr: TextIO = sys.stderr,
+    auth_service: CliIdentityService | None = None,
 ) -> int:
     parser = _parser()
     try:
         args = parser.parse_args(argv)
     except SystemExit as error:
         return int(error.code)
+    if args.action == "auth":
+        if auth_service is None:
+            from web_app.core.identity import IdentityService
+            from web_app.workspace import default_data_root
+
+            auth_service = CliIdentityService(
+                IdentityService(default_data_root()),
+                DpapiTokenStore(Path.home() / ".json_codr" / "credentials" / "cli.dpapi"),
+            )
+        try:
+            if args.auth_action == "login":
+                result = auth_service.login(args.username, args.password)
+                print(f"Signed in as {result.account} · {result.label} · expires {result.expires_at.isoformat()}", file=stdout)
+            elif args.auth_action == "status":
+                principal = auth_service.status()
+                print(f"Signed in as {principal.username} · cli · {', '.join(principal.scopes)}", file=stdout)
+            elif args.auth_action == "logout":
+                auth_service.logout()
+                print("CLI credential revoked", file=stdout)
+            else:
+                parser.print_help(stderr)
+                return 64
+        except (OSError, PermissionError, ValueError) as error:
+            print(f"JSON_CODR authentication failed: {error}", file=stderr)
+            return 1
+        return 0
     if args.action == "status":
         try:
             result = dict(submit({}) if submit is not None else _http_status(args.url))
@@ -160,6 +189,13 @@ def _parser() -> argparse.ArgumentParser:
     status = subparsers.add_parser("status")
     status.add_argument("--output", choices=("text", "json"), default="text")
     status.add_argument("--url", default="http://127.0.0.1:8772")
+    auth = subparsers.add_parser("auth")
+    auth_subparsers = auth.add_subparsers(dest="auth_action")
+    login = auth_subparsers.add_parser("login")
+    login.add_argument("--username", default="Administrator")
+    login.add_argument("--password", default="")
+    auth_subparsers.add_parser("status")
+    auth_subparsers.add_parser("logout")
     return parser
 
 

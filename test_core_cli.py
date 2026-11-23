@@ -1,11 +1,31 @@
 import io
 import json
 import unittest
+from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from web_app.core.cli import run_cli
 
 
 class CoreCliTests(unittest.TestCase):
+    def test_auth_commands_do_not_print_raw_credentials(self):
+        class Auth:
+            def login(self, username, password):
+                return SimpleNamespace(account=username, label="WORKSTATION · issued", expires_at=datetime(2030, 1, 1, tzinfo=UTC))
+
+            def status(self):
+                return SimpleNamespace(username="Administrator", scopes=("lesson.read",))
+
+            def logout(self):
+                return None
+
+        output = io.StringIO()
+        auth = Auth()
+        self.assertEqual(run_cli(["auth", "login"], auth_service=auth, stdout=output), 0)
+        self.assertNotIn("token", output.getvalue().casefold())
+        self.assertEqual(run_cli(["auth", "status"], auth_service=auth, stdout=output), 0)
+        self.assertEqual(run_cli(["auth", "logout"], auth_service=auth, stdout=output), 0)
+
     def test_json_and_text_outputs_have_deterministic_exit_codes(self):
         completed = {
             "task_id": "task-1",
