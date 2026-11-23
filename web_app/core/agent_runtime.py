@@ -10,6 +10,9 @@ from web_app.core.contracts import GoalSpec, TaskCommand, TaskEventDraft, TaskSt
 from web_app.core.project_intelligence import ProjectReader
 
 
+PLANNER_CONTEXT_BUDGET = 1_800
+
+
 class AgentRuntime:
     def __init__(self, task_store, core_service, context, planner, verifier, project_fingerprint, project_reader_resolver=None) -> None:
         self._tasks = task_store
@@ -107,7 +110,7 @@ class AgentRuntime:
             if root.status is TaskStatus.cancel_requested:
                 self._tasks.append(task_id, TaskEventDraft(event_type="task.cancelled"))
                 return self._tasks.get(task_id)
-            context = self.context.assemble(root.thread_id, task_id, 32_000)
+            context = self.context.assemble(root.thread_id, task_id, PLANNER_CONTEXT_BUDGET)
             call = await self._planner.plan(context)
             root = self._tasks.get(task_id)
             if root.status is TaskStatus.cancel_requested:

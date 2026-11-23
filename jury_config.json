@@ -3,7 +3,7 @@
   "model": "qwen2.5-coder:0.5b",
   "primary_base_model": "qwen2.5-coder:0.5b",
   "synthesizer_model": "qwen2.5-coder:0.5b",
-  "tool_fallback_model": "qwen3:4b",
+  "tool_fallback_model": "",
   "verified_tool_models": [
     "qwen2.5-coder:7b-instruct-q4_K_M",
     "qwen3:4b",

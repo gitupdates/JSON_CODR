@@ -174,6 +174,7 @@ const elements = {
   workspaceModel: document.querySelector("#workspace-model"),
   workspaceOutcome: document.querySelector("#workspace-outcome"),
   workspaceAgentRun: document.querySelector("#workspace-agent-run"),
+  workspaceAgentApprove: document.querySelector("#workspace-agent-approve"),
   workspaceAgentStatus: document.querySelector("#workspace-agent-status"),
   workspaceAgentResult: document.querySelector("#workspace-agent-result"),
   terminalXterm: document.querySelector("#terminal-xterm"),
@@ -1125,6 +1126,7 @@ async function runWorkspaceAgent() {
   const outcome = elements.workspaceOutcome.value.trim();
   if (!projectRoot || !model || !outcome) return;
   elements.workspaceAgentRun.disabled = true;
+  elements.workspaceAgentApprove.hidden = true;
   elements.workspaceAgentStatus.textContent = "BORG is inspecting the project and executing the verified action plan…";
   elements.workspaceAgentResult.textContent = "Task running…";
   localStorage.setItem("json_codr_workspace_project_root", projectRoot);
@@ -1142,11 +1144,46 @@ async function runWorkspaceAgent() {
     if (!response.ok) throw new Error(payload.detail || "Project task failed");
     elements.workspaceAgentStatus.textContent = `${payload.route} · requested ${payload.requested_model} · effective ${payload.effective_model || "all installed models"}`;
     elements.workspaceAgentResult.textContent = JSON.stringify(payload.result, null, 2);
+    if (payload.status === "approval_required") {
+      const approval = [...(payload.result?.task?.events || [])].reverse().find(
+        (event) => event.event_type === "agent.approval_required",
+      );
+      if (!approval?.payload?.proposal_id) throw new Error("Agent approval is missing its proposal identity");
+      elements.workspaceAgentApprove.dataset.taskId = payload.task_id;
+      elements.workspaceAgentApprove.dataset.proposalId = approval.payload.proposal_id;
+      elements.workspaceAgentApprove.hidden = false;
+      elements.workspaceAgentStatus.textContent = "Approval required · review and approve the proposed project action";
+    }
   } catch (error) {
     elements.workspaceAgentStatus.textContent = "Agent task failed";
     elements.workspaceAgentResult.textContent = error.message;
   } finally {
     elements.workspaceAgentRun.disabled = false;
+  }
+}
+
+async function approveWorkspaceAgentAction() {
+  const taskId = elements.workspaceAgentApprove.dataset.taskId;
+  const proposalId = elements.workspaceAgentApprove.dataset.proposalId;
+  if (!taskId || !proposalId) return;
+  elements.workspaceAgentApprove.disabled = true;
+  elements.workspaceAgentStatus.textContent = "Executing the approved project action…";
+  try {
+    const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: "project", proposal_id: proposalId }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || "Unable to approve the project action");
+    elements.workspaceAgentResult.textContent = JSON.stringify(payload, null, 2);
+    elements.workspaceAgentStatus.textContent = `Agent task ${payload.status}`;
+    elements.workspaceAgentApprove.hidden = true;
+  } catch (error) {
+    elements.workspaceAgentStatus.textContent = "Agent approval failed";
+    elements.workspaceAgentResult.textContent = error.message;
+  } finally {
+    elements.workspaceAgentApprove.disabled = false;
   }
 }
 
@@ -3026,6 +3063,7 @@ elements.workspaceAgentForm.addEventListener("submit", (event) => {
   event.preventDefault();
   runWorkspaceAgent();
 });
+elements.workspaceAgentApprove.addEventListener("click", approveWorkspaceAgentAction);
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && elements.workspaceFilesPopover.matches(":popover-open")) {
     event.preventDefault();

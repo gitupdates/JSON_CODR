@@ -44,17 +44,33 @@ class NativeOllamaTransport:
         return [item for item in models if isinstance(item, dict)]
 
     async def json_chat(self, model: str, prompt: str, schema: dict) -> str:
-        payload = await self._post_json("/api/chat", {
+        constrained_prompt = (
+            f"{prompt}\n\nReturn only one valid JSON object matching this schema exactly. "
+            "Do not include markdown or prose.\nJSON SCHEMA:\n"
+            + json.dumps(schema, sort_keys=True, separators=(",", ":"))
+        )
+        request = {
             "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "format": schema,
+            "prompt": constrained_prompt,
             "stream": False,
-            "options": {"temperature": 0.0},
-        })
-        message = payload.get("message")
-        if not isinstance(message, dict) or not isinstance(message.get("content"), str):
-            raise ModelOutputError("Ollama returned malformed JSON chat output")
-        return message["content"]
+            "raw": True,
+            "options": {"temperature": 0.0, "num_ctx": 2048, "num_gpu": 0, "num_predict": 256},
+        }
+        for attempt in range(2):
+            try:
+                payload = await self._post_json("/api/generate", request)
+                break
+            except OllamaUnavailableError as error:
+                transient_runner_restart = (
+                    isinstance(error.__cause__, ConnectionResetError)
+                    or "forcibly closed" in str(error)
+                )
+                if attempt or not transient_runner_restart:
+                    raise
+        response = payload.get("response")
+        if not isinstance(response, str):
+            raise ModelOutputError("Ollama returned malformed JSON generation output")
+        return response
 
     async def stream_chat(
         self,
@@ -270,7 +286,16 @@ class NativeOllamaTransport:
             return await asyncio.wait_for(asyncio.to_thread(operation), timeout=self.timeout_seconds)
         except (TimeoutError, asyncio.TimeoutError) as error:
             raise ModelTimeoutError("Model request timed out") from error
-        except (HTTPError, URLError, OSError) as error:
+        except HTTPError as error:
+            detail = ""
+            try:
+                detail = error.read(4096).decode("utf-8", errors="replace").strip()
+            except Exception:
+                pass
+            if detail:
+                raise OllamaUnavailableError(f"Ollama request failed: {detail}") from error
+            raise OllamaUnavailableError("Ollama request failed") from error
+        except (URLError, OSError) as error:
             raise OllamaUnavailableError("Ollama request failed") from error
         except json.JSONDecodeError as error:
             raise ModelOutputError("Ollama returned malformed JSON") from error

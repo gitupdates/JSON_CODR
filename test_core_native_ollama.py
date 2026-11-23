@@ -3,6 +3,7 @@ import json
 import asyncio
 import threading
 import unittest
+from urllib.error import HTTPError
 from unittest.mock import patch
 
 
@@ -199,8 +200,9 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
         captured = {}
 
         def fake_urlopen(request, timeout):
+            captured["url"] = request.full_url
             captured["payload"] = json.loads(request.data)
-            return _Response(json.dumps({"message": {"content": '{"done":true}'}}).encode())
+            return _Response(json.dumps({"response": '{"done":true}'}).encode())
 
         transport = NativeOllamaTransport("http://localhost:11434")
         schema = {"type": "object", "properties": {"done": {"type": "boolean"}}}
@@ -208,9 +210,117 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
             content = await transport.json_chat("qwen3:4b", "Plan", schema)
 
         self.assertEqual(content, '{"done":true}')
-        self.assertEqual(captured["payload"]["format"], schema)
+        self.assertEqual(captured["url"], "http://localhost:11434/api/generate")
+        self.assertNotIn("format", captured["payload"])
+        self.assertIn(
+            json.dumps(schema, sort_keys=True, separators=(",", ":")),
+            captured["payload"]["prompt"],
+        )
         self.assertFalse(captured["payload"]["stream"])
+        self.assertTrue(captured["payload"]["raw"])
+        self.assertEqual(captured["payload"]["options"], {
+            "temperature": 0.0,
+            "num_ctx": 2048,
+            "num_gpu": 0,
+            "num_predict": 256,
+        })
 
+    async def test_json_chat_retries_one_plain_connection_reset(self):
+        from web_app.core.native_ollama import NativeOllamaTransport
+
+        captured = []
+
+        def fake_urlopen(request, timeout):
+            captured.append(json.loads(request.data))
+            if len(captured) == 1:
+                raise ConnectionResetError("runner reset")
+            return _Response(json.dumps({"response": '{"done":false}'}).encode())
+
+        transport = NativeOllamaTransport("http://localhost:11434")
+        schema = {"type": "object", "properties": {"done": {"type": "boolean"}}}
+        with patch("web_app.core.native_ollama.urlopen", side_effect=fake_urlopen):
+            result = await transport.json_chat("qwen3:4b", "Plan", schema)
+
+        self.assertEqual(result, '{"done":false}')
+        self.assertEqual(len(captured), 2)
+        self.assertNotIn("format", captured[0])
+
+    async def test_json_chat_preserves_local_ollama_http_error_detail(self):
+        from web_app.core.native_ollama import NativeOllamaTransport
+        from web_app.ollama_service import OllamaUnavailableError
+
+        def fake_urlopen(_request, timeout):
+            del timeout
+            raise HTTPError(
+                "http://localhost:11434/api/chat",
+                500,
+                "Internal Server Error",
+                {},
+                io.BytesIO(b'{"error":"model runner stopped"}'),
+            )
+
+        transport = NativeOllamaTransport("http://localhost:11434")
+        with patch("web_app.core.native_ollama.urlopen", side_effect=fake_urlopen):
+            with self.assertRaisesRegex(OllamaUnavailableError, "model runner stopped"):
+                await transport.json_chat("qwen3:4b", "Plan", {"type": "object"})
+
+    async def test_json_chat_retries_one_transient_tokenizer_runner_restart(self):
+        from web_app.core.native_ollama import NativeOllamaTransport
+
+        calls = 0
+
+        def fake_urlopen(_request, timeout):
+            nonlocal calls
+            del timeout
+            calls += 1
+            if calls == 1:
+                raise HTTPError(
+                    "http://localhost:11434/api/chat",
+                    500,
+                    "Internal Server Error",
+                    {},
+                    io.BytesIO(json.dumps({
+                        "error": 'Post "http://127.0.0.1:65000/tokenize": '
+                        "wsarecv: An existing connection was forcibly closed by the remote host."
+                    }).encode()),
+                )
+            return _Response(json.dumps({"response": '{"done":false}'}).encode())
+
+        transport = NativeOllamaTransport("http://localhost:11434")
+        with patch("web_app.core.native_ollama.urlopen", side_effect=fake_urlopen):
+            result = await transport.json_chat("qwen3:4b", "Plan", {"type": "object"})
+
+        self.assertEqual(result, '{"done":false}')
+        self.assertEqual(calls, 2)
+
+    async def test_json_chat_retries_one_transient_model_runner_restart(self):
+        from web_app.core.native_ollama import NativeOllamaTransport
+
+        calls = 0
+
+        def fake_urlopen(_request, timeout):
+            nonlocal calls
+            del timeout
+            calls += 1
+            if calls == 1:
+                raise HTTPError(
+                    "http://localhost:11434/api/chat",
+                    500,
+                    "Internal Server Error",
+                    {},
+                    io.BytesIO(json.dumps({
+                        "error": "an error was encountered while running the model: "
+                        "wsarecv: An existing connection was forcibly closed by the remote host."
+                    }).encode()),
+                )
+            return _Response(json.dumps({"response": '{"done":false}'}).encode())
+
+        transport = NativeOllamaTransport("http://localhost:11434")
+        with patch("web_app.core.native_ollama.urlopen", side_effect=fake_urlopen):
+            result = await transport.json_chat("qwen3:4b", "Plan", {"type": "object"})
+
+        self.assertEqual(result, '{"done":false}')
+        self.assertEqual(calls, 2)
 
 if __name__ == "__main__":
     unittest.main()

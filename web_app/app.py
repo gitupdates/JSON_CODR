@@ -1979,9 +1979,16 @@ def create_app(
             if requested_model == "auto":
                 warnings.append(f"Auto selected {selected_model} from the installed model roster")
             compatibility = await service.tool_compatibility(selected_model)
-            if not compatibility["available"]:
-                raise HTTPException(status_code=409, detail="Requested engine and model do not have a verified tool route")
-            effective_model = compatibility["effective_tool_model"] or selected_model
+            if compatibility["available"]:
+                effective_model = compatibility["effective_tool_model"] or selected_model
+                route = compatibility.get("route") or "broker_verified"
+            else:
+                effective_model = selected_model
+                route = "json_planner_compatibility"
+                warnings.append(
+                    "Native tool calling is not verified for this model; JSON_CODR will validate "
+                    "its planning output and execute capabilities through the BORG compatibility layer"
+                )
             if effective_model != selected_model:
                 warnings.append(f"Verified tool execution uses {effective_model}; requested model remains {selected_model}")
             recommendation = recommendations.recommend(session, request.prompt)
@@ -1991,17 +1998,25 @@ def create_app(
                 raise RuntimeError("project registry is unavailable")
             registered = core_projects.register(request.project_root)
             task_id = str(uuid7())
-            route = compatibility.get("route") or "broker_verified"
+            thread_id = f"workspace:{request.session_id}:{task_id}"
             goal = GoalSpec(
-                goal_id=f"goal:{task_id}", revision=1, objective=assembled.prompt,
+                goal_id=f"goal:{task_id}", revision=1, objective=request.prompt,
                 criteria=(CompletionCriterion(
                     criterion_id=f"criterion:{task_id}", kind=CriterionKind.project_state,
                     description="Complete the requested project work with fresh persisted evidence",
                 ),), accepted=True,
             )
+            if core_memory is None:
+                raise RuntimeError("agent memory is unavailable")
+            core_memory.add(
+                thread_id,
+                "workspace_context",
+                assembled.prompt,
+                source_ref=f"workspace-context:{task_id}",
+            )
             record = await core_service.submit(TaskCommand(
                 command_id=str(uuid7()), task_id=task_id,
-                thread_id=f"workspace:{request.session_id}:{task_id}",
+                thread_id=thread_id,
                 project_id=registered.project_id, command_type="agent.run",
                 payload={
                     "goal_spec": goal.model_dump(mode="json"), "target_path": ".",

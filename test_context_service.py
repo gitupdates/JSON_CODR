@@ -65,6 +65,30 @@ class ContextServiceTests(unittest.TestCase):
         with self.assertRaises(ContextOverflow):
             self.context.assemble("thread-1", "parent", 10)
 
+    def test_selected_model_route_is_mandatory_context(self):
+        self.tasks.append(
+            "parent",
+            TaskEventDraft(
+                event_type="agent.model_route",
+                payload={
+                    "requested_model": "qwen3.5:9b",
+                    "effective_model": "qwen3.5:9b",
+                    "route": "broker_verified",
+                },
+            ),
+        )
+        self.tasks.append(
+            "parent",
+            TaskEventDraft(event_type="capability.result", payload={"value": "x" * 2_000}),
+        )
+
+        bundle = self.context.assemble("thread-1", "parent", 600)
+
+        route = next(source for source in bundle.sources if source.event_type == "agent.model_route")
+        self.assertTrue(route.mandatory)
+        self.assertIn("qwen3.5:9b", bundle.text)
+        self.assertNotIn('"value"', bundle.text)
+
     def test_project_snapshot_is_durable_mandatory_and_deduplicated(self):
         project = Path(self.temporary.name) / "project"
         project.mkdir()

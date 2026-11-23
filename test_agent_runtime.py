@@ -167,6 +167,33 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_planner_context_is_bounded_for_local_model_stability(self):
+        observed = []
+
+        class RecordingPlanner:
+            async def plan(_self, context):
+                observed.append(context)
+                return None
+
+        task_id = self.create_root_task()
+        self.memory.add(
+            "thread-1", "workspace_context", "evidence " * 2_000,
+            source_ref="workspace-context:test",
+        )
+        runtime = AgentRuntime(
+            self.tasks,
+            CoreService(self.tasks, self.policy, {}),
+            ContextService(self.tasks, self.memory),
+            RecordingPlanner(),
+            DeterministicVerifier(satisfied=False),
+            lambda _root: "sha256:" + "1" * 64,
+        )
+
+        await runtime.run(task_id)
+
+        self.assertEqual(len(observed), 1)
+        self.assertLessEqual(len(observed[0].text), 1_800)
+
     async def test_satisfied_verification_requires_planner_done_after_evidence(self):
         adapter = RecordingAdapter()
         call = CapabilityCall(

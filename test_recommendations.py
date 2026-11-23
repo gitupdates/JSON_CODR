@@ -107,6 +107,33 @@ class RecommendationTests(unittest.TestCase):
             [item.reference for item in result.recommendations],
         )
 
+    def test_review_agent_does_not_auto_attach_to_file_edit_requests(self):
+        packs = self.library.list()
+        packs.append(SkillPack(
+            id="review-agent",
+            name="Review agent",
+            source_format="codex",
+            source_name="review-agent",
+            skills=[SkillRecord(
+                id="review-agent",
+                name="Review agent",
+                description="Review and validate files using evidence",
+                content="capabilities: file validation\nDo not modify files.",
+            )],
+        ))
+        self.library._save(packs)
+        self.skillsets.reconcile()
+
+        result = self.service.recommend(
+            self.session,
+            "Modify only parity-config.json and validate the final file values.",
+        )
+
+        self.assertNotIn(
+            "review-agent:review-agent",
+            [item.reference for item in result.recommendations],
+        )
+
     def test_api_previews_reasons_updates_session_controls_and_rejects_unknown_exclusions(self):
         client = TestClient(create_app(FakeService(), self.workspace))
 

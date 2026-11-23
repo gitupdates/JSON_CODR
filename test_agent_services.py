@@ -19,6 +19,7 @@ class AgentServicesTests(unittest.IsolatedAsyncioTestCase):
             schema["required"],
             ["done", "capability_id", "operation", "target_path", "arguments"],
         )
+        self.assertFalse(schema["additionalProperties"])
         self.assertEqual(schema["properties"]["capability_id"]["minLength"], 1)
         self.assertEqual(
             schema["properties"]["capability_id"]["enum"],
@@ -108,6 +109,11 @@ class AgentServicesTests(unittest.IsolatedAsyncioTestCase):
 
         await InferencePlanner(generate, model="local-model").plan(context)
 
+        self.assertIn(
+            'project.patch uses operation "replace", target_path, and arguments '
+            '{"content":"the complete UTF-8 replacement file content"}',
+            captured["prompt"],
+        )
         self.assertTrue(captured["prompt"].endswith("AUTHORITATIVE CURRENT GOAL:\n" + goal))
 
     async def test_planner_returns_none_for_done_and_rejects_invalid_output(self):
@@ -168,6 +174,95 @@ class AgentServicesTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "without persisted action evidence"):
             await InferencePlanner(generate, model="local-model").plan(context)
 
+    async def test_planner_corrects_one_premature_done_response(self):
+        prompts = []
+
+        async def generate(_model, prompt):
+            prompts.append(prompt)
+            return json.dumps({
+                "done": len(prompts) == 1,
+                "capability_id": "project.read",
+                "operation": "read",
+                "target_path": "README.md",
+                "arguments": {},
+            })
+
+        context = ContextBundle(
+            thread_id="thread-1", task_id="task-1", text="read README",
+            sources=(ContextSource(
+                kind="project_snapshot", source_ref="snapshot", mandatory=True,
+                content=json.dumps({"project_root": str(self.root.resolve())}),
+            ),),
+        )
+
+        call = await InferencePlanner(generate, model="local-model").plan(context)
+
+        self.assertEqual(call.capability_id, "project.read")
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("No completed action evidence exists", prompts[1])
+
+    async def test_planner_corrects_invalid_core_capability_contract(self):
+        prompts = []
+
+        async def generate(_model, prompt):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return json.dumps({
+                    "done": False,
+                    "capability_id": "project.patch",
+                    "operation": "write",
+                    "target_path": ".tmp/parity-config.json",
+                    "arguments": {"feature_enabled": True},
+                })
+            return json.dumps({
+                "done": False,
+                "capability_id": "project.patch",
+                "operation": "replace",
+                "target_path": ".tmp/parity-config.json",
+                "arguments": {"content": "{\n  \"feature_enabled\": true\n}\n"},
+            })
+
+        context = ContextBundle(
+            thread_id="thread-1", task_id="task-1", text="update configuration",
+            sources=(ContextSource(
+                kind="project_snapshot", source_ref="snapshot", mandatory=True,
+                content=json.dumps({"project_root": str(self.root.resolve())}),
+            ),),
+        )
+
+        call = await InferencePlanner(generate, model="local-model").plan(context)
+
+        self.assertEqual(call.operation, "replace")
+        self.assertEqual(set(call.arguments), {"content"})
+        self.assertEqual(len(prompts), 2)
+        self.assertIn('project.patch requires operation "replace"', prompts[1])
+
+    async def test_planner_normalizes_call_envelope_without_done_flag(self):
+        prompts = []
+
+        async def generate(_model, prompt):
+            prompts.append(prompt)
+            value = {
+                "capability_id": "project.read",
+                "operation": "read",
+                "target_path": "app.py",
+                "arguments": {},
+            }
+            return json.dumps(value)
+
+        context = ContextBundle(
+            thread_id="thread-1", task_id="task-1", text="read app.py",
+            sources=(ContextSource(
+                kind="project_snapshot", source_ref="snapshot", mandatory=True,
+                content=json.dumps({"project_root": str(self.root.resolve())}),
+            ),),
+        )
+
+        call = await InferencePlanner(generate, model="local-model").plan(context)
+
+        self.assertEqual(call.capability_id, "project.read")
+        self.assertEqual(len(prompts), 1)
+
     async def test_planner_rejects_prose_duplicate_keys_and_multiple_fences(self):
         context = ContextBundle(
             thread_id="thread-1", task_id="task-1", text="read",
@@ -181,6 +276,8 @@ class AgentServicesTests(unittest.IsolatedAsyncioTestCase):
             '"target_path":"app.py","arguments":{}}',
             '{"done":false,"done":true,"capability_id":"project.read","operation":"read",'
             '"target_path":"app.py","arguments":{}}',
+            '{"done":false,"capability_id":"project.read"}\n'
+            '{"done":true,"operation":"read","target_path":"app.py","arguments":{}}',
             '```json\n{}\n```\n```json\n{}\n```',
         )
         for output in invalid:
@@ -188,6 +285,28 @@ class AgentServicesTests(unittest.IsolatedAsyncioTestCase):
                 return value
             with self.subTest(output=output), self.assertRaises(ValueError):
                 await InferencePlanner(generate, model="local-model").plan(context)
+
+    async def test_planner_merges_complementary_adjacent_json_objects(self):
+        async def generate(_model, _prompt):
+            return (
+                '{"capability_id":"project.read","operation":"read",'
+                '"target_path":"app.py","arguments":{}}\n'
+                '{"done":false}'
+            )
+
+        context = ContextBundle(
+            thread_id="thread-1", task_id="task-1", text="read app.py",
+            sources=(ContextSource(
+                kind="project_snapshot", source_ref="snapshot", mandatory=True,
+                content=json.dumps({"project_root": str(self.root.resolve())}),
+            ),),
+        )
+
+        call = await InferencePlanner(generate, model="local-model").plan(context)
+
+        self.assertEqual(call.capability_id, "project.read")
+        self.assertEqual(call.operation, "read")
+        self.assertEqual(call.target_path, "app.py")
 
     def test_planner_model_prefers_verified_tool_fallback(self):
         from web_app.core.agent_services import select_agent_planner_model

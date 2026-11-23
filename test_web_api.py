@@ -17,9 +17,10 @@ from fastapi.testclient import TestClient
 from web_app.app import create_app
 from web_app.app import configure_local_analysis_tools
 from cli import parse_response_content
-from web_app.models import ActionSuggestion, ChatResult, ConversionBundle, GeneratedFile
+from web_app.models import ActionSuggestion, ChatResult, ConversionBundle, GeneratedFile, SkillPack, SkillRecord
 from web_app.ollama_service import ModelOutputError, ModelTimeoutError, OllamaService, OllamaUnavailableError
 from web_app.workspace import WorkspaceService
+from web_app.skills import SkillLibraryService
 from web_app.version import APP_VERSION
 from web_app.coding_agents import CodingAgentService
 from web_app.git_broker import GitBrokerService
@@ -1072,18 +1073,35 @@ class WebApiTests(unittest.TestCase):
             def __init__(self):
                 super().__init__()
                 self.planner_calls = 0
+                self.prompts = []
 
             async def list_models(self):
                 return [*await super().list_models(), {
                     "name": "deepseek-coder:6.7b-instruct", "installed": True, "size": 1,
                     "quantization": "Q4", "context_length": 4096, "capabilities": ["completion"],
+                }, {
+                    "name": "qwen2.5-coder:0.5b", "installed": True, "size": 1,
+                    "quantization": "Q4", "context_length": 32768, "capabilities": ["completion"],
                 }]
 
             async def supports_tools(self, model):
                 return model == "qwen2.5-coder:7b-instruct-q4_K_M"
 
+            async def tool_compatibility(self, model):
+                if model == "qwen2.5-coder:0.5b":
+                    return {
+                        "requested_model": model,
+                        "advertised_tools": False,
+                        "native_tools_verified": False,
+                        "route": "unavailable",
+                        "effective_tool_model": None,
+                        "available": False,
+                    }
+                return await super().tool_compatibility(model)
+
             async def chat(self, model, prompt, images=None):
                 self.last_prompt = prompt
+                self.prompts.append(prompt)
                 if "Return one capability call" in prompt:
                     self.planner_calls += 1
                     if "agent.action_completed" not in prompt:
@@ -1115,8 +1133,23 @@ class WebApiTests(unittest.TestCase):
         subprocess.run(["git", "add", "README.md"], cwd=project, check=True)
         subprocess.run(["git", "commit", "-m", "initial"], cwd=project, check=True, capture_output=True)
         model_service = WorkspaceModelService()
+        skill_library = SkillLibraryService(self.workspace.data_root)
+        skill_library._save([SkillPack(
+            id="large-agent-context",
+            name="Large agent context",
+            source_format="codex",
+            source_name="large-agent-context",
+            skills=[SkillRecord(
+                id="instructions",
+                name="Large instructions",
+                description="Provide project inspection guidance",
+                content="capabilities: inspect\n" + ("Keep evidence grounded. " * 420),
+            )],
+        )])
         client = self.track_core_client(TestClient(create_app(model_service, self.workspace)))
         session = self.workspace.create_session()
+        session.selected_skill_ids = ["large-agent-context:instructions"]
+        self.workspace.save_manifest(session)
         from web_app.attachments import AttachmentService
         AttachmentService(self.workspace).import_text(session.id, "workspace context evidence")
         base = {
@@ -1130,6 +1163,7 @@ class WebApiTests(unittest.TestCase):
         bad_engine = client.post("/api/workspace/tasks", json={**base, "engine_id": "missing", "model_selection": "auto"})
         bad_model = client.post("/api/workspace/tasks", json={**base, "model_selection": "opencoder:8b"})
         fallback = client.post("/api/workspace/tasks", json={**base, "model_selection": "deepseek-coder:6.7b-instruct"})
+        compatibility = client.post("/api/workspace/tasks", json={**base, "model_selection": "qwen2.5-coder:0.5b"})
         missing_project = client.post("/api/workspace/tasks", json={
             **base, "project_root": str(project / "missing"), "model_selection": "auto",
         })
@@ -1151,7 +1185,11 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(fallback.json()["requested_model"], "deepseek-coder:6.7b-instruct")
         self.assertEqual(fallback.json()["effective_model"], "qwen3:4b")
         self.assertTrue(fallback.json()["warnings"])
-        self.assertIn("workspace context evidence", model_service.last_prompt)
+        self.assertEqual(compatibility.status_code, 201, compatibility.text)
+        self.assertEqual(compatibility.json()["effective_model"], "qwen2.5-coder:0.5b")
+        self.assertEqual(compatibility.json()["route"], "json_planner_compatibility")
+        self.assertTrue(any("not verified" in warning for warning in compatibility.json()["warnings"]))
+        self.assertTrue(any("workspace context evidence" in prompt for prompt in model_service.prompts))
         self.assertEqual(missing_project.status_code, 400)
 
     def test_optimized_connector_catalog_and_install_plans_are_additive(self):
@@ -1542,6 +1580,7 @@ class WebApiTests(unittest.TestCase):
                 return {"capabilities": ["completion", "tools"]}
 
         service = OllamaService(client=CapabilityClient())
+        service.config["tool_fallback_model"] = "qwen3:4b"
 
         delegated = asyncio.run(service.tool_compatibility("qwen2.5-coder:7b"))
         native = asyncio.run(service.tool_compatibility("qwen3:8b"))

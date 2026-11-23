@@ -11,7 +11,10 @@ from web_app.skillsets import SkillsetService
 
 GENERIC_TERMS = frozenset({"help", "task", "skill", "use", "create", "build", "make", "work", "project"})
 PROVIDER_TERMS = frozenset({"claude", "cursor", "copilot", "gemini", "anthropic"})
-EXPLICIT_ONLY_SKILLS = frozenset({"readteam:readteam-secondary-review"})
+EXPLICIT_ONLY_SKILLS = frozenset({
+    "readteam:readteam-secondary-review",
+    "review-agent:review-agent",
+})
 ROUTING_SYNONYMS = {
     "bug": "debug",
     "fix": "debug",

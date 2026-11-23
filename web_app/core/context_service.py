@@ -201,6 +201,7 @@ class ContextService:
                     mandatory=event.event_type in {
                         "agent.action_completed",
                         "agent.goal_registered",
+                        "agent.model_route",
                         "agent.verification_failed",
                         "task.steered",
                     },
