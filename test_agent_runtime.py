@@ -111,6 +111,18 @@ class SequencedVerifier(DeterministicVerifier):
 
 
 class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_automatic_lesson_activation_requires_ready_service_identity(self):
+        class Gate:
+            def automatic_lesson_activation_ready(self):
+                return True
+
+        runtime = AgentRuntime(
+            None, None, None, None, None, lambda _root: "", verifier_identity=Gate()
+        )
+        unavailable = AgentRuntime(None, None, None, None, None, lambda _root: "")
+        self.assertTrue(runtime.automatic_lesson_activation_ready())
+        self.assertFalse(unavailable.automatic_lesson_activation_ready())
+
     async def asyncSetUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)

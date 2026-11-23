@@ -14,7 +14,7 @@ PLANNER_CONTEXT_BUDGET = 3_000
 
 
 class AgentRuntime:
-    def __init__(self, task_store, core_service, context, planner, verifier, project_fingerprint, project_reader_resolver=None) -> None:
+    def __init__(self, task_store, core_service, context, planner, verifier, project_fingerprint, project_reader_resolver=None, verifier_identity=None) -> None:
         self._tasks = task_store
         self._core = core_service
         self.context = context
@@ -23,6 +23,13 @@ class AgentRuntime:
         self._project_fingerprint = project_fingerprint
         self._evidence = EvidenceResolver()
         self._project_reader_resolver = project_reader_resolver
+        self._verifier_identity = verifier_identity
+
+    def automatic_lesson_activation_ready(self) -> bool:
+        return bool(
+            self._verifier_identity is not None
+            and self._verifier_identity.automatic_lesson_activation_ready()
+        )
 
     async def run(self, task_id: str):
         root = self._tasks.get(task_id)
