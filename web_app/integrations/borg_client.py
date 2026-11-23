@@ -38,6 +38,8 @@ class BorgClient:
 
     def models(self) -> list[dict]:
         result = self._request("GET", "/api/models")
+        if isinstance(result, dict):
+            result = result.get("models")
         if not isinstance(result, list) or not all(isinstance(item, dict) for item in result):
             raise BorgClientError("JSON_CODR model response is not a list")
         return result

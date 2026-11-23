@@ -3,10 +3,18 @@
   "mcpServers": {
     "json-codr-borg": {
       "type": "stdio",
-      "command": "python",
-      "args": ["-m", "web_app.integrations.mcp_server"],
+      "command": "powershell.exe",
+      "args": [
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${PLUGIN_ROOT}/start_mcp.ps1"
+      ],
       "env": {
-        "JSON_CODR_URL": "http://127.0.0.1:8874",
+        "JSON_CODR_URL": "http://127.0.0.1:8765",
+        "JSON_CODR_ROOT": "${PLUGIN_ROOT}/../..",
         "PYTHONPATH": "${PLUGIN_ROOT}/../.."
       }
     }

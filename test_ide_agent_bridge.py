@@ -1,9 +1,93 @@
 import json
 import io
 import socket
+import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from urllib import error, parse
+
+
+class InstallationResolverTests(unittest.TestCase):
+    def _resolver(self, *, environment=None, manifest_path=None, plugin_root=None, known_roots=()):
+        try:
+            from web_app.integrations.installation import InstallationResolver
+        except ImportError as error:
+            self.fail(f"Portable installation resolver is missing: {error}")
+        return InstallationResolver(
+            environment=environment or {},
+            manifest_path=manifest_path,
+            plugin_root=plugin_root,
+            known_roots=known_roots,
+        )
+
+    @staticmethod
+    def _installation(root: Path):
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "run_web.ps1").write_text("param()\n", encoding="utf-8")
+        module = root / "web_app" / "integrations" / "mcp_server.py"
+        module.parent.mkdir(parents=True, exist_ok=True)
+        module.write_text("# bridge\n", encoding="utf-8")
+        return root
+
+    def test_resolution_precedence_is_explicit_environment_manifest_plugin_then_known(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            roots = {
+                name: self._installation(base / name)
+                for name in ("explicit", "environment", "manifest", "plugin", "known")
+            }
+            manifest = base / "installation.json"
+            manifest.write_text(json.dumps({"schema_version": 1, "root": str(roots["manifest"]), "service_url": "http://127.0.0.1:8765"}), encoding="utf-8")
+            resolver = self._resolver(
+                environment={"JSON_CODR_ROOT": str(roots["environment"])},
+                manifest_path=manifest,
+                plugin_root=roots["plugin"] / "integrations" / "vscode-json-codr",
+                known_roots=(roots["known"],),
+            )
+
+            self.assertEqual(resolver.resolve(str(roots["explicit"])).source, "explicit")
+            self.assertEqual(resolver.resolve().source, "environment")
+            self.assertEqual(self._resolver(manifest_path=manifest, plugin_root=resolver.plugin_root, known_roots=(roots["known"],)).resolve().source, "manifest")
+
+    def test_stale_manifest_falls_through_to_relocated_known_root(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            relocated = self._installation(base / "relocated")
+            manifest = base / "installation.json"
+            manifest.write_text(json.dumps({"schema_version": 1, "root": str(base / "missing"), "service_url": "http://127.0.0.1:8765"}), encoding="utf-8")
+
+            resolution = self._resolver(manifest_path=manifest, known_roots=(relocated,)).resolve()
+
+            self.assertEqual((resolution.root, resolution.source), (relocated.resolve(), "known"))
+            self.assertIn("stale_manifest", resolution.warnings)
+
+    def test_registration_is_atomic_and_round_trips(self):
+        try:
+            from web_app.integrations.installation import InstallationResolver, register_installation
+        except ImportError as error:
+            self.fail(f"Portable installation registration is missing: {error}")
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            root = self._installation(base / "install")
+            manifest_path = base / "state" / "installation.json"
+
+            manifest = register_installation(root, "http://127.0.0.1:8765", manifest_path=manifest_path)
+            resolution = InstallationResolver(environment={}, manifest_path=manifest_path).resolve()
+
+            self.assertEqual(manifest.root, root.resolve())
+            self.assertEqual(resolution.root, root.resolve())
+            self.assertFalse(manifest_path.with_suffix(".tmp").exists())
+
+    def test_wrong_service_on_port_is_not_accepted_as_json_codr(self):
+        try:
+            from web_app.integrations.installation import service_matches_installation
+        except ImportError as error:
+            self.fail(f"Portable service identity probe is missing: {error}")
+
+        with patch("web_app.integrations.installation.urlopen") as opener:
+            opener.return_value = io.BytesIO(json.dumps({"status": "ready", "app_version": "other"}).encode())
+            self.assertFalse(service_matches_installation("http://127.0.0.1:8765"))
 
 
 class _FixtureOpener:
@@ -19,7 +103,9 @@ class _FixtureOpener:
         if path == "/.well-known/json-codr":
             return io.BytesIO(json.dumps({"schema_version": 1, "service": {"name": "JSON_CODR"}}).encode())
         if path == "/api/models":
-            return io.BytesIO(json.dumps([{"name": "qwen3.5:9b", "installed": True}]).encode())
+            return io.BytesIO(json.dumps({
+                "models": [{"name": "qwen3.5:9b", "installed": True}],
+            }).encode())
         if path == "/api/workspace/tasks":
             return io.BytesIO(json.dumps({
                 "task_id": "task-1", "requested_engine": "borg", "effective_engine": "borg",
@@ -188,9 +274,12 @@ class AdapterPackageTests(unittest.TestCase):
         server = mcp["mcpServers"]["json-codr-borg"]
         self.assertEqual(mcp["$schema"], "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json")
         self.assertEqual(server["type"], "stdio")
-        self.assertEqual(server["args"][:2], ["-m", "web_app.integrations.mcp_server"])
+        self.assertEqual(server["command"], "powershell.exe")
+        self.assertEqual(server["args"][-2:], ["-File", "${PLUGIN_ROOT}/start_mcp.ps1"])
         self.assertIn("JSON_CODR_URL", server["env"])
+        self.assertEqual(server["env"]["JSON_CODR_URL"], "http://127.0.0.1:8765")
         self.assertEqual(server["env"].get("PYTHONPATH"), "${PLUGIN_ROOT}/../..")
+        self.assertTrue((plugin_root / "start_mcp.ps1").is_file())
         self.assertTrue((plugin_root / "com.github.copilot/agents/json-codr.agent.md").is_file())
         skill = (plugin_root / "skills/json-codr-workspace/SKILL.md").read_text(encoding="utf-8")
         self.assertIn("name: json-codr-workspace", skill)

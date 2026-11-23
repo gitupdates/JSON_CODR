@@ -128,7 +128,7 @@ class McpServer:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Expose JSON_CODR BORG capabilities over MCP stdio")
-    parser.add_argument("--base-url", default=os.environ.get("JSON_CODR_URL", "http://127.0.0.1:8874"))
+    parser.add_argument("--base-url", default=os.environ.get("JSON_CODR_URL", "http://127.0.0.1:8765"))
     parser.add_argument("--timeout", type=float, default=30.0)
     options = parser.parse_args(argv)
     server = McpServer(BorgClient(options.base_url, options.timeout))
