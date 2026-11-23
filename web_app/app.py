@@ -61,6 +61,7 @@ from web_app.core.assimilation import AssimilationService, FunctionalProbeResult
 from web_app.core.contracts import CompletionCriterion, CriterionKind, GoalSpec, TaskCommand, TaskStatus
 from web_app.core.git_adapter import GitExecutionAdapter
 from web_app.core.inference_adapter import InferenceAdapter
+from web_app.core.identity import IdentityService
 from web_app.core.context_service import ContextService
 from web_app.core.connection_recovery import ConnectionRecoveryService
 from web_app.core.memory import MemoryStore
@@ -132,6 +133,8 @@ def create_app(
         lambda request: McpServer(BorgClient(str(request.base_url).rstrip("/")))
     ))
     workspace = workspace or WorkspaceService(default_data_root())
+    identity = IdentityService(workspace.data_root)
+    application.state.identity = identity
     component_manager = None
     component_root = workspace.data_root / "core" / "component-registry"
 
