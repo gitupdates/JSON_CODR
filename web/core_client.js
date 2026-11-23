@@ -136,9 +136,13 @@
     emit(record) { this.listeners.forEach((listener) => listener(record)); }
 
     async request(url, { method = "GET", body } = {}) {
+      const headers = body ? { "Content-Type": "application/json" } : {};
+      if (!["GET", "HEAD"].includes(method.toUpperCase())) {
+        Object.assign(headers, global.JSONCodrHttpIdentity?.mutationHeaders(headers) || headers);
+      }
       const response = await this.fetch(url, {
         method,
-        headers: body ? { "Content-Type": "application/json" } : undefined,
+        headers: Object.keys(headers).length ? headers : undefined,
         body: body ? JSON.stringify(body) : undefined,
       });
       const payload = await response.json();

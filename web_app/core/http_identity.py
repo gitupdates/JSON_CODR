@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import secrets
+from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, Request
 
-from web_app.core.identity import AuthenticatedPrincipal, IdentityService
+if TYPE_CHECKING:
+    from web_app.core.identity import AuthenticatedPrincipal, IdentityService
 
 
 CookieNames = Callable[[Request], tuple[str, str, bool]]
@@ -22,7 +24,7 @@ class MutationAuthorizer:
         if authorization:
             if not separator or scheme.casefold() != "bearer" or not token.strip():
                 raise HTTPException(status_code=401, detail="Authentication required")
-            return self._resolve(token.strip(), "service", scope)
+            return self._resolve_bearer(token.strip(), scope)
 
         session_name, _, _ = self._cookie_names(request)
         token = request.cookies.get(session_name)
@@ -38,6 +40,33 @@ class MutationAuthorizer:
         header = request.headers.get("x-csrf-token", "")
         if not cookie or not header or not secrets.compare_digest(cookie, header):
             raise HTTPException(status_code=403, detail="CSRF validation failed")
+
+    def websocket_csrf(self, request: Request) -> str | None:
+        if request.headers.get("authorization"):
+            return None
+        _, csrf_name, _ = self._cookie_names(request)
+        cookie = request.cookies.get(csrf_name, "")
+        protocol = next(
+            (
+                candidate.strip()
+                for candidate in request.headers.get("sec-websocket-protocol", "").split(",")
+                if candidate.strip().startswith("json-codr-csrf.")
+            ),
+            "",
+        )
+        token = protocol.removeprefix("json-codr-csrf.")
+        if not cookie or not token or not secrets.compare_digest(cookie, token):
+            raise HTTPException(status_code=403, detail="CSRF validation failed")
+        return protocol
+
+    def _resolve_bearer(self, token: str, scope: str) -> AuthenticatedPrincipal:
+        try:
+            credential = self._identity.resolve_credential(token)
+        except PermissionError as error:
+            raise HTTPException(status_code=401, detail="Authentication required") from error
+        if credential.credential_kind not in {"service", "cli"}:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        return self._resolve(token, credential.credential_kind, scope)
 
     def _resolve(self, token: str, kind: str, scope: str) -> AuthenticatedPrincipal:
         try:

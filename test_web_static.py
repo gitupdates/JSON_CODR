@@ -363,7 +363,7 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         self.assertNotIn('data-workspace-mode="codex"', html)
         self.assertIn("function selectWorkspaceMode", script)
         self.assertIn('fetch("/api/workspace/tasks"', script)
-        self.assertIn('"X-JSON-CODR": "1"', script)
+        self.assertIn("JSONCodrHttpIdentity.mutationHeaders", script)
         self.assertIn("requested_model", script)
         self.assertIn("effective_model", script)
 
@@ -669,6 +669,17 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         javascript = self.client.get("/static/app.js").text
         self.assertIn("/api/terminals", javascript)
         self.assertIn("/ws/terminals/", javascript)
+
+    def test_browser_mutation_helper_reads_only_the_csrf_cookie(self):
+        output = subprocess.check_output([
+            "node", "-e",
+            "const identity = require('./web/http_identity.js');"
+            "global.document = { cookie: 'json_codr_session=hidden; json_codr_csrf=csrf-value' };"
+            "console.log(JSON.stringify({headers: identity.mutationHeaders(), protocol: identity.websocketCsrfProtocol()}));",
+        ], text=True)
+        payload = json.loads(output)
+        self.assertEqual(payload["headers"], {"X-CSRF-Token": "csrf-value"})
+        self.assertEqual(payload["protocol"], "json-codr-csrf.csrf-value")
 
     def test_embedded_conpty_terminal_has_xterm_tabs_resize_and_reconnect(self):
         html = self.client.get("/").text

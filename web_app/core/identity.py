@@ -685,19 +685,44 @@ class IdentityService:
         )
 
     def lesson_scopes(self, user_id: str) -> tuple[str, ...]:
-        user = self.get_user(user_id)
-        if set(user.roles) & {"owner", "administrator"}:
+        if set(self._effective_roles(user_id)) & {"owner", "administrator"}:
             return (
                 "lesson.read", "lesson.audit", "lesson.edit", "lesson.disable", "lesson.supersede",
                 "lesson.remove", "lesson.verify", "lesson.verification.record", "lesson.promote_global",
             )
         return ("lesson.read",)
 
-    def browser_session_scopes(self, user_id: str) -> tuple[str, ...]:
+    def _effective_roles(self, user_id: str) -> tuple[str, ...]:
         user = self.get_user(user_id)
-        if not set(user.roles) & {"owner", "administrator"}:
-            return self.lesson_scopes(user_id)
-        return tuple(dict.fromkeys((*self.lesson_scopes(user_id), *MUTATION_SCOPES)))
+        with self._connect() as connection:
+            group_roles = tuple(
+                row[0]
+                for row in connection.execute(
+                    """SELECT gr.role_name FROM identity_group_members gm
+                        JOIN identity_group_roles gr ON gr.group_id=gm.group_id WHERE gm.user_id=?
+                        ORDER BY gr.role_name""",
+                    (user.user_id,),
+                )
+            )
+        return tuple(dict.fromkeys((*user.roles, *group_roles)))
+
+    def credential_scopes(self, user_id: str) -> tuple[str, ...]:
+        scopes = self.lesson_scopes(user_id)
+        if not set(self._effective_roles(user_id)) & {"owner", "administrator"}:
+            return scopes
+        return tuple(dict.fromkeys((*scopes, *MUTATION_SCOPES)))
+
+    def browser_session_scopes(self, user_id: str) -> tuple[str, ...]:
+        return self.credential_scopes(user_id)
+
+    def cli_scopes(self, user_id: str, requested_scopes: tuple[str, ...]) -> tuple[str, ...]:
+        requested = tuple(dict.fromkeys(requested_scopes))
+        if any(scope not in MUTATION_SCOPES for scope in requested):
+            raise PermissionError("requested CLI scope is not allowed")
+        allowed = set(self.credential_scopes(user_id))
+        if any(scope not in allowed for scope in requested):
+            raise PermissionError("requested CLI scope is not allowed")
+        return tuple(dict.fromkeys((*self.lesson_scopes(user_id), *requested)))
 
     @staticmethod
     def require_distinct_accounts(*user_ids: str) -> None:
@@ -827,9 +852,7 @@ class IdentityService:
             kind = CredentialKind(row["kind"])
             if required_kind is not None and kind is not CredentialKind(required_kind):
                 raise PermissionError("credential kind is not allowed")
-            scopes = tuple(json.loads(row["scopes_json"]))
-            if required_scope and required_scope not in scopes:
-                raise PermissionError("credential scope is not allowed")
+            stored_scopes = tuple(json.loads(row["scopes_json"]))
             if kind is CredentialKind.browser_session:
                 next_idle = min(now + timedelta(hours=12), datetime.fromisoformat(row["expires_at"]))
                 connection.execute(
@@ -842,6 +865,10 @@ class IdentityService:
                     (self._iso(now), row["credential_id"]),
                 )
         user = self.get_user(row["user_id"])
+        allowed_scopes = set(self.credential_scopes(user.user_id))
+        scopes = tuple(scope for scope in stored_scopes if scope in allowed_scopes)
+        if required_scope and required_scope not in scopes:
+            raise PermissionError("credential scope is not allowed")
         return AuthenticatedPrincipal(
             user_id=user.user_id,
             username=user.username,

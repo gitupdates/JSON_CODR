@@ -2244,7 +2244,8 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     @application.get("/api/terminals")
-    async def list_terminals():
+    async def list_terminals(http_request: Request):
+        mutation_authorizer.principal(http_request, "terminal.write")
         return terminals.list()
 
     @application.post("/api/terminals", status_code=201)
@@ -2388,8 +2389,17 @@ def create_app(
 
     @application.websocket("/ws/terminals/{terminal_id}")
     async def terminal_socket(websocket: WebSocket, terminal_id: str):
-        expected_origin = f"http://{websocket.url.hostname}:{websocket.url.port}"
+        scheme = "https" if websocket.url.scheme == "wss" else "http"
+        port = websocket.url.port
+        default_port = 443 if scheme == "https" else 80
+        expected_origin = f"{scheme}://{websocket.url.hostname}" + (f":{port}" if port and port != default_port else "")
         if websocket.headers.get("origin") != expected_origin:
+            await websocket.close(code=1008)
+            return
+        try:
+            mutation_authorizer.principal(websocket, "terminal.write")
+            csrf_protocol = mutation_authorizer.websocket_csrf(websocket)
+        except HTTPException:
             await websocket.close(code=1008)
             return
         try:
@@ -2397,7 +2407,7 @@ def create_app(
         except KeyError:
             await websocket.close(code=1008)
             return
-        await websocket.accept()
+        await websocket.accept(subprotocol=csrf_protocol)
         pending_action_markers: dict[str, str] = {}
         completion_tail = ""
         try:

@@ -65,7 +65,13 @@ class AttachmentServiceTests(unittest.TestCase):
         self.assertEqual(self.workspace.get_session(self.session.id).attachments, [])
 
     def test_http_upload_paste_preview_include_and_delete(self):
-        client = TestClient(create_app(FakeOllamaService(), self.workspace, self.service))
+        app = create_app(FakeOllamaService(), self.workspace, self.service)
+        client = TestClient(app)
+        identity = app.state.identity
+        user = identity.bootstrap("development", "Administrator").user
+        credential = identity.issue_credential(user.user_id, "browser_session", "attachment test", ("session.write",))
+        client.cookies.set("json_codr_session", credential.token)
+        csrf = client.get("/api/identity/bootstrap").cookies["json_codr_csrf"]
         upload = client.post(
             f"/api/sessions/{self.session.id}/attachments",
             files={"file": ("notes.txt", b"file context", "text/plain")},
@@ -85,10 +91,14 @@ class AttachmentServiceTests(unittest.TestCase):
         changed = client.patch(
             f"/api/sessions/{self.session.id}/attachments/{attachment_id}",
             json={"included": False},
+            headers={"X-CSRF-Token": csrf},
         )
         self.assertFalse(changed.json()["included"])
         self.assertEqual(
-            client.delete(f"/api/sessions/{self.session.id}/attachments/{attachment_id}").status_code,
+            client.delete(
+                f"/api/sessions/{self.session.id}/attachments/{attachment_id}",
+                headers={"X-CSRF-Token": csrf},
+            ).status_code,
             204,
         )
 

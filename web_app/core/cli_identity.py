@@ -101,7 +101,13 @@ class CliIdentityService:
         self.identity = identity
         self.store = store
 
-    def login(self, username: str, password: str, machine: str | None = None) -> CliLoginResult:
+    def login(
+        self,
+        username: str,
+        password: str,
+        machine: str | None = None,
+        requested_scopes: tuple[str, ...] = (),
+    ) -> CliLoginResult:
         if not self.identity.authenticate_password(username, password):
             raise PermissionError("Invalid username or password")
         user = next(
@@ -113,7 +119,7 @@ class CliIdentityService:
             user.user_id,
             CredentialKind.cli,
             label,
-            self.identity.lesson_scopes(user.user_id),
+            self.identity.cli_scopes(user.user_id, requested_scopes),
             lifetime=timedelta(days=30),
         )
         self.store.save(credential)

@@ -24,12 +24,13 @@ class CliIdentityTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def test_login_uses_scoped_30_day_dpapi_credential_without_plaintext(self):
-        result = self.service.login("Administrator", "", machine="WORKSTATION")
+        result = self.service.login("Administrator", "", machine="WORKSTATION", requested_scopes=("git.commit",))
         principal = self.service.status()
 
         self.assertIn("WORKSTATION", result.label)
         self.assertEqual(principal.credential_kind, "cli")
         self.assertIn("lesson.edit", principal.scopes)
+        self.assertIn("git.commit", principal.scopes)
         self.assertNotIn("identity.admin", principal.scopes)
         self.assertNotIn(self.store.load()["token"], self.store.path.read_text(encoding="ascii"))
 

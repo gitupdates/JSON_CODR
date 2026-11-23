@@ -1,8 +1,10 @@
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from web_app.app import create_app
 from web_app.core.auth import LocalRequestEvidence
@@ -14,12 +16,25 @@ class FakeService:
         return {"ollama": True}
 
 
+class StoppedTerminals:
+    def list(self):
+        return [{"id": "terminal-1", "status": "stopped"}]
+
+    def get(self, terminal_id):
+        if terminal_id != "terminal-1":
+            raise KeyError(terminal_id)
+        return SimpleNamespace(status="stopped", cwd=".")
+
+    def read_after(self, terminal_id, after_sequence, timeout):
+        return []
+
+
 class IdentityApiTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         workspace = WorkspaceService(Path(self.temporary.name))
         self.session_id = workspace.create_session().id
-        self.app = create_app(FakeService(), workspace=workspace)
+        self.app = create_app(FakeService(), workspace=workspace, terminals=StoppedTerminals())
         self.identity = self.app.state.identity
         self.identity.bootstrap("development", "Administrator")
         self.identity.confirm_development_bypass(
@@ -199,10 +214,54 @@ class IdentityApiTests(unittest.TestCase):
             self.client.post(path, json=payload, headers={"Authorization": f"Bearer {browser.token}"}).status_code,
             401,
         )
+        cli_without_scope = self.credential("cli", ("git.commit",))
+        self.assertEqual(
+            self.client.post(path, json=payload, headers={"Authorization": f"Bearer {cli_without_scope.token}"}).status_code,
+            403,
+        )
         self.assertEqual(
             self.client.post(path, json=payload, headers={"Authorization": f"Bearer {cli.token}"}).status_code,
-            401,
+            404,
         )
+
+    def test_terminal_listing_and_socket_require_scoped_authenticated_browser_session(self):
+        """Terminal writes must authenticate before the WebSocket accepts an input-capable connection."""
+        socket_path = "/ws/terminals/terminal-1"
+        origin = {"origin": "http://testserver"}
+        self.assertEqual(self.client.get("/api/terminals").status_code, 401)
+        with self.assertRaises(WebSocketDisconnect):
+            with self.client.websocket_connect(socket_path, headers=origin):
+                pass
+
+        browser_bearer = self.credential("browser_session", ("terminal.write",))
+        with self.assertRaises(WebSocketDisconnect):
+            with self.client.websocket_connect(
+                socket_path,
+                headers={**origin, "Authorization": f"Bearer {browser_bearer.token}"},
+            ):
+                pass
+
+        wrong_scope = self.credential("browser_session", ("agent.launch",))
+        self.client.cookies.set("json_codr_session", wrong_scope.token)
+        with self.assertRaises(WebSocketDisconnect):
+            with self.client.websocket_connect(socket_path, headers=origin):
+                pass
+
+        self.client.cookies.clear()
+        valid = self.credential("browser_session", ("terminal.write",))
+        self.client.cookies.set("json_codr_session", valid.token)
+        csrf = self.csrf()
+        with self.assertRaises(WebSocketDisconnect):
+            with self.client.websocket_connect(socket_path, headers=origin):
+                pass
+
+        with self.client.websocket_connect(
+            socket_path,
+            headers=origin,
+            subprotocols=[f"json-codr-csrf.{csrf}"],
+        ) as socket:
+            self.assertEqual(socket.receive_json()["type"], "exit")
+        self.assertEqual(self.client.get("/api/terminals").status_code, 200)
 
 
 if __name__ == "__main__":

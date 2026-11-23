@@ -891,7 +891,7 @@ async function createTerminalConnection(profile = "powershell") {
   elements.terminalStatus.textContent = "Starting...";
   const response = await fetch("/api/terminals", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
+    headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ shell: "powershell" }),
   });
   if (!response.ok) throw new Error((await response.json()).detail || "Unable to start terminal");
@@ -908,7 +908,7 @@ async function closeActiveTerminal() {
   if (!previousId) return;
   const response = await fetch(`/api/terminals/${previousId}`, {
     method: "DELETE",
-    headers: { "X-JSON-CODR": "1" },
+    headers: window.JSONCodrHttpIdentity.mutationHeaders(),
   });
   if (!response.ok && response.status !== 404) {
     throw new Error((await response.json()).detail || "Unable to close the previous terminal");
@@ -936,7 +936,8 @@ async function connectTerminalRecord(terminal, profile = activeTerminalProfile) 
   if (xterm) xterm.clear();
   elements.terminalOutput.textContent = "";
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  const socket = new WebSocket(`${protocol}//${location.host}/ws/terminals/${terminalId}?after_seq=${lastTerminalSequence}`);
+  const csrfProtocol = window.JSONCodrHttpIdentity.websocketCsrfProtocol();
+  const socket = new WebSocket(`${protocol}//${location.host}/ws/terminals/${terminalId}?after_seq=${lastTerminalSequence}`, csrfProtocol || undefined);
   terminalSocket = socket;
   terminalSocket.addEventListener("open", () => {
     elements.terminalStatus.textContent = `${terminal.shell} · PID ${terminal.pid}`;
@@ -1034,7 +1035,7 @@ async function approveAction(proposal, approveButton) {
   await ensureTerminal();
   const response = await fetch(`/api/sessions/${sessionId}/action-proposals/${proposal.id}/approve`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
+    headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ terminal_id: terminalId }),
   });
   const approval = await response.json();
@@ -2782,7 +2783,7 @@ elements.destructiveSubmit.addEventListener("click", async () => {
   if (enteredPhrase !== phrase) return showError("Confirmation code does not match");
   const response = await fetch(`/api/sessions/${sessionId}/action-proposals/${proposal.id}/confirm-destructive`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-JSON-CODR": "1" },
+    headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ terminal_id: terminalId, phrase: enteredPhrase }),
   });
   const approval = await response.json();

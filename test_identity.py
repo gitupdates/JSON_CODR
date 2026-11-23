@@ -98,6 +98,49 @@ class IdentityServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(PermissionError, "recovery-capable"):
             service.assign_roles(administrator.user_id, ("viewer",))
 
+    def test_role_demotion_immediately_narrows_existing_credential_scopes(self):
+        """Stored administrator scopes must not survive an effective-role change."""
+        from web_app.core.identity import MUTATION_SCOPES
+
+        service = self.service()
+        service.bootstrap("production", "Administrator")
+        operator = service.create_user("Operator", "Operator")
+        service.assign_roles(operator.user_id, ("administrator",))
+        credential = service.issue_credential(
+            operator.user_id,
+            "service",
+            "operator",
+            ("lesson.read", *MUTATION_SCOPES),
+        )
+
+        service.assign_roles(operator.user_id, ("viewer",))
+
+        for scope in (
+            "git.commit",
+            "terminal.write",
+            "component.install",
+            "system.update",
+            "system.activate",
+            "system.rollback",
+        ):
+            with self.subTest(scope=scope):
+                with self.assertRaisesRegex(PermissionError, "scope"):
+                    service.resolve_credential(credential.token, required_scope=scope)
+        principal = service.resolve_credential(credential.token)
+        self.assertEqual(principal.scopes, ("lesson.read",))
+
+    def test_administrator_cli_scopes_are_explicit_and_revalidated(self):
+        service = self.service()
+        administrator = service.bootstrap("production", "Administrator").user
+
+        self.assertEqual(service.cli_scopes(administrator.user_id, ()), service.lesson_scopes(administrator.user_id))
+        self.assertIn("git.commit", service.cli_scopes(administrator.user_id, ("git.commit",)))
+        with self.assertRaisesRegex(PermissionError, "not allowed"):
+            service.cli_scopes(administrator.user_id, ("unknown.scope",))
+        viewer = service.create_user("Viewer", "Viewer")
+        with self.assertRaisesRegex(PermissionError, "not allowed"):
+            service.cli_scopes(viewer.user_id, ("git.commit",))
+
     def test_user_ids_are_immutable_and_unique(self):
         service = self.service()
         service.bootstrap("production", "Administrator")

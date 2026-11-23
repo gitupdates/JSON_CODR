@@ -165,6 +165,7 @@
   <section class="context-panel source-card"><h2>Permission boundary</h2><p>GitHub operations use the local GitHub CLI identity; Git uses the local Git executable. Every write and local sync operation requires browser confirmation and a request-level confirmation flag. Repository deletion additionally requires typing its exact owner/repository name. Account credentials, secrets, and workflow administration remain outside this page.</p></section>
 
 <script src="/static/source_control_updates.js"></script>
+<script src="/static/http_identity.js?v=1.0.0"></script>
 <script>
 (() => {
   const $ = (selector) => document.querySelector(selector);
@@ -201,8 +202,11 @@
     return node;
   }
   async function request(path, options = {}) {
-    const headers = {"X-JSON-CODR": "1", ...(options.headers || {})};
+    let headers = {...(options.headers || {})};
     if (options.body) headers["Content-Type"] = "application/json";
+    if (!["GET", "HEAD"].includes((options.method || "GET").toUpperCase())) {
+      headers = window.JSONCodrHttpIdentity.mutationHeaders(headers);
+    }
     const response = await fetch(path, {...options, headers});
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
