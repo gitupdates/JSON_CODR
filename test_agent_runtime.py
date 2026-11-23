@@ -8,6 +8,7 @@ from web_app.core.adapters import AdapterEvent, CapabilityCall
 from web_app.core.adapters import CapabilityExecutionError
 from web_app.core.agent_runtime import AgentRuntime
 from web_app.core.agent_services import EventEvidenceVerifier
+from web_app.core.approval import ApprovalStore
 from web_app.core.context_service import ContextService
 from web_app.core.contracts import (
     CompletionCriterion,
@@ -66,8 +67,9 @@ class DeterministicPlanner:
 
 
 class DeterministicVerifier:
-    def __init__(self, satisfied=True):
+    def __init__(self, satisfied=True, project_fingerprint=None):
         self.satisfied = satisfied
+        self.project_fingerprint = project_fingerprint
         self.calls = []
 
     async def verify(self, goal, task, context):
@@ -75,12 +77,17 @@ class DeterministicVerifier:
         status = CriterionStatus.passed if self.satisfied else CriterionStatus.failed
         evidence = ()
         if self.satisfied:
+            fingerprint = (
+                self.project_fingerprint()
+                if callable(self.project_fingerprint)
+                else self.project_fingerprint or "sha256:" + "1" * 64
+            )
             evidence = tuple(
                 EvidenceRef(
                     evidence_id=f"evidence-{criterion.criterion_id}", task_id=task.task_id,
                     project_id=task.project_id, goal_id=goal.goal_id, goal_revision=goal.revision,
                     criterion_id=criterion.criterion_id, source_ref=f"task:{task.task_id}",
-                    project_fingerprint="sha256:" + "1" * 64, observed_at=datetime.now(UTC),
+                    project_fingerprint=fingerprint, observed_at=datetime.now(UTC),
                 )
                 for criterion in goal.criteria
             )
@@ -91,6 +98,16 @@ class DeterministicVerifier:
             results={item.criterion_id: status for item in goal.criteria},
             evidence=evidence, verified_at=datetime.now(UTC),
         )
+
+
+class SequencedVerifier(DeterministicVerifier):
+    def __init__(self, outcomes):
+        super().__init__()
+        self.outcomes = iter(outcomes)
+
+    async def verify(self, goal, task, context):
+        self.satisfied = next(self.outcomes)
+        return await super().verify(goal, task, context)
 
 
 class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
@@ -107,10 +124,10 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.tasks.close()
         self.temporary.cleanup()
 
-    def create_root_task(self, *, accepted=True, project_root=None):
+    def create_root_task(self, *, accepted=True, project_root=None, objective="Complete the requested coding task"):
         task_id = str(uuid7())
         goal = GoalSpec(
-            goal_id="goal-1", revision=1, objective="Complete the requested coding task",
+            goal_id="goal-1", revision=1, objective=objective,
             criteria=(CompletionCriterion(
                 criterion_id="verified", kind=CriterionKind.project_state,
                 description="The resulting project state is verified",
@@ -161,8 +178,9 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             [event.event_type for event in result.events if event.event_type.startswith("agent.")],
             [
                 "agent.goal_registered", "agent.started", "agent.phase_changed",
-                "agent.step_planned", "agent.action_completed", "agent.step_planned",
-                "agent.action_completed", "agent.step_planned", "agent.action_completed",
+                "agent.step_planned", "agent.action_completed", "agent.verification_failed",
+                "agent.step_planned", "agent.action_completed", "agent.verification_failed",
+                "agent.step_planned", "agent.action_completed",
                 "agent.phase_changed", "agent.verification_completed", "agent.verified",
             ],
         )
@@ -185,16 +203,16 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             CoreService(self.tasks, self.policy, {}),
             ContextService(self.tasks, self.memory),
             RecordingPlanner(),
-            DeterministicVerifier(satisfied=False),
+            DeterministicVerifier(),
             lambda _root: "sha256:" + "1" * 64,
         )
 
         await runtime.run(task_id)
 
         self.assertEqual(len(observed), 1)
-        self.assertLessEqual(len(observed[0].text), 1_800)
+        self.assertTrue(all(len(context.text) <= 2_000 for context in observed))
 
-    async def test_satisfied_verification_requires_planner_done_after_evidence(self):
+    async def test_satisfied_verification_completes_without_a_second_planner_call(self):
         adapter = RecordingAdapter()
         call = CapabilityCall(
             capability_id="project.read", operation="read", project_root=str(self.root)
@@ -222,7 +240,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         result = await runtime.run(task_id)
 
         self.assertEqual(result.status, TaskStatus.completed)
-        self.assertEqual(planner.calls, 2)
+        self.assertEqual(planner.calls, 1)
 
     async def test_steering_is_durable_and_visible_to_the_next_plan(self):
         adapter = RecordingAdapter()
@@ -264,6 +282,56 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Use project evidence.", planned_context.text)
         self.assertIn("PROJECT_FACT = 42", planned_context.text)
         self.assertTrue(any(source.kind == "project_snapshot" for source in planned_context.sources))
+
+    async def test_runtime_prioritizes_a_goal_referenced_file_within_planner_budget(self):
+        project = self.root / "project"
+        project.mkdir()
+        target = project / "config.json"
+        target.write_text(
+            '{"schema_version":1,"source":"exact-source","feature_enabled":false}\n',
+            encoding="utf-8",
+        )
+        for index in range(12):
+            (project / f"noise-{index:02}.txt").write_text("noise " * 80, encoding="utf-8")
+        observed = []
+
+        class RecordingPlanner:
+            async def plan(_self, context):
+                observed.append(context)
+                return None
+
+        runtime = AgentRuntime(
+            self.tasks,
+            CoreService(self.tasks, self.policy, {}),
+            ContextService(self.tasks, self.memory),
+            RecordingPlanner(),
+            DeterministicVerifier(satisfied=False),
+            lambda _root: ProjectReader(project).fingerprint(),
+            project_reader_resolver=lambda _command: (ProjectReader(project), "."),
+        )
+        task_id = self.create_root_task(
+            project_root=project,
+            objective=(
+                "Edit only config.json. Preserve schema_version and source exactly. "
+                "Change feature_enabled from false to true."
+            ),
+        )
+
+        await runtime.run(task_id)
+
+        self.assertEqual(len(observed), 3)
+        self.assertTrue(all('"source":"exact-source"' in item.text for item in observed))
+        self.assertTrue(all(len(item.text) <= 3_000 for item in observed))
+
+    def test_project_fingerprint_is_independent_of_context_priority_order(self):
+        project = self.root / "project"
+        project.mkdir()
+        (project / "a.txt").write_text("a", encoding="utf-8")
+        (project / "b.txt").write_text("b", encoding="utf-8")
+        reader = ProjectReader(project)
+        files = reader.files()
+
+        self.assertEqual(reader.fingerprint(files), reader.fingerprint(tuple(reversed(files))))
 
     async def test_mutation_refreshes_project_context_before_verification(self):
         project = self.root / "project"
@@ -341,6 +409,90 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed.status, TaskStatus.completed)
         self.assertEqual(len(adapter.calls), 1)
 
+    async def test_exact_approval_ignores_runtime_churn_and_applies_requested_edit(self):
+        project = self.root / "project"
+        runtime_state = project / ".runtime"
+        runtime_state.mkdir(parents=True)
+        target = project / "config.json"
+        target.write_text(
+            '{"schema_version":1,"source":"exact-source","feature_enabled":false}\n',
+            encoding="utf-8",
+        )
+        runtime_log = runtime_state / "server.log"
+        runtime_log.write_text("started\n", encoding="utf-8")
+
+        class JsonMutatingAdapter:
+            def __init__(inner_self):
+                inner_self.calls = []
+
+            async def execute(inner_self, call, context):
+                inner_self.calls.append(call)
+                target.write_text(call.arguments["content"], encoding="utf-8")
+                yield AdapterEvent(event_type="capability.result", payload={"operation": call.operation})
+
+        adapter = JsonMutatingAdapter()
+        replacement = '{"schema_version":1,"source":"exact-source","feature_enabled":true}\n'
+        call = CapabilityCall(
+            capability_id="project.patch", operation="replace",
+            project_root=str(project), target_path=str(target), arguments={"content": replacement},
+        )
+        fingerprint = lambda _root=None: ProjectReader(project).fingerprint()
+        approvals = ApprovalStore(self.root / "approvals.sqlite")
+        core = CoreService(
+            self.tasks, self.policy, {"project.patch": adapter},
+            approval_store=approvals, project_fingerprint=fingerprint,
+        )
+        runtime = AgentRuntime(
+            self.tasks, core, ContextService(self.tasks, self.memory),
+            DeterministicPlanner([call]), DeterministicVerifier(project_fingerprint=fingerprint),
+            fingerprint,
+        )
+        task_id = self.create_root_task(project_root=project)
+
+        try:
+            waiting = await runtime.run(task_id)
+            approval = next(
+                event for event in waiting.events if event.event_type == "agent.approval_required"
+            )
+            runtime_log.write_text("started\nrequest completed\n", encoding="utf-8")
+
+            await core.approve(
+                approval.payload["child_task_id"],
+                proposal_id=approval.payload["proposal_id"],
+            )
+            completed = await runtime.resume(task_id)
+        finally:
+            approvals.close()
+
+        self.assertEqual(completed.status, TaskStatus.completed)
+        self.assertEqual(target.read_text(encoding="utf-8"), replacement)
+        self.assertEqual(adapter.calls, [call])
+
+    async def test_identical_successful_action_is_verified_without_executing_twice(self):
+        adapter = RecordingAdapter()
+        call = CapabilityCall(
+            capability_id="project.read", operation="read",
+            project_root=str(self.root), target_path=str(self.root / "file.py"),
+        )
+        self.policy.grant("user", "project-1", call, scope="project")
+        runtime = AgentRuntime(
+            self.tasks,
+            CoreService(self.tasks, self.policy, {"project.read": adapter}),
+            ContextService(self.tasks, self.memory),
+            DeterministicPlanner([call, call]),
+            DeterministicVerifier(),
+            lambda _root: "sha256:" + "1" * 64,
+        )
+        task_id = self.create_root_task()
+
+        completed = await runtime.run(task_id)
+
+        self.assertEqual(completed.status, TaskStatus.completed)
+        self.assertEqual(adapter.calls, [call])
+        event_types = [event.event_type for event in completed.events]
+        self.assertIn("agent.verification_completed", event_types)
+        self.assertIn("agent.verified", event_types)
+
     async def test_restart_does_not_treat_unresolved_running_child_as_failed(self):
         call = CapabilityCall(
             capability_id="project.read", operation="read", project_root=str(self.root)
@@ -380,6 +532,31 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status, TaskStatus.pending)
         self.assertNotIn("task.completed", [event.event_type for event in result.events])
         self.assertIn("agent.verification_failed", [event.event_type for event in result.events])
+
+    async def test_failed_verification_returns_to_planning(self):
+        adapter = RecordingAdapter()
+        call = CapabilityCall(
+            capability_id="project.read", operation="read", project_root=str(self.root)
+        )
+        planner = DeterministicPlanner([None, call, None])
+        runtime = AgentRuntime(
+            self.tasks,
+            CoreService(self.tasks, self.policy, {"project.read": adapter}),
+            ContextService(self.tasks, self.memory),
+            planner,
+            SequencedVerifier([False, True]),
+            lambda _root: "sha256:" + "1" * 64,
+        )
+        task_id = self.create_root_task()
+
+        result = await runtime.run(task_id)
+
+        self.assertEqual(result.status, TaskStatus.completed)
+        self.assertEqual(len(adapter.calls), 1)
+        self.assertEqual(
+            sum(event.event_type == "agent.verification_failed" for event in result.events),
+            1,
+        )
 
     async def test_unaccepted_generated_goal_blocks_before_mutation(self):
         adapter = RecordingAdapter()

@@ -645,6 +645,12 @@ class DesignerSettings(BaseModel):
     grid_size: int = Field(default=8, ge=1, le=64)
     autosave: bool = True
 
+
+class MemorySettings(BaseModel):
+    enabled: bool = True
+    detailed_retention_enabled: bool = False
+    search_limit: int = Field(default=20, ge=1, le=100)
+
 class SystemSettings(BaseModel):
     version: int = 3
     app_version: str = APP_VERSION
@@ -653,6 +659,7 @@ class SystemSettings(BaseModel):
     skill_routing: SkillRoutingSettings = Field(default_factory=SkillRoutingSettings)
     gpu_optimization: GpuOptimizationSettings = Field(default_factory=GpuOptimizationSettings)
     designer: DesignerSettings = Field(default_factory=DesignerSettings)
+    memory: MemorySettings = Field(default_factory=MemorySettings)
 
 
 class SettingsUpdate(BaseModel):
@@ -661,6 +668,7 @@ class SettingsUpdate(BaseModel):
     skill_routing: Optional[SkillRoutingSettings] = None
     gpu_optimization: Optional[GpuOptimizationSettings] = None
     designer: Optional[DesignerSettings] = None
+    memory: Optional[MemorySettings] = None
 
 
 class SkillScanRequest(BaseModel):

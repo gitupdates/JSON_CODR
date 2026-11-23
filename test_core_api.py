@@ -11,6 +11,8 @@ from web_app.core.approval import ApprovalStore
 from web_app.core.api import create_core_router
 from web_app.core.artifact_store import ArtifactMetadata, ArtifactStore
 from web_app.core.contracts import TaskCommand
+from web_app.core.memory import MemoryStore
+from web_app.models import MemorySettings
 from web_app.core.policy import PolicyService
 from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
@@ -33,6 +35,8 @@ class CoreApiTests(unittest.TestCase):
         self.policy = PolicyService(root / "policy.sqlite")
         self.approvals = ApprovalStore(root / "approvals.sqlite")
         self.artifacts = ArtifactStore(root / "artifacts", root / "artifacts.sqlite")
+        self.memory = MemoryStore(root / "memory.sqlite")
+        self.memory_settings = MemorySettings()
         self.adapter = RecordingAdapter()
         self.core = CoreService(
             self.tasks,
@@ -47,6 +51,8 @@ class CoreApiTests(unittest.TestCase):
                 lambda: (self.core, self.tasks, self.policy),
                 artifact_store=lambda: self.artifacts,
                 capabilities=lambda: ({"capability_id": "project.read"},),
+                memory_store=lambda: self.memory,
+                memory_settings=lambda: self.memory_settings,
             )
         )
         self.client = TestClient(app)
@@ -54,6 +60,7 @@ class CoreApiTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.client.close()
         self.artifacts.close()
+        self.memory.close()
         self.approvals.close()
         self.policy.close()
         self.tasks.close()
@@ -208,6 +215,91 @@ class CoreApiTests(unittest.TestCase):
         self.assertEqual(revised.json()["steps"][0]["operation"], "search")
         self.assertEqual(stale.status_code, 409)
         self.assertEqual(len(self.client.get("/api/tasks/task-1/plans/plan-1").json()), 2)
+
+    def test_collective_memory_api_scopes_search_and_revocation_to_principal(self):
+        created = self.client.post(
+            "/api/projects/project-1/memory",
+            headers={"X-JSON-CODR-Principal": "administrator"},
+            json={
+                "thread_id": "thread-1",
+                "task_id": "task-1",
+                "kind": "verified_outcome",
+                "content": "Planner contract verification passed.",
+                "source_refs": ["event:verified-1"],
+                "idempotency_key": "task-1:verified-1",
+            },
+        )
+        found = self.client.get(
+            "/api/projects/project-1/memory/search",
+            headers={"X-JSON-CODR-Principal": "administrator"},
+            params={"query": "planner"},
+        )
+        isolated = self.client.get(
+            "/api/projects/project-1/memory/search",
+            headers={"X-JSON-CODR-Principal": "other-user"},
+            params={"query": "planner"},
+        )
+        revoked = self.client.post(
+            f"/api/projects/project-1/memory/{created.json()['memory_id']}/revoke",
+            headers={"X-JSON-CODR-Principal": "administrator"},
+            json={"reason": "superseded evidence"},
+        )
+
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(found.status_code, 200)
+        self.assertEqual(len(found.json()), 1)
+        self.assertEqual(isolated.json(), [])
+        self.assertEqual(revoked.json()["status"], "revoked")
+
+    def test_collective_memory_api_requires_global_and_per_record_detailed_retention_opt_in(self):
+        payload = {
+            "thread_id": "thread-1",
+            "task_id": "task-1",
+            "kind": "transcript",
+            "content": "RAW TRANSCRIPT:\nuser: fix it\nassistant: result",
+            "source_refs": ["event:transcript-1"],
+            "retain_details": True,
+            "idempotency_key": "task-1:transcript-1",
+        }
+
+        blocked = self.client.post("/api/projects/project-1/memory", json=payload)
+        self.memory_settings = MemorySettings(detailed_retention_enabled=True)
+        allowed = self.client.post("/api/projects/project-1/memory", json=payload)
+
+        self.assertEqual(blocked.status_code, 422)
+        self.assertEqual(allowed.status_code, 201)
+
+    def test_collective_memory_search_distinguishes_configured_default_from_explicit_limit(self):
+        self.memory_settings = MemorySettings(search_limit=2)
+        headers = {"X-JSON-CODR-Principal": "administrator"}
+        for index in range(5):
+            created = self.client.post(
+                "/api/projects/project-limit/memory",
+                headers=headers,
+                json={
+                    "thread_id": "thread-1",
+                    "task_id": f"task-{index}",
+                    "kind": "verified_outcome",
+                    "content": f"Verified planner outcome {index}.",
+                    "source_refs": [f"event:verified-{index}"],
+                    "idempotency_key": f"task-{index}:verified",
+                },
+            )
+            self.assertEqual(created.status_code, 201)
+
+        configured = self.client.get(
+            "/api/projects/project-limit/memory/search",
+            headers=headers,
+            params={"query": "planner"},
+        )
+        explicit = self.client.get(
+            "/api/projects/project-limit/memory/search",
+            headers=headers,
+            params={"query": "planner", "limit": 5},
+        )
+
+        self.assertEqual(len(configured.json()), 2)
+        self.assertEqual(len(explicit.json()), 5)
 
 
 if __name__ == "__main__":

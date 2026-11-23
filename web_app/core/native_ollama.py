@@ -51,26 +51,46 @@ class NativeOllamaTransport:
         )
         request = {
             "model": model,
-            "prompt": constrained_prompt,
-            "stream": False,
-            "raw": True,
-            "options": {"temperature": 0.0, "num_ctx": 2048, "num_gpu": 0, "num_predict": 256},
+            "messages": [{"role": "user", "content": constrained_prompt}],
+            "stream": True,
+            "format": "json",
+            "think": False,
+            "options": {"temperature": 0.0, "num_ctx": 2048, "num_predict": 512},
         }
-        for attempt in range(2):
+        for attempt in range(3):
+            content_parts: list[str] = []
             try:
-                payload = await self._post_json("/api/generate", request)
-                break
+                async for line in self._stream_request("/api/chat", request):
+                    chunk = json.loads(line)
+                    message = chunk.get("message")
+                    if not isinstance(message, dict):
+                        raise ModelOutputError("Ollama returned a malformed JSON chat stream")
+                    content_parts.append(str(message.get("content") or ""))
             except OllamaUnavailableError as error:
+                response = "".join(content_parts).strip()
+                if self._is_complete_json_object(response):
+                    return response
                 transient_runner_restart = (
                     isinstance(error.__cause__, ConnectionResetError)
                     or "forcibly closed" in str(error)
                 )
-                if attempt or not transient_runner_restart:
+                if attempt == 2 or not transient_runner_restart:
                     raise
-        response = payload.get("response")
-        if not isinstance(response, str):
-            raise ModelOutputError("Ollama returned malformed JSON generation output")
-        return response
+                continue
+            except json.JSONDecodeError as error:
+                raise ModelOutputError("Ollama returned malformed JSON chat stream") from error
+            response = "".join(content_parts).strip()
+            if self._is_complete_json_object(response):
+                return response
+            raise ModelOutputError("Ollama returned malformed JSON chat output")
+        raise OllamaUnavailableError("Ollama request failed")
+
+    @staticmethod
+    def _is_complete_json_object(value: str) -> bool:
+        try:
+            return isinstance(json.loads(value), dict)
+        except json.JSONDecodeError:
+            return False
 
     async def stream_chat(
         self,
@@ -267,6 +287,16 @@ class NativeOllamaTransport:
                     error = value
                     if isinstance(error, TimeoutError):
                         raise ModelTimeoutError("Model request timed out") from error
+                    if isinstance(error, HTTPError):
+                        detail = ""
+                        try:
+                            detail = error.read(4096).decode("utf-8", errors="replace").strip()
+                        except Exception:
+                            pass
+                        if detail:
+                            raise OllamaUnavailableError(
+                                f"Ollama request failed: {detail}"
+                            ) from error
                     if isinstance(error, (HTTPError, URLError, OSError)):
                         raise OllamaUnavailableError("Ollama request failed") from error
                     raise error

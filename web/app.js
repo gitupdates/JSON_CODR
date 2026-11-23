@@ -35,6 +35,9 @@ const elements = {
   hardwareSubnavigation: document.querySelector("#hardware-subnavigation"),
   hardwareSectionButtons: [...document.querySelectorAll("[data-hardware-section]")],
   hardwareSectionViews: [...document.querySelectorAll("[data-hardware-view]")],
+  settingsSubnavigation: document.querySelector("#settings-subnavigation"),
+  settingsSectionButtons: [...document.querySelectorAll("[data-settings-section]")],
+  settingsSectionViews: [...document.querySelectorAll("[data-settings-view]")],
   contextPanel: document.querySelector("#context-panel"),
   skillsPanel: document.querySelector("#skills-panel"),
   settingsPanel: document.querySelector("#settings-panel"),
@@ -95,6 +98,11 @@ const elements = {
   uiResetPreset: document.querySelector("#ui-reset-preset"),
   uiRestoreDefaults: document.querySelector("#ui-restore-defaults"),
   approvedSkillDirectories: document.querySelector("#approved-skill-directories"),
+  memoryEnabled: document.querySelector("#memory-enabled"),
+  memoryDetailedRetention: document.querySelector("#memory-detailed-retention"),
+  memorySearchLimit: document.querySelector("#memory-search-limit"),
+  memorySettingsSave: document.querySelector("#memory-settings-save"),
+  memorySettingsStatus: document.querySelector("#memory-settings-status"),
   hardwareStatus: document.querySelector("#hardware-status"),
   hardwareDetect: document.querySelector("#hardware-detect"),
   hardwareCandidates: document.querySelector("#hardware-candidates"),
@@ -211,6 +219,7 @@ const TERMINAL_SESSIONS_KEY = "json_codr_terminal_sessions";
 const TERMINAL_COMMAND_HISTORY_KEY = "json_codr_terminal_command_history";
 const NAVIGATION_DESTINATIONS = new Set(["workspace", "context", "skills", "hardware", "settings"]);
 const HARDWARE_SECTIONS = new Set(["overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "leaderboard", "history", "localperf"]);
+const SETTINGS_SECTIONS = new Set(["interface", "memory", "skills", "components", "disabled", "diagnostics"]);
 const requestedNavigationDestination = window.JSONCodrNavigationRoutes?.destinationFromSearch(
   window.location.search,
   NAVIGATION_DESTINATIONS,
@@ -246,6 +255,7 @@ let skillsChangeRevision = 0;
 let navigationChangeRevision = 0;
 let activeDestination = "workspace";
 let activeHardwareSection = "overview";
+let activeSettingsSection = "interface";
 let sidebarWidth = 260;
 let persistedThemeMode = null;
 let excludedSkillIds = [];
@@ -701,6 +711,23 @@ function selectHardwareSection(section, { persist = true, focus = false } = {}) 
   }
 }
 
+function selectSettingsSection(section, { focus = false } = {}) {
+  if (!SETTINGS_SECTIONS.has(section)) section = "interface";
+  activeSettingsSection = section;
+  for (const button of elements.settingsSectionButtons) {
+    if (button.dataset.settingsSection === section) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  }
+  for (const view of elements.settingsSectionViews) view.hidden = view.dataset.settingsView !== section;
+  if (focus) {
+    elements.settingsSectionViews
+      .find((view) => view.dataset.settingsView === section)
+      ?.querySelector("h3, strong, summary")
+      ?.focus({ preventScroll: true });
+  }
+  if (section === "diagnostics") loadRuntimeDiagnostics();
+}
+
 function selectDestination(destination, { persist = true, focus = false } = {}) {
   if (destination === "terminal") {
     openWorkspacePanel("terminal", "bottom");
@@ -716,10 +743,9 @@ function selectDestination(destination, { persist = true, focus = false } = {}) 
   }
   for (const view of elements.destinationViews) view.hidden = view.dataset.view !== destination;
   elements.hardwareSubnavigation.hidden = destination !== "hardware";
+  elements.settingsSubnavigation.hidden = destination !== "settings";
   if (destination === "hardware") selectHardwareSection(activeHardwareSection, { persist: false });
-  if (destination === "settings") {
-    loadRuntimeDiagnostics();
-  }
+  if (destination === "settings") selectSettingsSection(activeSettingsSection);
   if (destination === "terminal") {
     initializeXterm();
     if (!terminalId) elements.terminalStatus.textContent = "PowerShell is ready to start";
@@ -1144,15 +1170,8 @@ async function runWorkspaceAgent() {
     if (!response.ok) throw new Error(payload.detail || "Project task failed");
     elements.workspaceAgentStatus.textContent = `${payload.route} · requested ${payload.requested_model} · effective ${payload.effective_model || "all installed models"}`;
     elements.workspaceAgentResult.textContent = JSON.stringify(payload.result, null, 2);
-    if (payload.status === "approval_required") {
-      const approval = [...(payload.result?.task?.events || [])].reverse().find(
-        (event) => event.event_type === "agent.approval_required",
-      );
-      if (!approval?.payload?.proposal_id) throw new Error("Agent approval is missing its proposal identity");
-      elements.workspaceAgentApprove.dataset.taskId = payload.task_id;
-      elements.workspaceAgentApprove.dataset.proposalId = approval.payload.proposal_id;
-      elements.workspaceAgentApprove.hidden = false;
-      elements.workspaceAgentStatus.textContent = "Approval required · review and approve the proposed project action";
+    if (payload.status === "approval_required" && !showWorkspaceAgentApproval(payload.result?.task, payload.task_id)) {
+      throw new Error("Agent approval is missing its proposal identity");
     }
   } catch (error) {
     elements.workspaceAgentStatus.textContent = "Agent task failed";
@@ -1160,6 +1179,25 @@ async function runWorkspaceAgent() {
   } finally {
     elements.workspaceAgentRun.disabled = false;
   }
+}
+
+function showWorkspaceAgentApproval(task, taskId) {
+  if (["completed", "failed", "cancelled"].includes(task?.status)) return false;
+  const completedSteps = new Set(
+    (task?.events || [])
+      .filter((event) => event.event_type === "agent.action_completed")
+      .map((event) => event.payload?.step_id),
+  );
+  const approval = [...(task?.events || [])].reverse().find(
+    (event) => event.event_type === "agent.approval_required"
+      && !completedSteps.has(event.payload?.step_id),
+  );
+  if (!approval?.payload?.proposal_id) return false;
+  elements.workspaceAgentApprove.dataset.taskId = taskId;
+  elements.workspaceAgentApprove.dataset.proposalId = approval.payload.proposal_id;
+  elements.workspaceAgentApprove.hidden = false;
+  elements.workspaceAgentStatus.textContent = "Approval required · review and approve the proposed project action";
+  return true;
 }
 
 async function approveWorkspaceAgentAction() {
@@ -1177,8 +1215,10 @@ async function approveWorkspaceAgentAction() {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || "Unable to approve the project action");
     elements.workspaceAgentResult.textContent = JSON.stringify(payload, null, 2);
-    elements.workspaceAgentStatus.textContent = `Agent task ${payload.status}`;
-    elements.workspaceAgentApprove.hidden = true;
+    if (!showWorkspaceAgentApproval(payload, taskId)) {
+      elements.workspaceAgentStatus.textContent = `Agent task ${payload.status}`;
+      elements.workspaceAgentApprove.hidden = true;
+    }
   } catch (error) {
     elements.workspaceAgentStatus.textContent = "Agent approval failed";
     elements.workspaceAgentResult.textContent = error.message;
@@ -1341,6 +1381,9 @@ async function loadSettings() {
     elements.settingSkillsOpen.checked = settingsState.ui.primary_destination === "skills";
   }
   elements.settingSkillsOpen.disabled = false;
+  elements.memoryEnabled.checked = settingsState.memory.enabled;
+  elements.memoryDetailedRetention.checked = settingsState.memory.detailed_retention_enabled;
+  elements.memorySearchLimit.value = settingsState.memory.search_limit;
   renderApprovedDirectories();
   renderGpuProfileControls();
 }
@@ -2782,6 +2825,9 @@ document.addEventListener("keydown", (event) => {
 for (const button of elements.hardwareSectionButtons) {
   button.addEventListener("click", () => selectHardwareSection(button.dataset.hardwareSection));
 }
+for (const button of elements.settingsSectionButtons) {
+  button.addEventListener("click", () => selectSettingsSection(button.dataset.settingsSection, { focus: true }));
+}
 elements.sidebarCollapse.addEventListener("click", () => {
   setSidebarCollapsed(!document.body.classList.contains("sidebar-collapsed"));
 });
@@ -2886,6 +2932,22 @@ elements.settingSkillsOpen.addEventListener("change", () => {
   skillsChangeRevision += 1;
   const open = elements.settingSkillsOpen.checked;
   selectDestination(open ? "skills" : "chat");
+});
+elements.memorySettingsSave.addEventListener("click", async () => {
+  elements.memorySettingsSave.disabled = true;
+  elements.memorySettingsStatus.textContent = "Saving…";
+  try {
+    await saveSettings({ memory: {
+      enabled: elements.memoryEnabled.checked,
+      detailed_retention_enabled: elements.memoryDetailedRetention.checked,
+      search_limit: Number(elements.memorySearchLimit.value),
+    } });
+    elements.memorySettingsStatus.textContent = "Memory settings saved";
+  } catch (error) {
+    elements.memorySettingsStatus.textContent = error.message;
+  } finally {
+    elements.memorySettingsSave.disabled = false;
+  }
 });
 elements.uiSave.addEventListener("click", async () => {
   const revision = ++themeSaveRevision;

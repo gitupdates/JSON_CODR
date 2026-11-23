@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 
 from cli import load_config
-from web_app.models import DesignerSettings, GpuOptimizationSettings, GpuProfileSettings, SettingsUpdate, SkillRoutingSettings, SystemSettings, UiSettings
+from web_app.models import DesignerSettings, GpuOptimizationSettings, GpuProfileSettings, MemorySettings, SettingsUpdate, SkillRoutingSettings, SystemSettings, UiSettings
 from web_app.version import APP_VERSION
 
 
@@ -52,6 +52,8 @@ class SettingsService:
             current.gpu_optimization = GpuOptimizationSettings.model_validate(update.gpu_optimization)
         if update.designer is not None:
             current.designer = DesignerSettings.model_validate(update.designer)
+        if update.memory is not None:
+            current.memory = MemorySettings.model_validate(update.memory)
         raw["version"] = current.version
         raw["app_version"] = APP_VERSION
         saved_ui = raw.setdefault("ui", {})
@@ -61,6 +63,7 @@ class SettingsService:
         raw["skill_routing"] = current.skill_routing.model_dump()
         raw["gpu_optimization"] = current.gpu_optimization.model_dump()
         raw["designer"] = current.designer.model_dump()
+        raw["memory"] = current.memory.model_dump()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.parent / f".settings-{uuid.uuid4().hex}.tmp"
         temporary.write_text(json.dumps(raw, indent=2), encoding="utf-8")

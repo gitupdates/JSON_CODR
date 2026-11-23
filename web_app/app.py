@@ -508,6 +508,8 @@ def create_app(
             artifact_store=get_core_artifacts,
             capabilities=lambda: core_capabilities if get_core_runtime() else (),
             components=get_component_manager,
+            memory_store=lambda: core_memory if get_core_runtime() else None,
+            memory_settings=lambda: settings.get().memory,
         )
     )
     action_proposals = ActionProposalService()

@@ -202,7 +202,9 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
         def fake_urlopen(request, timeout):
             captured["url"] = request.full_url
             captured["payload"] = json.loads(request.data)
-            return _Response(json.dumps({"response": '{"done":true}'}).encode())
+            return _Response(
+                json.dumps({"message": {"content": '{"done":true}'}, "done": True}).encode() + b"\n"
+            )
 
         transport = NativeOllamaTransport("http://localhost:11434")
         schema = {"type": "object", "properties": {"done": {"type": "boolean"}}}
@@ -210,19 +212,19 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
             content = await transport.json_chat("qwen3:4b", "Plan", schema)
 
         self.assertEqual(content, '{"done":true}')
-        self.assertEqual(captured["url"], "http://localhost:11434/api/generate")
-        self.assertNotIn("format", captured["payload"])
+        self.assertEqual(captured["url"], "http://localhost:11434/api/chat")
+        self.assertEqual(captured["payload"]["format"], "json")
         self.assertIn(
             json.dumps(schema, sort_keys=True, separators=(",", ":")),
-            captured["payload"]["prompt"],
+            captured["payload"]["messages"][0]["content"],
         )
-        self.assertFalse(captured["payload"]["stream"])
-        self.assertTrue(captured["payload"]["raw"])
+        self.assertTrue(captured["payload"]["stream"])
+        self.assertNotIn("raw", captured["payload"])
+        self.assertFalse(captured["payload"]["think"])
         self.assertEqual(captured["payload"]["options"], {
             "temperature": 0.0,
             "num_ctx": 2048,
-            "num_gpu": 0,
-            "num_predict": 256,
+            "num_predict": 512,
         })
 
     async def test_json_chat_retries_one_plain_connection_reset(self):
@@ -234,7 +236,9 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
             captured.append(json.loads(request.data))
             if len(captured) == 1:
                 raise ConnectionResetError("runner reset")
-            return _Response(json.dumps({"response": '{"done":false}'}).encode())
+            return _Response(
+                json.dumps({"message": {"content": '{"done":false}'}, "done": True}).encode() + b"\n"
+            )
 
         transport = NativeOllamaTransport("http://localhost:11434")
         schema = {"type": "object", "properties": {"done": {"type": "boolean"}}}
@@ -243,7 +247,51 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, '{"done":false}')
         self.assertEqual(len(captured), 2)
-        self.assertNotIn("format", captured[0])
+        self.assertEqual(captured[0]["format"], "json")
+
+    async def test_json_chat_recovers_from_two_consecutive_runner_restarts(self):
+        from web_app.core.native_ollama import NativeOllamaTransport
+
+        calls = 0
+
+        def fake_urlopen(_request, timeout):
+            nonlocal calls
+            del timeout
+            calls += 1
+            if calls <= 2:
+                raise ConnectionResetError("runner reset")
+            return _Response(
+                json.dumps({"message": {"content": '{"done":true}'}, "done": True}).encode()
+                + b"\n"
+            )
+
+        transport = NativeOllamaTransport("http://localhost:11434")
+        with patch("web_app.core.native_ollama.urlopen", side_effect=fake_urlopen):
+            result = await transport.json_chat("qwen3:4b", "Plan", {"type": "object"})
+
+        self.assertEqual(result, '{"done":true}')
+        self.assertEqual(calls, 3)
+
+    async def test_json_chat_keeps_complete_streamed_object_when_runner_resets_after_generation(self):
+        from web_app.core.native_ollama import NativeOllamaTransport
+
+        class CompleteThenResetResponse(_Response):
+            def __iter__(self):
+                yield json.dumps({
+                    "message": {"content": '{"done":false}'}, "done": False,
+                }).encode() + b"\n"
+                raise ConnectionResetError("runner reset after generation")
+
+        transport = NativeOllamaTransport("http://localhost:11434")
+        with patch(
+            "web_app.core.native_ollama.urlopen",
+            return_value=CompleteThenResetResponse(b""),
+        ):
+            result = await transport.json_chat(
+                "qwen3:4b", "Plan", {"type": "object", "properties": {"done": {"type": "boolean"}}}
+            )
+
+        self.assertEqual(result, '{"done":false}')
 
     async def test_json_chat_preserves_local_ollama_http_error_detail(self):
         from web_app.core.native_ollama import NativeOllamaTransport
@@ -284,7 +332,7 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
                         "wsarecv: An existing connection was forcibly closed by the remote host."
                     }).encode()),
                 )
-            return _Response(json.dumps({"response": '{"done":false}'}).encode())
+            return _Response(json.dumps({"message": {"content": '{"done":false}'}}).encode())
 
         transport = NativeOllamaTransport("http://localhost:11434")
         with patch("web_app.core.native_ollama.urlopen", side_effect=fake_urlopen):
@@ -313,7 +361,7 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
                         "wsarecv: An existing connection was forcibly closed by the remote host."
                     }).encode()),
                 )
-            return _Response(json.dumps({"response": '{"done":false}'}).encode())
+            return _Response(json.dumps({"message": {"content": '{"done":false}'}}).encode())
 
         transport = NativeOllamaTransport("http://localhost:11434")
         with patch("web_app.core.native_ollama.urlopen", side_effect=fake_urlopen):

@@ -9,7 +9,7 @@
     <title>JSON_CODR · Local model console</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/static/vendor/xterm.css" />
-    <link rel="stylesheet" href="/static/app.css?v=1.3.2" />
+    <link rel="stylesheet" href="/static/app.css?v=1.3.8" />
     <link rel="stylesheet" href="/static/fonts/fonts.css?v=1.2.0" />
     <link rel="stylesheet" href="/static/gamma.css?v=1.3.2" />
   </head>
@@ -36,8 +36,7 @@
           <button class="sidebar-destination" type="button" data-destination="context" title="Context &amp; files"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-context"/></svg><span>Context &amp; files</span></button>
           <button class="sidebar-destination" type="button" data-destination="skills" title="Skills"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-skills"/></svg><span>Skills</span></button>
           <button class="sidebar-destination" type="button" data-destination="hardware" title="Hardware"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-hardware"/></svg><span>Hardware</span></button>
-          <a class="sidebar-destination" href="/static/source-control.html" title="GitHub and source control"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 6 3 12l5 6M16 6l5 6-5 6M14 4l-4 16"/></svg><span>GitHub</span></a>
-          <div id="hardware-subnavigation" class="hardware-subnavigation" hidden>
+          <div id="hardware-subnavigation" class="sidebar-subnavigation" hidden>
             <button type="button" data-hardware-section="overview" aria-current="page">Overview</button>
             <button type="button" data-hardware-section="profiles">Profiles &amp; optimization</button>
             <button type="button" data-hardware-section="runtimes">Hardware &amp; runtimes</button>
@@ -48,7 +47,16 @@
             <button type="button" data-hardware-section="history">Results &amp; history</button>
             <button type="button" data-hardware-section="localperf">LocalPerf packages</button>
           </div>
+          <a class="sidebar-destination" href="/static/source-control.html" title="GitHub and source control"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 6 3 12l5 6M16 6l5 6-5 6M14 4l-4 16"/></svg><span>GitHub</span></a>
           <button class="sidebar-destination" type="button" data-destination="settings" title="Settings"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-settings"/></svg><span>Settings</span></button>
+          <div id="settings-subnavigation" class="sidebar-subnavigation" hidden>
+            <button type="button" data-settings-section="interface" aria-current="page">Interface</button>
+            <button type="button" data-settings-section="memory">Memory &amp; RAG</button>
+            <button type="button" data-settings-section="skills">Skills</button>
+            <button type="button" data-settings-section="components">Components</button>
+            <button type="button" data-settings-section="disabled">Disabled components</button>
+            <button type="button" data-settings-section="diagnostics">Diagnostics</button>
+          </div>
         </div>
         <div id="sidebar-resize-handle" class="sidebar-resize-handle" role="separator" aria-label="Resize navigation" aria-orientation="vertical" aria-valuemin="220" aria-valuemax="380" aria-valuenow="260" tabindex="0"></div>
       </nav>
@@ -56,7 +64,7 @@
       <header class="topbar">
         <a class="brand" href="/" aria-label="JSON CODR home">
           <span class="brand-mark">{ }</span>
-          <span><strong>JSON_CODR</strong><small>V1.3.7 · unified local agent</small></span>
+          <span><strong>JSON_CODR</strong><small>V1.3.8 · unified local agent</small></span>
         </a>
         <div id="health-status" class="health" role="status" aria-live="polite">
           <span class="health-dot"></span><span>Connecting</span>
@@ -318,7 +326,7 @@
 
       <aside id="settings-panel" class="context-panel app-view" data-view="settings" aria-label="JSON CODR settings" hidden>
         <div class="context-head"><div><span class="eyebrow">SETTINGS</span><h2>System configuration</h2></div></div>
-        <section class="dependency-review">
+        <section class="dependency-review" data-settings-view="interface">
           <strong>Interface</strong>
           <div class="appearance-editor" aria-labelledby="appearance-heading">
             <h3 id="appearance-heading">Appearance</h3>
@@ -347,11 +355,24 @@
           </div>
           <label class="setting-row"><input id="setting-skills-open" type="checkbox" disabled /> Reopen Skills panel on startup</label>
         </section>
-        <section class="dependency-review">
+        <section class="dependency-review" data-settings-view="memory" hidden>
+          <div class="dependency-head"><div><span class="eyebrow">LOCAL RETRIEVAL</span><strong>Memory &amp; RAG</strong></div></div>
+          <p class="meta">Canonical memory is stored in scoped SQLite records and searched through FTS5. Vector indexes remain optional, rebuildable projections and are not an authority.</p>
+          <label class="setting-row"><input id="memory-enabled" type="checkbox" /> Enable scoped collective memory</label>
+          <label class="setting-row"><input id="memory-detailed-retention" type="checkbox" /> Permit explicitly requested detailed retention</label>
+          <p class="meta">Detailed transcripts remain blocked unless both this setting and the individual memory request opt in.</p>
+          <label class="setting-row" for="memory-search-limit">Maximum search results</label>
+          <input id="memory-search-limit" class="setting-select" type="number" min="1" max="100" />
+          <div class="actions">
+            <button id="memory-settings-save" class="primary" type="button">Save memory settings</button>
+            <span id="memory-settings-status" class="meta" role="status" aria-live="polite"></span>
+          </div>
+        </section>
+        <section class="dependency-review" data-settings-view="skills" hidden>
           <strong>Approved skill directories</strong>
           <div id="approved-skill-directories" class="dependency-list"><p class="meta">No folders approved.</p></div>
         </section>
-        <section class="dependency-review" aria-labelledby="component-registry-heading">
+        <section class="dependency-review" data-settings-view="components" aria-labelledby="component-registry-heading" hidden>
           <div class="dependency-head"><div><span class="eyebrow">BORG COMPONENTS</span><strong id="component-registry-heading">Install tools and repositories</strong></div></div>
           <p class="meta">Components install globally by default into isolated runtimes. Review detected effects before activation.</p>
           <label class="setting-row" for="component-source">Source path, public Git URL, or package coordinate</label>
@@ -364,12 +385,12 @@
           <pre id="component-plan-details" class="attachment-preview" hidden></pre>
           <div id="component-list" class="dependency-list"><p class="meta">No verified components loaded.</p></div>
         </section>
-        <section class="dependency-review" aria-labelledby="disabled-components-heading">
+        <section class="dependency-review" data-settings-view="disabled" aria-labelledby="disabled-components-heading" hidden>
           <div class="dependency-head"><div><span class="eyebrow">INACTIVE</span><strong id="disabled-components-heading">Disabled components</strong></div></div>
           <p class="meta">Unavailable tools and models stay out of the Workspace until their requirements are satisfied.</p>
           <div id="disabled-components" class="dependency-list"><p class="meta">No disabled components.</p></div>
         </section>
-        <details class="dependency-review runtime-diagnostics-details">
+        <details class="dependency-review runtime-diagnostics-details" data-settings-view="diagnostics" hidden open>
           <summary>Advanced runtime diagnostics</summary>
           <p class="meta">Local routing, supervisor heartbeat, compatibility adapters, and recent execution evidence.</p>
           <div id="runtime-diagnostics" class="dependency-list" aria-live="polite"><p class="meta">Diagnostics have not been loaded.</p></div>
@@ -598,13 +619,13 @@
     <script src="/static/core_client.js?v=1.2.0" defer></script>
     <script src="/static/task_view.js?v=1.2.0" defer></script>
     <script src="/static/conversation_view.js?v=1.2.0" defer></script>
-    <script src="/static/vendor/xterm.js?v=1.3.7" defer></script>
-    <script src="/static/vendor/xterm-addon-fit.js?v=1.3.7" defer></script>
+    <script src="/static/vendor/xterm.js?v=1.3.8" defer></script>
+    <script src="/static/vendor/xterm-addon-fit.js?v=1.3.8" defer></script>
     <script src="/static/model_runs.js?v=1.2.0" defer></script>
     <script src="/static/workspace_layout.js?v=1.2.0" defer></script>
     <script src="/static/ui_customization.js?v=1.3.2" defer></script>
     <script src="/static/disclosure_groups.js?v=1.3.2" defer></script>
     <script src="/static/navigation_routes.js?v=1.3.2" defer></script>
-    <script src="/static/app.js?v=1.3.2" defer></script>
+    <script src="/static/app.js?v=1.3.8" defer></script>
   </body>
 </html>

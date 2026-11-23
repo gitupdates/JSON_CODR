@@ -520,7 +520,7 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.3.7", response.text)
+        self.assertIn("V1.3.8", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -545,7 +545,7 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         html = self.client.get("/").text
         css = self.client.get("/static/app.css")
         javascript = self.client.get("/static/app.js")
-        self.assertIn('/static/app.css?v=1.3.2', html)
+        self.assertRegex(html, r'/static/app\.css\?v=[^"\']+')
         self.assertEqual(css.status_code, 200)
         self.assertIn("text/css", css.headers["content-type"])
         self.assertEqual(javascript.status_code, 200)
@@ -675,8 +675,8 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         javascript = self.client.get("/static/app.js").text
 
         self.assertIn('/static/vendor/xterm.css', html)
-        self.assertIn('/static/vendor/xterm.js?v=1.3.7', html)
-        self.assertIn('/static/vendor/xterm-addon-fit.js?v=1.3.7', html)
+        self.assertIn('/static/vendor/xterm.js?v=1.3.8', html)
+        self.assertIn('/static/vendor/xterm-addon-fit.js?v=1.3.8', html)
         self.assertIn('id="terminal-tabs"', html)
         self.assertIn('data-terminal-profile="powershell"', html)
         self.assertEqual(html.count('data-terminal-profile="powershell"'), 1)
@@ -692,7 +692,7 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         javascript = self.client.get("/static/app.js").text
 
         self.assertIn('/static/terminal_keyboard.js?v=1.2.0', html)
-        self.assertIn('/static/app.js?v=1.3.2', html)
+        self.assertRegex(html, r'/static/app\.js\?v=[^"\']+')
         self.assertLess(html.index("terminal_keyboard.js"), html.index("app.js"))
         self.assertIn("createTerminalKeyboardController", javascript)
         self.assertIn("attachCustomKeyEventHandler", javascript)
@@ -770,8 +770,8 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         html = self.client.get("/").text
         javascript = self.client.get("/static/app.js").text
 
-        self.assertIn('/static/app.css?v=1.3.2', html)
-        self.assertIn('/static/app.js?v=1.3.2', html)
+        self.assertRegex(html, r'/static/app\.css\?v=[^"\']+')
+        self.assertRegex(html, r'/static/app\.js\?v=[^"\']+')
         self.assertIn('const group = document.createElement("details")', javascript)
         self.assertIn('const summary = document.createElement("summary")', javascript)
         self.assertIn('summary.textContent = `${pack.name} · ${pack.source_format} · ${pack.skills.length} skills`', javascript)
@@ -1090,6 +1090,15 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         self.assertIn('prefers-reduced-motion', css)
         self.assertIn('[data-workspace-mode="mobile"]', css)
         self.assertIn('[data-workspace-mode="intermediate"]', css)
+
+    def test_workspace_approval_keeps_a_follow_up_project_action_visible(self):
+        javascript = self.client.get("/static/app.js").text
+        self.assertIn("function showWorkspaceAgentApproval(task, taskId)", javascript)
+        self.assertIn('["completed", "failed", "cancelled"].includes(task?.status)', javascript)
+        self.assertIn('event.event_type === "agent.action_completed"', javascript)
+        self.assertIn("!completedSteps.has(event.payload?.step_id)", javascript)
+        self.assertIn("if (!showWorkspaceAgentApproval(payload, taskId))", javascript)
+        self.assertIn("elements.workspaceAgentApprove.dataset.proposalId = approval.payload.proposal_id", javascript)
 
 
 if __name__ == "__main__":

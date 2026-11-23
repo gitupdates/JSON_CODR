@@ -16,6 +16,8 @@ from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
 from web_app.core.component_manager import ComponentManager
 from web_app.core.component_registry import ComponentRequest, ComponentScope
+from web_app.core.memory import MemoryDraft, MemoryPolicyError, MemoryStore
+from web_app.models import MemorySettings
 
 
 Runtime = tuple[CoreService, TaskStore, PolicyService]
@@ -59,12 +61,30 @@ class StepRevisionRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=4096)
 
 
+class CollectiveMemoryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    thread_id: str = Field(min_length=1, max_length=256)
+    task_id: str = Field(min_length=1, max_length=128)
+    kind: str = Field(min_length=1, max_length=128)
+    content: str = Field(min_length=1, max_length=65_536)
+    source_refs: tuple[str, ...] = ()
+    retain_details: bool = False
+    idempotency_key: str = Field(min_length=1, max_length=256)
+
+
+class MemoryRevocationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(min_length=1, max_length=2048)
+
+
 def create_core_router(
     runtime: RuntimeProvider,
     *,
     artifact_store: Callable[[], ArtifactStore] | None = None,
     capabilities: Callable[[], Sequence[Mapping[str, Any]]] = tuple,
     components: Callable[[], ComponentManager] | None = None,
+    memory_store: Callable[[], MemoryStore] | None = None,
+    memory_settings: Callable[[], MemorySettings] = MemorySettings,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -88,6 +108,66 @@ def create_core_router(
     @router.get("/api/components")
     def list_components(project_id: str = ""):
         return () if components is None else components().list(project_id)
+
+    def memory() -> MemoryStore:
+        if memory_store is None:
+            raise HTTPException(status_code=503, detail="collective memory unavailable")
+        return memory_store()
+
+    @router.post("/api/projects/{project_id}/memory", status_code=201)
+    def accept_memory(
+        project_id: str,
+        request: CollectiveMemoryRequest,
+        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+    ):
+        try:
+            configuration = memory_settings()
+            if not configuration.enabled:
+                raise MemoryPolicyError("collective memory is disabled")
+            if request.retain_details and not configuration.detailed_retention_enabled:
+                raise MemoryPolicyError("detailed retention is disabled in system settings")
+            return memory().accept(MemoryDraft(
+                user_id=principal,
+                project_id=project_id,
+                **request.model_dump(),
+            ))
+        except MemoryPolicyError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @router.get("/api/projects/{project_id}/memory/search")
+    def search_memory(
+        project_id: str,
+        query: str = "",
+        limit: int | None = None,
+        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+    ):
+        configuration = memory_settings()
+        if not configuration.enabled:
+            return ()
+        effective_limit = configuration.search_limit if limit is None else limit
+        return memory().search_collective(principal, project_id, query, max(1, min(effective_limit, 100)))
+
+    @router.get("/api/projects/{project_id}/memory/export")
+    def export_memory(
+        project_id: str,
+        include_inactive: bool = False,
+        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+    ):
+        return memory().export_collective(principal, project_id, include_inactive=include_inactive)
+
+    @router.post("/api/projects/{project_id}/memory/{memory_id}/revoke")
+    def revoke_memory(
+        project_id: str,
+        memory_id: str,
+        request: MemoryRevocationRequest,
+        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+    ):
+        try:
+            return memory().revoke(
+                memory_id, user_id=principal, project_id=project_id, reason=request.reason
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="collective memory not found") from error
 
     @router.post("/api/components/{component_id}/disable")
     def disable_component(component_id: str, scope: ComponentScope = ComponentScope.global_, project_id: str | None = None):

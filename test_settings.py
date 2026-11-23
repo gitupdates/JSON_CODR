@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from web_app.app import create_app
-from web_app.models import DesignerSettings, SettingsUpdate, SkillRoutingSettings, SkillScanSettings, UiSettingsUpdate
+from web_app.models import DesignerSettings, MemorySettings, SettingsUpdate, SkillRoutingSettings, SkillScanSettings, UiSettingsUpdate
 from web_app.settings import SettingsService
 from web_app.version import APP_VERSION
 from web_app.workspace import WorkspaceService
@@ -74,6 +74,25 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(updated.designer.enabled)
         self.assertEqual(updated.designer.grid_size, 12)
         self.assertEqual(SettingsService(self.root).get().designer, updated.designer)
+
+    def test_collective_memory_settings_are_safe_by_default_and_persist(self):
+        service = SettingsService(self.root)
+
+        self.assertEqual(service.get().memory, MemorySettings(
+            enabled=True,
+            detailed_retention_enabled=False,
+            search_limit=20,
+        ))
+
+        updated = service.update(SettingsUpdate(memory=MemorySettings(
+            enabled=True,
+            detailed_retention_enabled=True,
+            search_limit=40,
+        )))
+
+        self.assertTrue(updated.memory.detailed_retention_enabled)
+        self.assertEqual(updated.memory.search_limit, 40)
+        self.assertEqual(SettingsService(self.root).get().memory, updated.memory)
 
     def test_reading_or_updating_unrelated_settings_does_not_create_an_appearance_overlay(self):
         service = SettingsService(self.root)

@@ -143,7 +143,8 @@ class ProjectReader:
 
     def fingerprint(self, files: tuple[ProjectFile, ...] | None = None) -> str:
         digest = hashlib.sha256()
-        for item in self.files() if files is None else files:
+        selected = self.files() if files is None else files
+        for item in sorted(selected, key=lambda entry: entry.relative_path.casefold()):
             digest.update(f"{item.relative_path}\0{item.digest}\0{item.size}\n".encode("utf-8"))
         return f"sha256:{digest.hexdigest()}"
 
