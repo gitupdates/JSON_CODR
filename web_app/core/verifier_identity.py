@@ -7,11 +7,17 @@ from pathlib import Path
 import sqlite3
 
 from web_app.core.cli_identity import DpapiTokenStore
-from web_app.core.identity import AuthenticatedPrincipal, IdentityService
+from web_app.core.identity import (
+    AuthenticatedPrincipal,
+    IdentityService,
+    VERIFIER_SERVICE_PURPOSE,
+    VERIFIER_SERVICE_SCOPES,
+    VERIFIER_SERVICE_USERNAME,
+)
 
 
-VERIFIER_USERNAME = "json-codr-verifier"
-VERIFIER_SCOPES = ("lesson.verify", "lesson.verification.record")
+VERIFIER_USERNAME = VERIFIER_SERVICE_USERNAME
+VERIFIER_SCOPES = VERIFIER_SERVICE_SCOPES
 
 
 @dataclass(frozen=True)
@@ -54,12 +60,7 @@ class VerifierIdentityService:
         try:
             return self.status()
         except PermissionError:
-            credential = self.identity.issue_credential(
-                user.user_id,
-                "service",
-                "local lesson verifier",
-                VERIFIER_SCOPES,
-            )
+            credential = self.identity.issue_service_credential_for_purpose(user.user_id, VERIFIER_SERVICE_PURPOSE)
             self.store.save(credential)
             return self.identity.resolve_credential(credential.token, required_kind="service")
 

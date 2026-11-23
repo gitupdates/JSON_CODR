@@ -32,17 +32,10 @@ def run_cli(
     except SystemExit as error:
         return int(error.code)
     if args.action == "auth":
-        if auth_service is None:
-            from web_app.core.identity import IdentityService
-            from web_app.workspace import default_data_root
-
-            auth_service = CliIdentityService(
-                IdentityService(default_data_root()),
-                DpapiTokenStore(Path.home() / ".json_codr" / "credentials" / "cli.dpapi"),
-            )
+        auth_service = auth_service or _default_auth_service()
         try:
             if args.auth_action == "login":
-                result = auth_service.login(args.username, args.password)
+                result = auth_service.login(args.username, args.password, requested_scopes=tuple(args.scopes))
                 print(f"Signed in as {result.account} · {result.label} · expires {result.expires_at.isoformat()}", file=stdout)
             elif args.auth_action == "status":
                 principal = auth_service.status()
@@ -96,7 +89,19 @@ def run_cli(
         },
     }
     try:
-        result = dict((submit or _http_submitter(args.url))(command))
+        if submit is not None:
+            result = dict(submit(command))
+        else:
+            active_auth = auth_service or _default_auth_service()
+            try:
+                token = active_auth.store.load().get("token")
+            except PermissionError as error:
+                print(f"JSON_CODR authentication failed: {error}", file=stderr)
+                return 1
+            if not isinstance(token, str) or not token:
+                print("JSON_CODR authentication failed: CLI credential storage is unavailable or corrupt", file=stderr)
+                return 1
+            result = dict(_http_submitter(args.url, token)(command))
     except (OSError, ValueError, urllib.error.HTTPError) as error:
         print(f"JSON_CODR request failed: {error}", file=stderr)
         return 1
@@ -121,12 +126,22 @@ def run_cli(
     return 0 if safe_result.get("status") == "completed" else 1
 
 
-def _http_submitter(base_url: str) -> Submitter:
+def _default_auth_service() -> CliIdentityService:
+    from web_app.core.identity import IdentityService
+    from web_app.workspace import default_data_root
+
+    return CliIdentityService(
+        IdentityService(default_data_root()),
+        DpapiTokenStore(Path.home() / ".json_codr" / "credentials" / "cli.dpapi"),
+    )
+
+
+def _http_submitter(base_url: str, token: str) -> Submitter:
     def submit(command: Mapping[str, Any]) -> Mapping[str, Any]:
         request = urllib.request.Request(
             f"{base_url.rstrip('/')}/api/tasks",
             data=json.dumps(command).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
             method="POST",
         )
         with urllib.request.urlopen(request) as response:
@@ -194,6 +209,7 @@ def _parser() -> argparse.ArgumentParser:
     login = auth_subparsers.add_parser("login")
     login.add_argument("--username", default="Administrator")
     login.add_argument("--password", default="")
+    login.add_argument("--scope", dest="scopes", action="append", default=[])
     auth_subparsers.add_parser("status")
     auth_subparsers.add_parser("logout")
     return parser

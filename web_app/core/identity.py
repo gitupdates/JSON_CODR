@@ -50,6 +50,10 @@ MUTATION_SCOPES = (
     "system.rollback",
 )
 
+VERIFIER_SERVICE_USERNAME = "json-codr-verifier"
+VERIFIER_SERVICE_PURPOSE = "lesson_verifier"
+VERIFIER_SERVICE_SCOPES = ("lesson.verify", "lesson.verification.record")
+
 
 @dataclass(frozen=True)
 class PasswordPolicy:
@@ -211,6 +215,7 @@ class IdentityService:
             user_id TEXT NOT NULL REFERENCES identity_users(user_id) ON DELETE CASCADE,
             kind TEXT NOT NULL CHECK(kind IN ('browser_session', 'cli', 'service')),
             label TEXT NOT NULL,
+            credential_purpose TEXT,
             token_hash TEXT NOT NULL UNIQUE,
             scopes_json TEXT NOT NULL,
             issued_at TEXT NOT NULL,
@@ -238,6 +243,9 @@ class IdentityService:
         """
         with self._connect() as connection:
             connection.executescript(schema)
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(identity_sessions)")}
+            if "credential_purpose" not in columns:
+                connection.execute("ALTER TABLE identity_sessions ADD COLUMN credential_purpose TEXT")
             for name, grants in _ROLE_GRANTS.items():
                 connection.execute(
                     "INSERT OR IGNORE INTO identity_roles(role_name, grants_json) VALUES (?, ?)",
@@ -724,6 +732,33 @@ class IdentityService:
             raise PermissionError("requested CLI scope is not allowed")
         return tuple(dict.fromkeys((*self.lesson_scopes(user_id), *requested)))
 
+    def _purpose_scopes(
+        self,
+        user: IdentityUser,
+        kind: CredentialKind,
+        purpose: str | None,
+    ) -> tuple[str, ...]:
+        if (
+            purpose == VERIFIER_SERVICE_PURPOSE
+            and kind is CredentialKind.service
+            and user.normalized_username == VERIFIER_SERVICE_USERNAME
+        ):
+            return VERIFIER_SERVICE_SCOPES
+        return ()
+
+    def issue_service_credential_for_purpose(self, user_id: str, purpose: str) -> IssuedCredential:
+        user = self.get_user(user_id)
+        scopes = self._purpose_scopes(user, CredentialKind.service, purpose)
+        if not scopes:
+            raise PermissionError("service credential purpose is not allowed")
+        return self.issue_credential(
+            user_id,
+            CredentialKind.service,
+            "local lesson verifier",
+            scopes,
+            _purpose=purpose,
+        )
+
     @staticmethod
     def require_distinct_accounts(*user_ids: str) -> None:
         if len(set(user_ids)) != len(user_ids):
@@ -781,26 +816,30 @@ class IdentityService:
         scopes: tuple[str, ...],
         *,
         lifetime: timedelta | None = None,
+        _purpose: str | None = None,
     ) -> IssuedCredential:
         user = self.get_user(user_id)
         if user.status != "active":
             raise PermissionError("user is disabled")
         credential_kind = CredentialKind(kind)
+        purpose_scopes = self._purpose_scopes(user, credential_kind, _purpose)
+        if _purpose and not purpose_scopes:
+            raise PermissionError("credential purpose is not allowed")
         now = self._now()
         lifetime = lifetime or timedelta(days=30)
         expires_at = now + lifetime
         idle_expires_at = now + timedelta(hours=12) if credential_kind is CredentialKind.browser_session else None
         token = secrets.token_urlsafe(48)
         credential_id = str(uuid4())
-        normalized_scopes = tuple(dict.fromkeys(scopes))
+        normalized_scopes = purpose_scopes or tuple(dict.fromkeys(scopes))
         with self._connect() as connection:
             connection.execute(
                 """INSERT INTO identity_sessions(
-                    credential_id, user_id, kind, label, token_hash, scopes_json, issued_at,
+                    credential_id, user_id, kind, label, credential_purpose, token_hash, scopes_json, issued_at,
                     expires_at, idle_expires_at, last_used_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    credential_id, user_id, credential_kind.value, label.strip(), self._token_digest(token),
+                    credential_id, user_id, credential_kind.value, label.strip(), _purpose, self._token_digest(token),
                     json.dumps(normalized_scopes), self._iso(now), self._iso(expires_at),
                     self._iso(idle_expires_at) if idle_expires_at else None, self._iso(now),
                 ),
@@ -865,7 +904,8 @@ class IdentityService:
                     (self._iso(now), row["credential_id"]),
                 )
         user = self.get_user(row["user_id"])
-        allowed_scopes = set(self.credential_scopes(user.user_id))
+        purpose_scopes = self._purpose_scopes(user, kind, row["credential_purpose"])
+        allowed_scopes = set(purpose_scopes or self.credential_scopes(user.user_id))
         scopes = tuple(scope for scope in stored_scopes if scope in allowed_scopes)
         if required_scope and required_scope not in scopes:
             raise PermissionError("credential scope is not allowed")

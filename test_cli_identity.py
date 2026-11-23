@@ -44,6 +44,13 @@ class CliIdentityTests(unittest.TestCase):
         self.assertFalse(self.store.path.exists())
         self.assertEqual(self.identity.resolve_credential(browser.token).credential_kind, "browser_session")
 
+    def test_login_rejects_mutation_scope_not_authorized_for_the_account(self):
+        viewer = self.identity.create_user("Viewer", "Viewer")
+        self.identity.reset_password("Viewer", "viewer-password")
+
+        with self.assertRaisesRegex(PermissionError, "not allowed"):
+            self.service.login("Viewer", "viewer-password", requested_scopes=("git.commit",))
+
 
 if __name__ == "__main__":
     unittest.main()
