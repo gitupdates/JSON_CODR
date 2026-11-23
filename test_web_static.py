@@ -520,7 +520,7 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.3.4", response.text)
+        self.assertIn("V1.3.5", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
