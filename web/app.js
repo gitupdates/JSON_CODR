@@ -2666,7 +2666,7 @@ async function submitPrompt(event) {
     elements.prompt.value = "";
     const response = await fetch("/api/workspace/tasks", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         project_root: elements.workspaceProjectRoot.value || ".",
         session_id: sessionId,

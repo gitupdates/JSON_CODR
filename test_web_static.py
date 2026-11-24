@@ -502,8 +502,9 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
 
     def test_workspace_task_submission_uses_authenticated_mutation_headers(self):
         script = self.client.get("/static/app.js").text
+        submit_start = script.index("async function submitPrompt")
         marker = 'fetch("/api/workspace/tasks", {'
-        start = script.index(marker)
+        start = script.index(marker, submit_start)
         request_block = script[start:start + 500]
         self.assertIn("JSONCodrHttpIdentity.mutationHeaders", request_block)
         self.assertIn('"Content-Type": "application/json"', request_block)
@@ -511,7 +512,7 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
     def test_chat_assets_use_current_patch_revision(self):
         html = self.client.get("/").text
         self.assertIn('/static/conversation_view.js?v=1.4.0.3', html)
-        self.assertIn('/static/app.js?v=1.4.0.3', html)
+        self.assertIn('/static/app.js?v=1.4.0.4', html)
 
     def test_runtime_observability_is_progressive_not_a_new_destination(self):
         html = self.client.get("/").text
