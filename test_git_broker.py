@@ -287,6 +287,56 @@ class GitBrokerExecutionTests(unittest.TestCase):
                 )
             self.assertEqual(git(project, "rev-parse", "HEAD"), baseline.head)
 
+    def test_execute_rejects_push_when_remote_advances_after_final_verification(self):
+        """Rebasing after receipt validation would push a tree the verifier did not inspect."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project, remote = self._repository(root)
+            service = GitBrokerService(root / "data")
+            baseline = service.inspect(project)
+            patch = "diff --git a/README.md b/README.md\nindex e79c5e8..b03d9db 100644\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-initial\n+verified\n"
+            receipt = None
+
+            def verify(action, *, candidate_id, base_sha, tree_sha):
+                nonlocal receipt
+                receipt = self._receipt(candidate_id=candidate_id, base_sha=base_sha, tree_sha=tree_sha)
+                return receipt
+
+            publisher = root / "publisher"
+            git(root, "clone", "-b", "main", str(remote), str(publisher))
+            git(publisher, "config", "user.name", "Remote User")
+            git(publisher, "config", "user.email", "remote@example.com")
+            checks = 0
+
+            def authorized():
+                nonlocal checks
+                checks += 1
+                if checks == 4:
+                    (publisher / "REMOTE.md").write_text("advanced\n", encoding="utf-8")
+                    git(publisher, "add", "REMOTE.md")
+                    git(publisher, "commit", "-m", "remote advance")
+                    git(publisher, "push", "origin", "HEAD:main")
+                return True
+
+            request = BrokerActionRequest(
+                schema_version=1, project_root=str(project), baseline_fingerprint=baseline.dirty_fingerprint,
+                actions=[
+                    {"kind": "apply_patch", "patch": patch},
+                    {"kind": "verify", "checks": ["unit-tests"]},
+                    {"kind": "commit", "message": "Update readme"},
+                    {"kind": "push"},
+                ],
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "upstream advanced"):
+                service.execute(
+                    request, model="qwen", grant_id="candidate-1", authorized=authorized,
+                    verification_runner=verify, receipt_validator=lambda received: received == receipt,
+                )
+
+            self.assertEqual(git(remote, "show", "main:README.md"), "initial")
+            self.assertEqual(git(remote, "show", "main:REMOTE.md"), "advanced")
+
     def test_execute_stops_when_baseline_does_not_match(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

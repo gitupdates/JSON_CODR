@@ -258,15 +258,17 @@ class GitBrokerService:
                         self._git(project, "fetch", "--quiet")
                         self._git(project, "rebase", current.upstream)
                     elif action.kind == "push":
-                        self._require_receipt(
-                            project, receipt, receipt_validator, candidate_id=grant_id, base_sha=base_sha,
-                            phase="push",
-                        )
                         current = self.inspect(project)
                         if not current.branch or not current.upstream:
                             raise RuntimeError("Checked-out branch must have an upstream")
                         self._git(project, "fetch", "--quiet")
-                        self._git(project, "rebase", current.upstream)
+                        current = self.inspect(project)
+                        if current.remote_head != (receipt.base_sha if receipt is not None else None):
+                            raise RuntimeError("upstream advanced after final verification")
+                        self._require_receipt(
+                            project, receipt, receipt_validator, candidate_id=grant_id, base_sha=base_sha,
+                            phase="push",
+                        )
                         self._git(project, "push", "origin", f"HEAD:{current.branch}")
                         status = "pushed"
                 final = self.inspect(project)
