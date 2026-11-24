@@ -15,6 +15,7 @@ from web_app.core.git_adapter import VerificationReceipt
 from web_app.core.identity import AuthenticatedPrincipal
 from web_app.core.store import TaskStore
 from web_app.core.worktree_runtime import RepositoryBusy, WorktreeRuntime
+from web_app.core.update_launcher import HealthReceipt
 
 
 def git(root: Path, *arguments: str) -> str:
@@ -283,6 +284,37 @@ class AutonomousUpdateTests(unittest.TestCase):
         published = self.controller.publish(candidate.candidate_id)
         self.assertEqual(published.state, CandidateState.published)
         self.assertEqual(publisher.calls, 2)
+
+    def test_candidate_health_failure_persists_typed_failure_evidence(self):
+        """Dropping launcher evidence from the durable failure event must fail this test."""
+        from web_app.core.update_launcher import CandidateHealthError
+
+        class FailingLauncher(RecordingLauncher):
+            def launch_candidate(self, candidate, profile):
+                raise CandidateHealthError(HealthReceipt(
+                    health_id="failed-health", candidate_id=candidate.candidate_id,
+                    revision=candidate.commit_sha, root=candidate.worktree.working_root,
+                    version="V1.3.9", host="127.0.0.1", port=43210,
+                    data_root=str(self_root / "failed-data"), pid=None, healthy=False,
+                    checks=("startup", "api"), error="candidate API failed",
+                    migration_compatibility="backward_compatible",
+                ))
+
+        self_root = self.root
+        launcher = FailingLauncher()
+        self.controller = AutonomousUpdateController(
+            store=self.store, profiles={self.profile.profile_id: self.profile},
+            worktrees=self.worktrees, verifier=self.verifier,
+            publisher=self.publisher, launcher=launcher,
+        )
+        candidate = self.controller.publish(self.controller.commit(self._verified().candidate_id).candidate_id)
+        with self.assertRaises(CandidateHealthError):
+            self.controller.health_check(candidate.candidate_id)
+        failure = next(
+            event for event in self.store.events(candidate.task_id)
+            if event.event_type == "candidate.health_failed"
+        )
+        self.assertEqual(failure.payload["receipt"]["health_id"], "failed-health")
 
 
 if __name__ == "__main__":

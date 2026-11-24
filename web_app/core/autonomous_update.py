@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid7
 
 from pydantic import Field
@@ -58,6 +58,9 @@ class UpdateProfile(FrozenContract):
     allowed_repository_roots: tuple[str, ...] = ()
     automatic_mode_enabled: bool = False
     expected_version: str | None = None
+    launch_argv: tuple[str, ...] = ()
+    migration_compatibility: Literal["backward_compatible", "requires_approval", "irreversible"] = "backward_compatible"
+    startup_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
 
 
 class CandidateRecord(FrozenContract):
@@ -508,12 +511,18 @@ class AutonomousUpdateController:
                 "publish": "candidate.publication_failed",
                 "health": "candidate.health_failed",
             }.get(transition, f"candidate.{transition}.failed")
+            failure_payload: dict[str, Any] = {
+                "reason": str(error)[:500], "error_type": type(error).__name__,
+            }
+            evidence = getattr(error, "receipt", None)
+            if evidence is not None:
+                failure_payload["receipt"] = self._json_receipt(evidence)
             self._store.fail_effect_with_event(
                 candidate.task_id,
                 effect_id,
                 TaskEventDraft(
                     event_type=failure_event,
-                    payload={"reason": str(error)[:500], "error_type": type(error).__name__},
+                    payload=failure_payload,
                 ),
             )
             raise

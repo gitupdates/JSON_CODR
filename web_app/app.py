@@ -596,7 +596,12 @@ def create_app(
     @application.get("/api/health")
     async def health():
         result = await service.health()
-        return {"status": "ready" if result["ollama"] else "degraded", "app_version": APP_VERSION, **result}
+        return {
+            "status": "ready" if result["ollama"] else "degraded",
+            "app_version": APP_VERSION,
+            "revision": os.environ.get("JSON_CODR_REVISION"),
+            **result,
+        }
 
     @application.get("/api/connections")
     async def connection_inventory(http_request: Request):

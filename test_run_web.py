@@ -51,6 +51,8 @@ class RunWebTests(unittest.TestCase):
         self.assertTrue(payload["ollama"])
         self.assertTrue(payload["supervised"])
         self.assertTrue(payload["ollamaNoCloud"])
+        self.assertTrue(payload["stableLauncher"])
+        self.assertTrue(Path(payload["activeBuildPointer"]).is_absolute())
 
     def test_launcher_is_valid_powershell(self):
         command = (

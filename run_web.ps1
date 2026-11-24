@@ -10,6 +10,8 @@ $HostAddress = '127.0.0.1'
 $Port = 8765
 $Url = "http://${HostAddress}:$Port"
 $Version = 'V1.3.9'
+$LauncherStateRoot = if ($env:JSON_CODR_LAUNCHER_ROOT) { $env:JSON_CODR_LAUNCHER_ROOT } else { Join-Path $env:LOCALAPPDATA 'JSON_CODR\launcher' }
+$ActiveBuildPointer = Join-Path $LauncherStateRoot 'pointer\active-build.json'
 $PythonCandidates = @()
 if ($env:JSON_CODR_PYTHON) {
   $PythonCandidates += $env:JSON_CODR_PYTHON
@@ -91,6 +93,8 @@ if ($ValidateOnly) {
     modelStore = $env:JSON_CODR_MODELS
     supervised = -not $Direct
     ollamaNoCloud = $true
+    stableLauncher = -not $Direct
+    activeBuildPointer = $ActiveBuildPointer
   } | ConvertTo-Json
   exit 0
 }
@@ -125,7 +129,14 @@ try {
   if ($Direct) {
     $WebArguments = @('-m', 'uvicorn', 'web_app.app:app', '--host', $HostAddress, '--port', $Port)
   } else {
-    $WebArguments = @('supervisor.py', '--host', $HostAddress, '--port', $Port)
+    $Revision = if ($env:JSON_CODR_REVISION) { $env:JSON_CODR_REVISION } else { (& git -C $Root rev-parse HEAD 2>$null) }
+    if (-not $Revision) { $Revision = 'development' }
+    $WebArguments = @(
+      'json_codr_launcher.py', '--pointer', $ActiveBuildPointer,
+      '--fallback-root', $Root, '--fallback-revision', $Revision,
+      '--fallback-version', $Version, '--python', $Python,
+      '--host', $HostAddress, '--port', $Port
+    )
   }
   $WebProcess = Start-Process -FilePath $Python -ArgumentList $WebArguments -WorkingDirectory $Root -WindowStyle Hidden -PassThru
 
