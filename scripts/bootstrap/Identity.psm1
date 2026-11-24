@@ -10,8 +10,12 @@ function Initialize-JsonCodrAdministrator {
   try {
     $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($first)
     if ($plain -ne [Runtime.InteropServices.Marshal]::PtrToStringBSTR($second)) { throw 'Administrator passwords do not match.' }
-    $script = Join-Path $Environment.root 'scripts\bootstrap\initialize_identity.py'
-    $plain | & $Environment.python $script --data-root $DataRoot --origin ("http://{0}:{1}" -f $Runtime.host,$Runtime.port)
+    Push-Location $Environment.root
+    try {
+      $plain | & $Environment.python -m scripts.bootstrap.initialize_identity --data-root $DataRoot --origin ("http://{0}:{1}" -f $Runtime.host,$Runtime.port)
+    } finally {
+      Pop-Location
+    }
     if($LASTEXITCODE -ne 0){ throw 'Administrator initialization failed.' }
   } finally {
     if($first -ne [IntPtr]::Zero){ [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($first) }
