@@ -1,26 +1,42 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from enum import Enum
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from web_app.core.adapters import CapabilityCall
 from web_app.core.contracts import FrozenContract
 
 
+class CapabilityRisk(str, Enum):
+    low = "low"
+    sensitive = "sensitive"
+
+
 class CapabilityDefinition(FrozenContract):
     capability_id: str = Field(min_length=1)
     operation: str = Field(min_length=1)
-    risk: str = Field(min_length=1)
+    risk: CapabilityRisk
     autonomous: bool
+
+    @model_validator(mode="after")
+    def validate_risk_autonomy(self) -> "CapabilityDefinition":
+        if self.risk is CapabilityRisk.low and not self.autonomous:
+            raise ValueError("low-risk capabilities must be autonomous")
+        if self.risk is CapabilityRisk.sensitive and self.autonomous:
+            raise ValueError("sensitive capabilities cannot be autonomous")
+        return self
 
 
 _DEFAULT_DEFINITIONS = (
     CapabilityDefinition(capability_id="project.read", operation="read", risk="low", autonomous=True),
     CapabilityDefinition(capability_id="project.search", operation="search", risk="low", autonomous=True),
     CapabilityDefinition(capability_id="project.discover", operation="discover", risk="low", autonomous=True),
-    CapabilityDefinition(capability_id="project.patch", operation="bounded_edit", risk="sensitive", autonomous=False),
+    CapabilityDefinition(capability_id="project.patch", operation="replace", risk="sensitive", autonomous=False),
     CapabilityDefinition(capability_id="project.test", operation="test", risk="sensitive", autonomous=False),
+    CapabilityDefinition(capability_id="test.run", operation="test", risk="sensitive", autonomous=False),
+    CapabilityDefinition(capability_id="resource.override", operation="resource_override", risk="sensitive", autonomous=False),
     CapabilityDefinition(capability_id="inference.generate", operation="generate", risk="low", autonomous=True),
     CapabilityDefinition(capability_id="model.generate", operation="generate", risk="low", autonomous=True),
     CapabilityDefinition(capability_id="native.read", operation="read", risk="low", autonomous=True),

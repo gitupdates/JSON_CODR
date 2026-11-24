@@ -54,7 +54,7 @@ class ScheduleService:
             project_id=self._project_id,
             command_type="schedule.trigger",
             payload=schedule.call.model_dump(mode="json"),
-        ), principal=self._principal)
+        ), principal=self._principal, trusted_schedule_id=schedule_id)
         history = self._history.setdefault(schedule_id, [])
         if all(item.task_id != record.task_id for item in history):
             history.append(record)

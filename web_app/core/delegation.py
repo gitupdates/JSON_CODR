@@ -45,6 +45,7 @@ class DelegationService:
         decision = self._budget.evaluate(sample)
         if not decision.allowed:
             call = call.model_copy(update={
+                "capability_id": "resource.override",
                 "operation": "resource_override",
                 "arguments": {**dict(call.arguments), "resource_reason": decision.reason},
             })

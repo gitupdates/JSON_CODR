@@ -274,7 +274,7 @@ class WebApiTests(unittest.TestCase):
                 capabilities = client.get("/api/capabilities").json()
 
             self.assertTrue(any(
-                item["capability_id"] == "mcp.rea" and item["available"]
+                item["capability_id"] == "mcp.rea.discover" and item["available"]
                 for item in capabilities
             ))
 

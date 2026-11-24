@@ -6,6 +6,7 @@ from pathlib import Path
 from web_app.core.adapters import AdapterEvent, CapabilityCall, ExecutionContext
 from web_app.core.contracts import TaskCommand, TaskEventDraft, TaskStatus
 from web_app.core.policy import PolicyEffect, PolicyService
+from web_app.core.project_registry import ProjectRegistry
 from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
 
@@ -64,7 +65,7 @@ class PolicyServiceTests(unittest.TestCase):
             decision = self.policy.evaluate("user", "project", self.call(capability, operation))
             self.assertEqual(decision.effect, PolicyEffect.allow)
         for capability, operation in (
-            ("project.test", "test"), ("project.patch", "bounded_edit"),
+            ("project.test", "test"), ("project.patch", "replace"),
             ("terminal.session", "session"), ("terminal.interrupt", "interrupt"),
             ("terminal.close", "close"),
         ):
@@ -88,12 +89,18 @@ class PolicyServiceTests(unittest.TestCase):
 
     def test_schedule_scoped_grant_persists_and_can_be_revoked(self):
         call = self.call("git.push", "push", schedule_id="nightly")
-        self.policy.grant("user", "project", call, scope="schedule")
+        self.policy.grant("user", "project", call, scope="schedule", schedule_id="nightly")
         reopened = PolicyService(self.root / "policy.sqlite")
         try:
-            self.assertEqual(reopened.evaluate("user", "project", call).effect, PolicyEffect.allow)
+            self.assertEqual(
+                reopened.evaluate("user", "project", call, trusted_schedule_id="nightly").effect,
+                PolicyEffect.allow,
+            )
             reopened.revoke("user", "project", call, scope="schedule")
-            self.assertEqual(reopened.evaluate("user", "project", call).effect, PolicyEffect.require_approval)
+            self.assertEqual(
+                reopened.evaluate("user", "project", call, trusted_schedule_id="nightly").effect,
+                PolicyEffect.require_approval,
+            )
         finally:
             reopened.close()
 
@@ -190,9 +197,46 @@ class CoreServiceTests(unittest.IsolatedAsyncioTestCase):
             payload.update({"capability_id": capability_id, "operation": "read"})
 
             with self.subTest(capability_id=capability_id):
-                record = await service.submit(command.model_copy(update={"payload": payload}))
-                self.assertEqual(record.status, TaskStatus.failed)
+                with self.assertRaisesRegex(ValueError, "operation"):
+                    await service.submit(command.model_copy(update={"payload": payload}))
+                with self.assertRaises(KeyError):
+                    self.store.command(f"spoof-{capability_id}")
                 self.assertEqual(adapter.calls, [])
+
+    async def test_server_binds_project_root_before_persisting_a_capability_command(self):
+        projects = ProjectRegistry(self.root / "projects.sqlite")
+        projects.register(self.root, project_id="project-1")
+        adapter = RecordingAdapter()
+        service = CoreService(
+            self.store, self.policy, {"project.read": adapter}, project_roots=projects,
+        )
+        root_alias = str(self.root / ".")
+        command = self.command().model_copy(update={
+            "payload": {**self.command().payload, "project_root": root_alias},
+        })
+        try:
+            record = await service.submit(command)
+            persisted = self.store.command(command.task_id)
+            self.assertEqual(record.status, TaskStatus.completed)
+            self.assertEqual(persisted.payload["project_root"], str(self.root.resolve()))
+
+            attacker = self.command(task_id="attacker", command_id="attacker-command").model_copy(update={
+                "payload": {**self.command().payload, "project_root": str(self.root.parent)},
+            })
+            with self.assertRaisesRegex(ValueError, "project root"):
+                await service.submit(attacker)
+            with self.assertRaises(KeyError):
+                self.store.command(attacker.task_id)
+
+            unknown = self.command(task_id="unknown", command_id="unknown-command").model_copy(update={
+                "payload": {**self.command().payload, "capability_id": "unregistered.execute"},
+            })
+            with self.assertRaisesRegex(LookupError, "unknown capability"):
+                await service.submit(unknown)
+            with self.assertRaises(KeyError):
+                self.store.command(unknown.task_id)
+        finally:
+            projects.close()
 
     async def test_unregistered_adapter_is_rejected_during_service_startup(self):
         with self.assertRaisesRegex(ValueError, "require capability definitions"):

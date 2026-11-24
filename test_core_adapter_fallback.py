@@ -4,6 +4,7 @@ from pathlib import Path
 
 from web_app.core.adapters import CapabilityCall, ExecutionContext
 from web_app.core.mcp_adapter import McpAdapter
+from web_app.core.capability_registry import CapabilityDefinition, CapabilityRegistry
 from web_app.core.policy import PolicyEffect, PolicyService
 from web_app.core.contracts import TaskEventDraft
 
@@ -27,31 +28,39 @@ class AdapterFallbackTests(unittest.TestCase):
         from web_app.core.adapter_fallback import AdapterFallbackRouter
 
         call = CapabilityCall(
-            capability_id="mcp.rea",
+            capability_id="mcp.rea.invoke",
             operation="invoke",
             project_root=".",
             arguments={"tool": "open_binary", "arguments": {}},
         )
-        route = AdapterFallbackRouter.resolve(call, {"native.read"}, {"mcp.rea"})
+        route = AdapterFallbackRouter.resolve(call, {"native.read"}, {"mcp.rea.invoke"})
 
         self.assertEqual(route.kind, "compatibility")
-        self.assertEqual(route.capability_id, "mcp.rea")
+        self.assertEqual(route.capability_id, "mcp.rea.invoke")
 
     def test_does_not_claim_an_unavailable_capability(self):
         from web_app.core.adapter_fallback import AdapterFallbackRouter
 
-        call = CapabilityCall(capability_id="mcp.missing", operation="invoke", project_root=".")
-        route = AdapterFallbackRouter.resolve(call, {"native.read"}, {"mcp.rea"})
+        call = CapabilityCall(capability_id="mcp.missing.invoke", operation="invoke", project_root=".")
+        route = AdapterFallbackRouter.resolve(call, {"native.read"}, {"mcp.rea.invoke"})
 
         self.assertEqual(route.kind, "unavailable")
         self.assertIsNone(route.capability_id)
 
     def test_read_only_mcp_discovery_is_automatically_allowed(self):
         with tempfile.TemporaryDirectory() as directory:
-            policy = PolicyService(Path(directory) / "policy.sqlite")
+            registry = CapabilityRegistry.default((
+                CapabilityDefinition(
+                    capability_id="mcp.rea.discover", operation="discover", risk="low", autonomous=True,
+                ),
+                CapabilityDefinition(
+                    capability_id="mcp.rea.invoke", operation="invoke", risk="sensitive", autonomous=False,
+                ),
+            ))
+            policy = PolicyService(Path(directory) / "policy.sqlite", registry=registry)
             try:
                 decision = policy.evaluate("user", "project-1", CapabilityCall(
-                    capability_id="mcp.rea", operation="discover", project_root=directory,
+                    capability_id="mcp.rea.discover", operation="discover", project_root=directory,
                 ))
             finally:
                 policy.close()
@@ -70,10 +79,10 @@ class McpApprovalEvidenceTests(unittest.IsolatedAsyncioTestCase):
         adapter = McpAdapter(Backend(), allowed_tools={"*"})
         context = ExecutionContext(task_id="task-1", project_id="project-1", principal="user")
         discovery = [event async for event in adapter.execute(CapabilityCall(
-            capability_id="mcp.rea", operation="discover", project_root=".",
+            capability_id="mcp.rea.discover", operation="discover", project_root=".",
         ), context)]
         invoked = [event async for event in adapter.execute(CapabilityCall(
-            capability_id="mcp.rea", operation="invoke", project_root=".",
+            capability_id="mcp.rea.invoke", operation="invoke", project_root=".",
             arguments={"tool": "inspect", "arguments": {"path": "README.md"}},
         ), context)]
 
@@ -81,7 +90,7 @@ class McpApprovalEvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(discovery[0].payload["approval_state"], "not_required")
         self.assertEqual(invoked[0].payload["approval_state"], "approved")
         self.assertEqual(invoked[0].payload["execution_route"], "compatibility")
-        self.assertEqual(invoked[0].payload["adapter_id"], "mcp.rea")
+        self.assertEqual(invoked[0].payload["adapter_id"], "mcp.rea.invoke")
 
     async def test_large_discovery_is_bounded_for_durable_task_events(self):
         class Backend:
@@ -94,7 +103,7 @@ class McpApprovalEvidenceTests(unittest.IsolatedAsyncioTestCase):
         adapter = McpAdapter(Backend(), allowed_tools={"*"})
         context = ExecutionContext(task_id="task-1", project_id="project-1", principal="user")
         events = [event async for event in adapter.execute(CapabilityCall(
-            capability_id="mcp.rea", operation="discover", project_root=".",
+            capability_id="mcp.rea.discover", operation="discover", project_root=".",
         ), context)]
 
         durable = TaskEventDraft(event_type=events[0].event_type, payload=events[0].payload)

@@ -49,7 +49,7 @@ class ProjectRuntimeTests(unittest.IsolatedAsyncioTestCase):
         adapter = ProjectAdapter(Path(self.temporary.name) / "state")
         call = CapabilityCall(
             capability_id="project.patch",
-            operation="bounded_edit",
+            operation="replace",
             project_root=str(self.root),
             target_path=str(self.root / "file.txt"),
             arguments={"content": "after"},

@@ -19,7 +19,7 @@ class ApprovalStoreTests(unittest.TestCase):
         self.store = ApprovalStore(self.database)
         self.call = CapabilityCall(
             capability_id="project.patch",
-            operation="bounded_edit",
+            operation="replace",
             project_root=self.temporary.name,
             target_path="module.py",
             arguments={"content": "answer = 42\n"},

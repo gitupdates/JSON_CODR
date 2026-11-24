@@ -427,9 +427,9 @@ def create_app(
             capability_registry = CapabilityRegistry.default(
                 PolicyCapabilityDefinition(
                     capability_id=capability_id,
-                    operation="mcp",
-                    risk="sensitive",
-                    autonomous=False,
+                    operation="discover" if capability_id.endswith(".discover") else "invoke",
+                    risk="low" if capability_id.endswith(".discover") else "sensitive",
+                    autonomous=capability_id.endswith(".discover"),
                 )
                 for capability_id in mcp_adapters
             )
@@ -484,6 +484,7 @@ def create_app(
                 approval_store=core_approvals,
                 project_fingerprint=agent_project_fingerprint,
                 registry=capability_registry,
+                project_roots=core_projects,
             )
             resolver = ProjectContextResolver(core_projects)
             core_memory = MemoryStore(core_root / "memory.sqlite")
@@ -1385,13 +1386,13 @@ def create_app(
             project_root=str(Path(__file__).resolve().parent.parent),
             arguments={"source_kind": source_kind, "reference": reference},
         )
-        core_policy.grant("user", "legacy", call, scope="project")
+        core_policy.grant("user", application.state.core_default_project_id, call, scope="project")
         task_id = str(uuid7())
         record = await core_service.submit(TaskCommand(
             command_id=str(uuid7()),
             task_id=task_id,
             thread_id=f"component:{source_kind}",
-            project_id="legacy",
+            project_id=application.state.core_default_project_id,
             command_type="component.install",
             payload=call.model_dump(mode="json"),
         ))
@@ -2028,7 +2029,7 @@ def create_app(
             command_id=str(uuid7()),
             task_id=task_id,
             thread_id=f"legacy:{task_id}",
-            project_id="legacy",
+            project_id=application.state.core_default_project_id,
             command_type="git.execute",
             payload=call.model_dump(mode="json"),
         ))
@@ -2273,7 +2274,7 @@ def create_app(
                 command_id=str(uuid7()),
                 task_id=task_id,
                 thread_id=f"terminal:{task_id}",
-                project_id="legacy",
+                project_id=application.state.core_default_project_id,
                 command_type="terminal.session",
                 payload=call.model_dump(mode="json"),
             ))
@@ -2308,7 +2309,7 @@ def create_app(
             command_id=str(uuid7()),
             task_id=task_id,
             thread_id=f"terminal:{terminal_id}",
-            project_id="legacy",
+            project_id=application.state.core_default_project_id,
             command_type=f"terminal.{operation}",
             payload=call.model_dump(mode="json"),
         ))
@@ -2518,7 +2519,7 @@ def create_app(
             command_id=str(uuid7()),
             task_id=task_id,
             thread_id=thread_id,
-            project_id="legacy",
+            project_id=application.state.core_default_project_id,
             command_type="inference.generate",
             payload=call.model_dump(mode="json"),
         ))

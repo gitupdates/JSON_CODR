@@ -100,13 +100,17 @@ def build_mcp_adapters(
     for config in configs:
         if config.name == "rea" and rea_provider_root is not None and (Path(rea_provider_root) / "state.sqlite").is_file():
             backend = LeasedReaBackend(Path(rea_provider_root), config)
-            adapters["mcp.rea"] = McpAdapter(backend, allowed_tools=config.allowed_tools or frozenset({"*"}))
+            adapter = McpAdapter(backend, allowed_tools=config.allowed_tools or frozenset({"*"}))
+            adapters["mcp.rea.discover"] = adapter
+            adapters["mcp.rea.invoke"] = adapter
             backends.append(backend)
             continue
         if config.name == "rea" and rea_provider_root is not None:
             config = _active_rea_config(config, Path(rea_provider_root))
         backend = StdioMcpBackend(config)
-        adapters[f"mcp.{config.name}"] = McpAdapter(backend, allowed_tools=config.allowed_tools)
+        adapter = McpAdapter(backend, allowed_tools=config.allowed_tools)
+        adapters[f"mcp.{config.name}.discover"] = adapter
+        adapters[f"mcp.{config.name}.invoke"] = adapter
         backends.append(backend)
     return adapters, tuple(backends)
 

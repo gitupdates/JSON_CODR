@@ -161,7 +161,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         core = CoreService(self.tasks, self.policy, {"project.read": adapter, "project.patch": adapter, "test.run": adapter})
         calls = [
             CapabilityCall(capability_id="project.read", operation="read", project_root=str(self.root)),
-            CapabilityCall(capability_id="project.patch", operation="bounded_edit", project_root=str(self.root)),
+            CapabilityCall(capability_id="project.patch", operation="replace", project_root=str(self.root)),
             CapabilityCall(capability_id="test.run", operation="test", project_root=str(self.root)),
         ]
         class VerifyAfterThreeActions(DeterministicVerifier):
@@ -353,7 +353,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         adapter = MutatingAdapter(target)
         context = ContextService(self.tasks, self.memory)
         call = CapabilityCall(
-            capability_id="project.patch", operation="bounded_edit",
+            capability_id="project.patch", operation="replace",
             project_root=str(project), target_path=str(target),
         )
         self.policy.grant("user", "project-1", call, scope="project")
@@ -385,7 +385,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             async def plan(_self, _context):
                 self.tasks.request_cancel(task_id)
                 return CapabilityCall(
-                    capability_id="project.patch", operation="bounded_edit", project_root=str(self.root)
+                    capability_id="project.patch", operation="replace", project_root=str(self.root)
                 )
 
         runtime = AgentRuntime(
@@ -402,10 +402,10 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_approved_child_can_resume_the_agent_root(self):
         adapter = RecordingAdapter()
         call = CapabilityCall(
-            capability_id="project.read", operation="install",
+            capability_id="component.install", operation="install",
             project_root=str(self.root), target_path=str(self.root / "file.py"),
         )
-        core = CoreService(self.tasks, self.policy, {"project.read": adapter})
+        core = CoreService(self.tasks, self.policy, {"component.install": adapter})
         runtime = AgentRuntime(
             self.tasks, core, ContextService(self.tasks, self.memory),
             DeterministicPlanner([call]), DeterministicVerifier(),
@@ -576,7 +576,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.tasks, CoreService(self.tasks, self.policy, {"project.patch": adapter}),
             ContextService(self.tasks, self.memory),
             DeterministicPlanner([CapabilityCall(
-                capability_id="project.patch", operation="bounded_edit", project_root=str(self.root)
+                capability_id="project.patch", operation="replace", project_root=str(self.root)
             )]),
             DeterministicVerifier(), lambda _root: "sha256:" + "1" * 64,
         )

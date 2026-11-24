@@ -172,7 +172,7 @@ class StdioMcpBackendTests(unittest.IsolatedAsyncioTestCase):
 
             adapters, backends = build_mcp_adapters(path)
 
-            self.assertEqual(set(adapters), {"mcp.rea"})
+            self.assertEqual(set(adapters), {"mcp.rea.discover", "mcp.rea.invoke"})
             self.assertEqual(backends[0].config.name, "rea")
 
     def test_active_rea_provider_overrides_only_the_manual_rea_launch_path(self):
@@ -209,7 +209,7 @@ class StdioMcpBackendTests(unittest.IsolatedAsyncioTestCase):
 
             adapters, backends = build_mcp_adapters(config_path, rea_provider_root=provider)
 
-            self.assertEqual(set(adapters), {"mcp.rea"})
+            self.assertEqual(set(adapters), {"mcp.rea.discover", "mcp.rea.invoke"})
             self.assertIsInstance(backends[0], LeasedReaBackend)
             self.assertIsNone(backends[0]._backend)
 
@@ -221,7 +221,10 @@ class StdioMcpBackendTests(unittest.IsolatedAsyncioTestCase):
                 Path(directory) / "mcp_servers.json", craft_command=command,
             )
 
-            self.assertEqual(set(adapters), {"mcp.craft-clean-room", "mcp.craft-deep"})
+            self.assertEqual(set(adapters), {
+                "mcp.craft-clean-room.discover", "mcp.craft-clean-room.invoke",
+                "mcp.craft-deep.discover", "mcp.craft-deep.invoke",
+            })
             configs = {backend.config.name: backend.config for backend in backends}
             self.assertEqual(configs["craft-clean-room"].command, command[0])
             self.assertEqual(configs["craft-clean-room"].args, ("--clean-room", "mcp"))

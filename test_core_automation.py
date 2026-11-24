@@ -62,7 +62,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
             sample=ResourceSample(active_tasks=0, vram_mb=512),
         )
         editing = await delegation.create_child(
-            "parent-task", "child-edit", self.call("project.patch", "bounded_edit"),
+            "parent-task", "child-edit", self.call("project.patch", "replace"),
             allowed_capabilities={"project.patch"}, sample=ResourceSample(active_tasks=1, vram_mb=1024), editing=True,
         )
         repeated = await delegation.create_child(
@@ -95,7 +95,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         inspected = await schedules.trigger("inspect", "run-1")
         blocked = await schedules.trigger("publish", "run-1")
         push_call = self.call("git.push", "push").model_copy(update={"schedule_id": "publish"})
-        self.policy.grant("user", "project-1", push_call, scope="schedule")
+        self.policy.grant("user", "project-1", push_call, scope="schedule", schedule_id="publish")
         allowed = await schedules.trigger("publish", "run-2")
         recovered = await schedules.recover_missed("inspect", "missed-1")
         repeated = await schedules.recover_missed("inspect", "missed-1")
