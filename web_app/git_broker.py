@@ -263,7 +263,11 @@ class GitBrokerService:
                             raise RuntimeError("Checked-out branch must have an upstream")
                         self._git(project, "fetch", "--quiet")
                         current = self.inspect(project)
-                        if current.remote_head != (receipt.base_sha if receipt is not None else None):
+                        receipt_base = receipt.base_sha if receipt is not None else ""
+                        merge_base = self._git(
+                            project, "merge-base", current.remote_head or "", receipt_base, check=False,
+                        ) if current.remote_head else ""
+                        if not current.remote_head or merge_base != current.remote_head:
                             raise RuntimeError("upstream advanced after final verification")
                         self._require_receipt(
                             project, receipt, receipt_validator, candidate_id=grant_id, base_sha=base_sha,

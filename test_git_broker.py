@@ -337,6 +337,43 @@ class GitBrokerExecutionTests(unittest.TestCase):
             self.assertEqual(git(remote, "show", "main:README.md"), "initial")
             self.assertEqual(git(remote, "show", "main:REMOTE.md"), "advanced")
 
+    def test_execute_pushes_when_receipt_base_is_already_ahead_of_upstream(self):
+        """An unchanged upstream may be an ancestor of a locally ahead receipt base."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project, remote = self._repository(root)
+            (project / "LOCAL.md").write_text("already local\n", encoding="utf-8")
+            git(project, "add", "LOCAL.md")
+            git(project, "commit", "-m", "local base")
+            service = GitBrokerService(root / "data")
+            baseline = service.inspect(project)
+            patch = "diff --git a/README.md b/README.md\nindex e79c5e8..b03d9db 100644\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-initial\n+verified\n"
+            receipt = None
+
+            def verify(action, *, candidate_id, base_sha, tree_sha):
+                nonlocal receipt
+                receipt = self._receipt(candidate_id=candidate_id, base_sha=base_sha, tree_sha=tree_sha)
+                return receipt
+
+            request = BrokerActionRequest(
+                schema_version=1, project_root=str(project), baseline_fingerprint=baseline.dirty_fingerprint,
+                actions=[
+                    {"kind": "apply_patch", "patch": patch},
+                    {"kind": "verify", "checks": ["unit-tests"]},
+                    {"kind": "commit", "message": "Update readme"},
+                    {"kind": "push"},
+                ],
+            )
+
+            result = service.execute(
+                request, model="qwen", grant_id="candidate-1",
+                verification_runner=verify, receipt_validator=lambda received: received == receipt,
+            )
+
+            self.assertEqual(result.status, "pushed")
+            self.assertEqual(git(remote, "show", "main:LOCAL.md"), "already local")
+            self.assertEqual(git(remote, "show", "main:README.md"), "verified")
+
     def test_execute_stops_when_baseline_does_not_match(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
