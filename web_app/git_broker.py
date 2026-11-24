@@ -256,7 +256,11 @@ class GitBrokerService:
                         if not current.upstream:
                             raise RuntimeError("Checked-out branch has no upstream")
                         self._git(project, "fetch", "--quiet")
-                        self._git(project, "rebase", current.upstream)
+                        try:
+                            self._git(project, "rebase", current.upstream)
+                        except Exception:
+                            self._git(project, "rebase", "--abort", check=False)
+                            raise
                     elif action.kind == "push":
                         current = self.inspect(project)
                         if not current.branch or not current.upstream:
@@ -391,5 +395,48 @@ class GitBrokerService:
 
     def merge_worktree_branch(self, project_root: Path | str, branch: str) -> dict[str, str]:
         project = self._project(project_root)
-        output = self._git(project, "merge", "--no-ff", branch, "-m", f"Merge {branch}")
+        try:
+            output = self._git(project, "merge", "--no-ff", branch, "-m", f"Merge {branch}")
+        except Exception:
+            self._git(project, "merge", "--abort", check=False)
+            raise
         return {"branch": branch, "commit": self._git(project, "rev-parse", "HEAD"), "output": output}
+
+    def rebase_candidate_worktree(self, worktree_root: Path | str, upstream: str) -> dict[str, str]:
+        project = self._candidate_worktree(worktree_root)
+        with self._lock(project):
+            try:
+                output = self._git(project, "rebase", upstream)
+            except Exception:
+                self._git(project, "rebase", "--abort", check=False)
+                raise
+            return {
+                "worktree_root": str(project),
+                "commit": self._git(project, "rev-parse", "HEAD"),
+                "output": output,
+            }
+
+    def merge_candidate_worktree(self, worktree_root: Path | str, source: str) -> dict[str, str]:
+        project = self._candidate_worktree(worktree_root)
+        with self._lock(project):
+            try:
+                output = self._git(project, "merge", "--no-edit", source)
+            except Exception:
+                self._git(project, "merge", "--abort", check=False)
+                raise
+            return {
+                "worktree_root": str(project),
+                "commit": self._git(project, "rev-parse", "HEAD"),
+                "output": output,
+            }
+
+    @classmethod
+    def _candidate_worktree(cls, worktree_root: Path | str) -> Path:
+        project = cls._project(worktree_root)
+        git_dir_value = Path(cls._git(project, "rev-parse", "--git-dir"))
+        common_value = Path(cls._git(project, "rev-parse", "--git-common-dir"))
+        git_dir = git_dir_value if git_dir_value.is_absolute() else (project / git_dir_value).resolve()
+        common = common_value if common_value.is_absolute() else (project / common_value).resolve()
+        if git_dir == common:
+            raise ValueError("operation requires an isolated candidate worktree")
+        return project

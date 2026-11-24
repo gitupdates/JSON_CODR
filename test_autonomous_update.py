@@ -245,6 +245,45 @@ class AutonomousUpdateTests(unittest.TestCase):
         self.assertEqual(reconciled.state, CandidateState.published)
         self.assertEqual(publisher.calls, 1)
 
+    def test_reconciled_not_applied_publication_can_retry_once_safely(self):
+        """A failed outbox row must not permanently strand a proven-not-applied publication."""
+        class RetryPublisher(RecordingPublisher):
+            def __init__(self):
+                super().__init__()
+                self.first = True
+
+            def publish_verified(self, *args, **kwargs):
+                self.calls += 1
+                if self.first:
+                    self.first = False
+                    raise AmbiguousEffect("network result unknown")
+                return {
+                    "publication_id": "retried", "branch": args[1],
+                    "commit_sha": args[2], "remote_sha": args[2], "status": "published",
+                }
+
+            def reconcile_publication(self, branch, commit_sha):
+                return {
+                    "branch": branch, "commit_sha": commit_sha,
+                    "remote_sha": None, "status": "not_published",
+                }
+
+        publisher = RetryPublisher()
+        self.controller = AutonomousUpdateController(
+            store=self.store, profiles={self.profile.profile_id: self.profile},
+            worktrees=self.worktrees, verifier=self.verifier,
+            publisher=publisher, launcher=self.launcher,
+        )
+        candidate = self.controller.commit(self._verified().candidate_id)
+        with self.assertRaises(AmbiguousEffect):
+            self.controller.publish(candidate.candidate_id)
+
+        reconciled = self.controller.reconcile(candidate.candidate_id, "publish")
+        self.assertEqual(reconciled.state, CandidateState.committed)
+        published = self.controller.publish(candidate.candidate_id)
+        self.assertEqual(published.state, CandidateState.published)
+        self.assertEqual(publisher.calls, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

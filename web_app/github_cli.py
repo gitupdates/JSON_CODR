@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import ctypes
+import os
 import re
+import secrets
 import shutil
 import subprocess
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Literal
 from urllib.parse import quote, urlencode, urlparse
+
+from web_app.core.contracts import FrozenContract
 
 
 class GitHubCLIError(RuntimeError):
@@ -20,6 +27,32 @@ class GitHubCLIError(RuntimeError):
 class GitHubBuildConflict(GitHubCLIError):
     def __init__(self, message: str) -> None:
         super().__init__(message, 409)
+
+
+class PublicationAmbiguous(GitHubCLIError):
+    ambiguous = True
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, 502)
+
+
+class PublicationReceipt(FrozenContract):
+    publication_id: str
+    project_root: str
+    branch: str
+    commit_sha: str
+    expected_remote_sha: str | None
+    observed_remote_sha: str
+    status: Literal["published", "already_published"]
+    reconciled: bool = False
+    published_at: datetime
+
+
+class PublicationState(FrozenContract):
+    branch: str
+    commit_sha: str
+    remote_sha: str | None
+    status: Literal["published", "not_published", "diverged", "missing"]
 
 
 class GitHubCLI:
@@ -34,6 +67,7 @@ class GitHubCLI:
         self._timeout = timeout
         self._locks_guard = threading.Lock()
         self._local_locks: dict[str, threading.RLock] = {}
+        self._publication_roots: dict[tuple[str, str], Path] = {}
 
     def status(self) -> dict[str, object]:
         user = self._json("gh", ["api", "user"])
@@ -339,6 +373,99 @@ class GitHubCLI:
         self._git(root, "push", "--set-upstream", "origin", branch)
         return {"project_root": str(root), "repository": repository, "branch": branch, "status": "pushed"}
 
+    def publish_verified(
+        self,
+        project_root: str,
+        branch: str,
+        commit_sha: str,
+        expected_remote_sha: str | None,
+    ) -> PublicationReceipt:
+        """Publish one exact verified commit using observed-SHA CAS and a normal push."""
+        root = Path(project_root).expanduser().resolve(strict=True)
+        if Path(self._git(root, "rev-parse", "--show-toplevel")).resolve() != root:
+            raise ValueError("Select the root folder of the candidate Git worktree")
+        selected_branch = self._validated_branch(branch)
+        commit = self._validated_sha(commit_sha, "verified commit")
+        expected = (
+            None if expected_remote_sha is None
+            else self._validated_sha(expected_remote_sha, "expected remote commit")
+        )
+        resolved_commit = self._git(root, "rev-parse", f"{commit}^{{commit}}")
+        if resolved_commit.casefold() != commit.casefold():
+            raise GitHubBuildConflict("verified commit does not resolve to the exact requested object")
+        key = (selected_branch, commit)
+        self._publication_roots[key] = root
+        with self._publication_lock(root, selected_branch, commit):
+            observed = self._remote_branch_sha(root, selected_branch)
+            if observed == commit:
+                return self._publication_receipt(
+                    root, selected_branch, commit, expected, observed,
+                    status="already_published", reconciled=True,
+                )
+            if observed != expected:
+                raise GitHubBuildConflict(
+                    f"remote branch changed from {expected or 'missing'} to {observed or 'missing'}; publication drifted"
+                )
+            if expected is not None:
+                # Fetch the object used for the ancestry proof, without rebasing or merging.
+                self._git(root, "fetch", "--quiet", "origin", f"refs/heads/{selected_branch}")
+                try:
+                    merge_base = self._git(root, "merge-base", expected, commit)
+                except GitHubCLIError as error:
+                    raise GitHubBuildConflict(
+                        "verified commit diverges from the expected remote commit"
+                    ) from error
+                if merge_base.casefold() != expected.casefold():
+                    raise GitHubBuildConflict(
+                        "verified commit does not descend from the expected remote commit; branches diverged"
+                    )
+            try:
+                self._git(root, "push", "origin", f"{commit}:refs/heads/{selected_branch}")
+            except GitHubCLIError as error:
+                reconciled = self._remote_branch_sha(root, selected_branch)
+                if reconciled == commit:
+                    return self._publication_receipt(
+                        root, selected_branch, commit, expected, reconciled,
+                        status="published", reconciled=True,
+                    )
+                if reconciled != expected:
+                    raise GitHubBuildConflict(
+                        "remote branch drifted or rejected the non-fast-forward publication"
+                    ) from error
+                raise PublicationAmbiguous(
+                    "publication result is ambiguous; remote does not yet contain the verified commit"
+                ) from error
+            reconciled = self._remote_branch_sha(root, selected_branch)
+            if reconciled != commit:
+                raise PublicationAmbiguous(
+                    "push returned success but the remote branch does not contain the verified commit"
+                )
+            return self._publication_receipt(
+                root, selected_branch, commit, expected, reconciled,
+                status="published", reconciled=False,
+            )
+
+    def reconcile_publication(self, branch: str, commit_sha: str) -> PublicationState:
+        selected_branch = self._validated_branch(branch)
+        commit = self._validated_sha(commit_sha, "verified commit")
+        root = self._publication_roots.get((selected_branch, commit))
+        if root is None:
+            raise ValueError("publication project is unknown; call publish_verified before reconciliation")
+        remote = self._remote_branch_sha(root, selected_branch)
+        if remote is None:
+            status = "missing"
+        elif remote == commit:
+            status = "published"
+        else:
+            try:
+                merge_base = self._git(root, "merge-base", remote, commit)
+            except GitHubCLIError:
+                merge_base = ""
+            status = "not_published" if merge_base == remote else "diverged"
+        return PublicationState(
+            branch=selected_branch, commit_sha=commit, remote_sha=remote, status=status,
+        )
+
     def fetch_local_changes(self, project_root: str) -> dict[str, object]:
         root, repository = self._local_repository(project_root)
         self._git(root, "fetch", "origin")
@@ -635,6 +762,118 @@ class GitHubCLI:
         if len(counts) != 2 or not all(value.isdigit() for value in counts):
             raise GitHubCLIError("Git returned invalid ahead/behind counts")
         return int(counts[0]), int(counts[1])
+
+    @staticmethod
+    def _validated_sha(value: str, label: str) -> str:
+        if not re.fullmatch(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})", value):
+            raise ValueError(f"{label} is invalid")
+        return value.lower()
+
+    def _remote_branch_sha(self, root: Path, branch: str) -> str | None:
+        output = self._git(root, "ls-remote", "--heads", "origin", f"refs/heads/{branch}")
+        if not output:
+            return None
+        rows = [line.split() for line in output.splitlines() if line.strip()]
+        if len(rows) != 1 or len(rows[0]) != 2 or rows[0][1] != f"refs/heads/{branch}":
+            raise GitHubCLIError("Git returned an invalid remote branch advertisement")
+        return self._validated_sha(rows[0][0], "remote commit")
+
+    @staticmethod
+    def _publication_receipt(
+        root: Path,
+        branch: str,
+        commit: str,
+        expected: str | None,
+        observed: str,
+        *,
+        status: Literal["published", "already_published"],
+        reconciled: bool,
+    ) -> PublicationReceipt:
+        material = f"{str(root).casefold()}\0{branch}\0{commit}".encode("utf-8")
+        return PublicationReceipt(
+            publication_id="publication-" + hashlib.sha256(material).hexdigest(),
+            project_root=str(root),
+            branch=branch,
+            commit_sha=commit,
+            expected_remote_sha=expected,
+            observed_remote_sha=observed,
+            status=status,
+            reconciled=reconciled,
+            published_at=datetime.now(timezone.utc),
+        )
+
+    @contextmanager
+    def _publication_lock(self, root: Path, branch: str, commit: str):
+        common_value = Path(self._git(root, "rev-parse", "--git-common-dir"))
+        common = common_value if common_value.is_absolute() else (root / common_value).resolve()
+        path = common / "json-codr-publication.lock"
+        token = secrets.token_hex(16)
+        owner = {
+            "owner_pid": os.getpid(),
+            "branch": branch,
+            "commit_sha": commit,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "token": token,
+        }
+        acquired = False
+        for _ in range(2):
+            try:
+                descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                try:
+                    existing = json.loads(path.read_text(encoding="utf-8"))
+                    owner_pid = int(existing["owner_pid"])
+                except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
+                    raise GitHubBuildConflict("publication lock metadata is unreadable") from error
+                if not self._process_alive(owner_pid):
+                    try:
+                        path.unlink()
+                    except FileNotFoundError:
+                        pass
+                    continue
+                raise GitHubBuildConflict(
+                    f"publication is already in progress for {existing.get('branch', 'this repository')}"
+                )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                json.dump(owner, stream, sort_keys=True)
+                stream.flush()
+                os.fsync(stream.fileno())
+            acquired = True
+            break
+        if not acquired:
+            raise GitHubBuildConflict("publication lock could not be acquired")
+        try:
+            yield
+        finally:
+            try:
+                current = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                current = {}
+            if current.get("token") == token:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+
+    @staticmethod
+    def _process_alive(pid: int) -> bool:
+        if pid <= 0:
+            return False
+        if pid == os.getpid():
+            return True
+        if os.name == "nt":
+            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)  # type: ignore[attr-defined]
+            if not handle:
+                return False
+            ctypes.windll.kernel32.CloseHandle(handle)  # type: ignore[attr-defined]
+            return True
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
 
     def _delete_api(self, endpoint: str) -> None:
         self._run("gh", ["api", "--hostname", "github.com", "--method", "DELETE", endpoint])

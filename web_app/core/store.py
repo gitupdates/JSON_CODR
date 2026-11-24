@@ -624,6 +624,39 @@ class TaskStore:
             expected_state=EffectState.unknown_requires_reconciliation,
         )
 
+    def reconcile_effect_for_retry(
+        self,
+        task_id: str,
+        effect_id: str,
+        event: TaskEventDraft,
+    ) -> EffectCompletion:
+        """Atomically record proof of non-application and reopen the same idempotent intent."""
+        evidence = event.model_copy(update={"causation_id": event.causation_id or effect_id})
+        with self._transaction():
+            row = self._connection.execute(
+                "SELECT effect_json FROM effects WHERE task_id = ? AND effect_id = ?",
+                (task_id, effect_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError((task_id, effect_id))
+            current = EffectIntent.model_validate_json(row["effect_json"])
+            if current.state is not EffectState.unknown_requires_reconciliation:
+                raise InvalidEffectTransition(
+                    f"cannot reopen effect from {current.state.value}"
+                )
+            persisted = self._append_unlocked(task_id, evidence)
+            updated = current.model_copy(update={
+                "state": EffectState.pending,
+                "lease_owner": None,
+                "lease_expires_at": None,
+                "updated_at": datetime.now(UTC),
+            })
+            self._connection.execute(
+                "UPDATE effects SET effect_json = ? WHERE task_id = ? AND effect_id = ?",
+                (updated.model_dump_json(), task_id, effect_id),
+            )
+            return EffectCompletion(persisted, updated, True)
+
     def _transition_effect_unlocked(
         self,
         task_id: str,

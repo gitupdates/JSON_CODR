@@ -2,10 +2,11 @@ import json
 import shutil
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
-from web_app.github_cli import GitHubBuildConflict, GitHubCLI, GitHubCLIError
+from web_app.github_cli import GitHubBuildConflict, GitHubCLI, GitHubCLIError, PublicationReceipt
 
 
 class GitHubCLITests(unittest.TestCase):
@@ -451,6 +452,142 @@ class GitHubCLITests(unittest.TestCase):
             GitHubCLI._relative_path("../outside")
         with self.assertRaises(GitHubCLIError):
             client.status()
+
+
+class GitHubPublicationTests(unittest.TestCase):
+    def _repository(self, root: Path):
+        remote = root / "remote.git"
+        project = root / "candidate"
+        subprocess.run(["git", "init", "--bare", str(remote)], cwd=root, check=True, capture_output=True)
+        project.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=project, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Candidate"], cwd=project, check=True)
+        subprocess.run(["git", "config", "user.email", "candidate@example.invalid"], cwd=project, check=True)
+        (project / "README.md").write_text("initial\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=project, check=True)
+        subprocess.run(["git", "commit", "-m", "initial"], cwd=project, check=True, capture_output=True)
+        subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=project, check=True)
+        subprocess.run(["git", "push", "-u", "origin", "main"], cwd=project, check=True, capture_output=True)
+        initial = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=project, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        (project / "candidate.txt").write_text("candidate\n", encoding="utf-8")
+        subprocess.run(["git", "add", "candidate.txt"], cwd=project, check=True)
+        subprocess.run(["git", "commit", "-m", "candidate"], cwd=project, check=True, capture_output=True)
+        candidate = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=project, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        return project, remote, initial, candidate
+
+    def _client(self, runner=subprocess.run):
+        return GitHubCLI(executable_finder=shutil.which, runner=runner)
+
+    def test_publish_verified_pushes_exact_commit_without_force_and_duplicate_is_reconciled(self):
+        """Pushing HEAD, force options, or a second duplicate push must fail this test."""
+        with tempfile.TemporaryDirectory() as directory:
+            project, remote, initial, candidate = self._repository(Path(directory))
+            calls = []
+
+            def runner(arguments, **kwargs):
+                calls.append(list(arguments))
+                return subprocess.run(arguments, **kwargs)
+
+            client = self._client(runner)
+            first = client.publish_verified(str(project), "main", candidate, initial)
+            repeated = client.publish_verified(str(project), "main", candidate, initial)
+
+            self.assertIsInstance(first, PublicationReceipt)
+            self.assertEqual(first.commit_sha, candidate)
+            self.assertEqual(repeated.status, "already_published")
+            pushes = [call for call in calls if "push" in call]
+            self.assertEqual(len(pushes), 1)
+            self.assertIn(f"{candidate}:refs/heads/main", pushes[0])
+            self.assertFalse(any("--force" in argument for call in calls for argument in call))
+            remote_sha = subprocess.run(
+                ["git", "rev-parse", "main"], cwd=remote, check=True, capture_output=True, text=True
+            ).stdout.strip()
+            self.assertEqual(remote_sha, candidate)
+
+    def test_remote_drift_and_divergence_are_rejected_before_push(self):
+        """Ignoring the observed remote SHA or ancestry must fail this test."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project, remote, initial, candidate = self._repository(root)
+            publisher = root / "publisher"
+            subprocess.run(["git", "clone", "-b", "main", str(remote), str(publisher)], check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Remote"], cwd=publisher, check=True)
+            subprocess.run(["git", "config", "user.email", "remote@example.invalid"], cwd=publisher, check=True)
+            (publisher / "remote.txt").write_text("remote\n", encoding="utf-8")
+            subprocess.run(["git", "add", "remote.txt"], cwd=publisher, check=True)
+            subprocess.run(["git", "commit", "-m", "remote"], cwd=publisher, check=True, capture_output=True)
+            subprocess.run(["git", "push", "origin", "HEAD:main"], cwd=publisher, check=True, capture_output=True)
+            advanced = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=publisher, check=True, capture_output=True, text=True
+            ).stdout.strip()
+            client = self._client()
+
+            with self.assertRaisesRegex(GitHubBuildConflict, "remote.*changed|drift"):
+                client.publish_verified(str(project), "main", candidate, initial)
+            with self.assertRaisesRegex(GitHubBuildConflict, "descend|diverg"):
+                client.publish_verified(str(project), "main", candidate, advanced)
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "rev-parse", "main"], cwd=remote, check=True,
+                    capture_output=True, text=True,
+                ).stdout.strip(),
+                advanced,
+            )
+
+    def test_ambiguous_network_success_is_reconciled_by_remote_commit(self):
+        """Reporting a failed publication after the remote accepted it must fail this test."""
+        with tempfile.TemporaryDirectory() as directory:
+            project, _, initial, candidate = self._repository(Path(directory))
+
+            def ambiguous_runner(arguments, **kwargs):
+                result = subprocess.run(arguments, **kwargs)
+                if "push" in arguments:
+                    return subprocess.CompletedProcess(arguments, 1, result.stdout, "connection reset")
+                return result
+
+            receipt = self._client(ambiguous_runner).publish_verified(
+                str(project), "main", candidate, initial
+            )
+            self.assertEqual(receipt.status, "published")
+            self.assertTrue(receipt.reconciled)
+            self.assertEqual(receipt.observed_remote_sha, candidate)
+
+    def test_concurrent_publish_attempt_is_rejected_by_os_visible_lock(self):
+        """A per-instance threading lock would allow both clients into the push window."""
+        with tempfile.TemporaryDirectory() as directory:
+            project, _, initial, candidate = self._repository(Path(directory))
+            entered = threading.Event()
+            release = threading.Event()
+            failures = []
+
+            def blocking_runner(arguments, **kwargs):
+                if "push" in arguments:
+                    entered.set()
+                    release.wait(5)
+                return subprocess.run(arguments, **kwargs)
+
+            def publish():
+                try:
+                    self._client(blocking_runner).publish_verified(
+                        str(project), "main", candidate, initial
+                    )
+                except Exception as error:  # pragma: no cover - surfaced below
+                    failures.append(error)
+
+            thread = threading.Thread(target=publish)
+            thread.start()
+            self.assertTrue(entered.wait(5))
+            try:
+                with self.assertRaisesRegex(GitHubBuildConflict, "already in progress"):
+                    self._client().publish_verified(str(project), "main", candidate, initial)
+            finally:
+                release.set()
+                thread.join(5)
+            self.assertEqual(failures, [])
 
 
 if __name__ == "__main__":

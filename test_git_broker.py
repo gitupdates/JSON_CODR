@@ -474,5 +474,59 @@ class GitBrokerExecutionTests(unittest.TestCase):
                 service.execute(request, model="qwen", grant_id="grant-1", authorized=lambda: False)
 
 
+class GitBrokerConflictRecoveryTests(unittest.TestCase):
+    def _conflicting_worktree(self, root: Path):
+        source = root / "source"
+        candidate = root / "candidate"
+        source.mkdir()
+        git(source, "init", "-b", "main")
+        git(source, "config", "user.name", "Test")
+        git(source, "config", "user.email", "test@example.invalid")
+        (source / "shared.txt").write_text("initial\n", encoding="utf-8")
+        git(source, "add", "shared.txt")
+        git(source, "commit", "-m", "initial")
+        git(source, "worktree", "add", "-b", "candidate", str(candidate), "HEAD")
+        (candidate / "shared.txt").write_text("candidate\n", encoding="utf-8")
+        git(candidate, "add", "shared.txt")
+        git(candidate, "commit", "-m", "candidate")
+        (source / "shared.txt").write_text("upstream\n", encoding="utf-8")
+        git(source, "add", "shared.txt")
+        git(source, "commit", "-m", "upstream")
+        return source, candidate, git(source, "rev-parse", "HEAD")
+
+    def _git_path_exists(self, project: Path, name: str) -> bool:
+        value = git(project, "rev-parse", "--git-path", name)
+        path = Path(value)
+        return (path if path.is_absolute() else project / path).exists()
+
+    def test_rebase_conflict_is_aborted_inside_candidate_worktree(self):
+        """Leaving REBASE_HEAD behind or rebasing the source repository must fail this test."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, candidate, upstream = self._conflicting_worktree(root)
+            service = GitBrokerService(root / "data")
+
+            with self.assertRaisesRegex(ValueError, "conflict|rebase"):
+                service.rebase_candidate_worktree(candidate, upstream)
+
+            self.assertFalse(self._git_path_exists(candidate, "rebase-merge"))
+            self.assertFalse(self._git_path_exists(candidate, "rebase-apply"))
+            self.assertEqual(git(source, "branch", "--show-current"), "main")
+
+    def test_merge_conflict_is_aborted_inside_candidate_worktree(self):
+        """Leaving MERGE_HEAD behind or accepting a normal checkout must fail this test."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, candidate, upstream = self._conflicting_worktree(root)
+            service = GitBrokerService(root / "data")
+
+            with self.assertRaisesRegex(ValueError, "conflict|merge"):
+                service.merge_candidate_worktree(candidate, upstream)
+
+            self.assertFalse(self._git_path_exists(candidate, "MERGE_HEAD"))
+            with self.assertRaisesRegex(ValueError, "candidate worktree"):
+                service.merge_candidate_worktree(source, "candidate")
+
+
 if __name__ == "__main__":
     unittest.main()

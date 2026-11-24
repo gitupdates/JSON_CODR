@@ -90,6 +90,7 @@ _EVENT_STATES = {
     "candidate.verification_completed": CandidateState.verified,
     "candidate.committed": CandidateState.committed,
     "candidate.published": CandidateState.published,
+    "candidate.publication_not_applied": CandidateState.committed,
     "candidate.health_requested": CandidateState.health_pending,
     "candidate.health_completed": CandidateState.healthy,
     "candidate.activated": CandidateState.activated,
@@ -406,13 +407,23 @@ class AutonomousUpdateController:
         )
         values = self._json_receipt(receipt)
         if values.get("status") not in {"published", "already_published"}:
-            self._store.reconcile_effect(candidate_id, effect_id, "not_applied")
-            self._store.append(
+            if values.get("status") not in {"not_published", "missing"}:
+                self._store.reconcile_effect(candidate_id, effect_id, "not_applied")
+                self._store.append(
+                    candidate_id,
+                    TaskEventDraft(
+                        event_type="candidate.publication_failed",
+                        payload={"reason": "remote diverged during publication reconciliation"},
+                    ),
+                )
+                return self.get(candidate_id)
+            self._store.reconcile_effect_for_retry(
                 candidate_id,
-                TaskEventDraft(
-                    event_type="candidate.publication_failed",
-                    payload={"reason": "publication was not applied"},
-                ),
+                effect_id,
+                TaskEventDraft(event_type="candidate.publication_not_applied", payload={
+                    "reason": "remote evidence proves publication was not applied",
+                    "receipt": values,
+                }),
             )
             return self.get(candidate_id)
         self._store.complete_effect_with_event(
@@ -479,6 +490,19 @@ class AutonomousUpdateController:
             )
             raise
         except Exception as error:
+            if getattr(error, "ambiguous", False):
+                self._store.transition_effect(
+                    candidate.task_id, effect_id, EffectState.unknown_requires_reconciliation,
+                    expected_state=EffectState.running,
+                )
+                self._store.append(
+                    candidate.task_id,
+                    TaskEventDraft(
+                        event_type="candidate.effect_ambiguous",
+                        payload={"transition": transition}, causation_id=effect_id,
+                    ),
+                )
+                raise AmbiguousEffect(str(error)) from error
             failure_event = {
                 "verify": "candidate.verification_failed",
                 "publish": "candidate.publication_failed",
