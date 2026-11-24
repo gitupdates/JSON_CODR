@@ -2688,7 +2688,13 @@ async function submitPrompt(event) {
     elements.taskRequestedModel.textContent = payload.requested_model;
     elements.taskEffectiveModel.textContent = payload.effective_model || "All installed models";
     elements.responseModel.textContent = payload.effective_model || payload.route;
-    elements.summary.textContent = payload.status === "running" ? "Multi-model run started" : "Workspace task completed";
+    elements.summary.textContent = payload.status === "running"
+      ? "Multi-model run started"
+      : payload.status === "completed"
+        ? "Workspace task completed"
+        : payload.status === "approval_required"
+          ? "Project action approval required"
+          : `Workspace task ${payload.status}`;
     elements.content.textContent = JSON.stringify({
       requested_engine: payload.requested_engine,
       effective_engine: payload.effective_engine,
@@ -2705,6 +2711,9 @@ async function submitPrompt(event) {
         throw new Error("Agent approval is missing its proposal identity");
       }
       elements.summary.textContent = "Project action approval required";
+    }
+    if (payload.status === "failed") {
+      elements.requestStatus.textContent = "The local model could not produce a valid execution plan.";
     }
     if (payload.route === "multi-model") localStorage.setItem("json_codr_active_model_run", payload.task_id);
     void userMessage;
