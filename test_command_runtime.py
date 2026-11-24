@@ -13,21 +13,30 @@ class CommandRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 argv=(sys.executable, "-c", "print('token=very-secret')"),
                 cwd=".", timeout_seconds=10,
             )
-            result = await CommandRuntime().run(policy, project_root=directory)
+            result = await CommandRuntime().run_interactive_admin(
+                policy, project_root=directory, administrator_scopes=("terminal.write",)
+            )
         self.assertEqual(result.exit_code, 0)
         self.assertIn("token=[REDACTED]", result.stdout)
-        self.assertIn("no_network_namespace", result.isolation_level)
+        self.assertIn("process_constrained", result.isolation_level)
+        self.assertNotIn("no_network", result.isolation_level)
         self.assertEqual(result.argv, policy.argv)
 
     async def test_escape_and_unapproved_environment_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             runtime = CommandRuntime()
             with self.assertRaisesRegex(ValueError, "escapes"):
-                await runtime.run(CommandPolicy(argv=(sys.executable, "-V"), cwd=".."), project_root=directory)
+                await runtime.run_interactive_admin(
+                    CommandPolicy(argv=(sys.executable, "-V"), cwd=".."),
+                    project_root=directory,
+                    administrator_scopes=("terminal.write",),
+                )
             with self.assertRaisesRegex(ValueError, "not allowed"):
-                await runtime.run(CommandPolicy(
-                    argv=(sys.executable, "-V"), cwd=".", environment={"AWS_SECRET_ACCESS_KEY": "x"},
-                ), project_root=directory)
+                await runtime.run_interactive_admin(
+                    CommandPolicy(argv=(sys.executable, "-V"), cwd=".", environment={"AWS_SECRET_ACCESS_KEY": "x"}),
+                    project_root=directory,
+                    administrator_scopes=("terminal.write",),
+                )
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ class CredentialScope(StrEnum):
     lesson_verify = "lesson.verify"
     lesson_verification_record = "lesson.verification.record"
     lesson_promote_global = "lesson.promote_global"
+    verification_profiles_manage = "verification.profiles.manage"
 
 
 @dataclass(frozen=True)

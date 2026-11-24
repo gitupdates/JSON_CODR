@@ -48,6 +48,7 @@ MUTATION_SCOPES = (
     "system.update",
     "system.activate",
     "system.rollback",
+    "verification.profiles.manage",
 )
 
 VERIFIER_SERVICE_USERNAME = "json-codr-verifier"

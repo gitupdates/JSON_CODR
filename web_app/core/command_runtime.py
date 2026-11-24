@@ -4,10 +4,12 @@ import asyncio
 import os
 import re
 from pathlib import Path
+from typing import Mapping
 
 from pydantic import Field
 
 from web_app.core.contracts import FrozenContract
+from web_app.core.verification_profiles import VerificationProfileStore, render_profile_arguments
 
 
 class CommandPolicy(FrozenContract):
@@ -34,7 +36,48 @@ class CommandRuntime:
     SAFE_ENVIRONMENT = frozenset({"SystemRoot", "SYSTEMROOT", "WINDIR", "windir", "COMSPEC", "PATH", "PATHEXT", "TEMP", "TMP"})
     SECRET_PATTERN = re.compile(r"(?i)(token|secret|password|api[_-]?key)=([^\s]+)")
 
-    async def run(self, policy: CommandPolicy, *, project_root: str | Path) -> CommandResult:
+    def __init__(self, profiles: VerificationProfileStore | None = None) -> None:
+        self._profiles = profiles
+
+    async def run_interactive_admin(
+        self,
+        policy: CommandPolicy,
+        *,
+        project_root: str | Path,
+        administrator_scopes: tuple[str, ...],
+    ) -> CommandResult:
+        """Run an administrator-approved, interactive command without claiming isolation."""
+        if "terminal.write" not in administrator_scopes:
+            raise PermissionError("interactive command execution requires an administrator terminal scope")
+        return await self._run(policy, project_root=project_root)
+
+    async def run_profile(
+        self,
+        *,
+        profile_id: str,
+        values: Mapping[str, object],
+        project_root: str | Path,
+        environment: Mapping[str, str] | None = None,
+        raw_argv: tuple[str, ...] | None = None,
+    ) -> CommandResult:
+        if raw_argv is not None:
+            raise ValueError("raw argv is only available to interactive administrators")
+        if environment:
+            raise ValueError("profile execution does not accept environment overrides")
+        if self._profiles is None:
+            raise RuntimeError("verification profile store is not configured")
+        profile = self._profiles.resolve(profile_id)
+        if profile.network_policy == "deny":
+            raise ValueError("no-network profiles require an enforcing sandbox adapter")
+        argv = (profile.executable, *render_profile_arguments(profile, dict(values)))
+        return await self._run(CommandPolicy(
+            argv=argv,
+            cwd="." if profile.cwd_rule == "project_root" else profile.cwd_rule,
+            timeout_seconds=profile.timeout_seconds,
+            max_output_bytes=profile.max_output_bytes,
+        ), project_root=project_root)
+
+    async def _run(self, policy: CommandPolicy, *, project_root: str | Path) -> CommandResult:
         root = Path(project_root).resolve(strict=True)
         cwd = Path(policy.cwd)
         cwd = cwd.resolve() if cwd.is_absolute() else (root / cwd).resolve()
@@ -67,5 +110,5 @@ class CommandRuntime:
         return CommandResult(
             argv=policy.argv, cwd=str(cwd), exit_code=-1 if timed_out else int(process.returncode or 0),
             stdout=redact(stdout), stderr=redact(stderr), timed_out=timed_out, truncated=truncated,
-            isolation_level="windows_process_constrained_no_network_namespace" if os.name == "nt" else "process_constrained_no_network_namespace",
+            isolation_level="windows_process_constrained" if os.name == "nt" else "process_constrained",
         )

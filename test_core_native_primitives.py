@@ -84,7 +84,7 @@ class NativePrimitiveTests(unittest.IsolatedAsyncioTestCase):
         terminal = TerminalAdapter(terminal_service)
         from web_app.core.command_runtime import CommandResult
         commands = AsyncMock()
-        commands.run.return_value = CommandResult(
+        commands.run_profile.return_value = CommandResult(
             argv=("python", "-V"), cwd=str(self.root), exit_code=0,
             stdout="verified\n", stderr="", timed_out=False, truncated=False,
             isolation_level="test",
@@ -107,12 +107,25 @@ class NativePrimitiveTests(unittest.IsolatedAsyncioTestCase):
             capability_id="native.shell",
             operation="command",
             project_root=str(self.root),
-            arguments={"argv": ["python", "-V"], "timeout": 15},
+            arguments={"profile_id": "python-version", "values": {}},
         )
         events = [event async for event in adapter.execute(shell, self.context)]
         self.assertEqual(events[0].payload["route"], "native")
         self.assertEqual(events[-1].payload["exit_code"], 0)
-        commands.run.assert_awaited_once()
+        commands.run_profile.assert_awaited_once()
+
+    async def test_autonomous_native_shell_rejects_raw_argv(self):
+        from web_app.core.native_primitives import NativePrimitiveAdapter
+        from web_app.core.project_adapter import ProjectAdapter
+        from web_app.core.terminal_adapter import TerminalAdapter
+
+        adapter = NativePrimitiveAdapter(ProjectAdapter(self.state), TerminalAdapter(_TerminalService()), AsyncMock())
+        call = CapabilityCall(
+            capability_id="native.shell", operation="command", project_root=str(self.root),
+            arguments={"argv": ["cmd.exe", "/c", "echo unsafe"]},
+        )
+        with self.assertRaisesRegex(ValueError, "profile_id"):
+            [event async for event in adapter.execute(call, self.context)]
 
 
 if __name__ == "__main__":
