@@ -148,6 +148,32 @@ class IdentityApiTests(unittest.TestCase):
         )
         self.assertEqual(accepted_browser.status_code, 404)
 
+    def test_mcp_mutation_boundary_requires_agent_scope_and_csrf(self):
+        payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+        self.client.cookies.clear()
+        self.assertEqual(self.client.post("/mcp", json=payload).status_code, 401)
+
+        wrong_scope = self.credential("service", ("session.write",))
+        self.assertEqual(
+            self.client.post(
+                "/mcp", json=payload,
+                headers={"Authorization": f"Bearer {wrong_scope.token}"},
+            ).status_code,
+            403,
+        )
+
+        browser = self.credential("browser_session", ("agent.launch",))
+        self.client.cookies.set("json_codr_session", browser.token)
+        self.assertEqual(self.client.post("/mcp", json=payload).status_code, 403)
+
+        service = self.credential("service", ("agent.launch",))
+        with TestClient(self.app, client=("127.0.0.1", 50001)) as loopback:
+            accepted = loopback.post(
+                "/mcp", json=payload,
+                headers={"Authorization": f"Bearer {service.token}"},
+            )
+            self.assertEqual(accepted.status_code, 200)
+
     def test_session_attachment_writes_require_session_scope_and_browser_csrf(self):
         """Removing either adjacent attachment guard must fail this test."""
         cases = (

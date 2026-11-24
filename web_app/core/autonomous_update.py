@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
@@ -13,16 +14,19 @@ from uuid import uuid7
 from pydantic import Field
 
 from web_app.core.contracts import (
+    CompletionCriterion,
+    CriterionKind,
     EffectIntentDraft,
     EffectState,
     FrozenContract,
+    GoalSpec,
     TaskCommand,
     TaskEventDraft,
 )
 from web_app.core.git_adapter import VerificationReceipt
 from web_app.core.canonical import canonical_digest
 from web_app.core.store import ConcurrencyConflict, InvalidEffectTransition, TaskStore
-from web_app.core.worktree_runtime import WorktreeRuntime, WorktreeSession
+from web_app.core.worktree_runtime import WorktreeRuntime, WorktreeSession, _default_process_alive
 
 
 class CandidateState(str, Enum):
@@ -67,6 +71,53 @@ class RepositoryScopeRequest(FrozenContract):
     requested_at: datetime
 
 
+class AgentRuntimeModifier:
+    """Creates an accepted agent task whose trusted project root is the candidate worktree."""
+
+    def __init__(self, *, core_runtime: Callable[[], tuple], project_registry: Callable[[], object]) -> None:
+        self._core_runtime = core_runtime
+        self._project_registry = project_registry
+
+    async def modify(self, candidate, profile, objective: str) -> Mapping[str, Any]:
+        if candidate.worktree is None:
+            raise RuntimeError("candidate worktree is missing")
+        core_service, _task_store, _policy = self._core_runtime()
+        registry = self._project_registry()
+        registered = registry.register(candidate.worktree.working_root)
+        task_id = f"update-agent-{uuid7()}"
+        goal = GoalSpec(
+            goal_id=f"goal:{task_id}",
+            revision=1,
+            objective=objective,
+            criteria=(CompletionCriterion(
+                criterion_id=f"criterion:{task_id}",
+                kind=CriterionKind.project_state,
+                description=(
+                    "Persist the requested candidate changes in the isolated worktree with fresh evidence"
+                ),
+            ),),
+            accepted=True,
+        )
+        record = await core_service.submit(TaskCommand(
+            command_id=f"command:{task_id}",
+            task_id=task_id,
+            thread_id=f"self-update:{candidate.candidate_id}",
+            project_id=registered.project_id,
+            command_type="agent.run",
+            payload={
+                "goal_spec": goal.model_dump(mode="json"),
+                "target_path": ".",
+                "route": "broker_verified",
+            },
+        ))
+        return {
+            "task_id": task_id,
+            "status": record.status.value,
+            "project_id": registered.project_id,
+            "objective_digest": canonical_digest(objective),
+        }
+
+
 class ScopedExecutionContext(FrozenContract):
     context_id: str = Field(min_length=1, max_length=256)
     repository_root: str = Field(min_length=1, max_length=4096)
@@ -85,6 +136,8 @@ class UpdateProfile(FrozenContract):
     automatic_mode_enabled: bool = False
     expected_version: str | None = None
     launch_argv: tuple[str, ...] = ()
+    container_image: str | None = None
+    container_port: int = Field(default=8000, ge=1, le=65535)
     migration_compatibility: Literal["backward_compatible", "requires_approval", "irreversible"] = "backward_compatible"
     startup_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
 
@@ -93,6 +146,8 @@ class CandidateRecord(FrozenContract):
     candidate_id: str
     task_id: str
     profile_id: str
+    profile_snapshot: UpdateProfile
+    profile_digest: str
     prompt: str
     principal_id: str
     credential_id: str
@@ -129,11 +184,19 @@ _EVENT_STATES = {
     "candidate.health_completed": CandidateState.healthy,
     "candidate.activated": CandidateState.activated,
     "candidate.rolled_back": CandidateState.rolled_back,
+    "candidate.activation_rolled_back": CandidateState.rolled_back,
     "candidate.rejected": CandidateState.rejected,
     "candidate.verification_failed": CandidateState.verification_failed,
     "candidate.publication_failed": CandidateState.publication_failed,
     "candidate.health_failed": CandidateState.health_failed,
     "candidate.quarantined": CandidateState.quarantined,
+    "candidate.stage_not_applied": CandidateState.proposed,
+    "candidate.modify_not_applied": CandidateState.staged,
+    "candidate.verification_not_applied": CandidateState.modified,
+    "candidate.commit_not_applied": CandidateState.verified,
+    "candidate.health_not_applied": CandidateState.published,
+    "candidate.activate_not_applied": CandidateState.healthy,
+    "candidate.rollback_not_applied": CandidateState.activated,
 }
 
 
@@ -151,8 +214,10 @@ class AutonomousUpdateController:
         verifier: object | None = None,
         publisher: object | None = None,
         launcher: object | None = None,
+        modifier: object | None = None,
         memory: object | None = None,
         scope_context_factory: object | None = None,
+        process_alive: Callable[[int], bool] | None = None,
     ) -> None:
         self._store = store
         self._profiles = dict(profiles)
@@ -160,11 +225,17 @@ class AutonomousUpdateController:
         self._verifier = verifier
         self._publisher = publisher
         self._launcher = launcher
+        self._modifier = modifier
         self._memory = memory
         self._scope_context_factory = scope_context_factory
+        self._process_alive = process_alive or _default_process_alive
+        self._lease_owner = f"controller:{os.getpid()}:{uuid7()}"
+        self.recovery_errors: list[str] = []
 
     def propose(self, profile_id: str, prompt: str, principal) -> CandidateRecord:
         profile = self._profile(profile_id)
+        if not profile.expected_remote_sha:
+            raise PermissionError("update profile requires an exact remote baseline SHA")
         principal_id = getattr(principal, "user_id", None)
         credential_id = getattr(principal, "credential_id", None)
         scopes = tuple(getattr(principal, "scopes", ()))
@@ -175,6 +246,8 @@ class AutonomousUpdateController:
         candidate_id = f"candidate-{uuid7()}"
         task_id = candidate_id
         proposed_at = datetime.now(UTC)
+        profile_snapshot = profile.model_dump(mode="json")
+        profile_digest = canonical_digest(profile_snapshot)
         command = TaskCommand(
             command_id=f"proposal:{candidate_id}",
             task_id=task_id,
@@ -184,6 +257,8 @@ class AutonomousUpdateController:
             payload={
                 "candidate_id": candidate_id,
                 "profile_id": profile_id,
+                "profile_snapshot": profile_snapshot,
+                "profile_digest": profile_digest,
                 "prompt": prompt.strip(),
                 "principal_id": principal_id,
                 "credential_id": credential_id,
@@ -250,6 +325,8 @@ class AutonomousUpdateController:
             "candidate_id": candidate_id,
             "task_id": candidate_id,
             "profile_id": payload["profile_id"],
+            "profile_snapshot": UpdateProfile.model_validate(payload["profile_snapshot"]),
+            "profile_digest": payload["profile_digest"],
             "prompt": payload["prompt"],
             "principal_id": payload["principal_id"],
             "credential_id": payload["credential_id"],
@@ -288,6 +365,8 @@ class AutonomousUpdateController:
                 record["activation_receipt"] = dict(values["receipt"])
             elif event.event_type == "candidate.rolled_back":
                 record["rollback_receipt"] = dict(values["receipt"])
+            elif event.event_type == "candidate.activation_rolled_back":
+                record["rollback_receipt"] = dict(values["rollback_receipt"])
             elif event.event_type in {
                 "candidate.rejected", "candidate.verification_failed",
                 "candidate.publication_failed", "candidate.health_failed", "candidate.quarantined",
@@ -303,8 +382,18 @@ class AutonomousUpdateController:
             return records
         return tuple(record for record in records if record.profile_id == profile_id)
 
+    def pending_reconciliations(self, candidate_id: str) -> tuple[str, ...]:
+        return tuple(
+            str(effect.payload.get("transition"))
+            for effect in self._store.effects(
+                candidate_id, {EffectState.unknown_requires_reconciliation}
+            )
+            if isinstance(effect.payload.get("transition"), str)
+        )
+
     def stage(self, candidate_id: str) -> CandidateRecord:
         candidate = self.get(candidate_id)
+        profile = self._bound_profile(candidate)
         if candidate.state is CandidateState.scope_approval_required:
             raise RepositoryScopeRequired(
                 f"repository scope approval is required for {candidate.scope_request.repository_root}"
@@ -315,8 +404,6 @@ class AutonomousUpdateController:
             raise self._invalid(candidate, "stage")
         if candidate.state is CandidateState.scope_approved and candidate.scoped_context is None:
             raise RepositoryScopeRequired("external scoped execution context is missing")
-        profile = self._profile(candidate.profile_id)
-
         def operation():
             session = self._worktrees.create(profile.repository_root, candidate_id=candidate_id)
             if not session.base_sha:
@@ -327,6 +414,7 @@ class AutonomousUpdateController:
 
     def mark_modified(self, candidate_id: str) -> CandidateRecord:
         candidate = self.get(candidate_id)
+        self._bound_profile(candidate)
         if candidate.state not in {CandidateState.staged, CandidateState.verified}:
             if candidate.state is CandidateState.modified:
                 return candidate
@@ -343,8 +431,32 @@ class AutonomousUpdateController:
         )
         return self.get(candidate_id)
 
+    def modify(self, candidate_id: str) -> CandidateRecord:
+        candidate = self.get(candidate_id)
+        profile = self._bound_profile(candidate)
+        if candidate.state is CandidateState.modified:
+            return candidate
+        if candidate.state is not CandidateState.staged or candidate.worktree is None:
+            raise self._invalid(candidate, "modify")
+        if self._modifier is None:
+            raise RuntimeError("candidate agent modifier is not configured")
+        objective = self._modification_objective(candidate)
+
+        def operation():
+            evidence = self._invoke(
+                self._modifier, "modify", candidate, profile, objective
+            )
+            if not self._worktrees.has_changes(candidate.worktree):
+                raise AmbiguousEffect(
+                    "agent modification has no persisted candidate changes and must be reconciled"
+                )
+            return {"agent": self._json_receipt(evidence), "objective_digest": canonical_digest(objective)}
+
+        return self._effect(candidate, "modify", operation, "candidate.modified")
+
     def verify(self, candidate_id: str) -> CandidateRecord:
         candidate = self.get(candidate_id)
+        profile = self._bound_profile(candidate)
         if candidate.state is CandidateState.verified:
             if candidate.worktree and self._worktrees.tree_sha(candidate.worktree) == candidate.verification_receipt.tree_sha:
                 return candidate
@@ -355,7 +467,6 @@ class AutonomousUpdateController:
             raise self._invalid(candidate, "verify")
         if self._verifier is None:
             raise RuntimeError("trusted verification service is not configured")
-        profile = self._profile(candidate.profile_id)
         tree_sha = self._worktrees.tree_sha(candidate.worktree)
         self._store.append(
             candidate_id,
@@ -381,6 +492,7 @@ class AutonomousUpdateController:
 
     def commit(self, candidate_id: str) -> CandidateRecord:
         candidate = self.get(candidate_id)
+        self._bound_profile(candidate)
         if candidate.state is CandidateState.committed:
             return candidate
         if candidate.state is not CandidateState.verified or candidate.worktree is None or candidate.verification_receipt is None:
@@ -399,21 +511,24 @@ class AutonomousUpdateController:
             raise PermissionError("verification receipt is not trusted")
 
         def operation():
-            commit_sha = self._worktrees.commit(candidate.worktree, "Apply verified JSON_CODR self-update")
+            commit_sha = self._worktrees.commit_verified(
+                candidate.worktree,
+                "Apply verified JSON_CODR self-update",
+                candidate.verification_receipt.tree_sha,
+            )
             return {"commit_sha": commit_sha, "tree_sha": current_tree}
 
         return self._effect(candidate, "commit", operation, "candidate.committed")
 
     def publish(self, candidate_id: str) -> CandidateRecord:
         candidate = self.get(candidate_id)
+        profile = self._bound_profile(candidate)
         if candidate.state is CandidateState.published:
             return candidate
         if candidate.state is not CandidateState.committed or candidate.worktree is None or not candidate.commit_sha:
             raise self._invalid(candidate, "publish")
         if self._publisher is None:
             raise RuntimeError("verified publisher is not configured")
-        profile = self._profile(candidate.profile_id)
-
         def operation():
             receipt = self._invoke(
                 self._publisher, "publish_verified",
@@ -426,13 +541,13 @@ class AutonomousUpdateController:
 
     def health_check(self, candidate_id: str) -> CandidateRecord:
         candidate = self.get(candidate_id)
+        profile = self._bound_profile(candidate)
         if candidate.state is CandidateState.healthy:
             return candidate
         if candidate.state is not CandidateState.published:
             raise self._invalid(candidate, "health check")
         if self._launcher is None:
             raise RuntimeError("candidate launcher is not configured")
-        profile = self._profile(candidate.profile_id)
         self._store.append(candidate_id, TaskEventDraft(event_type="candidate.health_requested"))
         candidate = self.get(candidate_id)
 
@@ -447,6 +562,7 @@ class AutonomousUpdateController:
 
     def activate(self, candidate_id: str, principal=None) -> CandidateRecord:
         candidate = self.get(candidate_id)
+        self._bound_profile(candidate)
         if not self._has_scope(candidate, principal, "system.activate"):
             raise PermissionError("candidate principal is not scoped for activation")
         if candidate.state is CandidateState.activated:
@@ -458,10 +574,13 @@ class AutonomousUpdateController:
             receipt = self._invoke(self._launcher, "activate", candidate.health_receipt)
             return {"receipt": self._json_receipt(receipt)}
 
-        return self._effect(candidate, "activate", operation, "candidate.activated")
+        activated = self._effect(candidate, "activate", operation, "candidate.activated")
+        self._close_worktree(activated)
+        return activated
 
     def rollback(self, candidate_id: str, principal=None) -> CandidateRecord:
         candidate = self.get(candidate_id)
+        self._bound_profile(candidate)
         if not self._has_scope(candidate, principal, "system.rollback"):
             raise PermissionError("candidate principal is not scoped for rollback")
         if candidate.state is CandidateState.rolled_back:
@@ -476,10 +595,13 @@ class AutonomousUpdateController:
             receipt = self._invoke(self._launcher, "rollback", activation_id)
             return {"receipt": self._json_receipt(receipt)}
 
-        return self._effect(candidate, "rollback", operation, "candidate.rolled_back")
+        rolled_back = self._effect(candidate, "rollback", operation, "candidate.rolled_back")
+        self._close_worktree(rolled_back)
+        return rolled_back
 
     def quarantine(self, candidate_id: str, reason: str, principal=None) -> CandidateRecord:
         candidate = self.get(candidate_id)
+        self._bound_profile(candidate)
         if not self._has_scope(candidate, principal, "system.update"):
             raise PermissionError("candidate quarantine requires system.update")
         if not reason.strip():
@@ -488,6 +610,11 @@ class AutonomousUpdateController:
             return candidate
         if candidate.state in {CandidateState.activated, CandidateState.rolled_back}:
             raise self._invalid(candidate, "quarantine")
+        if candidate.health_receipt is not None and self._launcher is not None:
+            health_id = candidate.health_receipt.get("health_id")
+            if isinstance(health_id, str):
+                self._invoke(self._launcher, "terminate_health", health_id)
+        self._close_worktree(candidate)
         self._store.append(
             candidate_id,
             TaskEventDraft(
@@ -506,6 +633,7 @@ class AutonomousUpdateController:
         principal,
     ) -> CandidateRecord:
         candidate = self.get(candidate_id)
+        self._bound_profile(candidate)
         if "system.update" not in tuple(getattr(principal, "scopes", ())):
             raise PermissionError("repository scope approval requires system.update")
         if (
@@ -562,18 +690,101 @@ class AutonomousUpdateController:
 
     def reconcile(self, candidate_id: str, transition: str) -> CandidateRecord:
         candidate = self.get(candidate_id)
+        profile = self._bound_profile(candidate)
         effect_id = self._effect_id(candidate_id, transition)
         effect = self._store.effect(candidate_id, effect_id)
         if effect.state is not EffectState.unknown_requires_reconciliation:
             raise InvalidCandidateTransition("only ambiguous effects can be reconciled")
+        if transition == "stage":
+            session = self._worktrees.find_candidate(candidate_id)
+            if session is None:
+                return self._reconcile_not_applied(candidate, effect_id, transition)
+            self._worktrees.resume(session)
+            self._store.complete_effect_with_event(
+                candidate_id, effect_id,
+                TaskEventDraft(event_type="candidate.staged", payload={
+                    "worktree": session.model_dump(mode="json"),
+                    "base_sha": session.base_sha,
+                }),
+            )
+            return self.get(candidate_id)
+        if transition == "verify":
+            return self._reconcile_not_applied(candidate, effect_id, transition)
+        if transition == "modify":
+            if candidate.worktree is None:
+                raise InvalidCandidateTransition("modify reconciliation lacks a candidate worktree")
+            if not self._worktrees.has_changes(candidate.worktree):
+                return self._reconcile_not_applied(candidate, effect_id, transition)
+            self._store.complete_effect_with_event(
+                candidate_id, effect_id,
+                TaskEventDraft(event_type="candidate.modified", payload={
+                    "reason": "reconciled persisted AgentRuntime changes",
+                }),
+            )
+            return self.get(candidate_id)
+        if transition == "commit":
+            if candidate.worktree is None or candidate.verification_receipt is None:
+                raise InvalidCandidateTransition("commit reconciliation lacks verified worktree evidence")
+            commit_sha = self._worktrees.reconcile_commit(
+                candidate.worktree, candidate.verification_receipt.tree_sha
+            )
+            if commit_sha is None:
+                return self._reconcile_not_applied(candidate, effect_id, transition)
+            self._store.complete_effect_with_event(
+                candidate_id, effect_id,
+                TaskEventDraft(event_type="candidate.committed", payload={
+                    "commit_sha": commit_sha,
+                    "tree_sha": candidate.verification_receipt.tree_sha,
+                }),
+            )
+            return self.get(candidate_id)
+        if transition == "health":
+            if self._launcher is None:
+                raise InvalidCandidateTransition("candidate launcher is unavailable")
+            receipt = self._invoke(self._launcher, "reconcile_health", candidate)
+            if receipt is None:
+                return self._reconcile_not_applied(candidate, effect_id, transition)
+            self._store.complete_effect_with_event(
+                candidate_id, effect_id,
+                TaskEventDraft(event_type="candidate.health_completed", payload={
+                    "receipt": self._json_receipt(receipt),
+                }),
+            )
+            return self.get(candidate_id)
+        if transition == "activate":
+            if self._launcher is None:
+                raise InvalidCandidateTransition("candidate launcher is unavailable")
+            receipt = self._invoke(self._launcher, "reconcile_activation", candidate_id)
+            if receipt is None:
+                return self._reconcile_not_applied(candidate, effect_id, transition)
+            self._store.complete_effect_with_event(
+                candidate_id, effect_id,
+                TaskEventDraft(event_type="candidate.activated", payload={
+                    "receipt": self._json_receipt(receipt),
+                }),
+            )
+            return self.get(candidate_id)
+        if transition == "rollback":
+            if self._launcher is None or candidate.activation_receipt is None:
+                raise InvalidCandidateTransition("rollback reconciliation lacks activation evidence")
+            activation_id = candidate.activation_receipt.get("activation_id")
+            receipt = None if not isinstance(activation_id, str) else self._invoke(
+                self._launcher, "reconcile_rollback", activation_id
+            )
+            if receipt is None:
+                return self._reconcile_not_applied(candidate, effect_id, transition)
+            self._store.complete_effect_with_event(
+                candidate_id, effect_id,
+                TaskEventDraft(event_type="candidate.rolled_back", payload={
+                    "receipt": self._json_receipt(receipt),
+                }),
+            )
+            return self.get(candidate_id)
         if (
-            transition != "publish"
-            or self._publisher is None
-            or not candidate.commit_sha
-            or candidate.worktree is None
+            transition != "publish" or self._publisher is None
+            or not candidate.commit_sha or candidate.worktree is None
         ):
             raise InvalidCandidateTransition(f"no reconciler is configured for {transition}")
-        profile = self._profile(candidate.profile_id)
         receipt = self._invoke(
             self._publisher,
             "reconcile_publication",
@@ -609,6 +820,56 @@ class AutonomousUpdateController:
         )
         return self.get(candidate_id)
 
+    def recover_abandoned_effects(self, *, now: datetime | None = None) -> tuple[CandidateRecord, ...]:
+        recovered = self._store.recover_expired_effect_leases(
+            now=now, owner_is_dead=self._lease_owner_is_dead
+        )
+        results = []
+        for effect in recovered:
+            transition = effect.payload.get("transition")
+            candidate_id = effect.payload.get("candidate_id")
+            if not isinstance(transition, str) or not isinstance(candidate_id, str):
+                continue
+            try:
+                results.append(self.reconcile(candidate_id, transition))
+            except Exception as error:
+                self.recovery_errors.append(
+                    f"{candidate_id}:{transition}:{type(error).__name__}:{error}"
+                )
+        return tuple(results)
+
+    def _lease_owner_is_dead(self, owner: str) -> bool:
+        parts = owner.split(":", 2)
+        if len(parts) != 3 or parts[0] != "controller":
+            return False
+        try:
+            pid = int(parts[1])
+        except ValueError:
+            return False
+        return not self._process_alive(pid)
+
+    def _reconcile_not_applied(
+        self, candidate: CandidateRecord, effect_id: str, transition: str
+    ) -> CandidateRecord:
+        event_types = {
+            "stage": "candidate.stage_not_applied",
+            "modify": "candidate.modify_not_applied",
+            "verify": "candidate.verification_not_applied",
+            "commit": "candidate.commit_not_applied",
+            "health": "candidate.health_not_applied",
+            "activate": "candidate.activate_not_applied",
+            "rollback": "candidate.rollback_not_applied",
+        }
+        self._store.reconcile_effect_for_retry(
+            candidate.task_id,
+            effect_id,
+            TaskEventDraft(
+                event_type=event_types[transition],
+                payload={"reason": f"durable evidence proves {transition} was not applied"},
+            ),
+        )
+        return self.get(candidate.candidate_id)
+
     def _effect(self, candidate: CandidateRecord, transition: str, operation, success_event: str) -> CandidateRecord:
         effect_id = self._effect_id(candidate.candidate_id, transition)
         reservation = self._store.append_with_effect(
@@ -620,7 +881,7 @@ class AutonomousUpdateController:
                 operation=transition,
                 payload={"candidate_id": candidate.candidate_id, "transition": transition},
                 principal=candidate.principal_id,
-                project_root=self._profile(candidate.profile_id).repository_root,
+                project_root=self._bound_profile(candidate).repository_root,
                 effect_class="self_update",
                 approval_required=False,
                 retry_classification="reconcile_before_retry",
@@ -641,7 +902,7 @@ class AutonomousUpdateController:
         try:
             self._store.transition_effect(
                 candidate.task_id, effect_id, EffectState.leased,
-                expected_state=EffectState.pending, lease_owner=f"controller-{id(self)}",
+                expected_state=EffectState.pending, lease_owner=self._lease_owner,
                 lease_expires_at=datetime.now(UTC) + timedelta(minutes=5),
             )
             self._store.transition_effect(
@@ -679,17 +940,22 @@ class AutonomousUpdateController:
                     ),
                 )
                 raise AmbiguousEffect(str(error)) from error
+            rollback_evidence = getattr(error, "rollback_receipt", None)
             failure_event = {
                 "verify": "candidate.verification_failed",
                 "publish": "candidate.publication_failed",
                 "health": "candidate.health_failed",
             }.get(transition, f"candidate.{transition}.failed")
+            if transition == "activate" and rollback_evidence is not None:
+                failure_event = "candidate.activation_rolled_back"
             failure_payload: dict[str, Any] = {
                 "reason": str(error)[:500], "error_type": type(error).__name__,
             }
             evidence = getattr(error, "receipt", None)
             if evidence is not None:
                 failure_payload["receipt"] = self._json_receipt(evidence)
+            if rollback_evidence is not None:
+                failure_payload["rollback_receipt"] = self._json_receipt(rollback_evidence)
             self._store.fail_effect_with_event(
                 candidate.task_id,
                 effect_id,
@@ -712,6 +978,32 @@ class AutonomousUpdateController:
         except KeyError as error:
             raise KeyError(f"unknown update profile: {profile_id}") from error
 
+    def _close_worktree(self, candidate: CandidateRecord) -> None:
+        if candidate.worktree is None:
+            return
+        working = Path(candidate.worktree.working_root)
+        if not working.exists():
+            return
+        self._worktrees.close(candidate.worktree)
+
+    def _bound_profile(self, candidate: CandidateRecord) -> UpdateProfile:
+        snapshot = candidate.profile_snapshot
+        if canonical_digest(snapshot.model_dump(mode="json")) != candidate.profile_digest:
+            raise PermissionError("candidate update profile snapshot is corrupt")
+        current = self._profile(candidate.profile_id)
+        if canonical_digest(current.model_dump(mode="json")) != candidate.profile_digest:
+            raise PermissionError("candidate update profile changed after proposal")
+        if not snapshot.expected_remote_sha:
+            raise PermissionError("candidate update profile has no exact remote baseline SHA")
+        repository = Path(snapshot.repository_root).resolve(strict=True)
+        if str(repository) != str(Path(current.repository_root).resolve(strict=True)):
+            raise PermissionError("candidate repository root changed after proposal")
+        if candidate.scoped_context is not None:
+            context = candidate.scoped_context
+            if context.repository_root != str(repository) or context.authority != ("read", "write"):
+                raise PermissionError("candidate scoped authority no longer matches its profile")
+        return snapshot
+
     @staticmethod
     def _principal_id(candidate: CandidateRecord, principal) -> str:
         return str(getattr(principal, "user_id", None) or candidate.principal_id)
@@ -732,7 +1024,12 @@ class AutonomousUpdateController:
         pointer_store = getattr(self._launcher, "pointer_store", None)
         if pointer_store is not None:
             pointer = pointer_store.load()
-            active = None if pointer is None else pointer.model_dump(mode="json")
+            if pointer is None:
+                active = None
+            elif hasattr(pointer, "model_dump"):
+                active = pointer.model_dump(mode="json")
+            else:
+                active = dict(pointer)
         previous = None
         for candidate in reversed(self.candidates()):
             receipt = candidate.activation_receipt
@@ -841,8 +1138,29 @@ class AutonomousUpdateController:
                 "content_digest": getattr(lesson, "content_digest", None),
                 "outcome": outcome,
                 "reason": reason,
+                **({"content": content[:2000]} if outcome == "applied" else {}),
             })
         return evidence
+
+    @staticmethod
+    def _modification_objective(candidate: CandidateRecord) -> str:
+        constraints = tuple(
+            str(item.get("content", "")).strip()
+            for item in candidate.lesson_evidence
+            if item.get("outcome") == "applied" and str(item.get("content", "")).strip()
+        )
+        sections = [
+            "Modify only the isolated candidate worktree for this self-update request:",
+            candidate.prompt,
+            "The immutable update profile, repository scope, mandatory checks, version, migration "
+            "policy, and publication baseline remain authoritative and cannot be weakened.",
+        ]
+        if constraints:
+            sections.append(
+                "Verified advisory lessons to apply when consistent with those authorities:\n- "
+                + "\n- ".join(constraints)
+            )
+        return "\n\n".join(sections)
 
     @staticmethod
     def _lesson_conflicts_with_policy(content: str) -> bool:

@@ -35,7 +35,7 @@ class GitVerificationServiceTests(unittest.TestCase):
         profiles = _Profiles()
         runtime = _Runtime()
         identity = _VerifierIdentity()
-        service = GitVerificationService(runtime, profiles, identity)
+        service = GitVerificationService(runtime, profiles, identity, signing_key=b"v" * 32)
 
         receipt = asyncio.run(service.verify(
             candidate_id="candidate-1", base_sha="base-sha", tree_sha="tree-sha",
@@ -50,6 +50,12 @@ class GitVerificationServiceTests(unittest.TestCase):
         self.assertEqual(receipt.verifier_credential_id, "verifier-credential")
         self.assertTrue(service.validate(receipt))
 
+        restarted = GitVerificationService(
+            runtime, profiles, identity, signing_key=b"v" * 32
+        )
+        self.assertTrue(restarted.validate(receipt))
+        self.assertFalse(restarted.validate(receipt.model_copy(update={"tree_sha": "other-tree"})))
+
         profiles.digest = "hmac-sha256:profiles-v2"
         self.assertFalse(service.validate(receipt))
         profiles.digest = "hmac-sha256:profiles-v1"
@@ -61,7 +67,9 @@ class GitVerificationServiceTests(unittest.TestCase):
             async def run_profile(self, **kwargs):
                 return type("Result", (), {"exit_code": 1, "timed_out": False, "stdout": "", "stderr": "failed"})()
 
-        service = GitVerificationService(_FailingRuntime(), _Profiles(), _VerifierIdentity())
+        service = GitVerificationService(
+            _FailingRuntime(), _Profiles(), _VerifierIdentity(), signing_key=b"v" * 32
+        )
         with self.assertRaisesRegex(RuntimeError, "Verification failed"):
             asyncio.run(service.verify(
                 candidate_id="candidate-1", base_sha="base", tree_sha="tree",

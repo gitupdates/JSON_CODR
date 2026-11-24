@@ -482,8 +482,8 @@ class GitHubPublicationTests(unittest.TestCase):
     def _client(self, runner=subprocess.run):
         return GitHubCLI(executable_finder=shutil.which, runner=runner)
 
-    def test_publish_verified_pushes_exact_commit_without_force_and_duplicate_is_reconciled(self):
-        """Pushing HEAD, force options, or a second duplicate push must fail this test."""
+    def test_publish_verified_uses_exact_sha_lease_and_duplicate_is_reconciled(self):
+        """The push must use an exact expected-SHA lease, never a blind force."""
         with tempfile.TemporaryDirectory() as directory:
             project, remote, initial, candidate = self._repository(Path(directory))
             calls = []
@@ -502,11 +502,42 @@ class GitHubPublicationTests(unittest.TestCase):
             pushes = [call for call in calls if "push" in call]
             self.assertEqual(len(pushes), 1)
             self.assertIn(f"{candidate}:refs/heads/main", pushes[0])
-            self.assertFalse(any("--force" in argument for call in calls for argument in call))
+            self.assertIn(f"--force-with-lease=refs/heads/main:{initial}", pushes[0])
+            self.assertFalse(any(argument == "--force" for call in calls for argument in call))
             remote_sha = subprocess.run(
                 ["git", "rev-parse", "main"], cwd=remote, check=True, capture_output=True, text=True
             ).stdout.strip()
             self.assertEqual(remote_sha, candidate)
+
+    def test_expected_sha_lease_rejects_remote_race_between_check_and_push(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project, remote, initial, candidate = self._repository(root)
+            publisher = root / "publisher"
+            subprocess.run(["git", "clone", "-b", "main", str(remote), str(publisher)], check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Remote"], cwd=publisher, check=True)
+            subprocess.run(["git", "config", "user.email", "remote@example.invalid"], cwd=publisher, check=True)
+            raced = False
+
+            def runner(arguments, **kwargs):
+                nonlocal raced
+                if "push" in arguments and not raced:
+                    raced = True
+                    (publisher / "remote.txt").write_text("race\n", encoding="utf-8")
+                    subprocess.run(["git", "add", "remote.txt"], cwd=publisher, check=True)
+                    subprocess.run(["git", "commit", "-m", "remote race"], cwd=publisher, check=True, capture_output=True)
+                    subprocess.run(["git", "push", "origin", "HEAD:main"], cwd=publisher, check=True, capture_output=True)
+                return subprocess.run(arguments, **kwargs)
+
+            with self.assertRaises(GitHubBuildConflict):
+                self._client(runner).publish_verified(str(project), "main", candidate, initial)
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "show", "main:remote.txt"], cwd=remote, check=True,
+                    capture_output=True, text=True,
+                ).stdout,
+                "race\n",
+            )
 
     def test_remote_drift_and_divergence_are_rejected_before_push(self):
         """Ignoring the observed remote SHA or ancestry must fail this test."""

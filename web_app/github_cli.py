@@ -420,7 +420,17 @@ class GitHubCLI:
                         "verified commit does not descend from the expected remote commit; branches diverged"
                     )
             try:
-                self._git(root, "push", "origin", f"{commit}:refs/heads/{selected_branch}")
+                lease = (
+                    f"--force-with-lease=refs/heads/{selected_branch}:"
+                    f"{expected or ''}"
+                )
+                self._git(
+                    root,
+                    "push",
+                    lease,
+                    "origin",
+                    f"{commit}:refs/heads/{selected_branch}",
+                )
             except GitHubCLIError as error:
                 reconciled = self._remote_branch_sha(root, selected_branch)
                 if reconciled == commit:

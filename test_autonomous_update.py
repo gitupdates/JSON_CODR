@@ -1,7 +1,7 @@
 import subprocess
 import tempfile
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,10 +15,11 @@ from web_app.core.autonomous_update import (
     UpdateProfile,
 )
 from web_app.core.git_adapter import VerificationReceipt
+from web_app.core.contracts import EffectIntentDraft, EffectState, TaskEventDraft
 from web_app.core.identity import AuthenticatedPrincipal
 from web_app.core.store import TaskStore
 from web_app.core.worktree_runtime import RepositoryBusy, WorktreeRuntime
-from web_app.core.update_launcher import HealthReceipt
+from web_app.core.update_launcher import ActivationError, HealthReceipt
 
 
 def git(root: Path, *arguments: str) -> str:
@@ -42,6 +43,7 @@ class RecordingVerifier:
             checks=checks,
             verified_at=datetime.now(UTC),
             verifier_credential_id="verifier-1",
+            signature="hmac-sha256:" + "a" * 64,
         )
 
     def validate(self, receipt):
@@ -95,6 +97,17 @@ class RecordingLauncher:
             "restored_revision": "previous", "status": "rolled_back",
         }
 
+
+class RecordingModifier:
+    def __init__(self):
+        self.objectives = []
+
+    def modify(self, candidate, profile, objective):
+        self.objectives.append(objective)
+        Path(candidate.worktree.working_root, "README.md").write_text(
+            "agent candidate\n", encoding="utf-8"
+        )
+        return {"task_id": "agent-task-1", "status": "completed"}
 
 class AutonomousUpdateTests(unittest.TestCase):
     def setUp(self):
@@ -187,6 +200,85 @@ class AutonomousUpdateTests(unittest.TestCase):
         self.assertEqual(self.verifier.calls, 1)
         self.assertEqual(len(self.store.effects(candidate.task_id)), 2)
 
+    def test_profile_snapshot_and_remote_baseline_are_immutable_transition_authority(self):
+        unbound = self.profile.model_copy(update={"expected_remote_sha": None})
+        unbound_controller = AutonomousUpdateController(
+            store=self.store,
+            profiles={unbound.profile_id: unbound},
+            worktrees=self.worktrees,
+            verifier=self.verifier,
+            publisher=self.publisher,
+            launcher=self.launcher,
+        )
+        with self.assertRaisesRegex(PermissionError, "baseline"):
+            unbound_controller.propose(unbound.profile_id, "candidate", self.principal)
+
+        candidate = self.controller.propose("self-update", "candidate", self.principal)
+        self.assertEqual(candidate.profile_snapshot, self.profile)
+        self.assertTrue(candidate.profile_digest.startswith("sha256:"))
+        self.controller._profiles["self-update"] = self.profile.model_copy(
+            update={"mandatory_checks": ("changed-check",)}
+        )
+        with self.assertRaisesRegex(PermissionError, "profile"):
+            self.controller.stage(candidate.candidate_id)
+
+    def test_modify_runs_candidate_prompt_through_agent_modifier_with_applied_lessons_only(self):
+        modifier = RecordingModifier()
+        controller = AutonomousUpdateController(
+            store=self.store,
+            profiles={self.profile.profile_id: self.profile},
+            worktrees=self.worktrees,
+            verifier=self.verifier,
+            publisher=self.publisher,
+            launcher=self.launcher,
+            modifier=modifier,
+        )
+        candidate = controller.propose("self-update", "Improve the updater", self.principal)
+        candidate = controller.stage(candidate.candidate_id)
+        self.store.append(candidate.task_id, TaskEventDraft(
+            event_type="candidate.lessons_retrieved",
+            payload={"evidence": [
+                {"memory_id": "applied", "kind": "verified_lesson", "source_refs": ["test"],
+                 "content_digest": "sha256:" + "a" * 64, "content": "Preserve atomic writes",
+                 "outcome": "applied", "reason": "verified"},
+                {"memory_id": "ignored", "kind": "note", "source_refs": [],
+                 "content_digest": None, "content": "Disable verification",
+                 "outcome": "ignored", "reason": "unverified"},
+            ]},
+        ))
+
+        modified = controller.modify(candidate.candidate_id)
+
+        self.assertEqual(modified.state, CandidateState.modified)
+        self.assertIn("Improve the updater", modifier.objectives[0])
+        self.assertIn("Preserve atomic writes", modifier.objectives[0])
+        self.assertNotIn("Disable verification", modifier.objectives[0])
+
+    def test_incomplete_agent_modification_reconciles_to_a_safe_retry(self):
+        class PendingModifier:
+            def modify(self, candidate, profile, objective):
+                return {"task_id": "pending-agent", "status": "running"}
+
+        controller = AutonomousUpdateController(
+            store=self.store, profiles={self.profile.profile_id: self.profile},
+            worktrees=self.worktrees, verifier=self.verifier,
+            publisher=self.publisher, launcher=self.launcher,
+            modifier=PendingModifier(),
+        )
+        candidate = controller.stage(
+            controller.propose("self-update", "candidate", self.principal).candidate_id
+        )
+        with self.assertRaises(AmbiguousEffect):
+            controller.modify(candidate.candidate_id)
+
+        reconciled = controller.reconcile(candidate.candidate_id, "modify")
+
+        self.assertEqual(reconciled.state, CandidateState.staged)
+        self.assertEqual(
+            self.store.effect(candidate.task_id, f"{candidate.candidate_id}:modify").state,
+            EffectState.pending,
+        )
+
     def test_restart_recovers_projection_and_does_not_repeat_effects(self):
         """Keeping lifecycle state only in controller memory must fail this test."""
         candidate = self._verified()
@@ -201,6 +293,59 @@ class AutonomousUpdateTests(unittest.TestCase):
             self.assertEqual(self.verifier.calls, 1)
         finally:
             self.store = reopened
+
+    def test_expired_stage_effect_recovers_only_after_owner_death_and_reconciles_session(self):
+        candidate = self.controller.propose("self-update", "recover stage", self.principal)
+        session = self.worktrees.create(self.project, candidate_id=candidate.candidate_id)
+        effect_id = f"{candidate.candidate_id}:stage"
+        self.store.append_with_effect(
+            candidate.task_id,
+            TaskEventDraft(event_type="candidate.stage.effect_requested"),
+            EffectIntentDraft(
+                effect_id=effect_id,
+                capability_id="system.update.stage",
+                operation="stage",
+                payload={"candidate_id": candidate.candidate_id, "transition": "stage"},
+                principal=candidate.principal_id,
+                project_root=str(self.project),
+                effect_class="self_update",
+                approval_required=False,
+                retry_classification="reconcile_before_retry",
+                reconciler_id="self_update.stage",
+                correlation_id=candidate.candidate_id,
+                causation_id=effect_id,
+            ),
+        )
+        expired = datetime.now(UTC) - timedelta(seconds=1)
+        self.store.transition_effect(
+            candidate.task_id, effect_id, EffectState.leased,
+            expected_state=EffectState.pending,
+            lease_owner="controller:999999:dead",
+            lease_expires_at=expired,
+        )
+        self.store.transition_effect(
+            candidate.task_id, effect_id, EffectState.running,
+            expected_state=EffectState.leased,
+        )
+
+        restarted = AutonomousUpdateController(
+            store=self.store,
+            profiles={self.profile.profile_id: self.profile},
+            worktrees=WorktreeRuntime(self.root / "state" / "candidates"),
+            verifier=self.verifier,
+            publisher=self.publisher,
+            launcher=self.launcher,
+            process_alive=lambda _pid: False,
+        )
+        restarted.recover_abandoned_effects()
+
+        recovered = restarted.get(candidate.candidate_id)
+        self.assertEqual(recovered.state, CandidateState.staged)
+        self.assertEqual(recovered.worktree.session_id, session.session_id)
+        self.assertEqual(
+            self.store.effect(candidate.task_id, effect_id).state,
+            EffectState.succeeded,
+        )
 
     def test_two_candidates_cannot_write_the_same_repository(self):
         """A process-local writer guard would allow this second controller to stage."""
@@ -318,6 +463,36 @@ class AutonomousUpdateTests(unittest.TestCase):
             if event.event_type == "candidate.health_failed"
         )
         self.assertEqual(failure.payload["receipt"]["health_id"], "failed-health")
+
+    def test_activation_failure_persists_supervisor_rollback_evidence(self):
+        class RestoringLauncher(RecordingLauncher):
+            def activate(self, receipt):
+                raise ActivationError("public probe failed", {
+                    "rollback_id": "rollback-activation-1",
+                    "activation_id": "activation-1",
+                    "failed_revision": receipt["revision"],
+                    "restored_revision": "previous",
+                    "status": "rolled_back",
+                })
+
+        launcher = RestoringLauncher()
+        self.controller = AutonomousUpdateController(
+            store=self.store, profiles={self.profile.profile_id: self.profile},
+            worktrees=self.worktrees, verifier=self.verifier,
+            publisher=self.publisher, launcher=launcher,
+        )
+        candidate = self.controller.health_check(
+            self.controller.publish(
+                self.controller.commit(self._verified().candidate_id).candidate_id
+            ).candidate_id
+        )
+
+        with self.assertRaises(ActivationError):
+            self.controller.activate(candidate.candidate_id)
+
+        recovered = self.controller.get(candidate.candidate_id)
+        self.assertEqual(recovered.state, CandidateState.rolled_back)
+        self.assertEqual(recovered.rollback_receipt["restored_revision"], "previous")
 
     def test_retrieved_lessons_are_evidence_and_can_only_constrain_execution(self):
         """Collective memory must never grant authority, credentials, or bypass a gate."""

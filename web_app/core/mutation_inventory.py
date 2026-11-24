@@ -210,23 +210,35 @@ def _routes(router, prefix: str = ""):
         path = prefix + str(getattr(route, "path", ""))
         methods = tuple(sorted(getattr(route, "methods", ()) or ()))
         if type(route).__name__ == "APIWebSocketRoute":
-            yield "WEBSOCKET", path
+            yield route, "WEBSOCKET", path
         for method in methods:
             if method in {"POST", "PUT", "PATCH", "DELETE"}:
-                yield method, path
+                yield route, method, path
 
 
-def inventory_mutation_routes(application) -> tuple[MutationRouteRecord, ...]:
+def bind_mutation_route_metadata(application) -> None:
+    """Attach the same policy records consumed by runtime enforcement and inventory."""
     assignments = _known_assignments()
-    records = []
     missing = []
-    for method, path in sorted(set(_routes(application))):
+    for route, method, path in _routes(application):
         assignment = assignments.get((method, path))
         if assignment is None:
             missing.append(f"{method} {path}")
-            records.append(MutationRouteRecord(method, path, "interactive_mutation", None))
-        else:
-            records.append(MutationRouteRecord(method, path, assignment[0], assignment[1]))
+            continue
+        policies = dict(getattr(route, "mutation_policies", {}))
+        policies[method] = MutationRouteRecord(method, path, assignment[0], assignment[1])
+        route.mutation_policies = policies
     if missing:
-        raise ValueError("unassigned mutation route(s): " + ", ".join(missing))
-    return tuple(records)
+        raise ValueError("unassigned mutation route(s): " + ", ".join(sorted(missing)))
+
+
+def inventory_mutation_routes(application) -> tuple[MutationRouteRecord, ...]:
+    bind_mutation_route_metadata(application)
+    records = []
+    seen = set()
+    for route, method, _path in _routes(application):
+        record = getattr(route, "mutation_policies", {}).get(method)
+        if record is not None and (record.method, record.path) not in seen:
+            records.append(record)
+            seen.add((record.method, record.path))
+    return tuple(sorted(records, key=lambda item: (item.method, item.path)))

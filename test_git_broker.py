@@ -192,6 +192,7 @@ class GitBrokerExecutionTests(unittest.TestCase):
             checks=("unit-tests",),
             verified_at=datetime.now(UTC),
             verifier_credential_id="verifier-credential",
+            signature="hmac-sha256:" + "a" * 64,
         )
 
     def test_execute_applies_commits_rebases_and_pushes_with_attribution(self):

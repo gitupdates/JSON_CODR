@@ -159,6 +159,16 @@ try {
   Wait-Process -Id $WebProcess.Id
 } finally {
   if ($WebProcess -and -not $WebProcess.HasExited) {
+    if (-not $Direct) {
+      try {
+        & $Python @WebArguments --request-shutdown *> $null
+        Wait-Process -Id $WebProcess.Id -Timeout 10 -ErrorAction SilentlyContinue
+      } catch {
+        # The bounded taskkill fallback below still owns final cleanup.
+      }
+    }
+  }
+  if ($WebProcess -and -not $WebProcess.HasExited) {
     & taskkill.exe /PID $WebProcess.Id /T /F *> $null
   }
   if ($OwnedOllama -and -not $OwnedOllama.HasExited) {

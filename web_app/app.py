@@ -70,6 +70,7 @@ from web_app.core.context_service import ContextService
 from web_app.core.connection_recovery import ConnectionRecoveryService
 from web_app.core.memory import MemoryStore
 from web_app.core.autonomous_update import (
+    AgentRuntimeModifier,
     AutonomousUpdateController,
     InvalidCandidateTransition,
     RepositoryScopeRequired,
@@ -129,7 +130,7 @@ class UpdateReasonRequest(BaseModel):
 
 class UpdateReconcileRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    transition: Literal["publish"]
+    transition: Literal["stage", "modify", "verify", "commit", "publish", "health", "activate", "rollback"]
 
 
 class RepositoryScopeApprovalRequest(BaseModel):
@@ -236,9 +237,6 @@ def create_app(
     autonomous_updates: AutonomousUpdateController | None = None,
 ) -> FastAPI:
     application = FastAPI(title="JSON_CODR", version=APP_VERSION)
-    application.include_router(create_mcp_http_router(
-        lambda request: McpServer(BorgClient(str(request.base_url).rstrip("/")))
-    ))
     workspace = workspace or WorkspaceService(default_data_root())
     identity = IdentityService(workspace.data_root)
     application.state.identity = identity
@@ -281,6 +279,27 @@ def create_app(
         principal = mutation_authorizer.principal(request, scope)
         mutation_authorizer.csrf(request)
         return principal
+    application.include_router(create_mcp_http_router(
+        lambda request: McpServer(BorgClient(str(request.base_url).rstrip("/"))),
+        authorize=lambda request: mutation_principal(request, "agent.launch"),
+    ))
+
+    @application.middleware("http")
+    async def enforce_mutation_route_metadata(request: Request, call_next):
+        method = request.method.upper()
+        if method in {"POST", "PUT", "PATCH", "DELETE"}:
+            for route in application.router.routes:
+                match, _child_scope = route.matches(request.scope)
+                if getattr(match, "name", "") != "FULL":
+                    continue
+                policy = getattr(route, "mutation_policies", {}).get(method)
+                if policy is not None:
+                    if policy.path == "/api/identity/login":
+                        require_csrf(request)
+                    elif policy.scope is not None:
+                        mutation_principal(request, policy.scope)
+                break
+        return await call_next(request)
     component_manager = None
     component_root = workspace.data_root / "core" / "component-registry"
 
@@ -506,7 +525,10 @@ def create_app(
             verifier_identity.ensure_service_account()
             verification_runtime = CommandRuntime(verification_profiles)
             core_verification_service = GitVerificationService(
-                verification_runtime, verification_profiles, verifier_identity
+                verification_runtime,
+                verification_profiles,
+                verifier_identity,
+                signing_key_path=workspace.data_root / "security" / "verification-receipts.key.dpapi",
             )
             core_git_adapter = GitExecutionAdapter(
                 git_broker,
@@ -713,6 +735,7 @@ def create_app(
         )
         owned_update_store = _LazyUpdateTaskStore(update_root / "tasks.sqlite")
         owned_update_memory = _LazyUpdateMemory(workspace.data_root / "core" / "memory.sqlite")
+        update_launcher = UpdateLauncher(launcher_root)
         autonomous_updates = AutonomousUpdateController(
             store=owned_update_store,
             profiles={
@@ -720,27 +743,38 @@ def create_app(
                     profile_id="self-update",
                     repository_root=str(profile_root),
                     branch=os.environ.get("JSON_CODR_UPDATE_BRANCH", "main"),
+                    expected_remote_sha=os.environ.get("JSON_CODR_UPDATE_BASELINE_SHA"),
                     mandatory_checks=("python-compile", "git-diff-check"),
                     allowed_repository_roots=(str(profile_root),) if configured_update_root else (),
                     automatic_mode_enabled=False,
                     expected_version=APP_VERSION,
                     launch_argv=(
-                        sys.executable, "-m", "uvicorn", "web_app.app:app",
+                        "python3", "-m", "uvicorn", "web_app.app:app",
                         "--host", "{host}", "--port", "{port}",
                     ),
+                    container_image=os.environ.get("JSON_CODR_UPDATE_CONTAINER_IMAGE"),
+                    container_port=int(os.environ.get("JSON_CODR_UPDATE_CONTAINER_PORT", "8000")),
                 )
             },
             worktrees=WorktreeRuntime(update_root / "candidates"),
             verifier=_LazyUpdateVerifier(get_update_verifier),
             publisher=github_cli,
-            launcher=UpdateLauncher(launcher_root),
+            launcher=update_launcher,
+            modifier=AgentRuntimeModifier(
+                core_runtime=get_core_runtime,
+                project_registry=lambda: core_projects,
+            ),
             memory=owned_update_memory,
         )
 
         def close_autonomous_updates() -> None:
+            update_launcher.close()
             owned_update_memory.close()
             owned_update_store.close()
 
+        application.router.add_event_handler(
+            "startup", autonomous_updates.recover_abandoned_effects
+        )
         application.router.add_event_handler("shutdown", close_autonomous_updates)
         application.state.close_autonomous_updates = close_autonomous_updates
     application.state.autonomous_updates = autonomous_updates
@@ -752,12 +786,16 @@ def create_app(
         return FileResponse(web_root / "index.html")
 
     @application.get("/api/health")
-    async def health():
+    async def health(http_request: Request):
         result = await service.health()
         return {
             "status": "ready" if result["ollama"] else "degraded",
             "app_version": APP_VERSION,
             "revision": os.environ.get("JSON_CODR_REVISION"),
+            "health_nonce": http_request.headers.get("x-json-codr-health-nonce"),
+            "instance_id": os.environ.get("JSON_CODR_INSTANCE_ID"),
+            "started_at": os.environ.get("JSON_CODR_STARTED_AT"),
+            "manifest_digest": os.environ.get("JSON_CODR_ARTIFACT_MANIFEST"),
             **result,
         }
 
@@ -774,6 +812,9 @@ def create_app(
         values = candidate.model_dump(mode="json")
         values.pop("credential_id", None)
         values.pop("scopes", None)
+        values["pending_reconciliations"] = list(
+            autonomous_updates.pending_reconciliations(candidate.candidate_id)
+        )
         return values
 
     def update_status_view(principal) -> dict:
@@ -859,7 +900,7 @@ def create_app(
     @application.post("/api/updates/candidates/{candidate_id}/modified")
     def mark_update_modified(candidate_id: str, http_request: Request):
         mutation_principal(http_request, "system.update")
-        return run_update(lambda: autonomous_updates.mark_modified(candidate_id))
+        return run_update(lambda: autonomous_updates.modify(candidate_id))
 
     @application.post("/api/updates/candidates/{candidate_id}/verify")
     def verify_update(candidate_id: str, http_request: Request):
@@ -885,7 +926,11 @@ def create_app(
     def reconcile_update(
         candidate_id: str, request: UpdateReconcileRequest, http_request: Request
     ):
-        mutation_principal(http_request, "system.update")
+        required_scope = {
+            "activate": "system.activate",
+            "rollback": "system.rollback",
+        }.get(request.transition, "system.update")
+        mutation_principal(http_request, required_scope)
         return run_update(
             lambda: autonomous_updates.reconcile(candidate_id, request.transition)
         )

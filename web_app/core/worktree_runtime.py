@@ -69,6 +69,28 @@ def _default_process_alive(pid: int) -> bool:
     return True
 
 
+def _sync_directory(path: Path) -> None:
+    if os.name != "nt":
+        descriptor = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        return
+    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    kernel32.CreateFileW.restype = ctypes.c_void_p
+    handle = kernel32.CreateFileW(
+        str(path), 0x40000000, 0x00000007, None, 3, 0x02000000, None
+    )
+    if handle in (None, ctypes.c_void_p(-1).value):
+        raise ctypes.WinError(kernel32.GetLastError())
+    try:
+        if not kernel32.FlushFileBuffers(handle):
+            raise ctypes.WinError(kernel32.GetLastError())
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 class WorktreeRuntime:
     """Owns candidate worktrees and an OS-visible, repository-scoped writer lease."""
 
@@ -83,8 +105,10 @@ class WorktreeRuntime:
         self.root = Path(state_root).resolve()
         self.worktree_root = self.root / "worktrees"
         self.lock_root = self.root / "locks"
+        self.sessions_root = self.root / "sessions"
         self.worktree_root.mkdir(parents=True, exist_ok=True)
         self.lock_root.mkdir(parents=True, exist_ok=True)
+        self.sessions_root.mkdir(parents=True, exist_ok=True)
         self._lock_ttl = lock_ttl
         self._clock = clock or (lambda: datetime.now(UTC))
         self._process_alive = process_alive or _default_process_alive
@@ -136,6 +160,7 @@ class WorktreeRuntime:
                 lock_token=owner.token,
             )
             self._held[session_id] = owner
+            self._write_session(session)
             return session
         except Exception:
             self._release(lock_path, owner.token)
@@ -204,19 +229,52 @@ class WorktreeRuntime:
             Path(index_name).unlink(missing_ok=True)
 
     def commit(self, session: WorktreeSession, message: str) -> str:
+        return self.commit_verified(session, message, self.tree_sha(session))
+
+    def commit_verified(
+        self, session: WorktreeSession, message: str, expected_tree_sha: str
+    ) -> str:
         self.resume(session)
         if session.isolation_level != "git_worktree" or session.candidate_id.startswith("legacy-"):
             raise PermissionError("only an isolated candidate Git worktree can be committed")
         working = Path(session.working_root)
         self._assert_no_linked_paths(working)
-        self._git(working, "add", "--all")
-        if not self._git(working, "diff", "--cached", "--name-only"):
-            raise ValueError("candidate has no changes to commit")
-        self._git(working, "commit", "-m", message.strip())
-        commit = self._git(working, "rev-parse", "HEAD")
-        if self._git(working, "status", "--porcelain", "--untracked-files=all"):
-            raise RuntimeError("candidate worktree is not clean after commit")
-        return commit
+        with self._metadata_guard(Path(session.lock_path)):
+            owner = self._read_owner(Path(session.lock_path))
+            if owner.token != session.lock_token or owner.candidate_id != session.candidate_id:
+                raise RepositoryBusy(owner)
+            self._git(working, "add", "--all")
+            staged_tree = self._git(working, "write-tree")
+            if staged_tree != expected_tree_sha:
+                raise PermissionError("staged commit tree does not equal the verified receipt tree")
+            if not self._git(working, "diff", "--cached", "--name-only"):
+                raise ValueError("candidate has no changes to commit")
+            self._git(working, "commit", "-m", message.strip())
+            commit = self._git(working, "rev-parse", "HEAD")
+            committed_tree = self._git(working, "rev-parse", f"{commit}^{{tree}}")
+            if committed_tree != expected_tree_sha:
+                raise RuntimeError("created commit tree does not equal the verified receipt tree")
+            if self._git(working, "status", "--porcelain", "--untracked-files=all"):
+                raise RuntimeError("candidate worktree is not clean after commit")
+            return commit
+
+    def reconcile_commit(
+        self, session: WorktreeSession, expected_tree_sha: str
+    ) -> str | None:
+        self.resume(session)
+        working = Path(session.working_root)
+        head = self._git(working, "rev-parse", "HEAD")
+        head_tree = self._git(working, "rev-parse", f"{head}^{{tree}}")
+        if head != session.base_sha:
+            if head_tree != expected_tree_sha:
+                raise PermissionError("candidate commit exists with an unverified tree")
+            if self._git(working, "status", "--porcelain", "--untracked-files=all"):
+                raise PermissionError("candidate commit worktree is not clean")
+            return head
+        current_tree = self.tree_sha(session)
+        if current_tree != expected_tree_sha:
+            raise PermissionError("candidate tree drifted while reconciling commit")
+        return None
 
     def close(self, session: WorktreeSession) -> None:
         working = Path(session.working_root)
@@ -229,6 +287,37 @@ class WorktreeRuntime:
             shutil.rmtree(working, ignore_errors=True)
         owner = self._held.pop(session.session_id, None)
         self._release(Path(session.lock_path), session.lock_token if owner is None else owner.token)
+        session_path = self.sessions_root / f"{session.session_id}.json"
+        if session_path.exists():
+            session_path.unlink()
+            _sync_directory(self.sessions_root)
+
+    def find_candidate(self, candidate_id: str) -> WorktreeSession | None:
+        for path in sorted(self.sessions_root.glob("*.json")):
+            try:
+                session = WorktreeSession.model_validate_json(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if session.candidate_id == candidate_id and Path(session.working_root).is_dir():
+                return session
+        return None
+
+    def _write_session(self, session: WorktreeSession) -> None:
+        path = self.sessions_root / f"{session.session_id}.json"
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(session.model_dump_json())
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+            _sync_directory(path.parent)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
 
     @staticmethod
     def fingerprint(root: Path) -> str:
@@ -246,7 +335,7 @@ class WorktreeRuntime:
         return f"json-codr/candidate-{safe[:80]}"
 
     def _acquire(self, source: Path, candidate_id: str) -> tuple[RepositoryLockOwner, Path]:
-        canonical = str(source.resolve()).casefold()
+        canonical = self._repository_identity(source)
         key = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         path = self.lock_root / f"{key}.lock"
         now = self._clock()
@@ -268,6 +357,16 @@ class WorktreeRuntime:
             self._write_owner(path, owner, exclusive=True)
         return owner, path
 
+    @classmethod
+    def _repository_identity(cls, source: Path) -> str:
+        git_marker = source / ".git"
+        if git_marker.exists():
+            common = Path(cls._git(source, "rev-parse", "--git-common-dir"))
+            if not common.is_absolute():
+                common = source / common
+            return "git-common-dir:" + os.path.normcase(str(common.resolve())).casefold()
+        return "directory:" + os.path.normcase(str(source.resolve())).casefold()
+
     @staticmethod
     def _read_owner(path: Path) -> RepositoryLockOwner:
         try:
@@ -285,6 +384,7 @@ class WorktreeRuntime:
                 return
             if owner.token == token:
                 path.unlink(missing_ok=True)
+                _sync_directory(path.parent)
 
     @staticmethod
     def _write_owner(
@@ -305,6 +405,7 @@ class WorktreeRuntime:
                 os.fsync(stream.fileno())
             if temporary is not None:
                 os.replace(temporary, path)
+            _sync_directory(path.parent)
         except Exception:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)

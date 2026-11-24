@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
 from web_app.core.adapters import AdapterEvent, CapabilityCall, ExecutionContext
+from web_app.core.auth import load_or_create_protected_key
+from web_app.core.canonical import canonical_json
 from web_app.core.contracts import FrozenContract, TaskId
 from web_app.models import BrokerActionRequest
 
@@ -34,20 +38,44 @@ class VerificationReceipt(FrozenContract):
     checks: tuple[str, ...]
     verified_at: datetime
     verifier_credential_id: str
+    signature: str
 
 
 class GitVerificationService:
     """Issues server-trusted final-tree receipts from activated verification profiles."""
 
-    def __init__(self, command_runtime, profiles, verifier_identity) -> None:
+    def __init__(
+        self,
+        command_runtime,
+        profiles,
+        verifier_identity,
+        *,
+        signing_key: bytes | None = None,
+        signing_key_path: str | Path | None = None,
+    ) -> None:
         self._runtime = command_runtime
         self._profiles = profiles
         self._verifier_identity = verifier_identity
-        self._issued: dict[str, VerificationReceipt] = {}
+        if signing_key is not None and signing_key_path is not None:
+            raise ValueError("provide either a verification signing key or key path")
+        if signing_key is None:
+            if signing_key_path is None:
+                raise ValueError("verification receipt signing key is required")
+            signing_key = load_or_create_protected_key(Path(signing_key_path))
+        if len(signing_key) < 32:
+            raise ValueError("verification receipt signing key must contain at least 32 bytes")
+        self._signing_key = bytes(signing_key)
 
     @staticmethod
-    def _key(receipt: VerificationReceipt) -> str:
-        return receipt.model_dump_json()
+    def _material(receipt: VerificationReceipt) -> dict:
+        return receipt.model_dump(mode="json", exclude={"signature"})
+
+    def _signature(self, receipt: VerificationReceipt) -> str:
+        return "hmac-sha256:" + hmac.new(
+            self._signing_key,
+            canonical_json(self._material(receipt)),
+            hashlib.sha256,
+        ).hexdigest()
 
     async def verify(
         self,
@@ -74,7 +102,7 @@ class GitVerificationService:
                 raise RuntimeError(f"Verification failed: {detail}")
         if self._profiles.profile_digest() != profile_digest:
             raise RuntimeError("verification profile digest changed during verification")
-        receipt = VerificationReceipt(
+        unsigned = VerificationReceipt(
             candidate_id=candidate_id,
             base_sha=base_sha,
             tree_sha=tree_sha,
@@ -82,12 +110,12 @@ class GitVerificationService:
             checks=checks,
             verified_at=datetime.now(timezone.utc),
             verifier_credential_id=credential_id,
+            signature="hmac-sha256:" + "0" * 64,
         )
-        self._issued[self._key(receipt)] = receipt
-        return receipt
+        return unsigned.model_copy(update={"signature": self._signature(unsigned)})
 
     def validate(self, receipt: VerificationReceipt) -> bool:
-        if self._issued.get(self._key(receipt)) != receipt:
+        if not hmac.compare_digest(receipt.signature, self._signature(receipt)):
             return False
         if self._profiles.profile_digest() != receipt.profile_digest:
             return False

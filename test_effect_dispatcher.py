@@ -108,10 +108,31 @@ class EffectDispatcherTests(unittest.IsolatedAsyncioTestCase):
         self.store.close()
         self.store = TaskStore(self.database)
 
-        recovered = self.store.recover_expired_effect_leases(now=start + timedelta(seconds=31))
+        recovered = self.store.recover_expired_effect_leases(
+            now=start + timedelta(seconds=31),
+            owner_is_dead=lambda owner: owner == "dispatcher-1",
+        )
 
         self.assertEqual([item.effect_id for item in recovered], ["effect-task-1"])
         self.assertEqual(recovered[0].state, EffectState.unknown_requires_reconciliation)
+
+    async def test_expired_lease_is_not_recovered_until_owner_death_is_verified(self):
+        self.reserve("task-1")
+        start = datetime(2026, 11, 17, tzinfo=UTC)
+        self.store.lease_pending_effects(
+            owner="dispatcher-1", limit=1,
+            lease_duration=timedelta(seconds=30), now=start,
+        )
+
+        recovered = self.store.recover_expired_effect_leases(
+            now=start + timedelta(seconds=31), owner_is_dead=lambda _owner: False,
+        )
+
+        self.assertEqual(recovered, ())
+        self.assertEqual(
+            self.store.effect("task-1", "effect-task-1").state,
+            EffectState.leased,
+        )
 
     async def test_missing_handler_fails_before_external_execution(self):
         self.reserve("task-1")

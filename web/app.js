@@ -2957,7 +2957,7 @@ function renderUpdateCandidate(candidate, update) {
   const lifecycle = {
     proposed: ["Stage", "stage"],
     scope_approved: ["Stage", "stage"],
-    staged: ["Record modifications", "modified"],
+    staged: ["Run agent modification", "modified"],
     modified: ["Verify", "verify"],
     verified: ["Commit", "commit"],
     committed: ["Publish", "publish"],
@@ -2986,6 +2986,14 @@ function renderUpdateCandidate(candidate, update) {
   if (candidate.state === "activated") {
     actions.append(updateActionButton("Rollback", update.permissions.rollback, () => (
       updateMutation(`/api/updates/candidates/${encodeURIComponent(candidate.candidate_id)}/rollback`)
+    )));
+  }
+  for (const transition of candidate.pending_reconciliations || []) {
+    const permission = transition === "activate"
+      ? update.permissions.activate
+      : transition === "rollback" ? update.permissions.rollback : update.permissions.propose;
+    actions.append(updateActionButton(`Reconcile ${transition}`, permission, () => (
+      updateMutation(`/api/updates/candidates/${encodeURIComponent(candidate.candidate_id)}/reconcile`, { transition })
     )));
   }
   if (!["activated", "rolled_back", "quarantined"].includes(candidate.state)) {

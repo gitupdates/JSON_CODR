@@ -11,6 +11,7 @@ from web_app.integrations.mcp_server import McpServer
 
 
 ServerFactory = Callable[[Request], McpServer]
+RequestAuthorizer = Callable[[Request], object]
 
 
 def is_loopback_host(host: str | None) -> bool:
@@ -22,11 +23,18 @@ def is_loopback_host(host: str | None) -> bool:
         return host.casefold() == "localhost"
 
 
-def create_mcp_http_router(server_factory: ServerFactory, *, loopback_only: bool = True) -> APIRouter:
+def create_mcp_http_router(
+    server_factory: ServerFactory,
+    *,
+    loopback_only: bool = True,
+    authorize: RequestAuthorizer | None = None,
+) -> APIRouter:
     router = APIRouter()
 
     @router.post("/mcp")
     async def handle_mcp(request: Request) -> Response:
+        if authorize is not None:
+            authorize(request)
         if loopback_only and not is_loopback_host(request.client.host if request.client else None):
             return Response(status_code=403)
         if request.headers.get("mcp-session-id"):

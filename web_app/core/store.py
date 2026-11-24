@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -588,7 +589,12 @@ class TaskStore:
                 for row in rows
             )
 
-    def recover_expired_effect_leases(self, *, now: datetime | None = None) -> tuple[EffectIntent, ...]:
+    def recover_expired_effect_leases(
+        self,
+        *,
+        now: datetime | None = None,
+        owner_is_dead: Callable[[str], bool] | None = None,
+    ) -> tuple[EffectIntent, ...]:
         observed_at = now or datetime.now(UTC)
         with self._transaction():
             rows = self._connection.execute(
@@ -601,6 +607,14 @@ class TaskStore:
             for row in rows:
                 intent = EffectIntent.model_validate_json(row["effect_json"])
                 if intent.lease_expires_at is None or intent.lease_expires_at > observed_at:
+                    continue
+                if intent.lease_owner is None or owner_is_dead is None:
+                    continue
+                try:
+                    verified_dead = bool(owner_is_dead(intent.lease_owner))
+                except Exception:
+                    verified_dead = False
+                if not verified_dead:
                     continue
                 recovered.append(self._transition_effect_unlocked(
                     row["task_id"],
