@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sqlite3
-from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -41,20 +40,15 @@ class ModelConformanceStore:
     def __init__(self, database: str | Path) -> None:
         path = Path(database)
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._database = path
-        with closing(self._connect()) as connection:
-            connection.execute(
-                "CREATE TABLE IF NOT EXISTS model_conformance (model TEXT PRIMARY KEY, classification TEXT NOT NULL, evidence_digest TEXT NOT NULL, evidence_json TEXT NOT NULL, verified_at TEXT NOT NULL)"
-            )
+        self._connection = sqlite3.connect(path, check_same_thread=False)
+        self._connection.row_factory = sqlite3.Row
+        self._connection.execute("PRAGMA journal_mode = WAL")
+        self._connection.execute(
+            "CREATE TABLE IF NOT EXISTS model_conformance (model TEXT PRIMARY KEY, classification TEXT NOT NULL, evidence_digest TEXT NOT NULL, evidence_json TEXT NOT NULL, verified_at TEXT NOT NULL)"
+        )
 
     def close(self) -> None:
-        return None
-
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self._database)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA journal_mode = DELETE")
-        return connection
+        self._connection.close()
 
     def record(self, evidence: ConformanceEvidence, *, classification: Classification) -> ModelConformanceRecord:
         if classification != "chat_only" and not evidence.passed:
@@ -64,8 +58,8 @@ class ModelConformanceStore:
             evidence_digest=evidence.evidence_digest, evidence=evidence,
             verified_at=datetime.now(UTC),
         )
-        with closing(self._connect()) as connection, connection:
-            connection.execute(
+        with self._connection:
+            self._connection.execute(
                 "INSERT OR REPLACE INTO model_conformance VALUES (?, ?, ?, ?, ?)",
                 (record.model, record.classification, record.evidence_digest,
                  evidence.model_dump_json(), record.verified_at.isoformat()),
@@ -73,8 +67,7 @@ class ModelConformanceStore:
         return record
 
     def get(self, model: str) -> ModelConformanceRecord | None:
-        with closing(self._connect()) as connection:
-            row = connection.execute("SELECT * FROM model_conformance WHERE model = ?", (model,)).fetchone()
+        row = self._connection.execute("SELECT * FROM model_conformance WHERE model = ?", (model,)).fetchone()
         if row is None:
             return None
         evidence = ConformanceEvidence.model_validate_json(row["evidence_json"])

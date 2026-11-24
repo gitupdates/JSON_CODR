@@ -8,6 +8,25 @@ from web_app.designer.contracts import DesignDocument, DesignNode, DesignPage, L
 
 TEMPLATE_IDS = ("blank", "landing-page", "dashboard", "form")
 
+UNIFIED_VISUAL_POLICY = {
+    "planning_order": [
+        "canonical_page",
+        "shared_geometry",
+        "spacing_scale",
+        "typography",
+        "color_and_state",
+        "responsive_flow",
+        "accessibility",
+    ],
+    "rules": [
+        "Start from an existing canonical page and shared shell before creating page-specific structure.",
+        "Use shared spacing and sizing values for shells, sections, panels, fields, and controls.",
+        "Inherit typography, colors, borders, focus states, and themes from design-system values.",
+        "Verify alignment and visual rhythm at desktop, narrow, and mobile widths.",
+        "Treat exceptions as explicit documented variants, not one-off approximations.",
+    ],
+}
+
 NOC_LIGHT_TOKENS = {
     "color_background": "#f6f8fa",
     "color_surface": "#ffffff",
@@ -19,6 +38,12 @@ NOC_LIGHT_TOKENS = {
     "font_mono": "ui-monospace",
     "radius": 8,
     "spacing": 8,
+    "spacing_scale": [4, 8, 12, 16, 18, 22],
+    "content_gutter": 16,
+    "section_gap": 18,
+    "panel_inset": 22,
+    "field_gap": 12,
+    "control_height": 44,
     "density": "compact",
 }
 
@@ -96,5 +121,9 @@ def create_template(template_id: str, name: str) -> DesignDocument:
         pages=(DesignPage(page_id="home", slug="home", root_node_id="root", title=name),),
         nodes=nodes,
         tokens=NOC_LIGHT_TOKENS,
-        metadata={"template_id": template_id, "theme": "noc-light"},
+        metadata={
+            "template_id": template_id,
+            "theme": "noc-light",
+            "visual_policy": UNIFIED_VISUAL_POLICY,
+        },
     )

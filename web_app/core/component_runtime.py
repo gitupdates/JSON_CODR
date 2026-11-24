@@ -95,24 +95,7 @@ class ComponentRuntimeInstaller:
             ]
         else:
             resolution = None
-            wheelhouse = staging / "wheelhouse"
-            wheelhouse.mkdir()
-            built = subprocess.run(
-                [
-                    sys.executable, "-m", "pip", "wheel", "--disable-pip-version-check",
-                    "--no-deps", "--no-build-isolation", "--wheel-dir", str(wheelhouse), str(source),
-                ],
-                capture_output=True, text=True, timeout=300,
-            )
-            if built.returncode:
-                raise RuntimeError((built.stderr or built.stdout).strip())
-            wheels = tuple(wheelhouse.glob("*.whl"))
-            if len(wheels) != 1:
-                raise RuntimeError("component build did not produce exactly one wheel")
-            command = [
-                str(python), "-m", "pip", "install", "--disable-pip-version-check",
-                "--no-index", "--no-deps", str(wheels[0]),
-            ]
+            command = [str(python), "-m", "pip", "install", "--disable-pip-version-check", "--no-deps", str(source)]
         completed = subprocess.run(command, capture_output=True, text=True, timeout=300)
         if completed.returncode:
             raise RuntimeError((completed.stderr or completed.stdout).strip())

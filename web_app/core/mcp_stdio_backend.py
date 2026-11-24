@@ -100,13 +100,17 @@ def build_mcp_adapters(
     for config in configs:
         if config.name == "rea" and rea_provider_root is not None and (Path(rea_provider_root) / "state.sqlite").is_file():
             backend = LeasedReaBackend(Path(rea_provider_root), config)
-            adapters["mcp.rea"] = McpAdapter(backend, allowed_tools=config.allowed_tools or frozenset({"*"}))
+            adapter = McpAdapter(backend, allowed_tools=config.allowed_tools or frozenset({"*"}))
+            adapters["mcp.rea.discover"] = adapter
+            adapters["mcp.rea.invoke"] = adapter
             backends.append(backend)
             continue
         if config.name == "rea" and rea_provider_root is not None:
             config = _active_rea_config(config, Path(rea_provider_root))
         backend = StdioMcpBackend(config)
-        adapters[f"mcp.{config.name}"] = McpAdapter(backend, allowed_tools=config.allowed_tools)
+        adapter = McpAdapter(backend, allowed_tools=config.allowed_tools)
+        adapters[f"mcp.{config.name}.discover"] = adapter
+        adapters[f"mcp.{config.name}.invoke"] = adapter
         backends.append(backend)
     return adapters, tuple(backends)
 
@@ -119,11 +123,12 @@ def _active_rea_config(fallback: McpServerConfig, provider_root: Path) -> McpSer
         active = json.loads(active_path.read_text(encoding="utf-8"))
         version = str(active["version"])
         versions_root = (provider_root / "versions").resolve()
-        script = provider_root / "versions" / version / "installation" / "node_modules" / "rea-agents" / "scripts" / "rea.mjs"
-        resolved_script = script.resolve()
-        resolved_script.relative_to(versions_root)
+        script = (
+            versions_root / version / "installation" / "node_modules" / "rea-agents" / "scripts" / "rea.mjs"
+        ).resolve()
+        script.relative_to(versions_root)
         node = shutil.which("node")
-        if node is None or not resolved_script.is_file():
+        if node is None or not script.is_file():
             return fallback
         return replace(fallback, command=node, args=(str(script), "mcp"))
     except (KeyError, OSError, ValueError, json.JSONDecodeError):

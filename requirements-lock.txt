@@ -1,0 +1,4 @@
+# Release-owned lock gate. Regenerate this file with hashes before a release.
+# Bootstrap deliberately refuses an unhashed lock rather than resolving mutable
+# dependencies. DevelopmentSource may use requirements.txt explicitly.
+-r requirements.txt

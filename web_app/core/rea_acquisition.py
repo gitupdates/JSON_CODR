@@ -52,7 +52,7 @@ class NpmReaInstaller:
 
 class ReaAcquirer:
     def __init__(self, root: str | Path, store: ReaProviderStore, installer) -> None:
-        self.root = Path(root).absolute()
+        self.root = Path(root).resolve()
         self.store = store
         self.installer = installer
         self.versions = self.root / "versions"
@@ -123,7 +123,7 @@ class ReaAcquirer:
     def _contained(path: Path, root: Path) -> Path:
         resolved = path.resolve()
         resolved.relative_to(root.resolve())
-        return path.absolute()
+        return resolved
 
     @staticmethod
     def _tree_digest(root: Path) -> str:

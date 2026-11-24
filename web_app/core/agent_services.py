@@ -28,6 +28,7 @@ def planner_output_schema(capability_ids: tuple[str, ...] = ()) -> dict:
         capability_schema["enum"] = list(capability_ids)
     return {
         "type": "object",
+        "additionalProperties": False,
         "properties": {
             "done": {"type": "boolean"},
             "capability_id": capability_schema,
@@ -89,7 +90,12 @@ class InferencePlanner:
             "Act as a local coding planner. Return one capability call as a JSON object with "
             "capability_id, operation, target_path when needed, and arguments. Return "
             '{"done":true} only when the supplied evidence proves the task is complete. '
-            "Do not include markdown or prose.\n\nCONTEXT:\n" + context.text
+            "Do not include markdown or prose. Use these exact core capability contracts: "
+            'project.read uses operation "read", target_path, and arguments {}; '
+            'project.search uses operation "search", target_path ".", and arguments {"query":"text"}; '
+            'project.patch uses operation "replace", target_path, and arguments '
+            '{"content":"the complete UTF-8 replacement file content"}. '
+            "Never invent argument names.\n\nCONTEXT:\n" + context.text
             + "\n\nAUTHORITATIVE CURRENT GOAL:\n" + current_goal
         )
         model = self._model
@@ -104,28 +110,52 @@ class InferencePlanner:
             if isinstance(candidate, str) and candidate:
                 model = candidate
                 break
-        raw = await self._generate(model, prompt)
-        try:
-            value = self._decode_object(raw)
-        except (TypeError, json.JSONDecodeError) as error:
-            raise ValueError("planner must return valid capability JSON") from error
-        if not isinstance(value, dict):
-            raise ValueError("planner must return valid capability JSON")
         expected = {"done", "capability_id", "operation", "target_path", "arguments"}
-        if set(value) != expected:
-            raise ValueError("planner response must match the exact capability envelope")
         has_completed_action = any(
-            source.event_type == "agent.action_completed"
-            or (
-                source.kind in {"task_event", "context_compaction"}
-                and '"event_type": "agent.action_completed"' in source.content
-            )
-            for source in context.sources
+            source.event_type == "agent.action_completed" for source in context.sources
         )
-        if value.get("done") is True:
-            if not has_completed_action:
-                raise ValueError("planner cannot finish without persisted action evidence")
-            return None
+        for attempt in range(3):
+            raw = await self._generate(model, prompt)
+            try:
+                value = self._decode_object(raw)
+            except (TypeError, json.JSONDecodeError) as error:
+                raise ValueError("planner must return valid capability JSON") from error
+            if not isinstance(value, dict):
+                raise ValueError("planner must return valid capability JSON")
+            if set(value) == expected - {"done"}:
+                value = {"done": False, **value}
+            if set(value) != expected:
+                contract_error = (
+                    "The planner envelope must contain exactly these keys: done, capability_id, "
+                    "operation, target_path, arguments; received keys: "
+                    f"{sorted(str(key) for key in value)}."
+                )
+                if attempt == 2:
+                    raise ValueError(
+                        "planner response must match the exact capability envelope; "
+                        f"received keys: {sorted(str(key) for key in value)}"
+                    )
+                prompt += (
+                    f"\n\nCORRECTION: {contract_error} "
+                    "Return the single corrected capability call needed to begin the task."
+                )
+                continue
+            if value.get("done") is True:
+                if has_completed_action:
+                    return None
+                contract_error = "No completed action evidence exists. done must be false."
+            else:
+                contract_error = self._core_contract_error(value)
+                if contract_error is None:
+                    break
+            if attempt == 2:
+                if value.get("done") is True:
+                    raise ValueError("planner cannot finish without persisted action evidence")
+                raise ValueError(f"planner correction failed: {contract_error}")
+            prompt += (
+                f"\n\nCORRECTION: {contract_error} "
+                "Return the single corrected capability call needed to begin the task."
+            )
         try:
             call_value = {key: item for key, item in value.items() if key != "done"}
             return CapabilityCall.model_validate({**call_value, "project_root": project_root})
@@ -165,7 +195,65 @@ class InferencePlanner:
                     raise ValueError(f"duplicate JSON key: {key}")
                 result[key] = value
             return result
-        return json.loads(text, object_pairs_hook=no_duplicates)
+        decoder = json.JSONDecoder(object_pairs_hook=no_duplicates)
+        values = []
+        offset = 0
+        while offset < len(text):
+            value, offset = decoder.raw_decode(text, offset)
+            values.append(value)
+            while offset < len(text) and text[offset].isspace():
+                offset += 1
+        if len(values) == 1:
+            return values[0]
+        if not all(isinstance(value, dict) for value in values):
+            raise ValueError("planner output must contain one JSON object")
+        merged = {}
+        for value in values:
+            if set(merged).intersection(value):
+                raise ValueError("planner output contains conflicting JSON objects")
+            merged.update(value)
+        expected = {"done", "capability_id", "operation", "target_path", "arguments"}
+        if set(merged) != expected:
+            raise ValueError("planner output must contain one complete capability envelope")
+        return merged
+
+    @staticmethod
+    def _core_contract_error(value: dict) -> str | None:
+        capability_id = value.get("capability_id")
+        operation = value.get("operation")
+        target_path = value.get("target_path")
+        arguments = value.get("arguments")
+        if capability_id not in {"project.read", "project.search", "project.patch"}:
+            return None
+        if not isinstance(target_path, str) or not target_path:
+            return f"{capability_id} requires a non-empty target_path."
+        if not isinstance(arguments, dict):
+            return f"{capability_id} requires an arguments object."
+        if capability_id == "project.read":
+            if operation != "read" or arguments:
+                return 'project.read requires operation "read" and arguments {}.'
+            return None
+        if capability_id == "project.search":
+            if (
+                operation != "search" or target_path != "."
+                or set(arguments) != {"query"}
+                or not isinstance(arguments.get("query"), str)
+            ):
+                return (
+                    'project.search requires operation "search", target_path ".", '
+                    'and arguments {"query":"text"}.'
+                )
+            return None
+        if (
+            operation != "replace"
+            or set(arguments) != {"content"}
+            or not isinstance(arguments.get("content"), str)
+        ):
+            return (
+                'project.patch requires operation "replace" and exactly '
+                'arguments {"content":"the complete UTF-8 replacement file content"}.'
+            )
+        return None
 
 
 class EventEvidenceVerifier:

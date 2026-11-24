@@ -5,15 +5,32 @@ from pathlib import Path
 
 from web_app.core.adapters import AdapterEvent, CapabilityCall, ExecutionContext
 from web_app.core.command_runtime import CommandPolicy, CommandRuntime
+from web_app.core.verification_profiles import VerificationProfileStore
 
 
 class NativePrimitiveAdapter:
     capability_ids = frozenset({"native.read", "native.write", "native.edit", "native.shell"})
 
-    def __init__(self, project, terminal, command_runtime: CommandRuntime | None = None) -> None:
+    def __init__(
+        self,
+        project,
+        terminal,
+        command_runtime: CommandRuntime | None = None,
+        *,
+        data_root: str | Path | None = None,
+    ) -> None:
         self._project = project
         self._terminal = terminal
-        self._commands = command_runtime or CommandRuntime()
+        if command_runtime is not None:
+            self._commands = command_runtime
+        else:
+            project_state_root = self._project._root
+            inferred_data_root = (
+                project_state_root.parent.parent
+                if project_state_root.name == "project-state" and project_state_root.parent.name == "core"
+                else project_state_root.parent
+            )
+            self._commands = CommandRuntime(VerificationProfileStore(data_root or inferred_data_root))
 
     async def execute(self, call: CapabilityCall, context: ExecutionContext):
         if call.capability_id not in self.capability_ids:
@@ -53,22 +70,54 @@ class NativePrimitiveAdapter:
                 payload={"route": "native", "path": str(call.target_path), "checkpoint_id": checkpoint.checkpoint_id},
             )
             return
-        timeout = call.arguments.get("timeout", 60)
-        if not isinstance(timeout, int) or not 1 <= timeout <= 300:
-            raise ValueError("native shell timeout must be between 1 and 300 seconds")
-        argv = call.arguments.get("argv")
-        if not isinstance(argv, (list, tuple)) or not argv or not all(isinstance(item, str) and item for item in argv):
-            raise ValueError("native shell requires an exact argv array")
+        if "argv" in call.arguments:
+            administrator_scopes = context.principal_scopes
+            if "terminal.write" not in administrator_scopes:
+                raise ValueError("autonomous native shell requires a profile_id; raw argv is interactive-Administrator only")
+            argv = call.arguments.get("argv")
+            timeout = call.arguments.get("timeout", 60)
+            environment = call.arguments.get("environment", {})
+            if not isinstance(argv, (list, tuple)) or not argv or not all(isinstance(item, str) and item for item in argv):
+                raise ValueError("interactive native shell requires an exact argv array")
+            if not isinstance(timeout, int) or not 1 <= timeout <= 300:
+                raise ValueError("interactive native shell timeout must be between 1 and 300 seconds")
+            if not isinstance(environment, dict) or not all(
+                isinstance(key, str) and isinstance(value, str) for key, value in environment.items()
+            ):
+                raise ValueError("interactive native shell environment must contain string values")
+            yield AdapterEvent(
+                event_type="native.shell.started",
+                payload={"route": "native", "mode": "interactive_admin", "timeout_seconds": timeout},
+            )
+            result = await self._commands.run_interactive_admin(
+                CommandPolicy(
+                    argv=tuple(argv),
+                    cwd=str(call.arguments.get("cwd", ".")),
+                    timeout_seconds=timeout,
+                    environment=environment,
+                ),
+                project_root=call.project_root,
+                administrator_scopes=administrator_scopes,
+            )
+            yield AdapterEvent(
+                event_type="native.shell.completed",
+                payload={"route": "native", "mode": "interactive_admin", **result.model_dump(mode="json")},
+            )
+            return
+        profile_id = call.arguments.get("profile_id")
+        values = call.arguments.get("values", {})
+        if not isinstance(profile_id, str) or not profile_id:
+            raise ValueError("autonomous native shell requires a profile_id")
+        if not isinstance(values, dict):
+            raise ValueError("native shell profile values must be an object")
         yield AdapterEvent(
             event_type="native.shell.started",
-            payload={"route": "native", "timeout_seconds": timeout, "argv": list(argv)},
+            payload={"route": "native", "mode": "profile", "profile_id": profile_id},
         )
-        result = await self._commands.run(CommandPolicy(
-            argv=tuple(argv), cwd=str(call.arguments.get("cwd", ".")),
-            timeout_seconds=timeout,
-            network_approved=bool(call.arguments.get("network_approved", False)),
-        ), project_root=call.project_root)
+        result = await self._commands.run_profile(
+            profile_id=profile_id, values=values, project_root=call.project_root,
+        )
         yield AdapterEvent(
             event_type="native.shell.completed",
-            payload={"route": "native", "timeout_seconds": timeout, **result.model_dump(mode="json")},
+            payload={"route": "native", "mode": "profile", "profile_id": profile_id, **result.model_dump(mode="json")},
         )

@@ -48,6 +48,7 @@ class ProjectContextSnapshot(FrozenContract):
     instructions: tuple[ProjectInstruction, ...] = ()
     files: tuple[ProjectFile, ...] = ()
     omissions: tuple[ProjectOmission, ...] = ()
+    priority_paths: tuple[str, ...] = ()
 
 
 class ContextOverflow(RuntimeError):
@@ -125,6 +126,7 @@ class ContextService:
         reader: ProjectReader,
         *,
         target_path: str = ".",
+        prioritize_references_in: str = "",
     ) -> ProjectContextSnapshot:
         events = self._tasks.thread_events(thread_id)
         through = max((event.global_sequence for event in events), default=-1)
@@ -132,6 +134,24 @@ class ContextService:
         files, omissions = reader.scan()
         instruction_paths = {item.relative_path for item in instructions}
         files = tuple(item for item in files if item.relative_path not in instruction_paths)
+        if prioritize_references_in:
+            reference_text = prioritize_references_in.casefold()
+            files = tuple(sorted(
+                files,
+                key=lambda item: (
+                    item.relative_path.casefold() in reference_text
+                    or item.relative_path.replace("/", "\\").casefold() in reference_text,
+                    item.relative_path.casefold(),
+                ),
+            ))
+        priority_paths = tuple(
+            item.relative_path for item in files
+            if len(item.content) <= 1_000 and (
+                item.relative_path.casefold() in prioritize_references_in.casefold()
+                or item.relative_path.replace("/", "\\").casefold()
+                in prioritize_references_in.casefold()
+            )
+        )
         material = {
             "thread_id": thread_id,
             "task_id": task_id,
@@ -144,6 +164,7 @@ class ContextService:
                 for item in files
             ],
             "omissions": [item.model_dump(mode="json") for item in omissions],
+            "priority_paths": priority_paths,
         }
         snapshot_id = canonical_digest(material)
         for record in self._memory.list(thread_id):
@@ -163,6 +184,7 @@ class ContextService:
             instructions=instructions,
             files=files,
             omissions=omissions,
+            priority_paths=priority_paths,
         )
         self._memory.replace_kind(
             thread_id,
@@ -199,8 +221,9 @@ class ContextService:
                     event_type=event.event_type,
                     global_sequence=event.global_sequence,
                     mandatory=event.event_type in {
-                        "agent.goal_registered",
                         "agent.action_completed",
+                        "agent.goal_registered",
+                        "agent.model_route",
                         "agent.verification_failed",
                         "task.steered",
                     },
@@ -245,6 +268,7 @@ class ContextService:
                             source_ref=source_ref,
                             content=project_file.content,
                             global_sequence=snapshot.through_global_sequence,
+                            mandatory=project_file.relative_path in snapshot.priority_paths,
                             trust="untrusted_project",
                         )
                 for omission in snapshot.omissions:

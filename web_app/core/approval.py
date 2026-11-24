@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
@@ -42,10 +41,12 @@ class ApprovalStore:
     def __init__(self, database: str | Path) -> None:
         path = Path(database)
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._database = path
-        with closing(self._connect()) as connection:
-            connection.execute(
-                """CREATE TABLE IF NOT EXISTS approval_proposals (
+        self._connection = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+        self._connection.row_factory = sqlite3.Row
+        self._connection.execute("PRAGMA journal_mode = WAL")
+        self._connection.execute("PRAGMA busy_timeout = 5000")
+        self._connection.execute(
+            """CREATE TABLE IF NOT EXISTS approval_proposals (
                 proposal_id TEXT PRIMARY KEY,
                 principal TEXT NOT NULL,
                 project_id TEXT NOT NULL,
@@ -58,21 +59,12 @@ class ApprovalStore:
                 created_at TEXT NOT NULL,
                 expires_at TEXT NOT NULL,
                 consumed_at TEXT
-                )"""
-            )
+            )"""
+        )
         self._lock = threading.RLock()
 
     def close(self) -> None:
-        # Connections are deliberately operation-scoped so abandoned API
-        # clients cannot retain database handles on Windows.
-        return None
-
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self._database, isolation_level=None)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA journal_mode = DELETE")
-        connection.execute("PRAGMA busy_timeout = 5000")
-        return connection
+        self._connection.close()
 
     @staticmethod
     def _call_digest(call: CapabilityCall) -> str:
@@ -105,8 +97,8 @@ class ApprovalStore:
             created_at=created_at,
             expires_at=expires_at or created_at + timedelta(minutes=5),
         )
-        with self._lock, closing(self._connect()) as connection:
-            connection.execute(
+        with self._lock, self._connection:
+            self._connection.execute(
                 "INSERT INTO approval_proposals VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     proposal.proposal_id, proposal.principal, proposal.project_id,
@@ -118,8 +110,8 @@ class ApprovalStore:
         return proposal
 
     def get(self, proposal_id: str) -> ApprovalProposal:
-        with self._lock, closing(self._connect()) as connection:
-            row = connection.execute(
+        with self._lock:
+            row = self._connection.execute(
                 "SELECT * FROM approval_proposals WHERE proposal_id = ?", (proposal_id,)
             ).fetchone()
         if row is None:
@@ -137,10 +129,10 @@ class ApprovalStore:
         now: datetime | None = None,
     ) -> ApprovalLease:
         consumed_at = now or datetime.now(UTC)
-        with self._lock, closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
             try:
-                row = connection.execute(
+                row = self._connection.execute(
                     "SELECT * FROM approval_proposals WHERE proposal_id = ?", (proposal_id,)
                 ).fetchone()
                 if row is None:
@@ -159,16 +151,16 @@ class ApprovalStore:
                     raise PermissionError("approval project fingerprint does not match")
                 if step_revision != proposal.step_revision:
                     raise PermissionError("approval step revision does not match")
-                updated = connection.execute(
+                updated = self._connection.execute(
                     """UPDATE approval_proposals SET status = 'consumed', consumed_at = ?
                        WHERE proposal_id = ? AND status = 'pending'""",
                     (consumed_at.isoformat(), proposal_id),
                 )
                 if updated.rowcount != 1:
                     raise PermissionError("approval was already consumed")
-                connection.execute("COMMIT")
+                self._connection.execute("COMMIT")
             except Exception:
-                connection.execute("ROLLBACK")
+                self._connection.execute("ROLLBACK")
                 raise
         return ApprovalLease(**proposal.model_dump(exclude={"status", "consumed_at"}), consumed_at=consumed_at)
 
@@ -178,16 +170,16 @@ class ApprovalStore:
             raise PermissionError("approval principal does not match")
         if proposal.status != "pending":
             raise PermissionError(f"approval is {proposal.status}")
-        with self._lock, closing(self._connect()) as connection:
-            connection.execute(
+        with self._lock, self._connection:
+            self._connection.execute(
                 "UPDATE approval_proposals SET status = 'rejected' WHERE proposal_id = ? AND status = 'pending'",
                 (proposal_id,),
             )
         return self.get(proposal_id)
 
     def revoke_task(self, task_id: str) -> int:
-        with self._lock, closing(self._connect()) as connection:
-            result = connection.execute(
+        with self._lock, self._connection:
+            result = self._connection.execute(
                 "UPDATE approval_proposals SET status = 'revoked' WHERE task_id = ? AND status = 'pending'",
                 (task_id,),
             )

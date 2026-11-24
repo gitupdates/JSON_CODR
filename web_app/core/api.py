@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Header, HTTPException, Response, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Header, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -16,6 +16,9 @@ from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
 from web_app.core.component_manager import ComponentManager
 from web_app.core.component_registry import ComponentRequest, ComponentScope
+from web_app.core.memory import MemoryDraft, MemoryPolicyError, MemoryStore
+from web_app.core.http_identity import MutationAuthorizer
+from web_app.models import MemorySettings
 
 
 Runtime = tuple[CoreService, TaskStore, PolicyService]
@@ -59,23 +62,57 @@ class StepRevisionRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=4096)
 
 
+class CollectiveMemoryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    thread_id: str = Field(min_length=1, max_length=256)
+    task_id: str = Field(min_length=1, max_length=128)
+    kind: str = Field(min_length=1, max_length=128)
+    content: str = Field(min_length=1, max_length=65_536)
+    source_refs: tuple[str, ...] = ()
+    retain_details: bool = False
+    idempotency_key: str = Field(min_length=1, max_length=256)
+
+
+class MemoryRevocationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(min_length=1, max_length=2048)
+
+
 def create_core_router(
     runtime: RuntimeProvider,
     *,
     artifact_store: Callable[[], ArtifactStore] | None = None,
     capabilities: Callable[[], Sequence[Mapping[str, Any]]] = tuple,
     components: Callable[[], ComponentManager] | None = None,
+    memory_store: Callable[[], MemoryStore] | None = None,
+    memory_settings: Callable[[], MemorySettings] = MemorySettings,
+    mutation_authorizer: MutationAuthorizer | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
+    def require_component_mutation(request: Request) -> None:
+        if mutation_authorizer is None:
+            raise HTTPException(status_code=503, detail="mutation authorization is unavailable")
+        mutation_authorizer.principal(request, "component.install")
+        mutation_authorizer.csrf(request)
+
+    def require_agent_mutation(request: Request):
+        if mutation_authorizer is None:
+            raise HTTPException(status_code=503, detail="mutation authorization is unavailable")
+        principal = mutation_authorizer.principal(request, "agent.launch")
+        mutation_authorizer.csrf(request)
+        return principal
+
     @router.post("/api/components/plan")
-    def plan_component(request: ComponentRequest):
+    def plan_component(request: ComponentRequest, http_request: Request):
+        require_component_mutation(http_request)
         if components is None:
             raise HTTPException(status_code=503, detail="component registry unavailable")
         return components().plan(request)
 
     @router.post("/api/components/install/{plan_id}")
-    def install_component(plan_id: str, approval: ComponentInstallApproval):
+    def install_component(plan_id: str, approval: ComponentInstallApproval, http_request: Request):
+        require_component_mutation(http_request)
         if components is None:
             raise HTTPException(status_code=503, detail="component registry unavailable")
         try:
@@ -89,15 +126,77 @@ def create_core_router(
     def list_components(project_id: str = ""):
         return () if components is None else components().list(project_id)
 
+    def memory() -> MemoryStore:
+        if memory_store is None:
+            raise HTTPException(status_code=503, detail="collective memory unavailable")
+        return memory_store()
+
+    @router.post("/api/projects/{project_id}/memory", status_code=201)
+    def accept_memory(
+        project_id: str,
+        request: CollectiveMemoryRequest,
+        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+    ):
+        try:
+            configuration = memory_settings()
+            if not configuration.enabled:
+                raise MemoryPolicyError("collective memory is disabled")
+            if request.retain_details and not configuration.detailed_retention_enabled:
+                raise MemoryPolicyError("detailed retention is disabled in system settings")
+            return memory().accept(MemoryDraft(
+                user_id=principal,
+                project_id=project_id,
+                **request.model_dump(),
+            ))
+        except MemoryPolicyError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @router.get("/api/projects/{project_id}/memory/search")
+    def search_memory(
+        project_id: str,
+        query: str = "",
+        limit: int | None = None,
+        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+    ):
+        configuration = memory_settings()
+        if not configuration.enabled:
+            return ()
+        effective_limit = configuration.search_limit if limit is None else limit
+        return memory().search_collective(principal, project_id, query, max(1, min(effective_limit, 100)))
+
+    @router.get("/api/projects/{project_id}/memory/export")
+    def export_memory(
+        project_id: str,
+        include_inactive: bool = False,
+        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+    ):
+        return memory().export_collective(principal, project_id, include_inactive=include_inactive)
+
+    @router.post("/api/projects/{project_id}/memory/{memory_id}/revoke")
+    def revoke_memory(
+        project_id: str,
+        memory_id: str,
+        request: MemoryRevocationRequest,
+        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+    ):
+        try:
+            return memory().revoke(
+                memory_id, user_id=principal, project_id=project_id, reason=request.reason
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="collective memory not found") from error
+
     @router.post("/api/components/{component_id}/disable")
-    def disable_component(component_id: str, scope: ComponentScope = ComponentScope.global_, project_id: str | None = None):
+    def disable_component(component_id: str, http_request: Request, scope: ComponentScope = ComponentScope.global_, project_id: str | None = None):
+        require_component_mutation(http_request)
         if components is None:
             raise HTTPException(status_code=503, detail="component registry unavailable")
         components().disable(component_id, scope, project_id)
         return {"status": "disabled", "component_id": component_id}
 
     @router.post("/api/components/{component_id}/rollback")
-    def rollback_component(component_id: str, scope: ComponentScope = ComponentScope.global_, project_id: str | None = None):
+    def rollback_component(component_id: str, http_request: Request, scope: ComponentScope = ComponentScope.global_, project_id: str | None = None):
+        require_component_mutation(http_request)
         if components is None:
             raise HTTPException(status_code=503, detail="component registry unavailable")
         return components().rollback(component_id, scope, project_id)
@@ -106,9 +205,14 @@ def create_core_router(
     async def submit_task(
         command: TaskCommand,
         response: Response,
-        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+        http_request: Request,
     ):
-        record = await runtime()[0].submit(command, principal=principal)
+        principal = require_agent_mutation(http_request)
+        record = await runtime()[0].submit(
+            command,
+            principal=principal.user_id,
+            principal_scopes=principal.scopes,
+        )
         if record.events and record.events[-1].event_type == "task.permission_required":
             response.status_code = 202
         return record
@@ -224,12 +328,14 @@ def create_core_router(
     async def approve_task(
         task_id: str,
         request: TaskApprovalRequest,
-        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+        http_request: Request,
     ):
         try:
+            principal = require_agent_mutation(http_request)
             return await runtime()[0].approve(
                 task_id,
-                principal=principal,
+                principal=principal.user_id,
+                principal_scopes=principal.scopes,
                 scope=request.scope,
                 proposal_id=request.proposal_id,
             )

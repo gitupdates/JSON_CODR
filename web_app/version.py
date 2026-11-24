@@ -1,1 +1,4 @@
-APP_VERSION = "V1.0.18-alpha.17"
+from web_app.runtime_config import RuntimeConfig
+
+
+APP_VERSION = RuntimeConfig.load().version

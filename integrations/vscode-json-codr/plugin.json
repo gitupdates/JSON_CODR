@@ -1,0 +1,8 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "json-codr",
+  "description": "Use the local JSON_CODR BORG service from GitHub Copilot agents.",
+  "version": "1.0.0",
+  "license": "MIT",
+  "keywords": ["coding-agent", "local-llm", "mcp", "ollama"]
+}

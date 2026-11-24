@@ -15,7 +15,7 @@ def _openvino_handler(operation: str, payload: dict) -> dict:
         raise RuntimeError(f"Optimized model artifact is not installed: {model_path}")
     pipeline = openvino_genai.LLMPipeline(str(model_path), payload.get("device", "NPU"))
     if operation == "chat":
-        text = pipeline.generate(payload["prompt"], max_new_tokens=512)
+        text = pipeline.generate(payload["prompt"], max_new_tokens=int(payload.get("max_new_tokens", 512)))
         return _chat_result(payload["model_id"], str(text))
     if operation == "benchmark":
         return {"samples": _benchmark(lambda prompt: pipeline.generate(prompt, max_new_tokens=96), payload)}

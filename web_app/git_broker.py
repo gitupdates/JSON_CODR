@@ -5,12 +5,14 @@ import json
 import os
 import stat
 import subprocess
+import tempfile
 import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from web_app.core.git_adapter import VerificationReceipt
 from web_app.models import BrokerActionRequest
 
 
@@ -23,6 +25,8 @@ class RepositorySnapshot:
     remote_head: str | None
     dirty_fingerprint: str
     clean: bool
+    ahead: int | None = None
+    behind: int | None = None
 
 
 @dataclass(frozen=True)
@@ -38,6 +42,7 @@ class BrokerActionResult:
 
 class GitBrokerService:
     _MAX_OUTPUT_BYTES = 200_000
+
     def __init__(self, data_root: Path, verification_checks: dict[str, list[str]] | None = None) -> None:
         self.data_root = Path(data_root).resolve()
         self.audit_path = self.data_root / "git-broker-audit.json"
@@ -163,6 +168,10 @@ class GitBrokerService:
         model: str,
         grant_id: str,
         authorized: Callable[[], bool] | None = None,
+        *,
+        verification_receipt: VerificationReceipt | None = None,
+        verification_runner: Callable[..., VerificationReceipt] | None = None,
+        receipt_validator: Callable[[VerificationReceipt], bool] | None = None,
     ) -> BrokerActionResult:
         request = self.validate_request(request)
         project = self._project(request.project_root)
@@ -178,6 +187,8 @@ class GitBrokerService:
                 "model": model, "profile": "broker", "grant_id": grant_id,
             })
             commit = None
+            receipt = verification_receipt
+            base_sha = snapshot.head
             touched_paths: list[str] = []
             status = "completed"
             outputs: dict = {"files": {}, "checks": {}, "diff": ""}
@@ -200,19 +211,19 @@ class GitBrokerService:
                                 encoding="utf-8", errors="replace"
                             )[:self._MAX_OUTPUT_BYTES]
                     elif action.kind == "verify":
-                        for check_name in action.checks:
-                            argv = self.verification_checks.get(check_name)
-                            if not argv:
-                                raise ValueError(f"Verification check is not configured: {check_name}")
-                            result = subprocess.run(
-                                argv, cwd=project, check=False, capture_output=True, text=True,
-                                encoding="utf-8", errors="replace", env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+                        base_sha = self._git(project, "rev-parse", "HEAD")
+                        tree_sha = self._tree_sha(project)
+                        if verification_runner is not None:
+                            receipt = verification_runner(
+                                action, candidate_id=grant_id, base_sha=base_sha, tree_sha=tree_sha,
                             )
-                            if result.returncode:
-                                raise RuntimeError(
-                                    result.stderr[:self._MAX_OUTPUT_BYTES].strip() or f"Verification failed: {check_name}"
-                                )
-                            outputs["checks"][check_name] = result.stdout[:self._MAX_OUTPUT_BYTES].strip()
+                            if not isinstance(receipt, VerificationReceipt):
+                                raise RuntimeError("Verification did not produce a trusted receipt")
+                            if receipt.checks != tuple(action.checks):
+                                raise RuntimeError("verification receipt does not cover the requested profiles")
+                            outputs["checks"] = {name: "verified" for name in receipt.checks}
+                        else:
+                            raise RuntimeError("trusted verification runner is not configured")
                     elif action.kind == "status":
                         summary = self._git(project, "status", "--short", "--untracked-files=all")
                         diff = self._git(project, "diff", "--no-ext-diff", "--")
@@ -220,7 +231,13 @@ class GitBrokerService:
                     elif action.kind == "commit":
                         if not touched_paths:
                             raise RuntimeError("Commit requires files changed by an apply_patch action")
-                        self._git(project, "add", "--", *list(dict.fromkeys(touched_paths)))
+                        self._require_receipt(
+                            project, receipt, receipt_validator, candidate_id=grant_id, base_sha=base_sha,
+                            phase="commit",
+                        )
+                        self._git(project, "add", "--all")
+                        if self._git(project, "write-tree") != receipt.tree_sha:
+                            raise RuntimeError("staged candidate tree does not match final verification receipt")
                         message = (action.message or "Apply JSON_CODR model changes").strip()
                         message += (
                             f"\n\nJSON-CODR-Model: {model}\n"
@@ -229,19 +246,37 @@ class GitBrokerService:
                         )
                         self._git(project, "commit", "-m", message)
                         commit = self._git(project, "rev-parse", "HEAD")
+                        if self._git(project, "rev-parse", "HEAD^{tree}") != receipt.tree_sha:
+                            raise RuntimeError("commit tree does not match final verification receipt")
+                        if not self.inspect(project).clean:
+                            raise RuntimeError("candidate worktree is not clean after commit")
                         status = "committed"
                     elif action.kind == "sync":
                         current = self.inspect(project)
                         if not current.upstream:
                             raise RuntimeError("Checked-out branch has no upstream")
                         self._git(project, "fetch", "--quiet")
-                        self._git(project, "rebase", current.upstream)
+                        try:
+                            self._git(project, "rebase", current.upstream)
+                        except Exception:
+                            self._git(project, "rebase", "--abort", check=False)
+                            raise
                     elif action.kind == "push":
                         current = self.inspect(project)
                         if not current.branch or not current.upstream:
                             raise RuntimeError("Checked-out branch must have an upstream")
                         self._git(project, "fetch", "--quiet")
-                        self._git(project, "rebase", current.upstream)
+                        current = self.inspect(project)
+                        receipt_base = receipt.base_sha if receipt is not None else ""
+                        merge_base = self._git(
+                            project, "merge-base", current.remote_head or "", receipt_base, check=False,
+                        ) if current.remote_head else ""
+                        if not current.remote_head or merge_base != current.remote_head:
+                            raise RuntimeError("upstream advanced after final verification")
+                        self._require_receipt(
+                            project, receipt, receipt_validator, candidate_id=grant_id, base_sha=base_sha,
+                            phase="push",
+                        )
                         self._git(project, "push", "origin", f"HEAD:{current.branch}")
                         status = "pushed"
                 final = self.inspect(project)
@@ -255,6 +290,56 @@ class GitBrokerService:
                 self.record_audit({"id": task_id, "status": "failed"})
                 raise
 
+    @classmethod
+    def _tree_sha(cls, project: Path) -> str:
+        descriptor, index_path = tempfile.mkstemp(prefix="json-codr-tree-", suffix=".index")
+        os.close(descriptor)
+        os.unlink(index_path)
+        environment = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_INDEX_FILE": index_path}
+
+        def git_index(*args: str) -> str:
+            result = subprocess.run(
+                ["git", *args], cwd=project, check=False, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", env=environment,
+            )
+            if result.returncode:
+                raise ValueError(result.stderr.strip() or result.stdout.strip() or "Git tree calculation failed")
+            return result.stdout.strip()
+
+        try:
+            git_index("read-tree", "HEAD")
+            git_index("add", "--all")
+            return git_index("write-tree")
+        finally:
+            Path(index_path).unlink(missing_ok=True)
+
+    @classmethod
+    def _require_receipt(
+        cls,
+        project: Path,
+        receipt: VerificationReceipt | None,
+        receipt_validator: Callable[[VerificationReceipt], bool] | None,
+        *,
+        candidate_id: str,
+        base_sha: str,
+        phase: str,
+    ) -> None:
+        if receipt is None or receipt_validator is None or not receipt_validator(receipt):
+            raise RuntimeError("publication requires a trusted final verification receipt")
+        if receipt.candidate_id != candidate_id:
+            raise RuntimeError("verification receipt belongs to a different candidate")
+        if receipt.base_sha != base_sha:
+            raise RuntimeError("verification receipt belongs to a different base")
+        if phase == "commit" and cls._git(project, "rev-parse", "HEAD") != receipt.base_sha:
+            raise RuntimeError("candidate base changed after verification")
+        if cls._tree_sha(project) != receipt.tree_sha:
+            raise RuntimeError("candidate final tree changed after verification")
+        if phase == "push":
+            if cls._git(project, "rev-parse", "HEAD^{tree}") != receipt.tree_sha:
+                raise RuntimeError("commit tree does not match final verification receipt")
+            if not cls._git(project, "status", "--porcelain=v2", "--untracked-files=all") == "":
+                raise RuntimeError("candidate worktree is not clean before push")
+
     def inspect(self, project_root: Path | str) -> RepositorySnapshot:
         project = self._project(project_root)
         if self._git(project, "rev-parse", "--is-inside-work-tree", check=False) != "true":
@@ -263,6 +348,15 @@ class GitBrokerService:
         branch = self._git(project, "branch", "--show-current") or None
         upstream = self._git(project, "rev-parse", "--abbrev-ref", "@{upstream}", check=False) or None
         remote_head = self._git(project, "rev-parse", "@{upstream}", check=False) if upstream else None
+        ahead = behind = None
+        if upstream:
+            counts = self._git(project, "rev-list", "--left-right", "--count", f"HEAD...{upstream}", check=False)
+            try:
+                local_count, upstream_count = (int(value) for value in counts.split())
+                ahead, behind = local_count, upstream_count
+            except (ValueError, TypeError):
+                # Keep the counts unknown if the configured tracking ref cannot be compared.
+                ahead = behind = None
         status = self._git(project, "status", "--porcelain=v2", "--untracked-files=all")
         digest = hashlib.sha256()
         digest.update(f"head={head}\nbranch={branch}\nupstream={upstream}\n".encode("utf-8"))
@@ -284,6 +378,7 @@ class GitBrokerService:
         return RepositorySnapshot(
             root=str(project), head=head, branch=branch, upstream=upstream,
             remote_head=remote_head or None, dirty_fingerprint=fingerprint, clean=not bool(status),
+            ahead=ahead, behind=behind,
         )
 
     def create_worktree(self, project_root: Path | str, worktree_root: Path | str, branch: str) -> dict[str, str]:
@@ -300,5 +395,48 @@ class GitBrokerService:
 
     def merge_worktree_branch(self, project_root: Path | str, branch: str) -> dict[str, str]:
         project = self._project(project_root)
-        output = self._git(project, "merge", "--no-ff", branch, "-m", f"Merge {branch}")
+        try:
+            output = self._git(project, "merge", "--no-ff", branch, "-m", f"Merge {branch}")
+        except Exception:
+            self._git(project, "merge", "--abort", check=False)
+            raise
         return {"branch": branch, "commit": self._git(project, "rev-parse", "HEAD"), "output": output}
+
+    def rebase_candidate_worktree(self, worktree_root: Path | str, upstream: str) -> dict[str, str]:
+        project = self._candidate_worktree(worktree_root)
+        with self._lock(project):
+            try:
+                output = self._git(project, "rebase", upstream)
+            except Exception:
+                self._git(project, "rebase", "--abort", check=False)
+                raise
+            return {
+                "worktree_root": str(project),
+                "commit": self._git(project, "rev-parse", "HEAD"),
+                "output": output,
+            }
+
+    def merge_candidate_worktree(self, worktree_root: Path | str, source: str) -> dict[str, str]:
+        project = self._candidate_worktree(worktree_root)
+        with self._lock(project):
+            try:
+                output = self._git(project, "merge", "--no-edit", source)
+            except Exception:
+                self._git(project, "merge", "--abort", check=False)
+                raise
+            return {
+                "worktree_root": str(project),
+                "commit": self._git(project, "rev-parse", "HEAD"),
+                "output": output,
+            }
+
+    @classmethod
+    def _candidate_worktree(cls, worktree_root: Path | str) -> Path:
+        project = cls._project(worktree_root)
+        git_dir_value = Path(cls._git(project, "rev-parse", "--git-dir"))
+        common_value = Path(cls._git(project, "rev-parse", "--git-common-dir"))
+        git_dir = git_dir_value if git_dir_value.is_absolute() else (project / git_dir_value).resolve()
+        common = common_value if common_value.is_absolute() else (project / common_value).resolve()
+        if git_dir == common:
+            raise ValueError("operation requires an isolated candidate worktree")
+        return project

@@ -4,15 +4,22 @@ import asyncio
 from dataclasses import asdict
 import os
 import re
-import sqlite3
+import secrets
 import sys
+import threading
+import time
+from typing import Callable, Literal
 from uuid import uuid7
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from ag_ui.core import RunAgentInput
+from ag_ui.encoder import EventEncoder
+from pydantic import BaseModel, ConfigDict, Field
 
 from web_app.attachments import AttachmentService, AttachmentTooLarge
+from web_app.agui import build_prompt as build_agui_prompt, stream_events as stream_agui_events
 from web_app.actions import ActionProposalService
 from web_app.artifacts import ArtifactService
 from web_app.context import ContextAssembler
@@ -29,9 +36,16 @@ from web_app.inference.compatibility import attach_agent_compatibility, ollama_m
 from web_app.inference.search import OptimizedModelSearch
 from web_app.localperf.package import LocalPerfPackageError, LocalPerfPackageService
 from web_app.localperf.storage import LocalPerfStorage
+from web_app.integrations.discovery import build_discovery_document, build_vscode_language_model_config
+from web_app.integrations.borg_client import BorgClient
+from web_app.integrations.mcp_http import create_mcp_http_router, is_loopback_host
+from web_app.integrations.mcp_server import McpServer
+from web_app.integrations.connection_adapters import build_program_connection_adapters
 from web_app.integrity_benchmark import IntegrityBenchmarkService
 from web_app.benchmark_baseline import BenchmarkBaselineService
 from web_app.coding_agents import CodingAgentService
+from web_app.github_cli import GitHubCLI, GitHubCLIError
+from web_app.github_auth import GitHubAuthSessionConflict, GitHubAuthSessionNotFound, GitHubAuthSessionService
 from web_app.git_broker import GitBrokerService
 from web_app.git_adapter import GitActionAdapter
 from web_app.core.adapters import CapabilityCall
@@ -48,10 +62,23 @@ from web_app.core.api import create_core_router
 from web_app.core.artifact_store import ArtifactStore
 from web_app.core.assimilation import AssimilationService, FunctionalProbeResult, SkillInstallAdapter
 from web_app.core.contracts import CompletionCriterion, CriterionKind, GoalSpec, TaskCommand, TaskStatus
-from web_app.core.git_adapter import GitExecutionAdapter
+from web_app.core.git_adapter import GitExecutionAdapter, GitVerificationService
 from web_app.core.inference_adapter import InferenceAdapter
+from web_app.core.identity import IdentityService
+from web_app.core.http_identity import MutationAuthorizer
 from web_app.core.context_service import ContextService
+from web_app.core.connection_recovery import ConnectionRecoveryService
 from web_app.core.memory import MemoryStore
+from web_app.core.autonomous_update import (
+    AgentRuntimeModifier,
+    AutonomousUpdateController,
+    InvalidCandidateTransition,
+    RepositoryScopeRequired,
+    UpdateProfile,
+)
+from web_app.core.mutation_inventory import inventory_mutation_routes
+from web_app.core.update_launcher import UpdateLauncher
+from web_app.core.worktree_runtime import WorktreeRuntime
 from web_app.core.model_conformance import ModelConformanceStore
 from web_app.core.mcp_stdio_backend import build_mcp_adapters
 from web_app.core.policy import PolicyService
@@ -64,11 +91,15 @@ from web_app.core.component_manager import ComponentManager
 from web_app.core.component_catalog import active_component_command
 from web_app.core.component_adapter import LazyComponentExecutionAdapter
 from web_app.core.capability_catalog import CapabilityCatalog, CapabilityDefinition, lifecycle_definitions
+from web_app.core.capability_registry import CapabilityDefinition as PolicyCapabilityDefinition, CapabilityRegistry
 from web_app.core.capability_discovery import discover_project_profile
 from web_app.core.canonical import canonical_digest
 from web_app.core.terminal_adapter import TerminalAdapter
+from web_app.core.command_runtime import CommandRuntime
+from web_app.core.verification_profiles import VerificationProfileStore
+from web_app.core.verifier_identity import VerifierIdentityService
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
+from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, ConnectionPreviewRequest, ConnectionRecoveryRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GitHubAuthCancelRequest, GitHubAuthLoginRequest, GitHubBuildCheckRequest, GitHubBuildUpdateRequest, GitHubConfirmedWrite, GitHubIssueCommentRequest, GitHubIssueCreateRequest, GitHubIssueUpdateRequest, GitHubLocalBranchRequest, GitHubLocalCloneRequest, GitHubLocalCommitRequest, GitHubLocalPushRequest, GitHubLocalStageRequest, GitHubLocalSyncRequest, GitHubPullRequestCreateRequest, GitHubPullRequestMergeRequest, GitHubPullRequestUpdateRequest, GitHubReleaseCreateRequest, GitHubReleaseUpdateRequest, GitHubRemoteBranchCreateRequest, GitHubRepositoryCreateRequest, GitHubRepositoryDeleteRequest, GitHubRepositoryUpdateRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, OptimizedModelInstallRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
 from web_app.model_run_store import ModelRunStore, RequestKeyConflict
 from web_app.model_runs import ModelRunService, canonical_model_prompt
 from web_app.ollama_service import (
@@ -84,6 +115,95 @@ from web_app.settings import SettingsService
 from web_app.skillsets import SkillsetService
 from web_app.recommendations import SkillRecommendationService
 from web_app.version import APP_VERSION
+
+
+class UpdateProposalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    profile_id: str = Field(min_length=1, max_length=128)
+    prompt: str = Field(min_length=1, max_length=65_536)
+
+
+class UpdateReasonRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(min_length=1, max_length=2048)
+
+
+class UpdateReconcileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    transition: Literal["stage", "modify", "verify", "commit", "publish", "health", "activate", "rollback"]
+
+
+class RepositoryScopeApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    repository_root: str = Field(min_length=1, max_length=4096)
+    checkpoint_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    review_ledger_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
+class _LazyUpdateTaskStore:
+    """Avoid opening a new SQLite handle in processes that never use self-update."""
+
+    def __init__(self, database: Path) -> None:
+        self.database = Path(database)
+        self._store = None
+        self._lock = threading.Lock()
+
+    def _resource(self) -> TaskStore:
+        with self._lock:
+            if self._store is None:
+                self._store = TaskStore(self.database)
+            return self._store
+
+    def for_command_type(self, command_type: str):
+        if self._store is None and not self.database.is_file():
+            return ()
+        return self._resource().for_command_type(command_type)
+
+    def command(self, task_id: str):
+        if self._store is None and not self.database.is_file():
+            raise KeyError(task_id)
+        return self._resource().command(task_id)
+
+    def close(self) -> None:
+        if self._store is not None:
+            self._store.close()
+            self._store = None
+
+    def __getattr__(self, name: str):
+        return getattr(self._resource(), name)
+
+
+class _LazyUpdateMemory:
+    def __init__(self, database: Path) -> None:
+        self.database = Path(database)
+        self._memory = None
+        self._lock = threading.Lock()
+
+    def search_collective(self, user_id: str, project_id: str, query: str, limit: int = 20):
+        if self._memory is None and not self.database.is_file():
+            return ()
+        with self._lock:
+            if self._memory is None:
+                self._memory = MemoryStore(self.database)
+        return self._memory.search_collective(user_id, project_id, query, limit)
+
+    def close(self) -> None:
+        if self._memory is not None:
+            self._memory.close()
+            self._memory = None
+
+
+class _LazyUpdateVerifier:
+    """Resolve the shared trusted verifier only when an update reaches verification."""
+
+    def __init__(self, resolver: Callable[[], object]) -> None:
+        self._resolver = resolver
+
+    def verify(self, **arguments):
+        return self._resolver().verify(**arguments)
+
+    def validate(self, receipt) -> bool:
+        return bool(self._resolver().validate(receipt))
 
 
 def configure_local_analysis_tools(data_root: Path) -> None:
@@ -112,9 +232,81 @@ def create_app(
     coding_agents: CodingAgentService | None = None,
     git_broker: GitBrokerService | None = None,
     github_skills: GithubSkillService | None = None,
+    github_cli: GitHubCLI | None = None,
+    github_auth: GitHubAuthSessionService | None = None,
+    autonomous_updates: AutonomousUpdateController | None = None,
 ) -> FastAPI:
     application = FastAPI(title="JSON_CODR", version=APP_VERSION)
     workspace = workspace or WorkspaceService(default_data_root())
+    identity = IdentityService(workspace.data_root)
+    application.state.identity = identity
+
+    def identity_cookie_names(request: Request) -> tuple[str, str, bool]:
+        secure = request.url.scheme == "https"
+        prefix = "__Host-" if secure else ""
+        return f"{prefix}json_codr_session", f"{prefix}json_codr_csrf", secure
+
+    def identity_user_view(user):
+        return {
+            "user_id": user.user_id,
+            "username": user.username,
+            "display_name": user.display_name,
+            "status": user.status,
+            "require_password_change": user.require_password_change,
+            "roles": list(user.roles),
+        }
+
+    def require_csrf(request: Request) -> None:
+        _, csrf_name, _ = identity_cookie_names(request)
+        cookie = request.cookies.get(csrf_name, "")
+        header = request.headers.get("x-csrf-token", "")
+        if not cookie or not header or not secrets.compare_digest(cookie, header):
+            raise HTTPException(status_code=403, detail="CSRF validation failed")
+
+    def session_principal(request: Request):
+        session_name, _, _ = identity_cookie_names(request)
+        token = request.cookies.get(session_name)
+        if not token:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        try:
+            return identity.resolve_credential(token, required_kind="browser_session")
+        except PermissionError as error:
+            raise HTTPException(status_code=401, detail="Authentication required") from error
+
+    mutation_authorizer = MutationAuthorizer(identity, identity_cookie_names)
+
+    def mutation_principal(request: Request, scope: str):
+        principal = mutation_authorizer.principal(request, scope)
+        mutation_authorizer.csrf(request)
+        return principal
+    application.include_router(create_mcp_http_router(
+        lambda request: McpServer(BorgClient(str(request.base_url).rstrip("/"))),
+        authorize=lambda request: mutation_principal(request, "agent.launch"),
+    ))
+
+    @application.middleware("http")
+    async def enforce_mutation_route_metadata(request: Request, call_next):
+        try:
+            method = request.method.upper()
+            if method in {"POST", "PUT", "PATCH", "DELETE"}:
+                for route in application.router.routes:
+                    match, _child_scope = route.matches(request.scope)
+                    if getattr(match, "name", "") != "FULL":
+                        continue
+                    policy = getattr(route, "mutation_policies", {}).get(method)
+                    if policy is not None:
+                        if policy.path == "/api/identity/login":
+                            require_csrf(request)
+                        elif policy.scope is not None:
+                            mutation_principal(request, policy.scope)
+                    break
+        except HTTPException as error:
+            return JSONResponse(
+                status_code=error.status_code,
+                content={"detail": error.detail},
+                headers=error.headers,
+            )
+        return await call_next(request)
     component_manager = None
     component_root = workspace.data_root / "core" / "component-registry"
 
@@ -133,6 +325,22 @@ def create_app(
     skill_library.ensure_envelopes()
     skill_converter = SkillConverterService()
     settings = SettingsService(workspace.data_root)
+    async def probe_json_codr_service() -> bool:
+        try:
+            return bool((await service.health()).get("ollama"))
+        except Exception:
+            return False
+
+    connection_recovery = ConnectionRecoveryService(build_program_connection_adapters(
+        data_root=workspace.data_root,
+        service_url=os.environ.get("JSON_CODR_URL", "http://127.0.0.1:8765"),
+        functional_probe=probe_json_codr_service,
+    ))
+    application.state.connection_recovery = connection_recovery
+
+    def require_local_connection_request(request: Request) -> None:
+        if not is_loopback_host(request.client.host if request.client else None):
+            raise HTTPException(status_code=403, detail="Connection management is available only on this computer")
     if hasattr(service, "set_optimization_provider"):
         service.set_optimization_provider(settings.optimization_for)
     catalog = OptimizedModelCatalog()
@@ -161,16 +369,21 @@ def create_app(
         if generator is None:
             raise RuntimeError("Integrity benchmarks are unavailable for this model service")
         return await generator(model, messages, temperature)
+    base_log_perplexity_scorer = getattr(service, "score_base_log_perplexity", None)
     integrity = integrity or IntegrityBenchmarkService(
         workspace.data_root,
         generate_integrity,
         response_timeout_seconds=int(getattr(service, "timeout_seconds", 180)),
+        score_base_log_perplexity=base_log_perplexity_scorer if callable(base_log_perplexity_scorer) else None,
     )
     optimized_search = OptimizedModelSearch(catalog=catalog)
     skillsets = SkillsetService(workspace.data_root, skill_library)
     recommendations = SkillRecommendationService(skill_library, skillsets, settings)
     skill_discovery = SkillDiscoveryService(skill_library, skill_converter, workspace.data_root)
     github_skills = github_skills or GithubSkillService(skill_library, skill_converter, workspace.data_root)
+    github_cli = github_cli or GitHubCLI()
+    github_auth = github_auth or GitHubAuthSessionService(status_probe=lambda: github_cli.status())
+    application.router.add_event_handler("shutdown", github_auth.close)
     context_assembler = ContextAssembler(attachments, skills=skill_library)
     model_run_store = ModelRunStore(workspace.data_root)
     model_runs = ModelRunService(
@@ -231,6 +444,7 @@ def create_app(
     core_projects = None
     core_conformance = None
     core_artifacts = None
+    core_verification_service = None
     core_capabilities = ()
     core_mcp_backends = []
 
@@ -256,13 +470,12 @@ def create_app(
         raise ValueError("Unsupported skill source")
 
     def get_core_runtime():
-        nonlocal core_runtime, core_capabilities, core_memory, core_approvals, core_projects, core_conformance
+        nonlocal core_runtime, core_capabilities, core_memory, core_approvals, core_projects, core_conformance, core_verification_service
         if core_runtime is None:
             core_root = workspace.data_root / "core"
             core_conformance = ModelConformanceStore(core_root / "model-conformance.sqlite")
             application.state.core_model_conformance = core_conformance
             core_tasks = TaskStore(core_root / "tasks.sqlite")
-            core_policy = PolicyService(core_root / "policy.sqlite")
             core_terminal_adapter = TerminalAdapter(terminals)
             core_project_adapter = ProjectAdapter(core_root / "project-state")
             def prepare_inference_prompt(call, prompt):
@@ -304,17 +517,36 @@ def create_app(
                 prepare_prompt=prepare_inference_prompt,
                 model_registry=model_registry if isinstance(service, OllamaService) else None,
             )
-            core_git_adapter = GitExecutionAdapter(
-                git_broker,
-                lambda grant_id, project_root: coding_agents.authorized_grant(grant_id, project_root, "broker"),
-            )
             component_adapter = SkillInstallAdapter(
                 AssimilationService(core_root / "components", probe_component),
                 resolve_skill_install,
                 skill_library.install,
                 DuplicateSkillPack,
             )
-            native_primitives = NativePrimitiveAdapter(core_project_adapter, core_terminal_adapter)
+            verification_profiles = VerificationProfileStore(
+                workspace.data_root,
+                administration_resolver=identity.resolve_credential,
+            )
+            application.state.verification_profiles = verification_profiles
+            verifier_identity = VerifierIdentityService(identity, workspace.data_root)
+            verifier_identity.ensure_service_account()
+            verification_runtime = CommandRuntime(verification_profiles)
+            core_verification_service = GitVerificationService(
+                verification_runtime,
+                verification_profiles,
+                verifier_identity,
+                signing_key_path=workspace.data_root / "security" / "verification-receipts.key.dpapi",
+            )
+            core_git_adapter = GitExecutionAdapter(
+                git_broker,
+                lambda grant_id, project_root: coding_agents.authorized_grant(grant_id, project_root, "broker"),
+                core_verification_service,
+            )
+            native_primitives = NativePrimitiveAdapter(
+                core_project_adapter,
+                core_terminal_adapter,
+                verification_runtime,
+            )
             adapters = {
                 "git.execute": core_git_adapter,
                 "inference.generate": core_inference_adapter,
@@ -342,6 +574,16 @@ def create_app(
             )
             adapters.update(mcp_adapters)
             core_mcp_backends.extend(mcp_backends)
+            capability_registry = CapabilityRegistry.default(
+                PolicyCapabilityDefinition(
+                    capability_id=capability_id,
+                    operation="discover" if capability_id.endswith(".discover") else "invoke",
+                    risk="low" if capability_id.endswith(".discover") else "sensitive",
+                    autonomous=capability_id.endswith(".discover"),
+                )
+                for capability_id in mcp_adapters
+            )
+            core_policy = PolicyService(core_root / "policy.sqlite", registry=capability_registry)
             project_root = Path(__file__).resolve().parent.parent
             definitions = list(lifecycle_definitions())
             defined_ids = {item.capability_id for item in definitions}
@@ -391,6 +633,8 @@ def create_app(
                 agent_runner=run_agent,
                 approval_store=core_approvals,
                 project_fingerprint=agent_project_fingerprint,
+                registry=capability_registry,
+                project_roots=core_projects,
             )
             resolver = ProjectContextResolver(core_projects)
             core_memory = MemoryStore(core_root / "memory.sqlite")
@@ -450,17 +694,12 @@ def create_app(
         if core_runtime is not None:
             core_service, core_tasks, core_policy = core_runtime
             await core_service.shutdown()
-            # Close the approval database first. Some compatibility tests close
-            # older stores directly before the ASGI shutdown hook runs.
-            if core_approvals is not None:
-                core_approvals.close()
             if core_artifacts is not None:
                 core_artifacts.close()
-            for store in (core_policy, core_tasks):
-                try:
-                    store.close()
-                except sqlite3.ProgrammingError:
-                    pass
+            core_policy.close()
+            core_tasks.close()
+            if core_approvals is not None:
+                core_approvals.close()
             if core_projects is not None:
                 core_projects.close()
             if core_conformance is not None:
@@ -475,9 +714,77 @@ def create_app(
             artifact_store=get_core_artifacts,
             capabilities=lambda: core_capabilities if get_core_runtime() else (),
             components=get_component_manager,
+            memory_store=lambda: core_memory if get_core_runtime() else None,
+            memory_settings=lambda: settings.get().memory,
+            mutation_authorizer=mutation_authorizer,
         )
     )
     action_proposals = ActionProposalService()
+
+    def get_update_verifier():
+        get_core_runtime()
+        if core_verification_service is None:
+            raise RuntimeError("trusted verification service is not configured")
+        return core_verification_service
+
+    owned_update_store = None
+    owned_update_memory = None
+    if autonomous_updates is None:
+        update_root = workspace.data_root / "autonomous-update"
+        launcher_root = Path(
+            os.environ.get("JSON_CODR_LAUNCHER_ROOT", str(workspace.data_root / "launcher"))
+        ).resolve()
+        code_root = Path(__file__).resolve().parent.parent
+        configured_update_root = os.environ.get("JSON_CODR_UPDATE_ROOT")
+        profile_root = (
+            Path(configured_update_root).resolve(strict=True)
+            if configured_update_root else code_root
+        )
+        owned_update_store = _LazyUpdateTaskStore(update_root / "tasks.sqlite")
+        owned_update_memory = _LazyUpdateMemory(workspace.data_root / "core" / "memory.sqlite")
+        update_launcher = UpdateLauncher(launcher_root)
+        autonomous_updates = AutonomousUpdateController(
+            store=owned_update_store,
+            profiles={
+                "self-update": UpdateProfile(
+                    profile_id="self-update",
+                    repository_root=str(profile_root),
+                    branch=os.environ.get("JSON_CODR_UPDATE_BRANCH", "main"),
+                    expected_remote_sha=os.environ.get("JSON_CODR_UPDATE_BASELINE_SHA"),
+                    mandatory_checks=("python-compile", "git-diff-check"),
+                    allowed_repository_roots=(str(profile_root),) if configured_update_root else (),
+                    automatic_mode_enabled=False,
+                    expected_version=APP_VERSION,
+                    launch_argv=(
+                        "python3", "-m", "uvicorn", "web_app.app:app",
+                        "--host", "{host}", "--port", "{port}",
+                    ),
+                    container_image=os.environ.get("JSON_CODR_UPDATE_CONTAINER_IMAGE"),
+                    container_port=int(os.environ.get("JSON_CODR_UPDATE_CONTAINER_PORT", "8000")),
+                )
+            },
+            worktrees=WorktreeRuntime(update_root / "candidates"),
+            verifier=_LazyUpdateVerifier(get_update_verifier),
+            publisher=github_cli,
+            launcher=update_launcher,
+            modifier=AgentRuntimeModifier(
+                core_runtime=get_core_runtime,
+                project_registry=lambda: core_projects,
+            ),
+            memory=owned_update_memory,
+        )
+
+        def close_autonomous_updates() -> None:
+            update_launcher.close()
+            owned_update_memory.close()
+            owned_update_store.close()
+
+        application.router.add_event_handler(
+            "startup", autonomous_updates.recover_abandoned_effects
+        )
+        application.router.add_event_handler("shutdown", close_autonomous_updates)
+        application.state.close_autonomous_updates = close_autonomous_updates
+    application.state.autonomous_updates = autonomous_updates
     web_root = Path(__file__).resolve().parent.parent / "web"
     application.mount("/static", StaticFiles(directory=web_root), name="static")
 
@@ -486,9 +793,277 @@ def create_app(
         return FileResponse(web_root / "index.html")
 
     @application.get("/api/health")
-    async def health():
+    async def health(http_request: Request):
         result = await service.health()
-        return {"status": "ready" if result["ollama"] else "degraded", "app_version": APP_VERSION, **result}
+        return {
+            "status": "ready" if result["ollama"] else "degraded",
+            "app_version": APP_VERSION,
+            "revision": os.environ.get("JSON_CODR_REVISION"),
+            "health_nonce": http_request.headers.get("x-json-codr-health-nonce"),
+            "instance_id": os.environ.get("JSON_CODR_INSTANCE_ID"),
+            "started_at": os.environ.get("JSON_CODR_STARTED_AT"),
+            "manifest_digest": os.environ.get("JSON_CODR_ARTIFACT_MANIFEST"),
+            **result,
+        }
+
+    def update_permissions(principal) -> dict[str, bool]:
+        scopes = set(getattr(principal, "scopes", ()))
+        return {
+            "propose": "system.update" in scopes,
+            "quarantine": "system.update" in scopes,
+            "activate": "system.activate" in scopes,
+            "rollback": "system.rollback" in scopes,
+        }
+
+    def update_candidate_view(candidate) -> dict:
+        values = candidate.model_dump(mode="json")
+        values.pop("credential_id", None)
+        values.pop("scopes", None)
+        values["pending_reconciliations"] = list(
+            autonomous_updates.pending_reconciliations(candidate.candidate_id)
+        )
+        return values
+
+    def update_status_view(principal) -> dict:
+        profiles = autonomous_updates.profiles()
+        enabled = bool(profiles) and all(profile.automatic_mode_enabled for profile in profiles)
+        return {
+            "profiles": [profile.model_dump(mode="json") for profile in profiles],
+            "candidates": [
+                update_candidate_view(candidate) for candidate in autonomous_updates.candidates()
+            ],
+            "builds": autonomous_updates.build_state(),
+            "permissions": update_permissions(principal),
+            "automatic_mode": {
+                "enabled": enabled,
+                "ready": False,
+                "missing_prerequisites": [
+                    "automatic profile enablement",
+                    "isolated programmatic activation and rollback proof",
+                    "Administrator in-app browser evidence",
+                ],
+            },
+        }
+
+    def run_update(action):
+        try:
+            return action()
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Update candidate or profile not found") from error
+        except (InvalidCandidateTransition, RepositoryScopeRequired) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @application.get("/api/updates")
+    def update_status(http_request: Request):
+        return update_status_view(session_principal(http_request))
+
+    @application.get("/api/updates/profiles/{profile_id}")
+    def update_profile(profile_id: str, http_request: Request):
+        principal = session_principal(http_request)
+        profile = run_update(lambda: autonomous_updates.profile(profile_id))
+        return {
+            "profile": profile.model_dump(mode="json"),
+            "permissions": update_permissions(principal),
+        }
+
+    @application.get("/api/updates/candidates")
+    def update_candidates(http_request: Request, profile_id: str | None = None):
+        principal = session_principal(http_request)
+        return {
+            "candidates": [
+                update_candidate_view(candidate)
+                for candidate in autonomous_updates.candidates(profile_id)
+            ],
+            "permissions": update_permissions(principal),
+        }
+
+    @application.get("/api/updates/candidates/{candidate_id}")
+    def update_candidate(candidate_id: str, http_request: Request):
+        principal = session_principal(http_request)
+        candidate = run_update(lambda: autonomous_updates.get(candidate_id))
+        return {
+            "candidate": update_candidate_view(candidate),
+            "permissions": update_permissions(principal),
+        }
+
+    @application.post("/api/updates/candidates", status_code=201)
+    def propose_update(request: UpdateProposalRequest, http_request: Request):
+        principal = mutation_principal(http_request, "system.update")
+        return run_update(
+            lambda: autonomous_updates.propose(request.profile_id, request.prompt, principal)
+        )
+
+    @application.post("/api/updates/candidates/{candidate_id}/stage")
+    def stage_update(candidate_id: str, http_request: Request):
+        mutation_principal(http_request, "system.update")
+        return run_update(lambda: autonomous_updates.stage(candidate_id))
+
+    @application.post("/api/updates/candidates/{candidate_id}/modified")
+    def mark_update_modified(candidate_id: str, http_request: Request):
+        mutation_principal(http_request, "system.update")
+        return run_update(lambda: autonomous_updates.modify(candidate_id))
+
+    @application.post("/api/updates/candidates/{candidate_id}/verify")
+    def verify_update(candidate_id: str, http_request: Request):
+        mutation_principal(http_request, "system.update")
+        return run_update(lambda: autonomous_updates.verify(candidate_id))
+
+    @application.post("/api/updates/candidates/{candidate_id}/commit")
+    def commit_update(candidate_id: str, http_request: Request):
+        mutation_principal(http_request, "system.update")
+        return run_update(lambda: autonomous_updates.commit(candidate_id))
+
+    @application.post("/api/updates/candidates/{candidate_id}/publish")
+    def publish_update(candidate_id: str, http_request: Request):
+        mutation_principal(http_request, "system.update")
+        return run_update(lambda: autonomous_updates.publish(candidate_id))
+
+    @application.post("/api/updates/candidates/{candidate_id}/health")
+    def health_check_update(candidate_id: str, http_request: Request):
+        mutation_principal(http_request, "system.update")
+        return run_update(lambda: autonomous_updates.health_check(candidate_id))
+
+    @application.post("/api/updates/candidates/{candidate_id}/reconcile")
+    def reconcile_update(
+        candidate_id: str, request: UpdateReconcileRequest, http_request: Request
+    ):
+        required_scope = {
+            "activate": "system.activate",
+            "rollback": "system.rollback",
+        }.get(request.transition, "system.update")
+        mutation_principal(http_request, required_scope)
+        return run_update(
+            lambda: autonomous_updates.reconcile(candidate_id, request.transition)
+        )
+
+    @application.post("/api/updates/candidates/{candidate_id}/quarantine")
+    def quarantine_update(
+        candidate_id: str, request: UpdateReasonRequest, http_request: Request
+    ):
+        principal = mutation_principal(http_request, "system.update")
+        return run_update(
+            lambda: autonomous_updates.quarantine(candidate_id, request.reason, principal)
+        )
+
+    @application.post("/api/updates/candidates/{candidate_id}/scope-approval")
+    def approve_update_scope(
+        candidate_id: str, request: RepositoryScopeApprovalRequest, http_request: Request
+    ):
+        principal = mutation_principal(http_request, "system.update")
+        return run_update(lambda: autonomous_updates.approve_repository_scope(
+            candidate_id,
+            request.repository_root,
+            request.checkpoint_digest,
+            request.review_ledger_digest,
+            principal,
+        ))
+
+    @application.post("/api/updates/candidates/{candidate_id}/activate")
+    def activate_update(candidate_id: str, http_request: Request):
+        principal = mutation_principal(http_request, "system.activate")
+        return run_update(lambda: autonomous_updates.activate(candidate_id, principal))
+
+    @application.post("/api/updates/candidates/{candidate_id}/rollback")
+    def rollback_update(candidate_id: str, http_request: Request):
+        principal = mutation_principal(http_request, "system.rollback")
+        return run_update(lambda: autonomous_updates.rollback(candidate_id, principal))
+
+    @application.get("/api/connections")
+    async def connection_inventory(http_request: Request):
+        require_local_connection_request(http_request)
+        return {"connections": [asdict(item) for item in await connection_recovery.inventory()]}
+
+    @application.post("/api/connections/scan")
+    async def scan_connections(http_request: Request):
+        require_local_connection_request(http_request)
+        return {"connections": [asdict(item) for item in await connection_recovery.inventory()]}
+
+    @application.get("/api/connections/{connection_id:path}/plan")
+    async def connection_plan(connection_id: str, http_request: Request):
+        require_local_connection_request(http_request)
+        try:
+            return asdict(await connection_recovery.plan(connection_id))
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @application.post("/api/connections/{connection_id:path}/preview")
+    async def preview_connection(connection_id: str, request: ConnectionPreviewRequest, http_request: Request):
+        require_local_connection_request(http_request)
+        try:
+            return await connection_recovery.preview(connection_id, request.action_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @application.post("/api/connections/{connection_id:path}/test")
+    async def test_connection(connection_id: str, http_request: Request):
+        require_local_connection_request(http_request)
+        try:
+            return asdict(await connection_recovery.status(connection_id))
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @application.post("/api/connections/{connection_id:path}/recover")
+    async def recover_connection(connection_id: str, request: ConnectionRecoveryRequest, http_request: Request):
+        require_local_connection_request(http_request)
+        try:
+            return asdict(await connection_recovery.recover_confirmed(
+                connection_id, request.action_id, request.confirmation_code,
+            ))
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except (OSError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @application.get("/.well-known/json-codr")
+    async def json_codr_discovery(request: Request):
+        requested_origin = str(request.base_url).rstrip("/")
+        requested_host = request.url.hostname
+        configured_origin = os.environ.get("JSON_CODR_PUBLIC_URL")
+        service_origin = configured_origin or (
+            requested_origin
+            if requested_host in {"127.0.0.1", "localhost", "::1"}
+            else "http://127.0.0.1:8874"
+        )
+        return build_discovery_document(
+            service_origin,
+            os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"),
+        )
+
+    @application.get("/api/integrations/vscode/language-models")
+    async def vscode_language_models():
+        try:
+            models = await service.list_models()
+            installed = [model for model in models if model.get("installed") is True]
+            if hasattr(service, "model_metadata"):
+                metadata = await asyncio.gather(*(
+                    service.model_metadata(str(model["name"])) for model in installed
+                ))
+                enriched = [{**model, **details} for model, details in zip(installed, metadata)]
+            else:
+                tool_support, vision_support = await asyncio.gather(
+                    asyncio.gather(*(service.supports_tools(str(model["name"])) for model in installed)),
+                    asyncio.gather(*(service.supports_vision(str(model["name"])) for model in installed)),
+                )
+                enriched = [
+                    {**model, "tool_calling": tools, "vision": vision}
+                    for model, tools, vision in zip(installed, tool_support, vision_support)
+                ]
+            return build_vscode_language_model_config(
+                os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"),
+                enriched,
+            )
+        except OllamaUnavailableError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
 
     @application.post("/api/benchmarks/baseline")
     async def export_benchmark_baseline():
@@ -579,6 +1154,90 @@ def create_app(
         except ValueError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
 
+    @application.get("/api/identity/bootstrap")
+    async def identity_bootstrap_state(request: Request, response: Response):
+        _, csrf_name, secure = identity_cookie_names(request)
+        csrf = request.cookies.get(csrf_name) or secrets.token_urlsafe(32)
+        response.set_cookie(
+            csrf_name,
+            csrf,
+            secure=secure,
+            httponly=False,
+            samesite="strict",
+            path="/",
+        )
+        state = identity.bootstrap_state()
+        bypass = identity.development_bypass()
+        return {
+            "completed": state.completed,
+            "mode": state.mode,
+            "credential_policy": "non-expiring, revocable (non-production)" if state.mode == "non-production" else None,
+            "development_bypass": {
+                "enabled": bypass.enabled,
+                "do_not_expire": bypass.do_not_expire,
+                "expires_at": bypass.expires_at.isoformat() if bypass.expires_at else None,
+            },
+        }
+
+    @application.post("/api/identity/login")
+    async def identity_login(request: Request, response: Response):
+        require_csrf(request)
+        payload = await request.json()
+        username = str(payload.get("username", ""))
+        password = str(payload.get("password", ""))
+        if not identity.authenticate_password(username, password):
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+        user = next(
+            (candidate for candidate in identity.list_users() if candidate.normalized_username == username.strip().casefold()),
+            None,
+        )
+        if user is None:
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+        credential = identity.issue_credential(
+            user.user_id,
+            "browser_session",
+            f"browser session · {request.client.host if request.client else 'local'}",
+            identity.browser_session_scopes(user.user_id),
+        )
+        session_name, _, secure = identity_cookie_names(request)
+        response.set_cookie(
+            session_name,
+            credential.token,
+            secure=secure,
+            httponly=True,
+            samesite="strict",
+            path="/",
+            expires=credential.expires_at,
+        )
+        return identity_user_view(user)
+
+    @application.get("/api/identity/account")
+    async def identity_account(request: Request):
+        principal = session_principal(request)
+        return identity_user_view(identity.get_user(principal.user_id))
+
+    @application.get("/api/identity/users")
+    async def identity_users(request: Request):
+        principal = session_principal(request)
+        if not set(principal.roles) & {"owner", "administrator"}:
+            raise HTTPException(status_code=403, detail="Administrator authority required")
+        return {
+            "users": [identity_user_view(user) for user in identity.list_users()],
+            "roles": [{"name": role.name, "grants": list(role.grants)} for role in identity.list_roles()],
+        }
+
+    @application.post("/api/identity/logout", status_code=204)
+    async def identity_logout(request: Request, response: Response):
+        require_csrf(request)
+        principal = session_principal(request)
+        identity.revoke_credential(
+            principal.credential_id,
+            actor_id=principal.user_id,
+            reason="browser logout",
+        )
+        session_name, _, secure = identity_cookie_names(request)
+        response.delete_cookie(session_name, path="/", secure=secure, httponly=True, samesite="strict")
+
     @application.get("/api/settings")
     async def get_settings():
         return settings.get()
@@ -595,6 +1254,28 @@ def create_app(
             return await asyncio.to_thread(optimized_search.search, provider.value, q, limit)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @application.post("/api/inference/models/install")
+    async def install_optimized_model(request: OptimizedModelInstallRequest):
+        if not request.confirmed:
+            raise HTTPException(status_code=409, detail="Model download requires confirmation")
+        try:
+            model = catalog.get(request.model_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Only approved catalog models can be installed") from error
+        try:
+            path = await asyncio.to_thread(environment_manager.install_model, model)
+            probe = await inference_router.probe(model.id) if inference_router else None
+        except (OSError, RuntimeError, ValueError) as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+        return {
+            "model_id": model.id,
+            "provider": model.provider.value,
+            "path": str(path),
+            "installed": path.is_dir(),
+            "verified": bool(probe and probe.success),
+            "probe_error": probe.error if probe and not probe.success else None,
+        }
 
     @application.get("/api/inference/environments")
     async def inference_environments():
@@ -1098,13 +1779,13 @@ def create_app(
             project_root=str(Path(__file__).resolve().parent.parent),
             arguments={"source_kind": source_kind, "reference": reference},
         )
-        core_policy.grant("user", "legacy", call, scope="project")
+        core_policy.grant("user", application.state.core_default_project_id, call, scope="project")
         task_id = str(uuid7())
         record = await core_service.submit(TaskCommand(
             command_id=str(uuid7()),
             task_id=task_id,
             thread_id=f"component:{source_kind}",
-            project_id="legacy",
+            project_id=application.state.core_default_project_id,
             command_type="component.install",
             payload=call.model_dump(mode="json"),
         ))
@@ -1275,23 +1956,425 @@ def create_app(
             raise HTTPException(status_code=404, detail="Session not found") from error
 
     @application.patch("/api/sessions/{session_id}/attachments/{attachment_id}")
-    async def update_attachment(session_id: str, attachment_id: str, request: AttachmentUpdate):
+    async def update_attachment(
+        session_id: str,
+        attachment_id: str,
+        request: AttachmentUpdate,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "session.write")
         try:
             return attachments.set_included(session_id, attachment_id, request.included)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Attachment not found") from error
 
     @application.delete("/api/sessions/{session_id}/attachments/{attachment_id}", status_code=204)
-    async def delete_attachment(session_id: str, attachment_id: str):
+    async def delete_attachment(session_id: str, attachment_id: str, http_request: Request):
+        mutation_principal(http_request, "session.write")
         try:
             attachments.remove(session_id, attachment_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Attachment not found") from error
         return Response(status_code=204)
 
-    def require_terminal_header(x_json_codr: str | None) -> None:
-        if x_json_codr != "1":
-            raise HTTPException(status_code=403, detail="Terminal request header required")
+    def require_github_read(request: Request, response: Response, x_json_codr: str | None) -> None:
+        if x_json_codr == "1":
+            response.headers["Deprecation"] = "true"
+            return
+        mutation_authorizer.principal(request, "git.read")
+
+    async def github_call(operation: Callable[..., object], *args: object, **kwargs: object) -> object:
+        try:
+            return await asyncio.to_thread(operation, *args, **kwargs)
+        except GitHubCLIError as error:
+            raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @application.get("/api/github/status")
+    async def github_status(request: Request, response: Response, x_json_codr: str | None = Header(None)):
+        require_github_read(request, response, x_json_codr)
+        return await github_call(github_cli.status)
+
+    async def github_auth_call(operation: Callable[..., object], *args: object) -> object:
+        try:
+            return await asyncio.to_thread(operation, *args)
+        except GitHubAuthSessionNotFound as error:
+            raise HTTPException(status_code=404, detail="GitHub login session not found") from error
+        except GitHubAuthSessionConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @application.post("/api/github/auth/login")
+    async def github_auth_login(
+        request: GitHubAuthLoginRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_auth_call(github_auth.start)
+
+    @application.get("/api/github/auth/login/{session_id}")
+    async def github_auth_login_status(
+        session_id: str,
+        request: Request,
+        response: Response,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_github_read(request, response, x_json_codr)
+        return await github_auth_call(github_auth.status, session_id)
+
+    @application.post("/api/github/auth/login/{session_id}/cancel")
+    async def github_auth_login_cancel(
+        session_id: str,
+        request: GitHubAuthCancelRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_auth_call(github_auth.cancel, session_id)
+
+    @application.get("/api/github/repositories")
+    async def github_repositories(request: Request, response: Response, x_json_codr: str | None = Header(None)):
+        require_github_read(request, response, x_json_codr)
+        return await github_call(github_cli.repositories)
+
+    @application.post("/api/github/repositories", status_code=201)
+    async def github_create_repository(
+        request: GitHubRepositoryCreateRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_call(
+            github_cli.create_repository,
+            request.name,
+            request.description,
+            request.private,
+            request.auto_init,
+            request.owner,
+            request.homepage,
+        )
+
+    @application.patch("/api/github/repos/{owner}/{repository}")
+    async def github_update_repository(
+        owner: str,
+        repository: str,
+        request: GitHubRepositoryUpdateRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_call(
+            github_cli.update_repository,
+            owner,
+            repository,
+            request.model_dump(exclude={"confirmed"}, exclude_none=True),
+        )
+
+    @application.delete("/api/github/repos/{owner}/{repository}")
+    async def github_delete_repository(
+        owner: str,
+        repository: str,
+        request: GitHubRepositoryDeleteRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        if request.confirm_name.casefold() != f"{owner}/{repository}".casefold():
+            raise HTTPException(status_code=422, detail="Type the exact owner/repository name to confirm deletion")
+        return await github_call(github_cli.delete_repository, owner, repository)
+
+    @application.get("/api/github/repos/{owner}/{repository}/issues")
+    async def github_issues(
+        owner: str,
+        repository: str,
+        request: Request,
+        response: Response,
+        state: Literal["open", "closed", "all"] = "open",
+        x_json_codr: str | None = Header(None),
+    ):
+        require_github_read(request, response, x_json_codr)
+        return await github_call(github_cli.issues, owner, repository, state)
+
+    @application.post("/api/github/repos/{owner}/{repository}/issues", status_code=201)
+    async def github_create_issue(
+        owner: str,
+        repository: str,
+        request: GitHubIssueCreateRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_call(github_cli.create_issue, owner, repository, request.title, request.body)
+
+    @application.patch("/api/github/repos/{owner}/{repository}/issues/{number}")
+    async def github_update_issue(
+        owner: str,
+        repository: str,
+        number: int,
+        request: GitHubIssueUpdateRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_call(
+            github_cli.update_issue, owner, repository, number,
+            request.model_dump(exclude={"confirmed"}, exclude_none=True),
+        )
+
+    @application.post("/api/github/repos/{owner}/{repository}/issues/{number}/comments", status_code=201)
+    async def github_comment_issue(
+        owner: str,
+        repository: str,
+        number: int,
+        request: GitHubIssueCommentRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_call(github_cli.comment_issue, owner, repository, number, request.body)
+
+    @application.get("/api/github/repos/{owner}/{repository}/pulls")
+    async def github_pull_requests(
+        owner: str,
+        repository: str,
+        request: Request,
+        response: Response,
+        state: Literal["open", "closed", "all"] = "open",
+        x_json_codr: str | None = Header(None),
+    ):
+        require_github_read(request, response, x_json_codr)
+        return await github_call(github_cli.pull_requests, owner, repository, state)
+
+    @application.get("/api/github/repos/{owner}/{repository}/branches")
+    async def github_branches(
+        owner: str,
+        repository: str,
+        request: Request,
+        response: Response,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_github_read(request, response, x_json_codr)
+        return await github_call(github_cli.branches, owner, repository)
+
+    @application.post("/api/github/repos/{owner}/{repository}/branches", status_code=201)
+    async def github_create_branch(
+        owner: str,
+        repository: str,
+        request: GitHubRemoteBranchCreateRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_call(
+            github_cli.create_branch, owner, repository, request.branch, request.source_branch,
+        )
+
+    @application.delete("/api/github/repos/{owner}/{repository}/branches/{branch:path}")
+    async def github_delete_branch(
+        owner: str,
+        repository: str,
+        branch: str,
+        request: GitHubConfirmedWrite,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_call(github_cli.delete_branch, owner, repository, branch)
+
+    @application.get("/api/github/repos/{owner}/{repository}/commits")
+    async def github_commits(
+        owner: str,
+        repository: str,
+        request: Request,
+        response: Response,
+        branch: str | None = None,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_github_read(request, response, x_json_codr)
+        return await github_call(github_cli.commits, owner, repository, branch)
+
+    @application.post("/api/github/repos/{owner}/{repository}/pulls", status_code=201)
+    async def github_create_pull_request(
+        owner: str,
+        repository: str,
+        request: GitHubPullRequestCreateRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_call(
+            github_cli.create_pull_request, owner, repository, request.head, request.base,
+            request.title, request.body, request.draft,
+        )
+
+    @application.patch("/api/github/repos/{owner}/{repository}/pulls/{number}")
+    async def github_update_pull_request(
+        owner: str,
+        repository: str,
+        number: int,
+        request: GitHubPullRequestUpdateRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_call(
+            github_cli.update_pull_request, owner, repository, number,
+            request.model_dump(exclude={"confirmed"}, exclude_none=True),
+        )
+
+    @application.post("/api/github/repos/{owner}/{repository}/pulls/{number}/merge")
+    async def github_merge_pull_request(
+        owner: str,
+        repository: str,
+        number: int,
+        request: GitHubPullRequestMergeRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_call(
+            github_cli.merge_pull_request, owner, repository, number, request.merge_method,
+        )
+
+    @application.get("/api/github/repos/{owner}/{repository}/releases")
+    async def github_releases(
+        owner: str,
+        repository: str,
+        request: Request,
+        response: Response,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_github_read(request, response, x_json_codr)
+        return await github_call(github_cli.releases, owner, repository)
+
+    @application.post("/api/github/repos/{owner}/{repository}/releases", status_code=201)
+    async def github_create_release(
+        owner: str,
+        repository: str,
+        request: GitHubReleaseCreateRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_call(
+            github_cli.create_release, owner, repository, request.tag_name, request.name,
+            request.body, request.target_commitish, request.draft, request.prerelease,
+        )
+
+    @application.patch("/api/github/repos/{owner}/{repository}/releases/{release_id}")
+    async def github_update_release(
+        owner: str,
+        repository: str,
+        release_id: int,
+        request: GitHubReleaseUpdateRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_call(
+            github_cli.update_release,
+            owner,
+            repository,
+            release_id,
+            request.model_dump(exclude={"confirmed"}, exclude_none=True),
+        )
+
+    @application.delete("/api/github/repos/{owner}/{repository}/releases/{release_id}")
+    async def github_delete_release(
+        owner: str,
+        repository: str,
+        release_id: int,
+        request: GitHubConfirmedWrite,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_call(github_cli.delete_release, owner, repository, release_id)
+
+    @application.post("/api/github/local/clone", status_code=201)
+    async def github_local_clone(
+        request: GitHubLocalCloneRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_call(github_cli.clone_local_repository, request.repository, request.destination)
+
+    @application.post("/api/github/local/fetch")
+    async def github_local_fetch(
+        request: GitHubLocalSyncRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_call(github_cli.fetch_local_changes, request.project_root)
+
+    @application.post("/api/github/local/pull")
+    async def github_local_pull(
+        request: GitHubLocalSyncRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_call(github_cli.pull_local_changes, request.project_root)
+
+    @application.post("/api/github/local/check-build")
+    async def github_local_check_build(
+        request: GitHubBuildCheckRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_call(
+            github_cli.check_build,
+            request.project_root,
+            request.repository,
+            request.branch,
+        )
+
+    @application.post("/api/github/local/update-build")
+    async def github_local_update_build(
+        request: GitHubBuildUpdateRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_call(
+            github_cli.update_build,
+            request.project_root,
+            request.repository,
+            request.branch,
+            request.expected_local_sha,
+            request.expected_remote_sha,
+            request.expected_login,
+            request.expected_host,
+        )
+
+    @application.get("/api/github/local/status")
+    async def github_local_status(
+        project_root: str,
+        request: Request,
+        response: Response,
+        x_json_codr: str | None = Header(None),
+    ):
+        require_github_read(request, response, x_json_codr)
+        return await github_call(github_cli.local_status, project_root)
+
+    @application.post("/api/github/local/branch", status_code=201)
+    async def github_local_branch(
+        request: GitHubLocalBranchRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_call(github_cli.create_local_branch, request.project_root, request.branch)
+
+    @application.post("/api/github/local/stage")
+    async def github_local_stage(
+        request: GitHubLocalStageRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.edit")
+        return await github_call(github_cli.stage_local_files, request.project_root, request.paths)
+
+    @application.post("/api/github/local/commit", status_code=201)
+    async def github_local_commit(
+        request: GitHubLocalCommitRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.commit")
+        return await github_call(github_cli.commit_local_changes, request.project_root, request.message)
+
+    @application.post("/api/github/local/push")
+    async def github_local_push(
+        request: GitHubLocalPushRequest,
+        http_request: Request,
+    ):
+        mutation_principal(http_request, "git.push")
+        return await github_call(github_cli.push_local_changes, request.project_root)
 
     @application.get("/api/coding-agents/status")
     async def coding_agent_status():
@@ -1306,16 +2389,16 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     @application.post("/api/git-broker/grants", status_code=201)
-    async def create_git_broker_grant(request: BrokerGrantRequest, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def create_git_broker_grant(request: BrokerGrantRequest, http_request: Request):
+        mutation_principal(http_request, "agent.launch")
         try:
             return coding_agents.grant(request.project_root, request.profile)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     @application.delete("/api/git-broker/grants/{grant_id}")
-    async def revoke_git_broker_grant(grant_id: str, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def revoke_git_broker_grant(grant_id: str, http_request: Request):
+        mutation_principal(http_request, "agent.launch")
         try:
             return coding_agents.revoke(grant_id)
         except KeyError as error:
@@ -1323,14 +2406,12 @@ def create_app(
 
     async def execute_git_through_core(action_request, model: str, grant_id: str):
         core_service, _, _ = get_core_runtime()
-        operation = next(
-            (kind for kind in ("push", "commit", "sync") if any(action.kind == kind for action in action_request.actions)),
-            "bounded_edit" if any(action.kind == "apply_patch" for action in action_request.actions) else "read",
-        )
+        project = application.state.core_project_registry.register(action_request.project_root)
+        operation = "git"
         call = CapabilityCall(
             capability_id="git.execute",
             operation=operation,
-            project_root=action_request.project_root,
+            project_root=project.root,
             arguments={
                 "request": action_request.model_dump(mode="json"),
                 "model": model,
@@ -1342,7 +2423,7 @@ def create_app(
             command_id=str(uuid7()),
             task_id=task_id,
             thread_id=f"legacy:{task_id}",
-            project_id="legacy",
+            project_id=project.project_id,
             command_type="git.execute",
             payload=call.model_dump(mode="json"),
         ))
@@ -1354,8 +2435,8 @@ def create_app(
         return completed.payload["result"]
 
     @application.post("/api/git-broker/tasks", status_code=201)
-    async def execute_git_broker_task(request: BrokerTaskRequest, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def execute_git_broker_task(request: BrokerTaskRequest, http_request: Request):
+        mutation_principal(http_request, "agent.launch")
         def authorized():
             return coding_agents.authorized_grant(request.grant_id, request.request.project_root, "broker")
         if not authorized():
@@ -1366,8 +2447,8 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.post("/api/git-broker/adapter", status_code=201)
-    async def execute_git_broker_adapter(request: BrokerAdapterRunRequest, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def execute_git_broker_adapter(request: BrokerAdapterRunRequest, http_request: Request):
+        mutation_principal(http_request, "agent.launch")
         def authorized():
             return coding_agents.authorized_grant(request.grant_id, request.project_root, "broker")
         if not authorized():
@@ -1410,8 +2491,8 @@ def create_app(
         }
 
     @application.post("/api/project-workspace/run", status_code=201)
-    async def run_project_workspace(request: ProjectWorkspaceRunRequest, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def run_project_workspace(request: ProjectWorkspaceRunRequest, http_request: Request):
+        mutation_principal(http_request, "agent.launch")
         try:
             executed = await execute_project_workspace(request.project_root, request.model, request.outcome)
             return {**executed, "requested_model": request.model}
@@ -1421,7 +2502,8 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.post("/api/workspace/tasks", response_model=WorkspaceTaskResponse, status_code=201)
-    async def submit_workspace_task(request: WorkspaceTaskRequest, response: Response):
+    async def submit_workspace_task(request: WorkspaceTaskRequest, response: Response, http_request: Request):
+        mutation_principal(http_request, "agent.launch")
         if request.engine_id != "borg":
             raise HTTPException(status_code=409, detail="Requested engine is not a verified Workspace engine")
         try:
@@ -1454,9 +2536,16 @@ def create_app(
             if requested_model == "auto":
                 warnings.append(f"Auto selected {selected_model} from the installed model roster")
             compatibility = await service.tool_compatibility(selected_model)
-            if not compatibility["available"]:
-                raise HTTPException(status_code=409, detail="Requested engine and model do not have a verified tool route")
-            effective_model = compatibility["effective_tool_model"] or selected_model
+            if compatibility["available"]:
+                effective_model = compatibility["effective_tool_model"] or selected_model
+                route = compatibility.get("route") or "broker_verified"
+            else:
+                effective_model = selected_model
+                route = "json_planner_compatibility"
+                warnings.append(
+                    "Native tool calling is not verified for this model; JSON_CODR will validate "
+                    "its planning output and execute capabilities through the BORG compatibility layer"
+                )
             if effective_model != selected_model:
                 warnings.append(f"Verified tool execution uses {effective_model}; requested model remains {selected_model}")
             recommendation = recommendations.recommend(session, request.prompt)
@@ -1466,17 +2555,25 @@ def create_app(
                 raise RuntimeError("project registry is unavailable")
             registered = core_projects.register(request.project_root)
             task_id = str(uuid7())
-            route = compatibility.get("route") or "broker_verified"
+            thread_id = f"workspace:{request.session_id}:{task_id}"
             goal = GoalSpec(
-                goal_id=f"goal:{task_id}", revision=1, objective=assembled.prompt,
+                goal_id=f"goal:{task_id}", revision=1, objective=request.prompt,
                 criteria=(CompletionCriterion(
                     criterion_id=f"criterion:{task_id}", kind=CriterionKind.project_state,
                     description="Complete the requested project work with fresh persisted evidence",
                 ),), accepted=True,
             )
+            if core_memory is None:
+                raise RuntimeError("agent memory is unavailable")
+            core_memory.add(
+                thread_id,
+                "workspace_context",
+                assembled.prompt,
+                source_ref=f"workspace-context:{task_id}",
+            )
             record = await core_service.submit(TaskCommand(
                 command_id=str(uuid7()), task_id=task_id,
-                thread_id=f"workspace:{request.session_id}:{task_id}",
+                thread_id=thread_id,
                 project_id=registered.project_id, command_type="agent.run",
                 payload={
                     "goal_spec": goal.model_dump(mode="json"), "target_path": ".",
@@ -1507,24 +2604,24 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.post("/api/coding-agents/grants", status_code=201)
-    async def create_coding_agent_grant(request: CodingAgentGrantRequest, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def create_coding_agent_grant(request: CodingAgentGrantRequest, http_request: Request):
+        mutation_principal(http_request, "agent.launch")
         try:
             return coding_agents.grant(request.project_root, request.tool)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     @application.delete("/api/coding-agents/grants/{grant_id}")
-    async def revoke_coding_agent_grant(grant_id: str, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def revoke_coding_agent_grant(grant_id: str, http_request: Request):
+        mutation_principal(http_request, "agent.launch")
         try:
             return coding_agents.revoke(grant_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Coding agent grant not found") from error
 
     @application.post("/api/coding-agents/launch", status_code=201)
-    async def launch_coding_agent(request: CodingAgentLaunchRequest, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def launch_coding_agent(request: CodingAgentLaunchRequest, http_request: Request):
+        mutation_principal(http_request, "agent.launch")
         try:
             compatibility = await service.tool_compatibility(request.model)
             if not compatibility["available"]:
@@ -1550,19 +2647,21 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     @application.get("/api/terminals")
-    async def list_terminals():
+    async def list_terminals(http_request: Request):
+        mutation_authorizer.principal(http_request, "terminal.write")
         return terminals.list()
 
     @application.post("/api/terminals", status_code=201)
-    async def create_terminal(request: TerminalCreateRequest, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def create_terminal(request: TerminalCreateRequest, http_request: Request):
+        mutation_principal(http_request, "terminal.write")
         cwd = Path(request.cwd).resolve() if request.cwd else Path(__file__).resolve().parent.parent
         try:
             core_service, _, _ = get_core_runtime()
+            project = application.state.core_project_registry.register(cwd)
             call = CapabilityCall(
                 capability_id="terminal.session",
                 operation="session",
-                project_root=str(cwd),
+                project_root=project.root,
                 arguments={"shell": request.shell},
             )
             task_id = str(uuid7())
@@ -1570,23 +2669,36 @@ def create_app(
                 command_id=str(uuid7()),
                 task_id=task_id,
                 thread_id=f"terminal:{task_id}",
-                project_id="legacy",
+                project_id=project.project_id,
                 command_type="terminal.session",
                 payload=call.model_dump(mode="json"),
             ))
+            if record.events and record.events[-1].event_type == "task.permission_required":
+                proposal_id = record.events[-1].payload.get("proposal_id")
+                if not isinstance(proposal_id, str):
+                    raise ValueError("Terminal session approval proposal is missing")
+                # This endpoint is called from an explicit local terminal action; consume only its exact one-shot proposal.
+                record = await core_service.approve(
+                    task_id, principal="user", scope="project", proposal_id=proposal_id,
+                )
             if record.status is not TaskStatus.completed:
-                raise ValueError(record.events[-1].payload.get("reason", "Terminal creation failed"))
+                reason = record.events[-1].payload.get("reason") if record.events else None
+                raise ValueError(reason or "Terminal creation failed")
             started = next(event for event in reversed(record.events) if event.event_type == "terminal.session_started")
             return started.payload["record"]
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     async def submit_terminal_mutation(operation: str, terminal_id: str) -> None:
         core_service, _, _ = get_core_runtime()
+        terminal = terminals.get(terminal_id)
+        project = application.state.core_project_registry.register(terminal.cwd)
         call = CapabilityCall(
             capability_id=f"terminal.{operation}",
             operation=operation,
-            project_root=str(Path(__file__).resolve().parent.parent),
+            project_root=project.root,
             arguments={"terminal_id": terminal_id},
         )
         task_id = str(uuid7())
@@ -1594,25 +2706,35 @@ def create_app(
             command_id=str(uuid7()),
             task_id=task_id,
             thread_id=f"terminal:{terminal_id}",
-            project_id="legacy",
+            project_id=project.project_id,
             command_type=f"terminal.{operation}",
             payload=call.model_dump(mode="json"),
         ))
+        if record.events and record.events[-1].event_type == "task.permission_required":
+            proposal_id = record.events[-1].payload.get("proposal_id")
+            if not isinstance(proposal_id, str):
+                raise HTTPException(status_code=409, detail="Terminal operation approval proposal is missing")
+            try:
+                record = await core_service.approve(
+                    task_id, principal="user", scope="project", proposal_id=proposal_id,
+                )
+            except PermissionError as error:
+                raise HTTPException(status_code=403, detail=str(error)) from error
         if record.status is not TaskStatus.completed:
-            reason = record.events[-1].payload.get("reason", "Terminal operation failed")
+            reason = record.events[-1].payload.get("reason", "Terminal operation failed") if record.events else "Terminal operation failed"
             if reason == "capability target not found":
                 raise HTTPException(status_code=404, detail="Terminal not found")
             raise HTTPException(status_code=409, detail=reason)
 
     @application.post("/api/terminals/{terminal_id}/interrupt", status_code=204)
-    async def interrupt_terminal(terminal_id: str, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def interrupt_terminal(terminal_id: str, http_request: Request):
+        mutation_principal(http_request, "terminal.write")
         await submit_terminal_mutation("interrupt", terminal_id)
         return Response(status_code=204)
 
     @application.delete("/api/terminals/{terminal_id}", status_code=204)
-    async def close_terminal(terminal_id: str, x_json_codr: str | None = Header(None)):
-        require_terminal_header(x_json_codr)
+    async def close_terminal(terminal_id: str, http_request: Request):
+        mutation_principal(http_request, "terminal.write")
         await submit_terminal_mutation("close", terminal_id)
         return Response(status_code=204)
 
@@ -1630,9 +2752,9 @@ def create_app(
         session_id: str,
         proposal_id: str,
         request: ActionApprovalRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "terminal.write")
         try:
             proposal = action_proposals.get(session_id, proposal_id)
             validate_action_terminal(proposal, request.terminal_id)
@@ -1647,9 +2769,9 @@ def create_app(
         session_id: str,
         proposal_id: str,
         request: DestructiveConfirmationRequest,
-        x_json_codr: str | None = Header(None),
+        http_request: Request,
     ):
-        require_terminal_header(x_json_codr)
+        mutation_principal(http_request, "terminal.write")
         try:
             proposal = action_proposals.get(session_id, proposal_id)
             validate_action_terminal(proposal, request.terminal_id)
@@ -1662,7 +2784,8 @@ def create_app(
             raise HTTPException(status_code=403, detail=str(error)) from error
 
     @application.post("/api/sessions/{session_id}/action-proposals/{proposal_id}/reject")
-    async def reject_action(session_id: str, proposal_id: str):
+    async def reject_action(session_id: str, proposal_id: str, http_request: Request):
+        mutation_principal(http_request, "terminal.write")
         try:
             return action_proposals.reject(session_id, proposal_id)
         except KeyError as error:
@@ -1672,8 +2795,17 @@ def create_app(
 
     @application.websocket("/ws/terminals/{terminal_id}")
     async def terminal_socket(websocket: WebSocket, terminal_id: str):
-        expected_origin = f"http://{websocket.url.hostname}:{websocket.url.port}"
+        scheme = "https" if websocket.url.scheme == "wss" else "http"
+        port = websocket.url.port
+        default_port = 443 if scheme == "https" else 80
+        expected_origin = f"{scheme}://{websocket.url.hostname}" + (f":{port}" if port and port != default_port else "")
         if websocket.headers.get("origin") != expected_origin:
+            await websocket.close(code=1008)
+            return
+        try:
+            mutation_authorizer.principal(websocket, "terminal.write")
+            csrf_protocol = mutation_authorizer.websocket_csrf(websocket)
+        except HTTPException:
             await websocket.close(code=1008)
             return
         try:
@@ -1681,7 +2813,7 @@ def create_app(
         except KeyError:
             await websocket.close(code=1008)
             return
-        await websocket.accept()
+        await websocket.accept(subprotocol=csrf_protocol)
         pending_action_markers: dict[str, str] = {}
         completion_tail = ""
         try:
@@ -1784,7 +2916,7 @@ def create_app(
             command_id=str(uuid7()),
             task_id=task_id,
             thread_id=thread_id,
-            project_id="legacy",
+            project_id=application.state.core_default_project_id,
             command_type="inference.generate",
             payload=call.model_dump(mode="json"),
         ))
@@ -1800,6 +2932,92 @@ def create_app(
             raise HTTPException(status_code=status, detail=reason)
         completed = next(event for event in reversed(record.events) if event.event_type == "inference.completed")
         return ChatResult.model_validate(completed.payload["result"])
+
+    @application.post("/api/ag-ui/run")
+    async def run_agui(run_input: RunAgentInput, http_request: Request):
+        try:
+            prompt = build_agui_prompt(run_input)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        forwarded_props = run_input.forwarded_props
+        requested_model = (
+            forwarded_props.get("model")
+            if isinstance(forwarded_props, dict)
+            else None
+        )
+        if requested_model is None:
+            requested_model = getattr(service, "config", {}).get("model")
+        if not isinstance(requested_model, str) or not requested_model.strip() or len(requested_model) > 200:
+            raise HTTPException(
+                status_code=422,
+                detail="Set a configured model or pass forwardedProps.model",
+            )
+        if any(ord(character) < 32 or ord(character) == 127 for character in requested_model):
+            raise HTTPException(status_code=422, detail="Invalid model name")
+        encoder = EventEncoder(accept=http_request.headers.get("accept"))
+        backend = inference_router or service
+        return StreamingResponse(
+            stream_agui_events(
+                run_input,
+                model=requested_model.strip(),
+                prompt=prompt,
+                backend=backend,
+                encoder=encoder,
+            ),
+            media_type=encoder.get_content_type(),
+            headers={"Cache-Control": "no-cache"},
+        )
+
+    @application.get("/v1/models")
+    async def openai_models():
+        models = await (inference_router.list_models() if inference_router else service.list_models())
+        return {
+            "object": "list",
+            "data": [
+                {"id": item["name"], "object": "model", "owned_by": "json-codr"}
+                for item in models
+                if item.get("installed", True)
+            ],
+        }
+
+    @application.post("/v1/chat/completions")
+    async def openai_chat_completions(payload: dict):
+        model = payload.get("model")
+        messages = payload.get("messages")
+        if not isinstance(model, str) or not model.strip():
+            raise HTTPException(status_code=422, detail="model is required")
+        if not isinstance(messages, list) or not messages:
+            raise HTTPException(status_code=422, detail="messages must be a non-empty list")
+        if payload.get("stream"):
+            raise HTTPException(status_code=400, detail="Streaming OpenAI responses are not supported yet")
+        prompt_parts = []
+        for message in messages:
+            if not isinstance(message, dict) or not isinstance(message.get("content"), str):
+                raise HTTPException(status_code=422, detail="Each message must contain string content")
+            role = str(message.get("role", "user")).strip() or "user"
+            prompt_parts.append(f"{role.upper()}: {message['content']}")
+        prompt = "\n\n".join(prompt_parts)
+        if len(messages) == 1 and messages[0].get("role") == "user":
+            prompt = messages[0]["content"]
+        try:
+            result = await service.chat(model.strip(), prompt)
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except OllamaUnavailableError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        except ModelTimeoutError as error:
+            raise HTTPException(status_code=504, detail=str(error)) from error
+        return {
+            "id": f"chatcmpl-{uuid7()}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": result.model,
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": result.content},
+                "finish_reason": "stop",
+            }],
+        }
 
     @application.post("/api/chat", response_model=ChatResult)
     async def chat(request: ChatRequest, http_request: Request):
@@ -1915,6 +3133,7 @@ def create_app(
                 hardware.record_runtime_failure(str(error))
             raise HTTPException(status_code=status, detail=str(error)) from error
 
+    application.state.mutation_route_inventory = inventory_mutation_routes(application)
     return application
 
 

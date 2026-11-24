@@ -21,7 +21,7 @@ class ConversationService:
     ) -> None:
         self.workspace = workspace
         self.attachments = attachments
-        self.project_root = Path(project_root).absolute()
+        self.project_root = Path(project_root).resolve()
         self.artifacts = artifacts or ArtifactService(workspace)
 
     def history(self, session_id: str) -> list[ChatMessage]:
@@ -93,12 +93,10 @@ class ConversationService:
             path = self.artifacts.artifact_path(session_id, reference.target)
             return path, mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         if reference.kind == "project_file":
-            candidate = self.project_root / reference.target
-            resolved_root = self.project_root.resolve()
-            resolved_candidate = candidate.resolve()
-            if resolved_candidate != resolved_root and resolved_root not in resolved_candidate.parents:
+            candidate = (self.project_root / reference.target).resolve()
+            if candidate != self.project_root and self.project_root not in candidate.parents:
                 raise PermissionError("Project reference escapes the active project")
-            if not resolved_candidate.is_file():
+            if not candidate.is_file():
                 raise KeyError(reference.target)
             return candidate, mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
         raise ValueError("Reference kind does not resolve to a local file")

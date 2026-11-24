@@ -10,8 +10,11 @@ from web_app.core.contracts import GoalSpec, TaskCommand, TaskEventDraft, TaskSt
 from web_app.core.project_intelligence import ProjectReader
 
 
+PLANNER_CONTEXT_BUDGET = 3_000
+
+
 class AgentRuntime:
-    def __init__(self, task_store, core_service, context, planner, verifier, project_fingerprint, project_reader_resolver=None) -> None:
+    def __init__(self, task_store, core_service, context, planner, verifier, project_fingerprint, project_reader_resolver=None, verifier_identity=None) -> None:
         self._tasks = task_store
         self._core = core_service
         self.context = context
@@ -20,6 +23,13 @@ class AgentRuntime:
         self._project_fingerprint = project_fingerprint
         self._evidence = EvidenceResolver()
         self._project_reader_resolver = project_reader_resolver
+        self._verifier_identity = verifier_identity
+
+    def automatic_lesson_activation_ready(self) -> bool:
+        return bool(
+            self._verifier_identity is not None
+            and self._verifier_identity.automatic_lesson_activation_ready()
+        )
 
     async def run(self, task_id: str):
         root = self._tasks.get(task_id)
@@ -68,8 +78,10 @@ class AgentRuntime:
                 task_id,
                 reader,
                 target_path=target_path if isinstance(target_path, str) else ".",
+                prioritize_references_in=goal.objective,
             )
         root = self._tasks.get(task_id)
+        reconciled_action = False
         for approval in (
             event for event in root.events if event.event_type == "agent.approval_required"
         ):
@@ -91,6 +103,7 @@ class AgentRuntime:
                 payload={
                     "capability_id": child_call.capability_id,
                     "operation": child_call.operation,
+                    "call_digest": canonical_digest(child_call.model_dump(mode="json")),
                     "child_task_id": child_task_id,
                     "step_id": step_id,
                     "project_fingerprint": self._project_fingerprint(child_call.project_root),
@@ -101,13 +114,22 @@ class AgentRuntime:
                 self.context.capture_project(
                     root.thread_id, task_id, reader,
                     target_path=target_path if isinstance(target_path, str) else ".",
+                    prioritize_references_in=goal.objective,
                 )
+            reconciled_action = True
+        if reconciled_action:
+            context = self.context.assemble(root.thread_id, task_id, PLANNER_CONTEXT_BUDGET)
+            completed = await self._complete_if_verified(
+                task_id, goal, root_command, context, record_failure=True
+            )
+            if completed is not None:
+                return completed
         while True:
             root = self._tasks.get(task_id)
             if root.status is TaskStatus.cancel_requested:
                 self._tasks.append(task_id, TaskEventDraft(event_type="task.cancelled"))
                 return self._tasks.get(task_id)
-            context = self.context.assemble(root.thread_id, task_id, 32_000)
+            context = self.context.assemble(root.thread_id, task_id, PLANNER_CONTEXT_BUDGET)
             call = await self._planner.plan(context)
             root = self._tasks.get(task_id)
             if root.status is TaskStatus.cancel_requested:
@@ -117,9 +139,52 @@ class AgentRuntime:
                 completed = await self._complete_if_verified(
                     task_id, goal, root_command, context, record_failure=True
                 )
-                return completed or self._tasks.get(task_id)
+                if completed is not None:
+                    return completed
+                root = self._tasks.get(task_id)
+                verification_failures = sum(
+                    event.event_type == "agent.verification_failed" for event in root.events
+                )
+                if verification_failures >= 3:
+                    self._tasks.append(
+                        task_id,
+                        TaskEventDraft(
+                            event_type="agent.blocked",
+                            payload={"reason": "verification repair budget exhausted"},
+                        ),
+                    )
+                    return self._tasks.get(task_id)
+                continue
+            call = self._core.prepare_capability_call(root.project_id, call)
             call_digest = canonical_digest(call.model_dump(mode="json"))
             project_fingerprint = self._project_fingerprint(call.project_root)
+            repeated_success = next(
+                (
+                    event for event in root.events
+                    if event.event_type == "agent.action_completed"
+                    and event.payload.get("call_digest") == call_digest
+                    and event.payload.get("project_fingerprint") == project_fingerprint
+                ),
+                None,
+            )
+            if repeated_success is not None:
+                completed = await self._complete_if_verified(
+                    task_id, goal, root_command, context, record_failure=True
+                )
+                if completed is not None:
+                    return completed
+                self._tasks.append(
+                    task_id,
+                    TaskEventDraft(
+                        event_type="agent.blocked",
+                        payload={
+                            "reason": "unchanged successful action loop",
+                            "call_digest": call_digest,
+                            "project_fingerprint": project_fingerprint,
+                        },
+                    ),
+                )
+                return self._tasks.get(task_id)
             prior_failures = [
                 event for event in root.events
                 if event.event_type == "agent.action_failed"
@@ -257,9 +322,10 @@ class AgentRuntime:
                     payload={
                         "capability_id": call.capability_id,
                         "operation": call.operation,
+                        "call_digest": call_digest,
                         "child_task_id": child_id,
                         "step_id": step_id,
-                        "project_fingerprint": project_fingerprint,
+                        "project_fingerprint": self._project_fingerprint(call.project_root),
                     },
                 ),
             )
@@ -270,9 +336,14 @@ class AgentRuntime:
                     task_id,
                     reader,
                     target_path=target_path if isinstance(target_path, str) else ".",
+                    prioritize_references_in=goal.objective,
                 )
-            # A successful action is evidence, not completion. The planner must observe the
-            # persisted result and explicitly return done before the verifier can finish.
+            context = self.context.assemble(root.thread_id, task_id, PLANNER_CONTEXT_BUDGET)
+            completed = await self._complete_if_verified(
+                task_id, goal, root_command, context, record_failure=True
+            )
+            if completed is not None:
+                return completed
 
     async def _complete_if_verified(
         self, task_id, goal, root_command, context, *, record_failure: bool

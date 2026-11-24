@@ -118,6 +118,27 @@ class OllamaService:
         capabilities = payload.get("capabilities", [])
         return "vision" in capabilities
 
+    async def model_metadata(self, model: str) -> dict[str, object]:
+        resolved = self._resolve(model)
+        try:
+            response = await asyncio.wait_for(self.client.show(resolved), timeout=5)
+        except Exception as error:
+            raise OllamaUnavailableError(f"Unable to inspect model metadata for {resolved}") from error
+        payload = response.model_dump() if hasattr(response, "model_dump") else response
+        capabilities = set(payload.get("capabilities", []))
+        model_info = payload.get("model_info", {})
+        context_lengths = [
+            value for key, value in model_info.items()
+            if key.endswith(".context_length") and isinstance(value, int) and value > 0
+        ] if isinstance(model_info, dict) else []
+        verified = self.config.get("verified_tool_models")
+        verified_models = verified if isinstance(verified, list) else []
+        return {
+            "context_length": max(context_lengths) if context_lengths else None,
+            "tool_calling": resolved in verified_models and "tools" in capabilities,
+            "vision": "vision" in capabilities,
+        }
+
     async def supports_tools(self, model: str) -> bool:
         resolved = self._resolve(model)
         try:

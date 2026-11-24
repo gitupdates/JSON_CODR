@@ -6,6 +6,34 @@ from typing import Any, Protocol
 from pydantic import BaseModel, Field
 
 from web_app.models import ChatResult
+from web_app.inference.protocol import (
+    CancellationMetadata,
+    ContentPart,
+    InferenceEvent,
+    InferenceFinishReason,
+    InferenceMessage,
+    InferenceRequest,
+    InferenceUsage,
+    ResponseFormat,
+    ToolDefinition,
+)
+
+__all__ = [
+    "CancellationMetadata",
+    "ContentPart",
+    "InferenceEvent",
+    "InferenceFinishReason",
+    "InferenceMessage",
+    "InferenceRequest",
+    "InferenceUsage",
+    "ResponseFormat",
+    "ToolDefinition",
+    "ProviderKind",
+    "ProviderState",
+    "OptimizedModelRecord",
+    "ProbeResult",
+    "InferenceProvider",
+]
 
 
 class ProviderKind(str, Enum):

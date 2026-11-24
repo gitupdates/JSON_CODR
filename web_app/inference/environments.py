@@ -12,10 +12,10 @@ from web_app.inference.contracts import ProviderKind
 
 
 PACKAGES = {
-    ProviderKind.openvino: ("openvino-genai==2025.4", "openvino-tokenizers==2025.4", "huggingface-hub==0.36.0"),
-    ProviderKind.ryzen_ai: ("onnxruntime-genai==0.19.0", "huggingface-hub==0.36.0"),
-    ProviderKind.winml: ("onnxruntime-genai==0.19.0", "huggingface-hub==0.36.0"),
-    ProviderKind.directml: ("onnxruntime-genai-directml==0.12.2", "huggingface-hub==0.36.0"),
+    ProviderKind.openvino: ("openvino-genai==2025.4", "openvino-tokenizers==2025.4", "huggingface-hub==0.36.0", "pydantic>=2,<3"),
+    ProviderKind.ryzen_ai: ("onnxruntime-genai==0.19.0", "huggingface-hub==0.36.0", "pydantic>=2,<3"),
+    ProviderKind.winml: ("onnxruntime-genai==0.19.0", "huggingface-hub==0.36.0", "pydantic>=2,<3"),
+    ProviderKind.directml: ("onnxruntime-genai-directml==0.12.2", "huggingface-hub==0.36.0", "pydantic>=2,<3"),
 }
 
 
@@ -178,3 +178,33 @@ class EnvironmentManager:
             f'& "{plan.python}" -m huggingface_hub.commands.huggingface_cli download '
             f'"{model.repository}" --revision "{model.revision}" --local-dir "{target}"'
         )
+
+    def install_model(self, model, timeout: int = 7200) -> Path:
+        plan = self.plan(model.provider)
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        if not plan.python.is_file():
+            result = subprocess.run(
+                [str(self.base_python), "-m", "venv", "--clear", str(plan.root)],
+                capture_output=True, text=True, timeout=300, creationflags=flags,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.strip() or "Provider environment creation failed")
+        result = subprocess.run(
+            [str(plan.python), "-m", "pip", "--disable-pip-version-check", "install", *plan.packages],
+            capture_output=True, text=True, timeout=1800, creationflags=flags,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "Provider runtime installation failed")
+        target = self.model_path(model)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        code = (
+            "import sys; from huggingface_hub import snapshot_download; "
+            "snapshot_download(repo_id=sys.argv[1], revision=sys.argv[2], local_dir=sys.argv[3])"
+        )
+        result = subprocess.run(
+            [str(plan.python), "-c", code, model.repository, model.revision, str(target)],
+            capture_output=True, text=True, timeout=timeout, creationflags=flags,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "Optimized model download failed")
+        return target

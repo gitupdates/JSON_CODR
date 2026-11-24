@@ -1,0 +1,68 @@
+.source-content { padding: var(--section-gap, 18px) 0 40px; }
+.source-topbar-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.source-back-link { color: var(--text-soft); font-size: 13px; font-weight: 650; }
+.source-back-link:hover { color: var(--text); }
+.source-card .source-intro { margin: 0 0 var(--section-gap, 18px); padding-bottom: var(--section-gap, 18px); color: var(--muted); line-height: 1.55; border-bottom: 1px solid var(--line); }
+.source-card { margin-top: var(--section-gap, 18px); box-shadow: none; }
+.source-content > .source-card:first-of-type { margin-top: 0; }
+.source-card h2 { margin: 0; font-size: 20px; }
+.source-card h3 { margin: 4px 0; font-size: 16px; }
+.source-card p { color: var(--muted); line-height: 1.55; }
+.source-card label { min-width: 220px; display: grid; flex: 1; gap: 7px; }
+.source-card input,
+.source-card select,
+.source-card textarea {
+  width: 100%;
+  min-width: 0;
+  color: var(--text);
+  background: var(--surface-input);
+  border: 1px solid var(--line);
+  font: inherit;
+}
+.source-card input,
+.source-card select { height: 44px; padding: 0 12px; }
+.source-card textarea { min-height: 90px; padding: 10px 12px; resize: vertical; }
+.source-card button:not(.primary) { color: var(--text); background: var(--surface-raised); }
+.source-card .primary { color: var(--accent-contrast); background: var(--lime); }
+.source-card .actions,
+.source-card .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.source-card .actions { margin-top: var(--section-gap, 18px); }
+.status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.status-item,
+.record { padding: 12px; overflow-wrap: anywhere; background: var(--surface-input); border: 1px solid var(--line); }
+.status-item span { display: block; color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+.status-item strong { display: block; margin-top: 6px; }
+.record { margin: 10px 0; }
+.record p { margin: .5em 0; }
+.record-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.record-actions button { min-height: 34px; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.checkbox-row { min-width: 0; display: flex !important; align-items: center; gap: 8px !important; }
+.checkbox-row input { width: auto; height: auto; }
+.file-row { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; overflow-wrap: anywhere; border-bottom: 1px solid var(--line); }
+.file-row input { width: auto; height: auto; margin-top: 4px; }
+.section-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.notice { min-height: 1.5em; }
+.tab-note { font-size: 13px; }
+.connect-step { padding: 14px 0; border-top: 1px solid var(--line); }
+.connect-step:first-of-type { border-top: 0; }
+.step-label { margin: 0 0 8px !important; color: var(--lime) !important; font: 800 11px ui-monospace, monospace; letter-spacing: .1em; text-transform: uppercase; }
+.build-banner { padding: 14px; font-weight: 700; background: var(--surface-input); border-left: 4px solid var(--line-strong); }
+.build-banner[data-state="current"] { border-color: var(--lime); }
+.build-banner[data-state="behind"] { border-color: var(--warning); }
+.build-banner[data-state="blocked"],
+.build-banner[data-state="error"] { border-color: var(--red); }
+.device-code { padding: 12px; background: var(--surface-input); border: 1px dashed var(--lime); }
+.source-card pre { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.source-card code { overflow-wrap: anywhere; }
+.source-card .ok { color: var(--lime); }
+.source-card .error { color: var(--red); }
+.hidden { display: none !important; }
+
+@media (max-width: 700px) {
+  .source-content { padding: 0 0 24px; }
+  .source-topbar-actions { gap: 8px; }
+  .source-back-link { display: none; }
+  .source-card { padding: 18px; }
+  .source-card .actions > button { width: 100%; }
+}

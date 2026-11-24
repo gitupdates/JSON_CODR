@@ -1,9 +1,17 @@
 {
   "host": "http://127.0.0.1:11434",
-  "model": "qwen2.5-coder:7b-instruct-q4_K_M",
-  "primary_base_model": "qwen2.5-coder:7b-instruct-q4_K_M",
-  "synthesizer_model": "qwen2.5-coder:7b-instruct-q4_K_M",
+  "model": "qwen2.5-coder:0.5b",
+  "primary_base_model": "qwen2.5-coder:0.5b",
+  "synthesizer_model": "qwen2.5-coder:0.5b",
+  "tool_fallback_model": "",
+  "verified_tool_models": [
+    "qwen2.5-coder:7b-instruct-q4_K_M",
+    "qwen3:4b",
+    "qwen3:8b",
+    "qwen3.5:9b"
+  ],
   "jury_models": [
+    "qwen2.5-coder:0.5b",
     "qwen2.5-coder:7b-instruct-q4_K_M",
     "opencoder:8b",
     "codegeex4:9b",
@@ -11,6 +19,15 @@
     "deepseek-coder:6.7b-instruct",
     "starcoder2:7b",
     "granite-code:8b-instruct",
-    "codegemma:7b-instruct"
+    "codegemma:7b-instruct",
+    "rnj-1:8b",
+    "deepcoder:1.5b",
+    "qwen2.5-coder:3b",
+    "qwen3:4b",
+    "mistral:7b-instruct",
+    "qwen3.5:9b",
+    "qwen3:8b",
+    "qwen2.5-coder:7b",
+    "deepseek-coder-v2:lite"
   ]
 }

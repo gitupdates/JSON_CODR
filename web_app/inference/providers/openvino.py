@@ -27,13 +27,15 @@ class OpenVINOProvider:
 
     async def probe(self, model: OptimizedModelRecord) -> ProbeResult:
         try:
-            response = await self.chat(model, "Reply with exactly OK")
+            response = await self.chat(model, "Reply with exactly OK", max_new_tokens=8)
             return ProbeResult(model_id=model.id, provider=self.kind, success=True, response=response)
         except Exception as error:
             return ProbeResult(model_id=model.id, provider=self.kind, success=False, error=str(error))
 
-    async def chat(self, model: OptimizedModelRecord, prompt: str, images=None) -> ChatResult:
-        result = await self.client.request("chat", {**self._payload(model), "prompt": prompt, "images": images or []})
+    async def chat(self, model: OptimizedModelRecord, prompt: str, images=None, max_new_tokens: int = 512) -> ChatResult:
+        result = await self.client.request("chat", {
+            **self._payload(model), "prompt": prompt, "images": images or [], "max_new_tokens": max_new_tokens,
+        })
         return ChatResult.model_validate(result)
 
     async def benchmark(self, model: OptimizedModelRecord, prompts: list[str], repeats: int) -> list[dict]:

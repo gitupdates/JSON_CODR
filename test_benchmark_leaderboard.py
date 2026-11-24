@@ -1,0 +1,353 @@
+import json
+import subprocess
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).parent
+MODULE = ROOT / "web" / "benchmark_leaderboard.js"
+
+
+def run_helper(expression, payload):
+    script = f"""
+require({json.dumps(str(MODULE))});
+const input = {json.dumps(payload)};
+const output = {expression};
+process.stdout.write(JSON.stringify(output));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script], cwd=ROOT, text=True, capture_output=True, check=True
+    )
+    return json.loads(completed.stdout)
+
+
+def session(session_id="run-1", created_at="2026-11-15T12:00:00Z"):
+    return {
+        "id": session_id,
+        "created_at": created_at,
+        "suite": "quick",
+        "model": "qwen:7b",
+        "workload_version": "LocalPerf-Core-v1",
+        "workload_hash": "abc123",
+        "results": [
+            {
+                "backend": "cpu",
+                "name": "CPU",
+                "status": "completed",
+                "verified": True,
+                "tokens_per_second": 20,
+                "average_total_seconds": 2,
+                "speedup_vs_cpu": 1,
+                "tests": [
+                    {"tokens_per_second": 18, "ttft_ms": 600, "total_seconds": 2.1, "peak_vram_mb": 0},
+                    {"tokens_per_second": 22, "ttft_ms": 500, "total_seconds": 1.9, "peak_vram_mb": 0},
+                ],
+                "localperf": {"evaluation_id": "cpu-eval", "conformance": {"conforming": True}},
+            },
+            {
+                "backend": "cuda_v12",
+                "name": "CUDA 12",
+                "status": "completed",
+                "verified": False,
+                "tokens_per_second": 30,
+                "average_total_seconds": 1.2,
+                "speedup_vs_cpu": 1.5,
+                "tests": [
+                    {"tokens_per_second": 28, "ttft_ms": 300, "total_seconds": 1.3, "peak_vram_mb": 6000},
+                    {"tokens_per_second": 32, "ttft_ms": 260, "total_seconds": 1.1, "peak_vram_mb": 6100},
+                ],
+                "localperf": {"evaluation_id": "cuda-eval", "conformance": {"conforming": True}},
+            },
+            {
+                "backend": "vulkan",
+                "name": "Vulkan",
+                "status": "completed",
+                "tokens_per_second": 35,
+                "speedup_vs_cpu": 1.75,
+                "tests": [],
+                "localperf": {"conformance": {"conforming": False}},
+            },
+        ],
+    }
+
+
+class BenchmarkLeaderboardTests(unittest.TestCase):
+    def test_all_rows_include_every_non_failed_benchmark_result(self):
+        first = session("run-1")
+        second = session("run-2")
+        second["model"] = "other:7b"
+        second["results"][0]["status"] = "failed"
+
+        rows = run_helper(
+            "globalThis.JSONCodrLeaderboard.buildAllRows(input.history)",
+            {"history": [first, second]},
+        )
+
+        self.assertEqual(len(rows), 5)
+        self.assertEqual({row["session_id"] for row in rows}, {"run-1", "run-2"})
+        self.assertFalse(any(row["session_id"] == "run-2" and row["backend"] == "cpu" for row in rows))
+
+    def test_sort_rows_supports_each_leaderboard_column_and_defaults_to_rank(self):
+        rows = [
+            {"id": "b", "rank": 2, "model": "Zulu", "performance_index": 120, "tokens_per_second": 30,
+             "ttft_ms": 200, "average_total_seconds": 3, "peak_vram_mb": 6000, "speedup_vs_cpu": 1.2, "status": "completed"},
+            {"id": "a", "rank": 1, "model": "Alpha", "performance_index": 150, "tokens_per_second": 40,
+             "ttft_ms": 100, "average_total_seconds": 2, "peak_vram_mb": 4000, "speedup_vs_cpu": 1.5, "status": "completed"},
+        ]
+        sorted_rows = run_helper(
+            "Object.fromEntries(input.keys.map(key=>[key,globalThis.JSONCodrLeaderboard.sortRows(input.rows,{key,direction:key==='model'?'desc':'asc'}).map(row=>row.id)]))",
+            {"rows": rows, "keys": ["rank", "model", "performance_index", "tokens_per_second", "ttft_ms", "average_total_seconds", "peak_vram_mb", "speedup_vs_cpu", "status"]},
+        )
+
+        self.assertEqual(sorted_rows["rank"], ["a", "b"])
+        self.assertEqual(sorted_rows["model"], ["b", "a"])
+        self.assertEqual(sorted_rows["performance_index"], ["b", "a"])
+        self.assertEqual(sorted_rows["tokens_per_second"], ["b", "a"])
+        self.assertEqual(sorted_rows["ttft_ms"], ["a", "b"])
+        self.assertEqual(sorted_rows["average_total_seconds"], ["a", "b"])
+        self.assertEqual(sorted_rows["peak_vram_mb"], ["a", "b"])
+        self.assertEqual(sorted_rows["speedup_vs_cpu"], ["b", "a"])
+        self.assertEqual(sorted_rows["status"], ["b", "a"])
+
+    def test_build_rows_keeps_concrete_backends_and_adds_detected_untested_options(self):
+        payload = {
+            "history": [session()],
+            "candidates": [
+                {"id": "cpu", "name": "CPU"},
+                {"id": "cuda_v12", "name": "CUDA 12"},
+                {"id": "cuda_v13", "name": "CUDA 13"},
+                {"id": "npu-0", "name": "Intel NPU"},
+            ],
+        }
+        rows = run_helper(
+            "globalThis.JSONCodrLeaderboard.buildRows(input.history, input.candidates, 'run-1')",
+            payload,
+        )
+        self.assertEqual([row["backend"] for row in rows], ["cpu", "cuda_v12", "vulkan", "cuda_v13", "npu-0"])
+        self.assertEqual(rows[1]["performance_index"], 150)
+        self.assertFalse(rows[1]["probe_verified"])
+        self.assertEqual(rows[3]["status"], "not_tested")
+        self.assertIsNone(rows[3]["performance_index"])
+
+    def test_filter_and_rank_excludes_invalid_rows_from_verified_rank(self):
+        payload = {"history": [session()], "candidates": []}
+        ranked = run_helper(
+            "globalThis.JSONCodrLeaderboard.filterAndRank(globalThis.JSONCodrLeaderboard.buildRows(input.history, input.candidates, 'run-1'), {metric:'tokens_per_second'})",
+            payload,
+        )
+        self.assertEqual([row["backend"] for row in ranked], ["cuda_v12", "cpu", "vulkan"])
+        self.assertEqual([row["rank"] for row in ranked], [1, 2, None])
+
+        missing_metric = run_helper(
+            "globalThis.JSONCodrLeaderboard.filterAndRank(input.rows, {metric:'ttft_ms'})",
+            {"rows": [{"id": "legacy", "eligible_rank": True, "ttft_ms": None}]},
+        )
+        self.assertIsNone(missing_metric[0]["rank"])
+
+    def test_integrity_and_combined_ranking_join_latest_model_quality(self):
+        rows = [
+            {"id": "fast", "model": "fast:7b", "eligible_rank": True, "performance_index": 200},
+            {"id": "safe", "model": "safe:7b", "eligible_rank": True, "performance_index": 100},
+            {"id": "unknown", "model": "unknown:7b", "eligible_rank": True, "performance_index": 300},
+            {"id": "invalid", "model": "safe:7b", "eligible_rank": False, "performance_index": 1000},
+        ]
+        integrity = [
+            {"id": "old", "suite_version": "Integrity-Comprehension-v1", "model": "fast:7b", "created_at": "2026-03-01", "scores": {"integrity": 100, "comprehension": 100, "overall": 100}},
+            {"id": "new", "suite_version": "Integrity-Comprehension-v2", "model": "fast:7b", "created_at": "2026-02-01", "scores": {"integrity": 40, "comprehension": 60, "overall": 50}},
+            {"id": "safe", "suite_version": "Integrity-Comprehension-v2", "model": "safe:7b", "created_at": "2026-02-01", "scores": {"integrity": 95, "comprehension": 85, "overall": 90}},
+        ]
+        ranked = run_helper(
+            "(()=>{const joined=globalThis.JSONCodrLeaderboard.joinIntegrity(input.rows,input.integrity); return {integrity:globalThis.JSONCodrLeaderboard.filterAndRank(joined,{metric:'integrity_overall'}),combined:globalThis.JSONCodrLeaderboard.filterAndRank(joined,{metric:'combined_score'})};})()",
+            {"rows": rows, "integrity": integrity},
+        )
+
+        self.assertEqual([row["id"] for row in ranked["integrity"]], ["safe", "fast", "unknown", "invalid"])
+        self.assertEqual(ranked["integrity"][1]["integrity_overall"], 50)
+        self.assertEqual([row["id"] for row in ranked["combined"]], ["fast", "safe", "unknown", "invalid"])
+        self.assertEqual(ranked["combined"][0]["combined_score"], 75)
+        self.assertIsNone(ranked["combined"][2]["combined_score"])
+
+    def test_integrity_join_keeps_models_without_performance_evidence(self):
+        joined = run_helper(
+            "globalThis.JSONCodrLeaderboard.joinIntegrity(input.rows,input.integrity)",
+            {
+                "rows": [{"id": "measured:cpu", "model": "measured:7b", "eligible_rank": True,
+                          "performance_index": 100}],
+                "integrity": [
+                    {"id": "measured-quality", "suite_version": "Integrity-Comprehension-v2",
+                     "model": "measured:7b", "created_at": "2026-11-15T12:00:00Z", "suite": "quick",
+                     "status": "completed", "scores": {"integrity": 80, "comprehension": 70, "overall": 75}},
+                    {"id": "quality-only", "suite_version": "Integrity-Comprehension-v2",
+                     "model": "quality-only:7b", "created_at": "2026-11-15T13:00:00Z", "suite": "quick",
+                     "status": "completed_with_failures",
+                     "scores": {"integrity": 60, "comprehension": 40, "overall": 50}},
+                ],
+            },
+        )
+
+        quality_only = next(row for row in joined if row["model"] == "quality-only:7b")
+        self.assertEqual(quality_only["integrity_overall"], 50)
+        self.assertTrue(quality_only["eligible_rank"])
+        self.assertIsNone(quality_only["performance_index"])
+        self.assertIsNone(quality_only["combined_score"])
+
+    def test_base_log_perplexity_ranks_only_same_canonical_evidence_lower_first(self):
+        integrity = [
+            {"id": "best", "suite_version": "Integrity-Comprehension-v3", "model": "best:7b",
+             "created_at": "2026-11-22T12:00:00Z", "suite": "quick", "status": "completed",
+             "scores": {"integrity": 90, "comprehension": 90, "overall": 90},
+             "language_model_metrics": {"base_log_perplexity": 0.75, "status": "measured",
+                 "comparable": True, "dataset_id": "json-codr-base-language", "dataset_version": "1.0",
+                 "method": "teacher_forced_loglikelihood", "token_count": 4096}},
+            {"id": "second", "suite_version": "Integrity-Comprehension-v3", "model": "second:7b",
+             "created_at": "2026-11-22T12:00:00Z", "suite": "quick", "status": "completed",
+             "scores": {"integrity": 80, "comprehension": 80, "overall": 80},
+             "language_model_metrics": {"base_log_perplexity": 0.9, "status": "measured",
+                 "comparable": True, "dataset_id": "json-codr-base-language", "dataset_version": "1.0",
+                 "method": "teacher_forced_loglikelihood", "token_count": 4096}},
+            {"id": "wrong-corpus", "suite_version": "Integrity-Comprehension-v3", "model": "wrong:7b",
+             "created_at": "2026-11-22T12:00:00Z", "suite": "quick", "status": "completed",
+             "scores": {"integrity": 100, "comprehension": 100, "overall": 100},
+             "language_model_metrics": {"base_log_perplexity": 0.1, "status": "measured",
+                 "comparable": True, "dataset_id": "different-corpus", "dataset_version": "1.0",
+                 "method": "teacher_forced_loglikelihood", "token_count": 4096}},
+        ]
+
+        ranked = run_helper(
+            "globalThis.JSONCodrLeaderboard.filterAndRank(globalThis.JSONCodrLeaderboard.joinIntegrity([],input.integrity),{metric:'base_log_perplexity'})",
+            {"integrity": integrity},
+        )
+
+        self.assertEqual([row["model"] for row in ranked], ["best:7b", "second:7b", "wrong:7b"])
+        self.assertEqual([row["rank"] for row in ranked], [1, 2, None])
+        self.assertFalse(ranked[2]["log_perplexity_comparable"])
+
+    def test_holistic_capability_ranks_capability_tiers_before_performance(self):
+        rows = [
+            {"id": "high-unmeasured", "model": "high", "eligible_rank": True,
+             "integrity_overall": 90, "performance_index": None},
+            {"id": "middle-fast", "model": "middle-fast", "eligible_rank": True,
+             "integrity_overall": 75, "performance_index": 500},
+            {"id": "middle-slow", "model": "middle-slow", "eligible_rank": True,
+             "integrity_overall": 75, "performance_index": 100},
+            {"id": "middle-unmeasured", "model": "middle-unmeasured", "eligible_rank": True,
+             "integrity_overall": 75, "performance_index": None},
+            {"id": "low-fast", "model": "low", "eligible_rank": True,
+             "integrity_overall": 50, "performance_index": 1000},
+        ]
+
+        ranked = run_helper(
+            "globalThis.JSONCodrLeaderboard.filterAndRank(input.rows,{metric:'holistic_capability'})",
+            {"rows": rows},
+        )
+
+        self.assertEqual([row["id"] for row in ranked], [
+            "high-unmeasured", "middle-fast", "middle-slow", "middle-unmeasured", "low-fast"
+        ])
+        self.assertEqual([row["capability_tier"] for row in ranked], [1, 2, 2, 2, 3])
+        self.assertEqual([row["rank"] for row in ranked], [1, 2, 3, 4, 5])
+
+    def test_percentiles_and_legacy_missing_fields_are_stable(self):
+        stats = run_helper(
+            "({stats:globalThis.JSONCodrLeaderboard.percentiles(input.values), rows:globalThis.JSONCodrLeaderboard.buildRows(input.history, [], 'legacy')})",
+            {"values": [1, 2, 3, 4, 5], "history": [{"id": "legacy", "results": [{"backend": "cpu"}]}]},
+        )
+        self.assertEqual(stats["stats"], {"min": 1, "p50": 3, "p90": 4.6, "max": 5})
+        self.assertEqual(stats["rows"][0]["status"], "unavailable")
+        self.assertIsNone(stats["rows"][0]["ttft_ms"])
+        self.assertIsNone(stats["rows"][0]["conforming"])
+        self.assertFalse(stats["rows"][0]["eligible_rank"])
+
+        null_metrics = run_helper(
+            "globalThis.JSONCodrLeaderboard.buildRows(input.history, [], 'nulls')[0]",
+            {"history": [{"id": "nulls", "results": [{"backend": "gpu", "tokens_per_second": None, "speedup_vs_cpu": None}]}]},
+        )
+        self.assertIsNone(null_metrics["tokens_per_second"])
+        self.assertIsNone(null_metrics["speedup_vs_cpu"])
+        self.assertIsNone(null_metrics["performance_index"])
+
+    def test_trend_requires_matching_model_suite_workload_and_backend(self):
+        first = session("run-1", "2026-11-15T12:00:00Z")
+        second = session("run-2", "2026-11-16T12:00:00Z")
+        second["results"][1]["tokens_per_second"] = 33
+        wrong_model = session("run-3", "2026-11-17T12:00:00Z")
+        wrong_model["model"] = "other:7b"
+        payload = {"history": [wrong_model, second, first], "candidates": []}
+        trend = run_helper(
+            "(()=>{const rows=globalThis.JSONCodrLeaderboard.buildRows(input.history, input.candidates, 'run-1'); return globalThis.JSONCodrLeaderboard.buildTrend(input.history, rows.find(row=>row.backend==='cuda_v12'));})()",
+            payload,
+        )
+        self.assertEqual([point["session_id"] for point in trend], ["run-1", "run-2"])
+        self.assertEqual([point["value"] for point in trend], [30, 33])
+
+        ttft_trend = run_helper(
+            "(()=>{const rows=globalThis.JSONCodrLeaderboard.buildRows(input.history, input.candidates, 'run-1'); return globalThis.JSONCodrLeaderboard.buildTrend(input.history, rows.find(row=>row.backend==='cuda_v12'), 'ttft_ms');})()",
+            payload,
+        )
+        self.assertEqual([point["value"] for point in ttft_trend], [280, 280])
+
+        second["results"][1]["localperf"]["conformance"]["conforming"] = False
+        gap_trend = run_helper(
+            "(()=>{const rows=globalThis.JSONCodrLeaderboard.buildRows(input.history, input.candidates, 'run-1'); return globalThis.JSONCodrLeaderboard.buildTrend(input.history, rows.find(row=>row.backend==='cuda_v12'));})()",
+            payload,
+        )
+        self.assertEqual(gap_trend[0]["value"], 30)
+        self.assertTrue(gap_trend[0]["eligible"])
+        self.assertIsNone(gap_trend[1]["value"])
+        self.assertFalse(gap_trend[1]["eligible"])
+
+        missing_backend = session("run-4", "2026-11-18T12:00:00Z")
+        missing_backend["results"] = [missing_backend["results"][0]]
+        payload["history"].append(missing_backend)
+        missing_trend = run_helper(
+            "(()=>{const rows=globalThis.JSONCodrLeaderboard.buildRows(input.history, input.candidates, 'run-1'); return globalThis.JSONCodrLeaderboard.buildTrend(input.history, rows.find(row=>row.backend==='cuda_v12'));})()",
+            payload,
+        )
+        self.assertIsNone(missing_trend[-1]["value"])
+        self.assertFalse(missing_trend[-1]["eligible"])
+
+    def test_candidate_readiness_and_session_selection_are_preserved(self):
+        candidate = run_helper(
+            "globalThis.JSONCodrLeaderboard.buildRows(input.history, input.candidates, 'run-1').at(-1)",
+            {
+                "history": [session()],
+                "candidates": [{"id": "npu-0", "name": "Intel NPU", "runnable": False, "compatible": False, "compatibility_reason": "Runtime missing"}],
+            },
+        )
+        self.assertFalse(candidate["runnable"])
+        self.assertFalse(candidate["compatible"])
+        self.assertEqual(candidate["availability_reason"], "Runtime missing")
+        self.assertEqual(candidate["compatibility_reasons"], ["Runtime missing"])
+        self.assertEqual(candidate["status"], "unavailable")
+        self.assertFalse(candidate["tested"])
+        self.assertIsNone(candidate["conforming"])
+
+        selected = run_helper(
+            "globalThis.JSONCodrLeaderboard.chooseSession(input.history, 'run-2', 'all', 'all').id",
+            {"history": [session("run-1"), session("run-2")]},
+        )
+        self.assertEqual(selected, "run-2")
+
+    def test_scale_points_handles_empty_single_and_constant_domains(self):
+        scaled = run_helper(
+            "({empty:globalThis.JSONCodrLeaderboard.scalePoints([], input.bounds), single:globalThis.JSONCodrLeaderboard.scalePoints([{x:4,y:9}], input.bounds), constant:globalThis.JSONCodrLeaderboard.scalePoints([{x:2,y:3},{x:2,y:3}], input.bounds)})",
+            {"bounds": {"width": 400, "height": 200, "padding": 20}},
+        )
+        self.assertEqual(scaled["empty"], [])
+        for group in (scaled["single"], scaled["constant"]):
+            for point in group:
+                self.assertIsInstance(point["cx"], (int, float))
+                self.assertIsInstance(point["cy"], (int, float))
+                self.assertGreaterEqual(point["cx"], 20)
+                self.assertLessEqual(point["cx"], 380)
+
+    def test_select_row_keeps_visible_selection_or_falls_back_deterministically(self):
+        selected = run_helper(
+            "({kept:globalThis.JSONCodrLeaderboard.selectRow(input.rows, 'b').id, fallback:globalThis.JSONCodrLeaderboard.selectRow(input.rows, 'missing').id, empty:globalThis.JSONCodrLeaderboard.selectRow([], 'b')})",
+            {"rows": [{"id": "a"}, {"id": "b"}]},
+        )
+        self.assertEqual(selected, {"kept": "b", "fallback": "a", "empty": None})
+
+
+if __name__ == "__main__":
+    unittest.main()

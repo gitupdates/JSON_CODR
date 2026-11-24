@@ -3,12 +3,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping
+from pathlib import Path
 
 from web_app.core.adapters import AdapterEvent, CapabilityAdapter, CapabilityCall, CapabilityExecutionError, ExecutionContext
 from web_app.core.approval import ApprovalLease, ApprovalStore
 from web_app.core.canonical import canonical_digest
+from web_app.core.capability_registry import CapabilityRegistry
 from web_app.core.contracts import JsonValue, TaskCommand, TaskEvent, TaskEventDraft, TaskRecord, TaskStatus
 from web_app.core.policy import PolicyEffect, PolicyService
+from web_app.core.project_registry import ProjectRegistry
 from web_app.core.store import TaskStore
 
 
@@ -26,10 +29,15 @@ class CoreService:
         agent_runner: Callable[[str], Awaitable[TaskRecord]] | None = None,
         approval_store: ApprovalStore | None = None,
         project_fingerprint: Callable[[str], str] | None = None,
+        registry: CapabilityRegistry | None = None,
+        project_roots: Mapping[str, str | Path] | ProjectRegistry | None = None,
     ) -> None:
         self._tasks = task_store
         self._policy = policy
         self._adapters = dict(adapters)
+        self._registry = registry or CapabilityRegistry.default()
+        self._registry.require_registered(self._adapters)
+        self._project_roots = project_roots
         self._restore_checkpoint = restore_checkpoint
         self._agent_runner = agent_runner
         self._approval_store = approval_store
@@ -43,9 +51,17 @@ class CoreService:
         command: TaskCommand,
         *,
         principal: str = "user",
+        principal_scopes: tuple[str, ...] = (),
         approval_lease: ApprovalLease | None = None,
+        trusted_schedule_id: str | None = None,
     ) -> TaskRecord:
-        record = await self.start(command, principal=principal, approval_lease=approval_lease)
+        record = await self.start(
+            command,
+            principal=principal,
+            principal_scopes=principal_scopes,
+            approval_lease=approval_lease,
+            trusted_schedule_id=trusted_schedule_id,
+        )
         if record.status in {
             TaskStatus.completed,
             TaskStatus.failed,
@@ -60,9 +76,18 @@ class CoreService:
         command: TaskCommand,
         *,
         principal: str = "user",
+        principal_scopes: tuple[str, ...] = (),
         approval_lease: ApprovalLease | None = None,
+        trusted_schedule_id: str | None = None,
     ) -> TaskRecord:
         async with self._submission_lock:
+            if command.command_type != "agent.run":
+                call = self._prepare_call(
+                    command.project_id,
+                    CapabilityCall.model_validate(command.model_dump(mode="json")["payload"]),
+                    trusted_schedule_id=trusted_schedule_id,
+                )
+                command = command.model_copy(update={"payload": call.model_dump(mode="json")})
             record = self._tasks.create(command)
             if command.command_type == "agent.run":
                 if record.status in {
@@ -87,8 +112,13 @@ class CoreService:
             if record.status is not TaskStatus.pending or (len(record.events) > 1 and not permission_wait):
                 return record
             try:
-                call = CapabilityCall.model_validate(command.model_dump(mode="json")["payload"])
-                decision = self._policy.evaluate(principal, command.project_id, call)
+                call = self._registry.normalize(CapabilityCall.model_validate(command.model_dump(mode="json")["payload"]))
+                decision = self._policy.evaluate(
+                    principal,
+                    command.project_id,
+                    call,
+                    trusted_schedule_id=trusted_schedule_id,
+                )
                 if decision.effect is PolicyEffect.deny:
                     self._append(
                         command.task_id,
@@ -152,6 +182,7 @@ class CoreService:
                     task_id=command.task_id,
                     project_id=command.project_id,
                     principal=principal,
+                    principal_scopes=principal_scopes,
                     credential_refs=call.credential_refs,
                 )
                 run = asyncio.create_task(
@@ -265,6 +296,7 @@ class CoreService:
         task_id: str,
         *,
         principal: str = "user",
+        principal_scopes: tuple[str, ...] = (),
         scope: str = "project",
         proposal_id: str | None = None,
     ) -> TaskRecord:
@@ -281,10 +313,13 @@ class CoreService:
             if not isinstance(child_task_id, str):
                 raise ValueError("approval request is invalid")
             await self.approve(
-                child_task_id, principal=principal, scope=scope, proposal_id=proposal_id,
+                child_task_id, principal=principal, principal_scopes=principal_scopes,
+                scope=scope, proposal_id=proposal_id,
             )
-            return await self.submit(command, principal=principal)
-        call = CapabilityCall.model_validate(command.payload)
+            return await self.submit(
+                command, principal=principal, principal_scopes=principal_scopes,
+            )
+        call = self._registry.normalize(CapabilityCall.model_validate(command.payload))
         if self._approval_store is not None:
             if proposal_id is None:
                 raise ValueError("exact approval proposal id is required")
@@ -299,11 +334,28 @@ class CoreService:
             )
             if not record.events or record.events[-1].event_type != "task.permission_required":
                 raise ValueError("task is not awaiting approval")
-            return await self.submit(command, principal=principal, approval_lease=lease)
+            return await self.submit(
+                command,
+                principal=principal,
+                principal_scopes=principal_scopes,
+                approval_lease=lease,
+                trusted_schedule_id=call.schedule_id,
+            )
         if not record.events or record.events[-1].event_type != "task.permission_required":
             raise ValueError("task is not awaiting approval")
-        self._policy.grant(principal, command.project_id, call, scope=scope)
-        return await self.submit(command, principal=principal)
+        self._policy.grant(
+            principal,
+            command.project_id,
+            call,
+            scope=scope,
+            schedule_id=call.schedule_id if scope == "schedule" else None,
+        )
+        return await self.submit(
+            command,
+            principal=principal,
+            principal_scopes=principal_scopes,
+            trusted_schedule_id=call.schedule_id,
+        )
 
     def subscribe(self, task_id: str, after_sequence: int = -1) -> tuple[TaskEvent, ...]:
         return self._tasks.events(task_id, after_sequence)
@@ -315,6 +367,46 @@ class CoreService:
         if self._restore_checkpoint is None:
             raise LookupError("checkpoint restore is unavailable")
         self._restore_checkpoint(checkpoint_id)
+
+    def _prepare_call(
+        self,
+        project_id: str,
+        call: CapabilityCall,
+        *,
+        trusted_schedule_id: str | None,
+    ) -> CapabilityCall:
+        if call.schedule_id != trusted_schedule_id:
+            raise ValueError("schedule authority must come from trusted scheduler context")
+        call = self._registry.normalize(call)
+        root = self._resolve_project_root(project_id)
+        if root is None:
+            return call
+        supplied = Path(call.project_root).resolve()
+        if supplied != root:
+            raise ValueError("capability project root does not match the registered project root")
+        return call.model_copy(update={"project_root": str(root)})
+
+    def prepare_capability_call(
+        self,
+        project_id: str,
+        call: CapabilityCall,
+        *,
+        trusted_schedule_id: str | None = None,
+    ) -> CapabilityCall:
+        """Return the server-bound form safe to persist or execute."""
+        return self._prepare_call(project_id, call, trusted_schedule_id=trusted_schedule_id)
+
+    def register_delegated_worktree(self, parent_project_id: str, root: str | Path) -> str:
+        if not isinstance(self._project_roots, ProjectRegistry):
+            raise RuntimeError("delegated worktrees require a project registry")
+        return self._project_roots.register_child(parent_project_id, root).project_id
+
+    def _resolve_project_root(self, project_id: str) -> Path | None:
+        if self._project_roots is None:
+            raise RuntimeError("capability execution requires a project registry")
+        if isinstance(self._project_roots, ProjectRegistry):
+            return self._project_roots.resolve(project_id)
+        raise RuntimeError("capability execution requires a project registry")
 
 
 def _redact(value: Mapping[str, JsonValue]) -> dict[str, JsonValue]:

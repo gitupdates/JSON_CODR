@@ -1,0 +1,7 @@
+{
+    "terminal.integrated.defaultProfile.windows": "PowerShell",
+    "opilot.experimental.webSearch": true,
+    "pylint.interpreter": [
+        "${env:LOCALAPPDATA}\\Programs\\Python\\Python311\\python.exe"
+    ]
+}

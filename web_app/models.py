@@ -19,6 +19,11 @@ class HardwareProbeRequest(BaseModel):
     model: str = Field(min_length=1, max_length=200)
 
 
+class OptimizedModelInstallRequest(BaseModel):
+    model_id: str = Field(min_length=3, max_length=500)
+    confirmed: bool = False
+
+
 class HardwareBenchmarkRequest(BaseModel):
     suite: Literal["quick", "thorough"] = "quick"
     model: str = Field(min_length=1, max_length=200)
@@ -84,9 +89,18 @@ class BrokerActionRequest(BaseModel):
         if "push" in kinds and kinds[-1] != "push":
             raise ValueError("push must be the final action")
         if "commit" in kinds:
+            if kinds.count("commit") != 1:
+                raise ValueError("publication workflow permits exactly one commit")
             commit_index = kinds.index("commit")
             if "apply_patch" not in kinds[:commit_index]:
                 raise ValueError("commit requires a preceding apply_patch action")
+            if commit_index == 0 or kinds[commit_index - 1] != "verify":
+                raise ValueError("verify must immediately precede commit")
+            verify_action = self.actions[commit_index - 1]
+            if not verify_action.checks:
+                raise ValueError("verify before commit requires at least one check")
+            if any(kind in {"apply_patch", "sync"} for kind in kinds[commit_index + 1:]):
+                raise ValueError("no tree-changing action may follow commit")
         if "push" in kinds and "commit" not in kinds[:kinds.index("push")]:
             raise ValueError("push requires a preceding commit action")
         return self
@@ -641,17 +655,22 @@ class DesignerSettings(BaseModel):
     autosave: bool = True
 
 
-class AutonomousCodingSettings(BaseModel):
-    schema_version: Literal[1] = 1
+class MemorySettings(BaseModel):
     enabled: bool = True
-    allow_read_only_automatically: bool = True
-    pause_before_file_changes: bool = True
-    pause_before_commands: bool = True
-    pause_before_network: bool = True
-    pause_before_installations: bool = True
-    pause_before_git_publication: bool = True
-    pause_before_external_effects: bool = True
-    external_adapters_enabled: bool = False
+    detailed_retention_enabled: bool = False
+    search_limit: int = Field(default=20, ge=1, le=100)
+
+
+class IdentitySettings(BaseModel):
+    development_mode: bool = False
+    do_not_expire: bool = False
+    configured_host: str = Field(default="127.0.0.1:8765", min_length=1, max_length=255)
+
+    @model_validator(mode="after")
+    def validate_atomic_development_mode(self) -> "IdentitySettings":
+        if self.do_not_expire and not self.development_mode:
+            raise ValueError("do_not_expire requires development_mode")
+        return self
 
 class SystemSettings(BaseModel):
     version: int = 3
@@ -661,7 +680,8 @@ class SystemSettings(BaseModel):
     skill_routing: SkillRoutingSettings = Field(default_factory=SkillRoutingSettings)
     gpu_optimization: GpuOptimizationSettings = Field(default_factory=GpuOptimizationSettings)
     designer: DesignerSettings = Field(default_factory=DesignerSettings)
-    autonomous_coding: AutonomousCodingSettings = Field(default_factory=AutonomousCodingSettings)
+    memory: MemorySettings = Field(default_factory=MemorySettings)
+    identity: IdentitySettings = Field(default_factory=IdentitySettings)
 
 
 class SettingsUpdate(BaseModel):
@@ -670,7 +690,8 @@ class SettingsUpdate(BaseModel):
     skill_routing: Optional[SkillRoutingSettings] = None
     gpu_optimization: Optional[GpuOptimizationSettings] = None
     designer: Optional[DesignerSettings] = None
-    autonomous_coding: Optional[AutonomousCodingSettings] = None
+    memory: Optional[MemorySettings] = None
+    identity: Optional[IdentitySettings] = None
 
 
 class SkillScanRequest(BaseModel):
@@ -693,6 +714,166 @@ class GithubSkillInstallRequest(BaseModel):
     preview_id: str
 
 
+class GitHubConfirmedWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmed: Literal[True]
+
+
+class GitHubAuthLoginRequest(GitHubConfirmedWrite):
+    pass
+
+
+class GitHubAuthCancelRequest(GitHubConfirmedWrite):
+    pass
+
+
+class GitHubRepositoryCreateRequest(GitHubConfirmedWrite):
+    owner: Optional[str] = Field(default=None, max_length=39)
+    name: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    description: str = Field(default="", max_length=350)
+    homepage: Optional[str] = Field(default=None, max_length=2048)
+    private: bool = True
+    auto_init: bool = True
+
+
+class GitHubRepositoryUpdateRequest(GitHubConfirmedWrite):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    description: Optional[str] = Field(default=None, max_length=350)
+    homepage: Optional[str] = Field(default=None, max_length=2048)
+    private: Optional[bool] = None
+    archived: Optional[bool] = None
+    default_branch: Optional[str] = Field(default=None, min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def require_repository_change(self):
+        if all(value is None for value in (self.name, self.description, self.homepage, self.private, self.archived, self.default_branch)):
+            raise ValueError("Provide at least one repository field to update")
+        return self
+
+
+class GitHubRepositoryDeleteRequest(GitHubConfirmedWrite):
+    confirm_name: str = Field(min_length=1, max_length=140)
+
+
+class GitHubIssueCreateRequest(GitHubConfirmedWrite):
+    title: str = Field(min_length=1, max_length=256)
+    body: str = Field(default="", max_length=65_536)
+
+
+class GitHubIssueUpdateRequest(GitHubConfirmedWrite):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    body: Optional[str] = Field(default=None, max_length=65_536)
+    state: Optional[Literal["open", "closed"]] = None
+
+    @model_validator(mode="after")
+    def require_issue_change(self):
+        if self.title is None and self.body is None and self.state is None:
+            raise ValueError("Provide at least one issue field to update")
+        return self
+
+
+class GitHubIssueCommentRequest(GitHubConfirmedWrite):
+    body: str = Field(min_length=1, max_length=65_536)
+
+
+class GitHubPullRequestCreateRequest(GitHubConfirmedWrite):
+    head: str = Field(min_length=1, max_length=256)
+    base: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1, max_length=256)
+    body: str = Field(default="", max_length=65_536)
+    draft: bool = False
+
+
+class GitHubPullRequestUpdateRequest(GitHubConfirmedWrite):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    body: Optional[str] = Field(default=None, max_length=65_536)
+    state: Optional[Literal["open", "closed"]] = None
+    base: Optional[str] = Field(default=None, min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def require_pull_request_change(self):
+        if all(value is None for value in (self.title, self.body, self.state, self.base)):
+            raise ValueError("Provide at least one pull request field to update")
+        return self
+
+
+class GitHubPullRequestMergeRequest(GitHubConfirmedWrite):
+    merge_method: Literal["merge", "squash", "rebase"] = "squash"
+
+
+class GitHubReleaseCreateRequest(GitHubConfirmedWrite):
+    tag_name: str = Field(min_length=1, max_length=256)
+    name: str = Field(min_length=1, max_length=256)
+    body: str = Field(default="", max_length=65_536)
+    target_commitish: Optional[str] = Field(default=None, max_length=256)
+    draft: bool = False
+    prerelease: bool = False
+
+
+class GitHubReleaseUpdateRequest(GitHubConfirmedWrite):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    body: Optional[str] = Field(default=None, max_length=65_536)
+    draft: Optional[bool] = None
+    prerelease: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def require_release_change(self):
+        if all(value is None for value in (self.name, self.body, self.draft, self.prerelease)):
+            raise ValueError("Provide at least one release field to update")
+        return self
+
+
+class GitHubLocalSyncRequest(GitHubConfirmedWrite):
+    project_root: str = Field(min_length=1, max_length=1000)
+
+
+class GitHubBuildCheckRequest(GitHubConfirmedWrite):
+    project_root: str = Field(min_length=1, max_length=1000)
+    repository: str = Field(
+        min_length=3,
+        max_length=140,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,38}/[A-Za-z0-9_.-]{1,100}$",
+    )
+    branch: str = Field(min_length=1, max_length=200)
+
+
+class GitHubBuildUpdateRequest(GitHubBuildCheckRequest):
+    expected_local_sha: str = Field(pattern=r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
+    expected_remote_sha: str = Field(pattern=r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
+    expected_login: str = Field(min_length=1, max_length=100)
+    expected_host: Literal["github.com"]
+
+
+class GitHubLocalCloneRequest(GitHubConfirmedWrite):
+    repository: str = Field(min_length=3, max_length=140)
+    destination: str = Field(min_length=1, max_length=1000)
+
+
+class GitHubRemoteBranchCreateRequest(GitHubConfirmedWrite):
+    branch: str = Field(min_length=1, max_length=200)
+    source_branch: str = Field(min_length=1, max_length=200)
+
+
+class GitHubLocalBranchRequest(GitHubConfirmedWrite):
+    project_root: str = Field(min_length=1, max_length=1000)
+    branch: str = Field(min_length=1, max_length=200)
+
+
+class GitHubLocalStageRequest(GitHubConfirmedWrite):
+    project_root: str = Field(min_length=1, max_length=1000)
+    paths: List[str] = Field(min_length=1, max_length=100)
+
+
+class GitHubLocalCommitRequest(GitHubConfirmedWrite):
+    project_root: str = Field(min_length=1, max_length=1000)
+    message: str = Field(min_length=1, max_length=500)
+
+
+class GitHubLocalPushRequest(GitHubConfirmedWrite):
+    project_root: str = Field(min_length=1, max_length=1000)
+
+
 class SkillDiscovery(BaseModel):
     id: str
     name: str
@@ -706,3 +887,12 @@ class SkillScanResult(BaseModel):
     discoveries: List[SkillDiscovery] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
     fallback_token: Optional[str] = None
+
+
+class ConnectionPreviewRequest(BaseModel):
+    action_id: Literal["configure", "disable", "remove", "restore"]
+
+
+class ConnectionRecoveryRequest(BaseModel):
+    action_id: Literal["configure", "disable", "remove", "restore"]
+    confirmation_code: str = Field(min_length=8, max_length=32, pattern=r"^[A-Fa-f0-9]+$")

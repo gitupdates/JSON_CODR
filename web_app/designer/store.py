@@ -53,6 +53,10 @@ class DesignerStore:
         self._initialize_project(document)
         return document
 
+    def managed_project_path(self, project_id: str) -> Path:
+        """Return a validated existing project directory for colocated services."""
+        return self._project_dir(project_id, must_exist=True)
+
     def get_project(self, project_id: str) -> DesignDocument:
         manifest = self._manifest(project_id)
         return self._revision(project_id, manifest["current_revision_id"]).document
