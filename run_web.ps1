@@ -6,22 +6,52 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$HostAddress = '127.0.0.1'
-$Port = 8765
+$RuntimeConfigPath = Join-Path $Root 'config\runtime.json'
+if (-not (Test-Path -LiteralPath $RuntimeConfigPath)) {
+  throw "Runtime configuration is missing: $RuntimeConfigPath"
+}
+try {
+  $Runtime = Get-Content -LiteralPath $RuntimeConfigPath -Raw | ConvertFrom-Json
+} catch {
+  throw "Runtime configuration is invalid: $RuntimeConfigPath"
+}
+$RequiredRuntimeProperties = @('schema_version', 'version', 'host', 'port', 'api_paths', 'python', 'default_roots', 'allowed_environment_overrides')
+foreach ($PropertyName in $RequiredRuntimeProperties) {
+  if ($null -eq $Runtime.$PropertyName) { throw "Runtime configuration is missing '$PropertyName'." }
+}
+foreach ($PropertyName in @('health', 'runtime_status', 'tasks')) {
+  if ([string]::IsNullOrWhiteSpace($Runtime.api_paths.$PropertyName)) {
+    throw "Runtime configuration is missing API path '$PropertyName'."
+  }
+}
+foreach ($PropertyName in @('host_versions', 'compatible_versions')) {
+  if ($null -eq $Runtime.python.$PropertyName -or @($Runtime.python.$PropertyName).Count -eq 0) {
+    throw "Runtime configuration is missing Python versions '$PropertyName'."
+  }
+}
+foreach ($PropertyName in @('data_root_segment', 'launcher_root_segment')) {
+  if ([string]::IsNullOrWhiteSpace($Runtime.default_roots.$PropertyName)) {
+    throw "Runtime configuration is missing default root '$PropertyName'."
+  }
+}
+$HostAddress = [string]$Runtime.host
+$Port = [int]$Runtime.port
 $Url = "http://${HostAddress}:$Port"
-$Version = 'V1.4.0'
-$DataRoot = if ($env:JSON_CODR_DATA_ROOT) { $env:JSON_CODR_DATA_ROOT } else { Join-Path $env:LOCALAPPDATA 'JSON_CODR' }
-$LauncherStateRoot = if ($env:JSON_CODR_LAUNCHER_ROOT) { $env:JSON_CODR_LAUNCHER_ROOT } else { Join-Path $DataRoot 'launcher' }
+$Version = [string]$Runtime.version
+$DataRoot = if ($env:JSON_CODR_DATA_ROOT) { $env:JSON_CODR_DATA_ROOT } else { Join-Path $env:LOCALAPPDATA ([string]$Runtime.default_roots.data_root_segment) }
+$LauncherStateRoot = if ($env:JSON_CODR_LAUNCHER_ROOT) { $env:JSON_CODR_LAUNCHER_ROOT } else { Join-Path $DataRoot ([string]$Runtime.default_roots.launcher_root_segment) }
 $ActiveBuildPointer = Join-Path $LauncherStateRoot 'pointer\active-build.json'
 $PythonCandidates = @()
 if ($env:JSON_CODR_PYTHON) {
   $PythonCandidates += $env:JSON_CODR_PYTHON
 }
-$KnownPython314 = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python314\python.exe'
-$KnownPython315 = Join-Path $env:LOCALAPPDATA 'Python\bin\python3.15.exe'
-if (Test-Path -LiteralPath $KnownPython314) { $PythonCandidates += $KnownPython314 }
-if (Test-Path -LiteralPath $KnownPython315) { $PythonCandidates += $KnownPython315 }
-$PythonCandidates += @('python3.14', 'python3.15', 'python')
+foreach ($PythonVersion in @($Runtime.python.host_versions)) {
+  $CompactVersion = ([string]$PythonVersion).Replace('.', '')
+  $PythonCandidates += Join-Path $env:LOCALAPPDATA "Programs\Python\Python$CompactVersion\python.exe"
+  $PythonCandidates += Join-Path $env:LOCALAPPDATA "Python\bin\python$PythonVersion.exe"
+  $PythonCandidates += "python$PythonVersion"
+}
+$PythonCandidates += 'python'
 
 $Python = $null
 $SeenPythonPaths = @{}
@@ -32,7 +62,10 @@ foreach ($Candidate in $PythonCandidates) {
     $PythonPath = $Command.Source
     if (-not $PythonPath -or $SeenPythonPaths.ContainsKey($PythonPath)) { continue }
     $SeenPythonPaths[$PythonPath] = $true
+    $CandidateErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     & $PythonPath -c "from uuid import uuid7; import fastapi, uvicorn, pydantic, ollama" *> $null
+    $ErrorActionPreference = $CandidateErrorActionPreference
     if ($LASTEXITCODE -eq 0) {
       $Python = $PythonPath
       break
@@ -40,18 +73,17 @@ foreach ($Candidate in $PythonCandidates) {
   }
   if ($Python) { break }
 }
-if (-not $Python) {
-  throw 'A compatible Python 3.14 or newer interpreter is required.'
-}
+if (-not $Python) { throw "A compatible Python $($Runtime.python.host_versions -join ' or ') interpreter is required." }
 $CompatiblePythonCandidates = @()
 if ($env:JSON_CODR_COMPATIBLE_PYTHON) {
   $CompatiblePythonCandidates += $env:JSON_CODR_COMPATIBLE_PYTHON
 }
-$KnownPython312 = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\python.exe'
-$KnownPython311 = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\python.exe'
-if (Test-Path -LiteralPath $KnownPython312) { $CompatiblePythonCandidates += $KnownPython312 }
-if (Test-Path -LiteralPath $KnownPython311) { $CompatiblePythonCandidates += $KnownPython311 }
-$CompatiblePythonCandidates += @('python3.12', 'python3.11', 'python')
+foreach ($PythonVersion in @($Runtime.python.compatible_versions)) {
+  $CompactVersion = ([string]$PythonVersion).Replace('.', '')
+  $CompatiblePythonCandidates += Join-Path $env:LOCALAPPDATA "Programs\Python\Python$CompactVersion\python.exe"
+  $CompatiblePythonCandidates += "python$PythonVersion"
+}
+$CompatiblePythonCandidates += 'python'
 $CompatiblePython = $null
 $SeenCompatiblePythonPaths = @{}
 foreach ($Candidate in $CompatiblePythonCandidates) {
@@ -61,17 +93,18 @@ foreach ($Candidate in $CompatiblePythonCandidates) {
     $PythonPath = $Command.Source
     if (-not $PythonPath -or $SeenCompatiblePythonPaths.ContainsKey($PythonPath)) { continue }
     $SeenCompatiblePythonPaths[$PythonPath] = $true
+    $CandidateErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     $VersionOutput = & $PythonPath -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
-    if ($LASTEXITCODE -eq 0 -and $VersionOutput -in @('3.11', '3.12')) {
+    $ErrorActionPreference = $CandidateErrorActionPreference
+    if ($LASTEXITCODE -eq 0 -and $VersionOutput -in @($Runtime.python.compatible_versions)) {
       $CompatiblePython = $PythonPath
       break
     }
   }
   if ($CompatiblePython) { break }
 }
-if (-not $CompatiblePython) {
-  throw 'A Python 3.11 or 3.12 interpreter is required for optional provider environments.'
-}
+if (-not $CompatiblePython) { throw "A Python $($Runtime.python.compatible_versions -join ' or ') interpreter is required for optional provider environments." }
 $OllamaCommand = Get-Command ollama -ErrorAction SilentlyContinue
 if ($OllamaCommand) {
   $Ollama = $OllamaCommand.Source
@@ -88,6 +121,8 @@ if ($ValidateOnly) {
     port = $Port
     url = $Url
     version = $Version
+    healthPath = [string]$Runtime.api_paths.health
+    runtimeStatusPath = [string]$Runtime.api_paths.runtime_status
     python = $Python
     compatiblePython = $CompatiblePython
     ollama = $Ollama
@@ -145,7 +180,7 @@ try {
   for ($Attempt = 0; $Attempt -lt 30; $Attempt++) {
     Start-Sleep -Milliseconds 300
     try {
-      Invoke-RestMethod -Uri "$Url/api/health" -TimeoutSec 2 | Out-Null
+      Invoke-RestMethod -Uri "$Url$($Runtime.api_paths.health)" -TimeoutSec 2 | Out-Null
       break
     } catch {
       if ($WebProcess.HasExited) { throw "Web server exited with code $($WebProcess.ExitCode)." }

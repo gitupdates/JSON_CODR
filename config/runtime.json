@@ -1,0 +1,50 @@
+{
+  "schema_version": "1",
+  "version": "V1.4.0",
+  "host": "127.0.0.1",
+  "port": 8765,
+  "api_paths": {
+    "health": "/api/health",
+    "runtime_status": "/api/runtime/status",
+    "tasks": "/api/tasks"
+  },
+  "python": {
+    "host_versions": ["3.14", "3.15"],
+    "compatible_versions": ["3.11", "3.12"]
+  },
+  "default_roots": {
+    "data_root_segment": "JSON_CODR",
+    "launcher_root_segment": "launcher"
+  },
+  "allowed_environment_overrides": [
+    "JSON_CODR_ACTION_DONE__",
+    "JSON_CODR_APPROVED_ACTION",
+    "JSON_CODR_ARTIFACT_MANIFEST",
+    "JSON_CODR_COMPATIBLE_PYTHON",
+    "JSON_CODR_DATA_ROOT",
+    "JSON_CODR_EXPECTED_VERSION",
+    "JSON_CODR_HOST",
+    "JSON_CODR_INSTANCE_ID",
+    "JSON_CODR_LAUNCHER_ROOT",
+    "JSON_CODR_MANIFEST_VERSION",
+    "JSON_CODR_MCP_START_8765",
+    "JSON_CODR_MODELS",
+    "JSON_CODR_PORT",
+    "JSON_CODR_PROOF_IMAGE",
+    "JSON_CODR_PUBLIC_URL",
+    "JSON_CODR_PYTHON",
+    "JSON_CODR_REVISION",
+    "JSON_CODR_ROOT",
+    "JSON_CODR_RUN_MODEL_CONFORMANCE",
+    "JSON_CODR_SAFE_UI",
+    "JSON_CODR_SKILL_SCHEMA",
+    "JSON_CODR_STARTED_AT",
+    "JSON_CODR_TERMINAL_READY",
+    "JSON_CODR_UPDATE_BASELINE_SHA",
+    "JSON_CODR_UPDATE_BRANCH",
+    "JSON_CODR_UPDATE_CONTAINER_IMAGE",
+    "JSON_CODR_UPDATE_CONTAINER_PORT",
+    "JSON_CODR_UPDATE_ROOT",
+    "JSON_CODR_URL"
+  ]
+}

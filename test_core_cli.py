@@ -11,6 +11,7 @@ from urllib.response import addinfourl
 
 from web_app.core.cli import run_cli
 from web_app.core.cli_identity import normalize_server_origin
+from web_app.runtime_config import RuntimeConfig
 
 
 def _memory_http_response(url, status, reason, body=b"", headers=None):
@@ -108,7 +109,7 @@ class CoreCliTests(unittest.TestCase):
 
         class Store:
             def load(self):
-                return {"token": "cli-secret", "server_origin": "http://127.0.0.1:8772"}
+                return {"token": "cli-secret", "server_origin": RuntimeConfig.load().url}
 
         output = io.StringIO()
         with patch("web_app.core.cli.urllib.request.build_opener", return_value=Opener()):

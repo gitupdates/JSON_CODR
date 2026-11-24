@@ -120,14 +120,38 @@ class ArtifactMaterializer:
         version_file = root / "web_app" / "version.py"
         tree = ast.parse(version_file.read_text(encoding="utf-8"), filename=str(version_file))
         for statement in tree.body:
-            if (
+            if not (
                 isinstance(statement, ast.Assign)
                 and any(isinstance(target, ast.Name) and target.id == "APP_VERSION" for target in statement.targets)
-                and isinstance(statement.value, ast.Constant)
-                and isinstance(statement.value.value, str)
             ):
+                continue
+            if isinstance(statement.value, ast.Constant) and isinstance(statement.value.value, str):
                 return statement.value.value
-        raise PermissionError("candidate version is not a literal APP_VERSION assignment")
+            if ArtifactMaterializer._is_canonical_runtime_version(statement.value):
+                runtime_config = root / "config" / "runtime.json"
+                try:
+                    document = json.loads(runtime_config.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as error:
+                    raise PermissionError("candidate canonical runtime version is unavailable") from error
+                version = document.get("version") if isinstance(document, dict) else None
+                if isinstance(version, str) and version:
+                    return version
+                raise PermissionError("candidate canonical runtime version is invalid")
+        raise PermissionError("candidate version is not a literal or canonical APP_VERSION assignment")
+
+    @staticmethod
+    def _is_canonical_runtime_version(value: ast.expr) -> bool:
+        return (
+            isinstance(value, ast.Attribute)
+            and value.attr == "version"
+            and isinstance(value.value, ast.Call)
+            and not value.value.args
+            and not value.value.keywords
+            and isinstance(value.value.func, ast.Attribute)
+            and value.value.func.attr == "load"
+            and isinstance(value.value.func.value, ast.Name)
+            and value.value.func.value.id == "RuntimeConfig"
+        )
 
     @staticmethod
     def _extract_archive(archive: bytes, destination: Path) -> None:

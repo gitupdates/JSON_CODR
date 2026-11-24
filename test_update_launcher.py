@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 import tempfile
 import unittest
@@ -138,6 +139,21 @@ class UpdateLauncherTests(unittest.TestCase):
 
     def tearDown(self):
         self.temporary.cleanup()
+
+    def test_materializer_reads_the_canonical_runtime_version_without_executing_candidate_code(self):
+        """A dynamic candidate import must not replace the isolated update version proof."""
+        config = self.repository / "config"
+        config.mkdir()
+        (config / "runtime.json").write_text(
+            json.dumps({"version": "V1.3.9"}), encoding="utf-8"
+        )
+        (self.repository / "web_app" / "version.py").write_text(
+            "from web_app.runtime_config import RuntimeConfig\n\n"
+            "APP_VERSION = RuntimeConfig.load().version\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual(ArtifactMaterializer._literal_version(self.repository), "V1.3.9")
 
     def http_probe(self, url, timeout, headers=None):
         if url.endswith("/openapi.json"):

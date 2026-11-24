@@ -12,6 +12,7 @@ from typing import Any, TextIO
 from uuid import uuid4
 
 from web_app.core.cli_identity import CliIdentityService, DpapiTokenStore, normalize_server_origin
+from web_app.runtime_config import RuntimeConfig
 
 
 Submitter = Callable[[Mapping[str, Any]], Mapping[str, Any]]
@@ -155,7 +156,7 @@ def _default_auth_service() -> CliIdentityService:
 def _http_submitter(base_url: str, token: str) -> Submitter:
     def submit(command: Mapping[str, Any]) -> Mapping[str, Any]:
         request = urllib.request.Request(
-            f"{base_url.rstrip('/')}/api/tasks",
+            f"{base_url.rstrip('/')}{RuntimeConfig.load().tasks_path}",
             data=json.dumps(command).encode("utf-8"),
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
             method="POST",
@@ -168,7 +169,7 @@ def _http_submitter(base_url: str, token: str) -> Submitter:
 
 
 def _http_status(base_url: str) -> Mapping[str, Any]:
-    with urllib.request.urlopen(f"{base_url.rstrip('/')}/api/runtime/status") as response:
+    with urllib.request.urlopen(f"{base_url.rstrip('/')}{RuntimeConfig.load().runtime_status_path}") as response:
         return json.load(response)
 
 
@@ -207,6 +208,7 @@ def _redact(value: Any) -> Any:
 
 
 def _parser() -> argparse.ArgumentParser:
+    runtime = RuntimeConfig.load()
     parser = argparse.ArgumentParser(prog="json-codr")
     subparsers = parser.add_subparsers(dest="action")
     run = subparsers.add_parser("run")
@@ -217,17 +219,17 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--capability", default="inference.generate")
     run.add_argument("--operation", default="generate")
     run.add_argument("--output", choices=("text", "json", "stream-json"), default="text")
-    run.add_argument("--url", default="http://127.0.0.1:8772")
+    run.add_argument("--url", default=runtime.url)
     status = subparsers.add_parser("status")
     status.add_argument("--output", choices=("text", "json"), default="text")
-    status.add_argument("--url", default="http://127.0.0.1:8772")
+    status.add_argument("--url", default=runtime.url)
     auth = subparsers.add_parser("auth")
     auth_subparsers = auth.add_subparsers(dest="auth_action")
     login = auth_subparsers.add_parser("login")
     login.add_argument("--username", default="Administrator")
     login.add_argument("--password", default="")
     login.add_argument("--scope", dest="scopes", action="append", default=[])
-    login.add_argument("--url", default="http://127.0.0.1:8772")
+    login.add_argument("--url", default=runtime.url)
     auth_subparsers.add_parser("status")
     auth_subparsers.add_parser("logout")
     return parser

@@ -5,12 +5,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from web_app.runtime_config import RuntimeConfig
 
 ROOT = Path(__file__).resolve().parent
 
 
 class RunWebTests(unittest.TestCase):
     def test_launcher_validation_reports_localhost_runtime(self):
+        config = RuntimeConfig.load()
         process = subprocess.run(
             [
                 "powershell.exe",
@@ -27,10 +29,12 @@ class RunWebTests(unittest.TestCase):
         )
         self.assertEqual(process.returncode, 0, process.stderr)
         payload = json.loads(process.stdout)
-        self.assertEqual(payload["host"], "127.0.0.1")
-        self.assertEqual(payload["port"], 8765)
-        self.assertEqual(payload["url"], "http://127.0.0.1:8765")
-        self.assertEqual(payload["version"], "V1.4.0")
+        self.assertEqual(payload["host"], config.host)
+        self.assertEqual(payload["port"], config.port)
+        self.assertEqual(payload["url"], config.url)
+        self.assertEqual(payload["version"], config.version)
+        self.assertEqual(payload["healthPath"], config.health_path)
+        self.assertEqual(payload["runtimeStatusPath"], config.runtime_status_path)
         self.assertTrue(payload["python"])
         subprocess.run(
             [payload["python"], "-c", "from uuid import uuid7"],
