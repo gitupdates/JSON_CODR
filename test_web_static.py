@@ -500,6 +500,14 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         self.assertIn('responseErrorMessage(response, "Hardware detection failed")', script)
         self.assertIn('responseErrorMessage(response, "Workspace task failed")', script)
 
+    def test_workspace_task_submission_uses_authenticated_mutation_headers(self):
+        script = self.client.get("/static/app.js").text
+        marker = 'fetch("/api/workspace/tasks", {'
+        start = script.index(marker)
+        request_block = script[start:start + 500]
+        self.assertIn("JSONCodrHttpIdentity.mutationHeaders", request_block)
+        self.assertIn('"Content-Type": "application/json"', request_block)
+
     def test_runtime_observability_is_progressive_not_a_new_destination(self):
         html = self.client.get("/").text
         script = self.client.get("/static/app.js").text

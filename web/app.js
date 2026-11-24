@@ -1186,7 +1186,7 @@ async function runWorkspaceAgent() {
     await ensureSession();
     const response = await fetch("/api/workspace/tasks", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         project_root: projectRoot, session_id: sessionId, engine_id: "borg",
         model_selection: model, prompt: outcome,
