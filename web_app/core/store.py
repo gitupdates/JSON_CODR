@@ -50,6 +50,13 @@ class EffectReservation:
     created: bool
 
 
+@dataclass(frozen=True)
+class EffectCompletion:
+    event: TaskEvent
+    effect: EffectIntent
+    created: bool
+
+
 _EVENT_STATUSES = {
     "task.started": TaskStatus.running,
     "task.completed": TaskStatus.completed,
@@ -424,6 +431,91 @@ class TaskStore:
             )
             return EffectReservation(persisted_event, persisted_effect, True)
 
+    def complete_effect_with_event(
+        self,
+        task_id: str,
+        effect_id: str,
+        event: TaskEventDraft,
+    ) -> EffectCompletion:
+        """Atomically persist an external-effect receipt and mark the outbox effect complete."""
+        completion = event.model_copy(update={"causation_id": event.causation_id or effect_id})
+        with self._transaction():
+            row = self._connection.execute(
+                "SELECT effect_json FROM effects WHERE task_id = ? AND effect_id = ?",
+                (task_id, effect_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError((task_id, effect_id))
+            current = EffectIntent.model_validate_json(row["effect_json"])
+            existing_rows = self._connection.execute(
+                "SELECT event_json FROM task_events WHERE task_id = ? ORDER BY sequence",
+                (task_id,),
+            ).fetchall()
+            existing = next(
+                (
+                    TaskEvent.model_validate_json(item["event_json"])
+                    for item in existing_rows
+                    if TaskEvent.model_validate_json(item["event_json"]).causation_id == effect_id
+                    and TaskEvent.model_validate_json(item["event_json"]).event_type == completion.event_type
+                ),
+                None,
+            )
+            if current.state is EffectState.succeeded:
+                if existing is None:
+                    raise IntegrityViolation("completed effect is missing its durable receipt event")
+                existing_draft = TaskEventDraft(
+                    event_type=existing.event_type,
+                    payload=existing.payload,
+                    causation_id=existing.causation_id,
+                )
+                if existing_draft != completion:
+                    raise ConcurrencyConflict("effect completion receipt changed on replay")
+                return EffectCompletion(existing, current, False)
+            if current.state not in {EffectState.running, EffectState.unknown_requires_reconciliation}:
+                raise InvalidEffectTransition(
+                    f"cannot complete effect from {current.state.value}"
+                )
+            persisted = self._append_unlocked(task_id, completion)
+            updated = self._transition_effect_unlocked(
+                task_id,
+                effect_id,
+                EffectState.succeeded,
+                expected_state=current.state,
+            )
+            return EffectCompletion(persisted, updated, True)
+
+    def fail_effect_with_event(
+        self,
+        task_id: str,
+        effect_id: str,
+        event: TaskEventDraft,
+    ) -> EffectCompletion:
+        """Atomically persist sanitized failure evidence and stop a known-failed effect."""
+        failure = event.model_copy(update={"causation_id": event.causation_id or effect_id})
+        with self._transaction():
+            current = self.effect(task_id, effect_id)
+            if current.state is EffectState.failed:
+                existing = next(
+                    (
+                        item for item in self._events_unlocked(task_id)
+                        if item.causation_id == effect_id and item.event_type == failure.event_type
+                    ),
+                    None,
+                )
+                if existing is None:
+                    raise IntegrityViolation("failed effect is missing its durable failure event")
+                return EffectCompletion(existing, current, False)
+            if current.state not in {
+                EffectState.pending, EffectState.leased, EffectState.running,
+                EffectState.unknown_requires_reconciliation,
+            }:
+                raise InvalidEffectTransition(f"cannot fail effect from {current.state.value}")
+            persisted = self._append_unlocked(task_id, failure)
+            updated = self._transition_effect_unlocked(
+                task_id, effect_id, EffectState.failed, expected_state=current.state,
+            )
+            return EffectCompletion(persisted, updated, True)
+
     def effect(self, task_id: str, effect_id: str) -> EffectIntent:
         with self._lock:
             row = self._connection.execute(
@@ -603,6 +695,14 @@ class TaskStore:
         with self._lock:
             rows = self._connection.execute(
                 "SELECT task_id FROM tasks WHERE project_id = ? ORDER BY rowid", (project_id,)
+            ).fetchall()
+            return tuple(self._get_unlocked(row["task_id"]) for row in rows)
+
+    def for_command_type(self, command_type: str) -> tuple[TaskRecord, ...]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT task_id FROM tasks WHERE json_extract(command_json, '$.command_type') = ? ORDER BY rowid",
+                (command_type,),
             ).fetchall()
             return tuple(self._get_unlocked(row["task_id"]) for row in rows)
 

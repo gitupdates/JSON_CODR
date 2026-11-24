@@ -281,6 +281,45 @@ class TaskStoreTests(unittest.TestCase):
         finally:
             reopened.close()
 
+    def test_effect_completion_and_receipt_event_are_atomic_and_idempotent(self):
+        """Splitting receipt persistence from effect completion must fail this test."""
+        self.store.create(command("task-1"))
+        self.store.append_with_effect("task-1", TaskEventDraft(event_type="effect.requested"), effect())
+        self.store.transition_effect(
+            "task-1", "effect-1", EffectState.leased,
+            expected_state=EffectState.pending, lease_owner="worker-1",
+        )
+        self.store.transition_effect(
+            "task-1", "effect-1", EffectState.running, expected_state=EffectState.leased,
+        )
+
+        completed = self.store.complete_effect_with_event(
+            "task-1", "effect-1",
+            TaskEventDraft(event_type="effect.completed", payload={"receipt": "durable"}),
+        )
+        replayed = self.store.complete_effect_with_event(
+            "task-1", "effect-1",
+            TaskEventDraft(event_type="effect.completed", payload={"receipt": "durable"}),
+        )
+
+        self.assertTrue(completed.created)
+        self.assertFalse(replayed.created)
+        self.assertEqual(replayed.effect.state, EffectState.succeeded)
+        self.assertEqual(
+            [event.event_type for event in self.store.events("task-1")],
+            ["task.created", "effect.requested", "effect.completed"],
+        )
+
+    def test_tasks_can_be_projected_by_durable_command_type(self):
+        self.store.create(command("ordinary"))
+        candidate = command("candidate").model_copy(update={"command_type": "system.update.candidate"})
+        self.store.create(candidate)
+
+        self.assertEqual(
+            [record.task_id for record in self.store.for_command_type("system.update.candidate")],
+            ["candidate"],
+        )
+
 
 class ArtifactStoreTests(unittest.TestCase):
     def setUp(self) -> None:
