@@ -60,14 +60,42 @@ V1.0.11 added sanitized-by-default portable `.localperf.zip` reference packages 
 
 The **Benchmarks** tab compares CPU with all detected runnable backends or one selected optimization using the same model and LocalPerf-Core-v1 workload. A selected accelerator is always paired with a fresh CPU baseline. **Quick** runs 12 prompts three times; **Thorough** runs them seven times after warmup. Results show conformance, model/runtime verification, TTFT, peak VRAM, duration, quality, token throughput, and CPU-relative performance. Benchmarking does not change the active backend, and canonical runs are stored under the JSON_CODR data root.
 
-## Requirements
+## Windows first run
+
+From a clean, trusted Windows 11 x64 checkout, the supported setup path is:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\bootstrap.ps1
+```
+
+The bootstrap validates the checked-out commit and trusted `origin` remote before it changes the machine. It uses only allowlisted WinGet packages for Git, GitHub CLI, Python, and Ollama; creates an isolated JSON_CODR runtime under `%LOCALAPPDATA%\JSON_CODR`; asks before downloading the reviewed Ollama model; and securely prompts for a permanent, full Administrator password. That initial account and its browser/CLI credentials are visibly **non-production, non-expiring, and revocable**. Passwords and tokens are never put in command lines, receipts, or reports.
+
+Useful modes:
+
+```powershell
+# Read-only diagnosis; changes nothing and never starts or stops a service.
+.\bootstrap.ps1 -Check -NoGitHub
+
+# Reconcile a prior bootstrap after a safe interruption.
+.\bootstrap.ps1 -Repair
+
+# Make the local web/CLI/Ollama path ready without GitHub authentication.
+.\bootstrap.ps1 -NoGitHub
+
+# Explicitly unverified local development source only; it cannot issue trusted readiness.
+.\bootstrap.ps1 -DevelopmentSource -Check -NoGitHub
+```
+
+Bootstrap never kills or silently reuses a process on port 8765. A non-JSON_CODR listener is a conflict with an exact repair command. GitHub proof uses only `gh auth` and read-only `gh api user` / `git ls-remote`; it never pushes, creates repositories, or changes remotes. See [the first-run guide](docs/user/first-run.md) for repair and operational boundaries.
+
+## Manual troubleshooting requirements
 
 - Windows with Python 3.14 or newer
 - Python 3.11 or 3.12 for the optional provider subprocess environments
 - Ollama available in `PATH`
 - At least one configured model installed in Ollama
 
-Install Python dependencies:
+Manual dependency installation is troubleshooting, not the first-run path. Install Python dependencies:
 
 ```powershell
 py -3.14 -m pip install -r requirements.txt

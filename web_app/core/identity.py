@@ -302,6 +302,45 @@ class IdentityService:
             )
         return BootstrapResult(created=True, user=user, temporary_credential=temporary)
 
+    def bootstrap_nonproduction_administrator(
+        self, password: str, administrator_name: str = "Administrator",
+    ) -> BootstrapResult:
+        """Create the one permanent local bootstrap administrator.
+
+        This deliberately lives on the identity service rather than in an
+        installer so callers never edit the identity database directly.
+        """
+        if not password:
+            raise ValueError("Administrator password must not be blank")
+        state = self.bootstrap_state()
+        existing = self._user_by_normalized(self._normalize(administrator_name))
+        if state.completed or existing:
+            if existing and state.mode == "non-production":
+                return BootstrapResult(created=False, user=existing)
+            raise RuntimeError("an existing identity installation must be reconciled manually")
+        user = self.create_user(
+            administrator_name,
+            administrator_name,
+            password_hash=self._hasher.hash(password),
+            password_expires_at=None,
+            require_password_change=False,
+            roles=("administrator",),
+            bootstrap_account=True,
+        )
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE identity_bootstrap_state SET completed=1, mode='non-production', administrator_user_id=?, updated_at=? WHERE singleton=1",
+                (user.user_id, self._iso(self._now())),
+            )
+        self._audit(
+            "identity.nonproduction_bootstrap",
+            actor_id=user.user_id,
+            target_id=user.user_id,
+            reason="permanent local administrator initialized",
+            changed_fields={"credential_policy": "non-expiring-revocable"},
+        )
+        return BootstrapResult(created=True, user=user)
+
     def bootstrap_state(self) -> BootstrapState:
         with self._connect() as connection:
             row = connection.execute(
@@ -827,9 +866,12 @@ class IdentityService:
         if _purpose and not purpose_scopes:
             raise PermissionError("credential purpose is not allowed")
         now = self._now()
-        lifetime = lifetime or timedelta(days=30)
+        if self.bootstrap_state().mode == "non-production":
+            lifetime = timedelta(days=36_500)
+        else:
+            lifetime = lifetime or timedelta(days=30)
         expires_at = now + lifetime
-        idle_expires_at = now + timedelta(hours=12) if credential_kind is CredentialKind.browser_session else None
+        idle_expires_at = None if self.bootstrap_state().mode == "non-production" else (now + timedelta(hours=12) if credential_kind is CredentialKind.browser_session else None)
         token = secrets.token_urlsafe(48)
         credential_id = str(uuid4())
         normalized_scopes = purpose_scopes or tuple(dict.fromkeys(scopes))

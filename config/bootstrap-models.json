@@ -1,0 +1,12 @@
+{
+  "schema_version": "1",
+  "models": [
+    {
+      "name": "llama3.2:3b",
+      "purpose": "general local inference",
+      "maximum_download_bytes": 3000000000,
+      "license": "Llama 3.2 Community License",
+      "source": "Ollama library"
+    }
+  ]
+}

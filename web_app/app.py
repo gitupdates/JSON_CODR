@@ -1164,6 +1164,7 @@ def create_app(
         return {
             "completed": state.completed,
             "mode": state.mode,
+            "credential_policy": "non-expiring, revocable (non-production)" if state.mode == "non-production" else None,
             "development_bypass": {
                 "enabled": bypass.enabled,
                 "do_not_expire": bypass.do_not_expire,
