@@ -445,11 +445,27 @@ class GitHubCLI:
                 status="published", reconciled=False,
             )
 
-    def reconcile_publication(self, branch: str, commit_sha: str) -> PublicationState:
+    def reconcile_publication(
+        self,
+        branch: str,
+        commit_sha: str,
+        project_root: str | None = None,
+    ) -> PublicationState:
         selected_branch = self._validated_branch(branch)
         commit = self._validated_sha(commit_sha, "verified commit")
-        root = self._publication_roots.get((selected_branch, commit))
-        if root is None:
+        key = (selected_branch, commit)
+        root = self._publication_roots.get(key)
+        if project_root is not None:
+            root = Path(project_root).expanduser().resolve(strict=True)
+            if Path(self._git(root, "rev-parse", "--show-toplevel")).resolve() != root:
+                raise ValueError("Select the root folder of the candidate Git worktree")
+            resolved_commit = self._git(root, "rev-parse", f"{commit}^{{commit}}")
+            if resolved_commit.casefold() != commit.casefold():
+                raise GitHubBuildConflict(
+                    "verified commit does not resolve to the exact requested object"
+                )
+            self._publication_roots[key] = root
+        elif root is None:
             raise ValueError("publication project is unknown; call publish_verified before reconciliation")
         remote = self._remote_branch_sha(root, selected_branch)
         if remote is None:

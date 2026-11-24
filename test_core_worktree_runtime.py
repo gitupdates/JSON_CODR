@@ -7,7 +7,7 @@ import warnings
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from web_app.core.worktree_runtime import RepositoryBusy, WorktreeRuntime
+from web_app.core.worktree_runtime import RepositoryBusy, RepositoryLockOwner, WorktreeRuntime
 
 
 def git(root: Path, *arguments: str) -> str:
@@ -88,6 +88,56 @@ class WorktreeRuntimeTests(unittest.TestCase):
             recovered_runtime.close(recovered)
             # The stale owner's close must not remove the replacement owner's lock.
             first_runtime.close(first)
+
+    def test_resume_rejects_the_same_token_while_its_recorded_owner_is_alive(self):
+        session = self.runtime.create(self.project, candidate_id="candidate-one")
+        lock_path = Path(session.lock_path)
+        owner = RepositoryLockOwner.model_validate_json(lock_path.read_text(encoding="utf-8"))
+        foreign_pid = os.getpid() + 100_000
+        lock_path.write_text(
+            owner.model_copy(update={"owner_pid": foreign_pid}).model_dump_json(),
+            encoding="utf-8",
+        )
+        other = WorktreeRuntime(
+            self.root / "state", process_alive=lambda pid: pid == foreign_pid,
+        )
+        try:
+            with self.assertRaises(RepositoryBusy):
+                other.resume(session)
+        finally:
+            self.runtime.close(session)
+
+    def test_resume_adopts_a_dead_owners_lease_for_restart_recovery(self):
+        now = datetime(2026, 11, 24, tzinfo=UTC)
+        first_runtime = WorktreeRuntime(
+            self.root / "state", lock_ttl=timedelta(seconds=1), clock=lambda: now,
+        )
+        session = first_runtime.create(self.project, candidate_id="candidate-one")
+        lock_path = Path(session.lock_path)
+        owner = RepositoryLockOwner.model_validate_json(lock_path.read_text(encoding="utf-8"))
+        foreign_pid = os.getpid() + 100_000
+        lock_path.write_text(
+            owner.model_copy(update={"owner_pid": foreign_pid}).model_dump_json(),
+            encoding="utf-8",
+        )
+        resumed_at = now + timedelta(minutes=1)
+        restarted = WorktreeRuntime(
+            self.root / "state", clock=lambda: resumed_at,
+            process_alive=lambda pid: pid == os.getpid(),
+        )
+        restarted.resume(session)
+        adopted = RepositoryLockOwner.model_validate_json(lock_path.read_text(encoding="utf-8"))
+        try:
+            self.assertEqual(adopted.owner_pid, os.getpid())
+            self.assertGreater(adopted.expires_at, resumed_at)
+            contender = WorktreeRuntime(
+                self.root / "state", clock=lambda: resumed_at + timedelta(hours=1),
+                process_alive=lambda pid: pid == os.getpid(),
+            )
+            with self.assertRaises(RepositoryBusy):
+                contender.create(self.project, candidate_id="candidate-two")
+        finally:
+            restarted.close(session)
 
     def test_candidate_commit_preserves_additions_and_deletions_without_copying_back(self):
         """Using a tracked-only diff or copying files to the source must fail this test."""

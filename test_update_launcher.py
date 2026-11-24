@@ -1,7 +1,15 @@
+import json
+import os
+import socket
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.request import urlopen
 
 from web_app.core.autonomous_update import UpdateProfile
 from web_app.core.update_launcher import (
@@ -12,6 +20,7 @@ from web_app.core.update_launcher import (
     HealthReceipt,
     UpdateLauncher,
 )
+from web_app.version import APP_VERSION
 
 
 class FakeProcess:
@@ -105,6 +114,22 @@ class UpdateLauncherTests(unittest.TestCase):
         self.assertEqual(environment["JSON_CODR_DATA_ROOT"], receipt.data_root)
         self.assertTrue(Path(receipt.data_root).is_relative_to(self.root / "launcher-state"))
 
+    def test_candidate_environment_excludes_parent_credentials_and_live_launcher_authority(self):
+        with patch.dict(
+            os.environ,
+            {
+                "GH_TOKEN": "candidate-must-not-inherit",
+                "OPENAI_API_KEY": "candidate-must-not-inherit",
+                "JSON_CODR_LAUNCHER_ROOT": str(self.root / "live-launcher"),
+            },
+        ):
+            self.launcher().launch_candidate(self.candidate, self.profile)
+
+        environment = self.environments[0]
+        self.assertNotIn("GH_TOKEN", environment)
+        self.assertNotIn("OPENAI_API_KEY", environment)
+        self.assertNotIn("JSON_CODR_LAUNCHER_ROOT", environment)
+
     def test_version_mismatch_terminates_candidate_with_failure_receipt(self):
         """Accepting a process that reports another version must fail this test."""
         def wrong_version(url, timeout):
@@ -157,6 +182,25 @@ class UpdateLauncherTests(unittest.TestCase):
             browser_error.exception.receipt.browser_fatal_errors,
             ("Uncaught TypeError: boot failed",),
         )
+
+    def test_openapi_probe_retries_transient_startup_reset(self):
+        """A live child must get the same bounded startup grace on every API probe."""
+        openapi_attempts = 0
+
+        def transient_openapi(url, timeout):
+            nonlocal openapi_attempts
+            if url.endswith("/openapi.json"):
+                openapi_attempts += 1
+                if openapi_attempts == 1:
+                    raise ConnectionResetError("server is still accepting connections")
+            return self.http_probe(url, timeout)
+
+        receipt = self.launcher(http_probe=transient_openapi).launch_candidate(
+            self.candidate, self.profile
+        )
+
+        self.assertTrue(receipt.healthy)
+        self.assertEqual(openapi_attempts, 2)
 
     def test_incompatible_migration_is_blocked_before_process_start(self):
         """Unattended activation must never run an irreversible migration."""
@@ -223,6 +267,112 @@ class UpdateLauncherTests(unittest.TestCase):
         repeated = restarted.rollback(activation.activation_id)
         self.assertEqual(rollback, repeated)
         self.assertEqual(restarted.pointer_store.load().revision, previous.revision)
+
+    def test_isolated_current_and_candidate_processes_activate_then_rollback(self):
+        """Release proof uses two real loopback ports and never replaces the serving process."""
+        server_source = '''
+import json
+import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+host, port, revision, version = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/api/health":
+            payload = {"status": "ready", "revision": revision, "app_version": version}
+            body = json.dumps(payload).encode()
+            content_type = "application/json"
+        elif self.path == "/openapi.json":
+            body = json.dumps({"openapi": "3.1.0"}).encode()
+            content_type = "application/json"
+        elif self.path == "/":
+            body = b"<!doctype html><title>isolated build</title>"
+            content_type = "text/html"
+        else:
+            self.send_response(404); self.end_headers(); return
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers(); self.wfile.write(body)
+    def log_message(self, *_args): pass
+ThreadingHTTPServer((host, port), Handler).serve_forever()
+'''
+        current_root = self.root / "current-build"
+        candidate_root = self.root / "candidate-build"
+        current_root.mkdir()
+        candidate_root.mkdir()
+        (current_root / "fixture_server.py").write_text(server_source, encoding="utf-8")
+        (candidate_root / "fixture_server.py").write_text(server_source, encoding="utf-8")
+
+        def available_port():
+            with socket.socket() as stream:
+                stream.bind(("127.0.0.1", 0))
+                return stream.getsockname()[1]
+
+        current_port = available_port()
+        current_revision = "b" * 40
+        candidate_revision = "c" * 40
+        version = APP_VERSION
+        current = subprocess.Popen(
+            [sys.executable, "fixture_server.py", "127.0.0.1", str(current_port), current_revision, version],
+            cwd=current_root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        def browser_probe(base_url):
+            deadline = time.monotonic() + 5
+            while True:
+                try:
+                    with urlopen(base_url, timeout=0.5) as response:
+                        return {"loaded": response.status == 200, "fatal_errors": ()}
+                except OSError as error:
+                    if time.monotonic() >= deadline:
+                        return {"loaded": False, "fatal_errors": (str(error),)}
+                    time.sleep(0.05)
+
+        launcher = UpdateLauncher(self.root / "e2e-launcher", browser_probe=browser_probe)
+        receipt = None
+        try:
+            deadline = time.monotonic() + 10
+            while True:
+                try:
+                    with urlopen(f"http://127.0.0.1:{current_port}/api/health", timeout=0.5) as response:
+                        self.assertEqual(json.loads(response.read())["revision"], current_revision)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        self.fail("current isolated build did not start")
+                    time.sleep(0.05)
+            launcher.pointer_store.write(ActiveBuildPointer(
+                revision=current_revision, root=str(current_root), version=version,
+                activated_at="2026-11-24T00:00:00+00:00", previous_revision=None,
+            ))
+            candidate = SimpleNamespace(
+                candidate_id="candidate-e2e", commit_sha=candidate_revision,
+                worktree=SimpleNamespace(working_root=str(candidate_root)),
+            )
+            profile = self.profile.model_copy(update={
+                "expected_version": version,
+                "launch_argv": (
+                    sys.executable, "fixture_server.py", "{host}", "{port}",
+                    candidate_revision, version,
+                ),
+                "startup_timeout_seconds": 10,
+            })
+            receipt = launcher.launch_candidate(candidate, profile)
+            self.assertNotEqual(receipt.port, current_port)
+            self.assertEqual(receipt.checks, ("startup", "api", "openapi", "browser"))
+            activation = launcher.activate(receipt)
+            self.assertEqual(launcher.pointer_store.load().revision, candidate_revision)
+
+            restarted = UpdateLauncher(self.root / "e2e-launcher")
+            rollback = restarted.rollback(activation.activation_id)
+            self.assertEqual(rollback.restored_revision, current_revision)
+            self.assertEqual(restarted.pointer_store.load().revision, current_revision)
+        finally:
+            if receipt is not None:
+                launcher.terminate_health(receipt.health_id)
+            if current.poll() is None:
+                current.terminate()
+                current.wait(timeout=5)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,8 @@ from starlette.websockets import WebSocketDisconnect
 
 from web_app.app import create_app
 from web_app.core.auth import LocalRequestEvidence
+from web_app.core.identity import MUTATION_SCOPES
+from web_app.core.mutation_inventory import inventory_mutation_routes
 from web_app.workspace import WorkspaceService
 
 
@@ -262,6 +264,100 @@ class IdentityApiTests(unittest.TestCase):
         ) as socket:
             self.assertEqual(socket.receive_json()["type"], "exit")
         self.assertEqual(self.client.get("/api/terminals").status_code, 200)
+
+    def test_update_status_is_authenticated_read_only_and_permissions_are_server_derived(self):
+        self.client.cookies.clear()
+        self.assertEqual(self.client.get("/api/updates").status_code, 401)
+
+        self.browser_headers(())
+        readonly = self.client.get("/api/updates")
+        self.assertEqual(readonly.status_code, 200)
+        self.assertFalse(readonly.json()["automatic_mode"]["enabled"])
+        self.assertFalse(readonly.json()["automatic_mode"]["ready"])
+        self.assertEqual(
+            readonly.json()["permissions"],
+            {"propose": False, "quarantine": False, "activate": False, "rollback": False},
+        )
+
+        self.client.cookies.clear()
+        self.browser_headers(("system.update", "system.activate", "system.rollback"))
+        permitted = self.client.get("/api/updates")
+        self.assertEqual(permitted.status_code, 200)
+        self.assertEqual(
+            permitted.json()["permissions"],
+            {"propose": True, "quarantine": True, "activate": True, "rollback": True},
+        )
+
+    def test_default_update_controller_has_a_lazy_trusted_verifier(self):
+        """A configured verification profile must be reachable from the default controller."""
+        controller = self.app.state.autonomous_updates
+        self.assertIsNotNone(getattr(controller, "_verifier", None))
+        self.assertEqual(
+            controller._launcher.pointer_store.pointer_path,
+            Path(self.temporary.name).resolve() / "launcher" / "pointer" / "active-build.json",
+        )
+
+    def test_update_mutations_reject_legacy_header_and_enforce_reverse_action_scopes(self):
+        self.client.cookies.clear()
+        legacy = self.client.post(
+            "/api/updates/candidates",
+            json={"profile_id": "self-update", "prompt": "candidate"},
+            headers={"X-JSON-CODR": "1"},
+        )
+        self.assertEqual(legacy.status_code, 401)
+
+        update_only = self.browser_headers(("system.update",))
+        self.assertEqual(
+            self.client.post("/api/updates/candidates/missing/activate", headers=update_only).status_code,
+            403,
+        )
+        self.client.cookies.clear()
+        activate = self.browser_headers(("system.activate",))
+        self.assertEqual(
+            self.client.post("/api/updates/candidates/missing/activate", headers=activate).status_code,
+            404,
+        )
+        self.client.cookies.clear()
+        rollback = self.browser_headers(("system.rollback",))
+        self.assertEqual(
+            self.client.post("/api/updates/candidates/missing/rollback", headers=rollback).status_code,
+            404,
+        )
+        self.client.cookies.clear()
+        quarantine = self.browser_headers(("system.update",))
+        self.assertEqual(
+            self.client.post(
+                "/api/updates/candidates/missing/quarantine",
+                json={"reason": "review"}, headers=quarantine,
+            ).status_code,
+            404,
+        )
+
+    def test_generated_mutation_inventory_has_no_unassigned_write_route(self):
+        inventory = self.app.state.mutation_route_inventory
+        self.assertTrue(inventory)
+        self.assertFalse([item for item in inventory if item.scope is None])
+        self.assertFalse([item for item in inventory if item.scope not in MUTATION_SCOPES])
+        assignments = {(item.method, item.path): (item.classification, item.scope) for item in inventory}
+        self.assertEqual(
+            assignments[("POST", "/api/updates/candidates/{candidate_id}/activate")],
+            ("autonomous_mutation", "system.activate"),
+        )
+        self.assertEqual(
+            assignments[("POST", "/api/updates/candidates/{candidate_id}/rollback")],
+            ("autonomous_mutation", "system.rollback"),
+        )
+        self.assertIn(("POST", "/api/components/install/{plan_id}"), assignments)
+
+        from fastapi import FastAPI
+        future = FastAPI()
+
+        @future.post("/api/future-write")
+        def future_write():
+            return {}
+
+        with self.assertRaisesRegex(ValueError, "unassigned mutation route"):
+            inventory_mutation_routes(future)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,20 @@ from pydantic import Field
 from web_app.core.contracts import FrozenContract
 
 
+_CANDIDATE_ENVIRONMENT_KEYS = frozenset({
+    "APPDATA",
+    "COMSPEC",
+    "JSON_CODR_COMPATIBLE_PYTHON",
+    "LOCALAPPDATA",
+    "PATH",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "TEMP",
+    "TMP",
+    "WINDIR",
+})
+
+
 class ActiveBuildPointer(FrozenContract):
     revision: str
     root: str
@@ -237,12 +251,17 @@ class UpdateLauncher:
         if not any("{port}" in argument or "--port" == argument for argument in launch_argv):
             arguments.extend(("--port", str(port)))
         environment = {
-            **os.environ,
+            **{
+                key: value
+                for key, value in os.environ.items()
+                if key.upper() in _CANDIDATE_ENVIRONMENT_KEYS
+            },
             "JSON_CODR_REVISION": revision,
             "JSON_CODR_EXPECTED_VERSION": version,
             "JSON_CODR_DATA_ROOT": str(data_root),
             "JSON_CODR_HOST": "127.0.0.1",
             "JSON_CODR_PORT": str(port),
+            "OLLAMA_NO_CLOUD": "1",
             "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",
         }
@@ -278,7 +297,18 @@ class UpdateLauncher:
             if health.get("app_version") != version:
                 raise failure("candidate API reported a version mismatch")
             checks.append("api")
-            openapi = dict(self._http_probe(f"{base_url}/openapi.json", 2.0))
+            while True:
+                try:
+                    openapi = dict(self._http_probe(f"{base_url}/openapi.json", 2.0))
+                    break
+                except (OSError, TimeoutError) as error:
+                    if process.poll() is not None:
+                        raise failure(f"candidate process exited with code {process.poll()}") from error
+                    if self._monotonic() >= deadline:
+                        raise failure(
+                            "candidate OpenAPI document did not become ready before the deadline"
+                        ) from error
+                    self._sleep(0.1)
             if not isinstance(openapi.get("openapi"), str):
                 raise failure("candidate API did not return an OpenAPI document")
             checks.append("openapi")
@@ -385,14 +415,17 @@ class UpdateLauncher:
 
     @staticmethod
     def _terminate(process: Any) -> None:
-        if process.poll() is not None:
-            return
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except (subprocess.TimeoutExpired, TimeoutError):
-            process.kill()
-            process.wait(timeout=5)
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except (subprocess.TimeoutExpired, TimeoutError):
+                process.kill()
+                process.wait(timeout=5)
+        for name in ("stdout", "stderr", "stdin"):
+            stream = getattr(process, name, None)
+            if stream is not None:
+                stream.close()
 
     @staticmethod
     def _allocate_port() -> int:

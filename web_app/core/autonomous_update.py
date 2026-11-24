@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from enum import Enum
@@ -19,12 +20,15 @@ from web_app.core.contracts import (
     TaskEventDraft,
 )
 from web_app.core.git_adapter import VerificationReceipt
+from web_app.core.canonical import canonical_digest
 from web_app.core.store import ConcurrencyConflict, InvalidEffectTransition, TaskStore
 from web_app.core.worktree_runtime import WorktreeRuntime, WorktreeSession
 
 
 class CandidateState(str, Enum):
     proposed = "proposed"
+    scope_approval_required = "scope_approval_required"
+    scope_approved = "scope_approved"
     staged = "staged"
     modified = "modified"
     verification_pending = "verification_pending"
@@ -39,6 +43,7 @@ class CandidateState(str, Enum):
     verification_failed = "verification_failed"
     publication_failed = "publication_failed"
     health_failed = "health_failed"
+    quarantined = "quarantined"
 
 
 class InvalidCandidateTransition(RuntimeError):
@@ -47,6 +52,27 @@ class InvalidCandidateTransition(RuntimeError):
 
 class AmbiguousEffect(RuntimeError):
     """An external side effect may have succeeded and must be reconciled before retry."""
+
+
+class RepositoryScopeRequired(PermissionError):
+    """The candidate requires an externally issued, exact repository scope."""
+
+
+class RepositoryScopeRequest(FrozenContract):
+    candidate_id: str
+    repository_root: str
+    requested_authority: tuple[Literal["read", "write"], ...]
+    checkpoint_digest: str
+    review_ledger_digest: str
+    requested_at: datetime
+
+
+class ScopedExecutionContext(FrozenContract):
+    context_id: str = Field(min_length=1, max_length=256)
+    repository_root: str = Field(min_length=1, max_length=4096)
+    authority: tuple[Literal["read", "write"], ...]
+    checkpoint_digest: str
+    review_ledger_digest: str
 
 
 class UpdateProfile(FrozenContract):
@@ -83,10 +109,15 @@ class CandidateRecord(FrozenContract):
     rollback_receipt: Mapping[str, Any] | None = None
     quarantine_reason: str | None = None
     automatic_mode_enabled: bool = False
+    lesson_evidence: tuple[Mapping[str, Any], ...] = ()
+    scope_request: RepositoryScopeRequest | None = None
+    scoped_context: ScopedExecutionContext | None = None
 
 
 _EVENT_STATES = {
     "candidate.proposed": CandidateState.proposed,
+    "candidate.scope_approval_required": CandidateState.scope_approval_required,
+    "candidate.scope_approved": CandidateState.scope_approved,
     "candidate.staged": CandidateState.staged,
     "candidate.modified": CandidateState.modified,
     "candidate.verification_requested": CandidateState.verification_pending,
@@ -102,6 +133,7 @@ _EVENT_STATES = {
     "candidate.verification_failed": CandidateState.verification_failed,
     "candidate.publication_failed": CandidateState.publication_failed,
     "candidate.health_failed": CandidateState.health_failed,
+    "candidate.quarantined": CandidateState.quarantined,
 }
 
 
@@ -119,6 +151,8 @@ class AutonomousUpdateController:
         verifier: object | None = None,
         publisher: object | None = None,
         launcher: object | None = None,
+        memory: object | None = None,
+        scope_context_factory: object | None = None,
     ) -> None:
         self._store = store
         self._profiles = dict(profiles)
@@ -126,6 +160,8 @@ class AutonomousUpdateController:
         self._verifier = verifier
         self._publisher = publisher
         self._launcher = launcher
+        self._memory = memory
+        self._scope_context_factory = scope_context_factory
 
     def propose(self, profile_id: str, prompt: str, principal) -> CandidateRecord:
         profile = self._profile(profile_id)
@@ -136,7 +172,6 @@ class AutonomousUpdateController:
             raise PermissionError("candidate proposal requires a scoped authenticated principal")
         if not prompt.strip():
             raise ValueError("candidate prompt is required")
-        self._assert_profile_scope(profile)
         candidate_id = f"candidate-{uuid7()}"
         task_id = candidate_id
         proposed_at = datetime.now(UTC)
@@ -170,6 +205,40 @@ class AutonomousUpdateController:
                 causation_id=command.command_id,
             ),
         )
+        scope_request = self._scope_request(profile, candidate_id, prompt.strip(), principal_id)
+        if scope_request is not None:
+            self._store.append(
+                task_id,
+                TaskEventDraft(
+                    event_type="candidate.scope_approval_required",
+                    payload={"request": scope_request.model_dump(mode="json")},
+                    causation_id=command.command_id,
+                ),
+            )
+        lesson_evidence = self._retrieve_lesson_evidence(
+            principal_id, profile_id, prompt.strip()
+        )
+        if lesson_evidence:
+            self._store.append(
+                task_id,
+                TaskEventDraft(
+                    event_type="candidate.lessons_retrieved",
+                    payload={"evidence": lesson_evidence},
+                    causation_id=command.command_id,
+                ),
+            )
+        if any(item["outcome"] == "conflict" for item in lesson_evidence):
+            self._store.append(
+                task_id,
+                TaskEventDraft(
+                    event_type="candidate.rejected",
+                    payload={
+                        "reason": "retrieved lesson conflicts with deterministic update policy",
+                        "evidence": lesson_evidence,
+                    },
+                    causation_id=command.command_id,
+                ),
+            )
         return self.get(candidate_id)
 
     def get(self, candidate_id: str) -> CandidateRecord:
@@ -188,6 +257,7 @@ class AutonomousUpdateController:
             "state": CandidateState.proposed,
             "proposed_at": datetime.fromisoformat(str(payload["proposed_at"])),
             "automatic_mode_enabled": False,
+            "lesson_evidence": (),
         }
         for event in self._store.events(candidate_id):
             state = _EVENT_STATES.get(event.event_type)
@@ -197,6 +267,12 @@ class AutonomousUpdateController:
             if event.event_type == "candidate.staged":
                 record["worktree"] = WorktreeSession.model_validate(values["worktree"])
                 record["base_sha"] = values["base_sha"]
+            elif event.event_type == "candidate.scope_approval_required":
+                record["scope_request"] = RepositoryScopeRequest.model_validate(values["request"])
+            elif event.event_type == "candidate.scope_approved":
+                record["scoped_context"] = ScopedExecutionContext.model_validate(values["context"])
+            elif event.event_type == "candidate.lessons_retrieved":
+                record["lesson_evidence"] = tuple(dict(item) for item in values.get("evidence", ()))
             elif event.event_type == "candidate.verification_completed":
                 record["verification_receipt"] = VerificationReceipt.model_validate(values["receipt"])
             elif event.event_type == "candidate.verification_invalidated":
@@ -214,7 +290,7 @@ class AutonomousUpdateController:
                 record["rollback_receipt"] = dict(values["receipt"])
             elif event.event_type in {
                 "candidate.rejected", "candidate.verification_failed",
-                "candidate.publication_failed", "candidate.health_failed",
+                "candidate.publication_failed", "candidate.health_failed", "candidate.quarantined",
             }:
                 record["quarantine_reason"] = values.get("reason")
         return CandidateRecord.model_validate(record)
@@ -229,10 +305,16 @@ class AutonomousUpdateController:
 
     def stage(self, candidate_id: str) -> CandidateRecord:
         candidate = self.get(candidate_id)
-        if candidate.state is not CandidateState.proposed:
+        if candidate.state is CandidateState.scope_approval_required:
+            raise RepositoryScopeRequired(
+                f"repository scope approval is required for {candidate.scope_request.repository_root}"
+            )
+        if candidate.state not in {CandidateState.proposed, CandidateState.scope_approved}:
             if candidate.worktree is not None:
                 return candidate
             raise self._invalid(candidate, "stage")
+        if candidate.state is CandidateState.scope_approved and candidate.scoped_context is None:
+            raise RepositoryScopeRequired("external scoped execution context is missing")
         profile = self._profile(candidate.profile_id)
 
         def operation():
@@ -363,14 +445,14 @@ class AutonomousUpdateController:
 
         return self._effect(candidate, "health", operation, "candidate.health_completed")
 
-    def activate(self, candidate_id: str) -> CandidateRecord:
+    def activate(self, candidate_id: str, principal=None) -> CandidateRecord:
         candidate = self.get(candidate_id)
+        if not self._has_scope(candidate, principal, "system.activate"):
+            raise PermissionError("candidate principal is not scoped for activation")
         if candidate.state is CandidateState.activated:
             return candidate
         if candidate.state is not CandidateState.healthy or candidate.health_receipt is None:
             raise self._invalid(candidate, "activate")
-        if "system.activate" not in candidate.scopes:
-            raise PermissionError("candidate principal is not scoped for activation")
 
         def operation():
             receipt = self._invoke(self._launcher, "activate", candidate.health_receipt)
@@ -378,14 +460,14 @@ class AutonomousUpdateController:
 
         return self._effect(candidate, "activate", operation, "candidate.activated")
 
-    def rollback(self, candidate_id: str) -> CandidateRecord:
+    def rollback(self, candidate_id: str, principal=None) -> CandidateRecord:
         candidate = self.get(candidate_id)
+        if not self._has_scope(candidate, principal, "system.rollback"):
+            raise PermissionError("candidate principal is not scoped for rollback")
         if candidate.state is CandidateState.rolled_back:
             return candidate
         if candidate.state is not CandidateState.activated or candidate.activation_receipt is None:
             raise self._invalid(candidate, "rollback")
-        if "system.rollback" not in candidate.scopes:
-            raise PermissionError("candidate principal is not scoped for rollback")
         activation_id = candidate.activation_receipt.get("activation_id")
         if not isinstance(activation_id, str):
             raise RuntimeError("activation receipt is missing its identity")
@@ -396,17 +478,108 @@ class AutonomousUpdateController:
 
         return self._effect(candidate, "rollback", operation, "candidate.rolled_back")
 
+    def quarantine(self, candidate_id: str, reason: str, principal=None) -> CandidateRecord:
+        candidate = self.get(candidate_id)
+        if not self._has_scope(candidate, principal, "system.update"):
+            raise PermissionError("candidate quarantine requires system.update")
+        if not reason.strip():
+            raise ValueError("quarantine reason is required")
+        if candidate.state is CandidateState.quarantined:
+            return candidate
+        if candidate.state in {CandidateState.activated, CandidateState.rolled_back}:
+            raise self._invalid(candidate, "quarantine")
+        self._store.append(
+            candidate_id,
+            TaskEventDraft(
+                event_type="candidate.quarantined",
+                payload={"reason": reason.strip(), "principal_id": self._principal_id(candidate, principal)},
+            ),
+        )
+        return self.get(candidate_id)
+
+    def approve_repository_scope(
+        self,
+        candidate_id: str,
+        repository_root: str,
+        checkpoint_digest: str,
+        review_ledger_digest: str,
+        principal,
+    ) -> CandidateRecord:
+        candidate = self.get(candidate_id)
+        if "system.update" not in tuple(getattr(principal, "scopes", ())):
+            raise PermissionError("repository scope approval requires system.update")
+        if (
+            getattr(principal, "credential_kind", None) != "browser_session"
+            or not set(getattr(principal, "roles", ())) & {"owner", "administrator"}
+        ):
+            raise PermissionError(
+                "repository scope approval requires an interactive Administrator session"
+            )
+        if candidate.scope_request is None:
+            raise self._invalid(candidate, "approve repository scope")
+        request = candidate.scope_request
+        if (
+            repository_root != request.repository_root
+            or checkpoint_digest != request.checkpoint_digest
+            or review_ledger_digest != request.review_ledger_digest
+        ):
+            raise PermissionError("repository scope approval must match the exact immutable request")
+        if candidate.state is CandidateState.scope_approved:
+            return candidate
+        if candidate.state is not CandidateState.scope_approval_required:
+            raise self._invalid(candidate, "approve repository scope")
+        if self._scope_context_factory is None:
+            raise RepositoryScopeRequired(
+                "a separately authorized scoped task or sandbox must issue the repository context"
+            )
+        def operation():
+            context_value = self._scope_context_factory(request, principal)
+            if inspect.isawaitable(context_value):
+                try:
+                    asyncio.get_running_loop()
+                except RuntimeError:
+                    context_value = asyncio.run(context_value)
+                else:
+                    raise RuntimeError("async scope issuance requires an async controller boundary")
+            context = ScopedExecutionContext.model_validate(context_value)
+            if (
+                context.repository_root != request.repository_root
+                or context.authority != request.requested_authority
+                or context.checkpoint_digest != request.checkpoint_digest
+                or context.review_ledger_digest != request.review_ledger_digest
+            ):
+                raise PermissionError(
+                    "issued scope context does not match the approved repository request"
+                )
+            return {
+                "context": context.model_dump(mode="json"),
+                "principal_id": getattr(principal, "user_id", None),
+            }
+
+        return self._effect(
+            candidate, "scope_approval", operation, "candidate.scope_approved"
+        )
+
     def reconcile(self, candidate_id: str, transition: str) -> CandidateRecord:
         candidate = self.get(candidate_id)
         effect_id = self._effect_id(candidate_id, transition)
         effect = self._store.effect(candidate_id, effect_id)
         if effect.state is not EffectState.unknown_requires_reconciliation:
             raise InvalidCandidateTransition("only ambiguous effects can be reconciled")
-        if transition != "publish" or self._publisher is None or not candidate.commit_sha:
+        if (
+            transition != "publish"
+            or self._publisher is None
+            or not candidate.commit_sha
+            or candidate.worktree is None
+        ):
             raise InvalidCandidateTransition(f"no reconciler is configured for {transition}")
         profile = self._profile(candidate.profile_id)
         receipt = self._invoke(
-            self._publisher, "reconcile_publication", profile.branch, candidate.commit_sha
+            self._publisher,
+            "reconcile_publication",
+            profile.branch,
+            candidate.commit_sha,
+            project_root=candidate.worktree.working_root,
         )
         values = self._json_receipt(receipt)
         if values.get("status") not in {"published", "already_published"}:
@@ -540,6 +713,35 @@ class AutonomousUpdateController:
             raise KeyError(f"unknown update profile: {profile_id}") from error
 
     @staticmethod
+    def _principal_id(candidate: CandidateRecord, principal) -> str:
+        return str(getattr(principal, "user_id", None) or candidate.principal_id)
+
+    @staticmethod
+    def _has_scope(candidate: CandidateRecord, principal, scope: str) -> bool:
+        scopes = tuple(getattr(principal, "scopes", candidate.scopes)) if principal is not None else candidate.scopes
+        return scope in scopes
+
+    def profile(self, profile_id: str) -> UpdateProfile:
+        return self._profile(profile_id)
+
+    def profiles(self) -> tuple[UpdateProfile, ...]:
+        return tuple(self._profiles[key] for key in sorted(self._profiles))
+
+    def build_state(self) -> dict[str, Any]:
+        active = None
+        pointer_store = getattr(self._launcher, "pointer_store", None)
+        if pointer_store is not None:
+            pointer = pointer_store.load()
+            active = None if pointer is None else pointer.model_dump(mode="json")
+        previous = None
+        for candidate in reversed(self.candidates()):
+            receipt = candidate.activation_receipt
+            if receipt and receipt.get("previous_pointer"):
+                previous = dict(receipt["previous_pointer"])
+                break
+        return {"active": active, "previous": previous}
+
+    @staticmethod
     def _effect_id(candidate_id: str, transition: str) -> str:
         return f"{candidate_id}:{transition}"
 
@@ -569,10 +771,87 @@ class AutonomousUpdateController:
         return result
 
     @staticmethod
-    def _assert_profile_scope(profile: UpdateProfile) -> None:
+    def _scope_request(
+        profile: UpdateProfile, candidate_id: str, prompt: str, principal_id: str
+    ) -> RepositoryScopeRequest | None:
         repository = Path(profile.repository_root).resolve(strict=True)
         allowed = tuple(Path(root).resolve(strict=True) for root in profile.allowed_repository_roots)
-        if not allowed or not any(repository == root or repository.is_relative_to(root) for root in allowed):
-            raise PermissionError(
-                f"repository {repository} is outside the update profile's scoped authority"
+        if any(repository == root for root in allowed):
+            return None
+        checkpoint = canonical_digest({
+            "candidate_id": candidate_id,
+            "profile_id": profile.profile_id,
+            "repository_root": str(repository),
+            "prompt": prompt,
+        })
+        ledger = canonical_digest({
+            "checkpoint_digest": checkpoint,
+            "principal_id": principal_id,
+            "requested_authority": ["read", "write"],
+        })
+        return RepositoryScopeRequest(
+            candidate_id=candidate_id,
+            repository_root=str(repository),
+            requested_authority=("read", "write"),
+            checkpoint_digest=checkpoint,
+            review_ledger_digest=ledger,
+            requested_at=datetime.now(UTC),
+        )
+
+    def _retrieve_lesson_evidence(
+        self, principal_id: str, profile_id: str, prompt: str
+    ) -> list[dict[str, Any]]:
+        if self._memory is None:
+            return []
+        try:
+            lessons = self._invoke(
+                self._memory, "search_collective", principal_id, profile_id, prompt, 20
             )
+            if not lessons:
+                lessons = self._invoke(
+                    self._memory, "search_collective", principal_id, profile_id, "", 20
+                )
+        except Exception as error:
+            return [{
+                "memory_id": "memory-search",
+                "kind": "retrieval_error",
+                "source_refs": [],
+                "content_digest": None,
+                "outcome": "ignored",
+                "reason": f"lesson retrieval unavailable: {type(error).__name__}",
+            }]
+        evidence: list[dict[str, Any]] = []
+        verified_kinds = {"verified_outcome", "verified_lesson", "security_lesson"}
+        for lesson in lessons:
+            kind = str(getattr(lesson, "kind", ""))
+            content = str(getattr(lesson, "content", ""))
+            sources = tuple(getattr(lesson, "source_refs", ()))
+            outcome = "applied"
+            reason = "verified lesson included as non-authoritative planning evidence"
+            if kind not in verified_kinds or not sources:
+                outcome = "ignored"
+                reason = "lesson is not independently verified with source evidence"
+            elif self._lesson_conflicts_with_policy(content):
+                outcome = "conflict"
+                reason = "lesson conflicts with deterministic verification or publication policy"
+            evidence.append({
+                "memory_id": str(getattr(lesson, "memory_id", "unknown")),
+                "kind": kind,
+                "source_refs": list(sources),
+                "content_digest": getattr(lesson, "content_digest", None),
+                "outcome": outcome,
+                "reason": reason,
+            })
+        return evidence
+
+    @staticmethod
+    def _lesson_conflicts_with_policy(content: str) -> bool:
+        normalized = " ".join(content.casefold().split())
+        forbidden = (
+            r"(?<!never )(?<!not )(?<!no )(?<!avoid )force[ -]push",
+            r"(?<!never )(?<!not )(?<!no )skip (?:independent )?verification",
+            r"(?:disable|bypass|omit) (?:mandatory )?(?:checks|verification)",
+            r"grant system\.(?:update|activate|rollback)",
+            r"use credential|supply credential|raw shell",
+        )
+        return any(re.search(pattern, normalized) for pattern in forbidden)

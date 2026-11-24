@@ -9,8 +9,9 @@ $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $HostAddress = '127.0.0.1'
 $Port = 8765
 $Url = "http://${HostAddress}:$Port"
-$Version = 'V1.3.9'
-$LauncherStateRoot = if ($env:JSON_CODR_LAUNCHER_ROOT) { $env:JSON_CODR_LAUNCHER_ROOT } else { Join-Path $env:LOCALAPPDATA 'JSON_CODR\launcher' }
+$Version = 'V1.4.0'
+$DataRoot = if ($env:JSON_CODR_DATA_ROOT) { $env:JSON_CODR_DATA_ROOT } else { Join-Path $env:LOCALAPPDATA 'JSON_CODR' }
+$LauncherStateRoot = if ($env:JSON_CODR_LAUNCHER_ROOT) { $env:JSON_CODR_LAUNCHER_ROOT } else { Join-Path $DataRoot 'launcher' }
 $ActiveBuildPointer = Join-Path $LauncherStateRoot 'pointer\active-build.json'
 $PythonCandidates = @()
 if ($env:JSON_CODR_PYTHON) {
@@ -91,6 +92,7 @@ if ($ValidateOnly) {
     compatiblePython = $CompatiblePython
     ollama = $Ollama
     modelStore = $env:JSON_CODR_MODELS
+    dataRoot = $DataRoot
     supervised = -not $Direct
     ollamaNoCloud = $true
     stableLauncher = -not $Direct
@@ -135,7 +137,7 @@ try {
       'json_codr_launcher.py', '--pointer', $ActiveBuildPointer,
       '--fallback-root', $Root, '--fallback-revision', $Revision,
       '--fallback-version', $Version, '--python', $Python,
-      '--host', $HostAddress, '--port', $Port
+      '--host', $HostAddress, '--port', $Port, '--data-root', $DataRoot
     )
   }
   $WebProcess = Start-Process -FilePath $Python -ArgumentList $WebArguments -WorkingDirectory $Root -WindowStyle Hidden -PassThru

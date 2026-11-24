@@ -520,7 +520,7 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.3.9", response.text)
+        self.assertIn("V1.4.0", response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -1110,6 +1110,29 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         self.assertIn("!completedSteps.has(event.payload?.step_id)", javascript)
         self.assertIn("if (!showWorkspaceAgentApproval(payload, taskId))", javascript)
         self.assertIn("elements.workspaceAgentApprove.dataset.proposalId = approval.payload.proposal_id", javascript)
+
+    def test_verified_update_administration_is_thin_and_permission_derived(self):
+        html = self.client.get("/").text
+        source_html = self.client.get("/static/source-control.html").text
+        javascript = self.client.get("/static/app.js").text
+        parser = IdCollector()
+        parser.feed(html)
+        self.assertTrue({
+            "update-profile", "update-automatic-mode", "update-active-build",
+            "update-previous-build", "update-candidates", "update-candidate-prompt",
+            "update-propose", "update-refresh", "update-status",
+        }.issubset(parser.ids))
+        for label in (
+            "Mandatory checks", "Manifest", "Publication receipt", "Health receipt",
+            "Quarantine", "Activate", "Rollback",
+        ):
+            self.assertIn(label, html)
+        self.assertIn("Verified self-update", source_html)
+        self.assertIn('fetch("/api/updates")', javascript)
+        self.assertIn("update.permissions", javascript)
+        self.assertIn("JSONCodrHttpIdentity.mutationHeaders", javascript)
+        self.assertNotIn("git push", javascript.lower())
+        self.assertNotIn("subprocess", javascript.lower())
 
 
 if __name__ == "__main__":

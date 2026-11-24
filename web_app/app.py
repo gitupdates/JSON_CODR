@@ -6,6 +6,7 @@ import os
 import re
 import secrets
 import sys
+import threading
 import time
 from typing import Callable, Literal
 from uuid import uuid7
@@ -15,6 +16,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from ag_ui.core import RunAgentInput
 from ag_ui.encoder import EventEncoder
+from pydantic import BaseModel, ConfigDict, Field
 
 from web_app.attachments import AttachmentService, AttachmentTooLarge
 from web_app.agui import build_prompt as build_agui_prompt, stream_events as stream_agui_events
@@ -67,6 +69,15 @@ from web_app.core.http_identity import MutationAuthorizer
 from web_app.core.context_service import ContextService
 from web_app.core.connection_recovery import ConnectionRecoveryService
 from web_app.core.memory import MemoryStore
+from web_app.core.autonomous_update import (
+    AutonomousUpdateController,
+    InvalidCandidateTransition,
+    RepositoryScopeRequired,
+    UpdateProfile,
+)
+from web_app.core.mutation_inventory import inventory_mutation_routes
+from web_app.core.update_launcher import UpdateLauncher
+from web_app.core.worktree_runtime import WorktreeRuntime
 from web_app.core.model_conformance import ModelConformanceStore
 from web_app.core.mcp_stdio_backend import build_mcp_adapters
 from web_app.core.policy import PolicyService
@@ -105,6 +116,95 @@ from web_app.recommendations import SkillRecommendationService
 from web_app.version import APP_VERSION
 
 
+class UpdateProposalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    profile_id: str = Field(min_length=1, max_length=128)
+    prompt: str = Field(min_length=1, max_length=65_536)
+
+
+class UpdateReasonRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(min_length=1, max_length=2048)
+
+
+class UpdateReconcileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    transition: Literal["publish"]
+
+
+class RepositoryScopeApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    repository_root: str = Field(min_length=1, max_length=4096)
+    checkpoint_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    review_ledger_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
+class _LazyUpdateTaskStore:
+    """Avoid opening a new SQLite handle in processes that never use self-update."""
+
+    def __init__(self, database: Path) -> None:
+        self.database = Path(database)
+        self._store = None
+        self._lock = threading.Lock()
+
+    def _resource(self) -> TaskStore:
+        with self._lock:
+            if self._store is None:
+                self._store = TaskStore(self.database)
+            return self._store
+
+    def for_command_type(self, command_type: str):
+        if self._store is None and not self.database.is_file():
+            return ()
+        return self._resource().for_command_type(command_type)
+
+    def command(self, task_id: str):
+        if self._store is None and not self.database.is_file():
+            raise KeyError(task_id)
+        return self._resource().command(task_id)
+
+    def close(self) -> None:
+        if self._store is not None:
+            self._store.close()
+            self._store = None
+
+    def __getattr__(self, name: str):
+        return getattr(self._resource(), name)
+
+
+class _LazyUpdateMemory:
+    def __init__(self, database: Path) -> None:
+        self.database = Path(database)
+        self._memory = None
+        self._lock = threading.Lock()
+
+    def search_collective(self, user_id: str, project_id: str, query: str, limit: int = 20):
+        if self._memory is None and not self.database.is_file():
+            return ()
+        with self._lock:
+            if self._memory is None:
+                self._memory = MemoryStore(self.database)
+        return self._memory.search_collective(user_id, project_id, query, limit)
+
+    def close(self) -> None:
+        if self._memory is not None:
+            self._memory.close()
+            self._memory = None
+
+
+class _LazyUpdateVerifier:
+    """Resolve the shared trusted verifier only when an update reaches verification."""
+
+    def __init__(self, resolver: Callable[[], object]) -> None:
+        self._resolver = resolver
+
+    def verify(self, **arguments):
+        return self._resolver().verify(**arguments)
+
+    def validate(self, receipt) -> bool:
+        return bool(self._resolver().validate(receipt))
+
+
 def configure_local_analysis_tools(data_root: Path) -> None:
     if not os.environ.get("GHIDRA_INSTALL_DIR"):
         candidates = sorted((Path(data_root) / "tools").glob("ghidra_*_PUBLIC"), reverse=True)
@@ -133,6 +233,7 @@ def create_app(
     github_skills: GithubSkillService | None = None,
     github_cli: GitHubCLI | None = None,
     github_auth: GitHubAuthSessionService | None = None,
+    autonomous_updates: AutonomousUpdateController | None = None,
 ) -> FastAPI:
     application = FastAPI(title="JSON_CODR", version=APP_VERSION)
     application.include_router(create_mcp_http_router(
@@ -317,6 +418,7 @@ def create_app(
     core_projects = None
     core_conformance = None
     core_artifacts = None
+    core_verification_service = None
     core_capabilities = ()
     core_mcp_backends = []
 
@@ -342,7 +444,7 @@ def create_app(
         raise ValueError("Unsupported skill source")
 
     def get_core_runtime():
-        nonlocal core_runtime, core_capabilities, core_memory, core_approvals, core_projects, core_conformance
+        nonlocal core_runtime, core_capabilities, core_memory, core_approvals, core_projects, core_conformance, core_verification_service
         if core_runtime is None:
             core_root = workspace.data_root / "core"
             core_conformance = ModelConformanceStore(core_root / "model-conformance.sqlite")
@@ -403,10 +505,13 @@ def create_app(
             verifier_identity = VerifierIdentityService(identity, workspace.data_root)
             verifier_identity.ensure_service_account()
             verification_runtime = CommandRuntime(verification_profiles)
+            core_verification_service = GitVerificationService(
+                verification_runtime, verification_profiles, verifier_identity
+            )
             core_git_adapter = GitExecutionAdapter(
                 git_broker,
                 lambda grant_id, project_root: coding_agents.authorized_grant(grant_id, project_root, "broker"),
-                GitVerificationService(verification_runtime, verification_profiles, verifier_identity),
+                core_verification_service,
             )
             native_primitives = NativePrimitiveAdapter(
                 core_project_adapter,
@@ -586,6 +691,59 @@ def create_app(
         )
     )
     action_proposals = ActionProposalService()
+
+    def get_update_verifier():
+        get_core_runtime()
+        if core_verification_service is None:
+            raise RuntimeError("trusted verification service is not configured")
+        return core_verification_service
+
+    owned_update_store = None
+    owned_update_memory = None
+    if autonomous_updates is None:
+        update_root = workspace.data_root / "autonomous-update"
+        launcher_root = Path(
+            os.environ.get("JSON_CODR_LAUNCHER_ROOT", str(workspace.data_root / "launcher"))
+        ).resolve()
+        code_root = Path(__file__).resolve().parent.parent
+        configured_update_root = os.environ.get("JSON_CODR_UPDATE_ROOT")
+        profile_root = (
+            Path(configured_update_root).resolve(strict=True)
+            if configured_update_root else code_root
+        )
+        owned_update_store = _LazyUpdateTaskStore(update_root / "tasks.sqlite")
+        owned_update_memory = _LazyUpdateMemory(workspace.data_root / "core" / "memory.sqlite")
+        autonomous_updates = AutonomousUpdateController(
+            store=owned_update_store,
+            profiles={
+                "self-update": UpdateProfile(
+                    profile_id="self-update",
+                    repository_root=str(profile_root),
+                    branch=os.environ.get("JSON_CODR_UPDATE_BRANCH", "main"),
+                    mandatory_checks=("python-compile", "git-diff-check"),
+                    allowed_repository_roots=(str(profile_root),) if configured_update_root else (),
+                    automatic_mode_enabled=False,
+                    expected_version=APP_VERSION,
+                    launch_argv=(
+                        sys.executable, "-m", "uvicorn", "web_app.app:app",
+                        "--host", "{host}", "--port", "{port}",
+                    ),
+                )
+            },
+            worktrees=WorktreeRuntime(update_root / "candidates"),
+            verifier=_LazyUpdateVerifier(get_update_verifier),
+            publisher=github_cli,
+            launcher=UpdateLauncher(launcher_root),
+            memory=owned_update_memory,
+        )
+
+        def close_autonomous_updates() -> None:
+            owned_update_memory.close()
+            owned_update_store.close()
+
+        application.router.add_event_handler("shutdown", close_autonomous_updates)
+        application.state.close_autonomous_updates = close_autonomous_updates
+    application.state.autonomous_updates = autonomous_updates
     web_root = Path(__file__).resolve().parent.parent / "web"
     application.mount("/static", StaticFiles(directory=web_root), name="static")
 
@@ -602,6 +760,167 @@ def create_app(
             "revision": os.environ.get("JSON_CODR_REVISION"),
             **result,
         }
+
+    def update_permissions(principal) -> dict[str, bool]:
+        scopes = set(getattr(principal, "scopes", ()))
+        return {
+            "propose": "system.update" in scopes,
+            "quarantine": "system.update" in scopes,
+            "activate": "system.activate" in scopes,
+            "rollback": "system.rollback" in scopes,
+        }
+
+    def update_candidate_view(candidate) -> dict:
+        values = candidate.model_dump(mode="json")
+        values.pop("credential_id", None)
+        values.pop("scopes", None)
+        return values
+
+    def update_status_view(principal) -> dict:
+        profiles = autonomous_updates.profiles()
+        enabled = bool(profiles) and all(profile.automatic_mode_enabled for profile in profiles)
+        return {
+            "profiles": [profile.model_dump(mode="json") for profile in profiles],
+            "candidates": [
+                update_candidate_view(candidate) for candidate in autonomous_updates.candidates()
+            ],
+            "builds": autonomous_updates.build_state(),
+            "permissions": update_permissions(principal),
+            "automatic_mode": {
+                "enabled": enabled,
+                "ready": False,
+                "missing_prerequisites": [
+                    "automatic profile enablement",
+                    "isolated programmatic activation and rollback proof",
+                    "Administrator in-app browser evidence",
+                ],
+            },
+        }
+
+    def run_update(action):
+        try:
+            return action()
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Update candidate or profile not found") from error
+        except (InvalidCandidateTransition, RepositoryScopeRequired) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @application.get("/api/updates")
+    def update_status(http_request: Request):
+        return update_status_view(session_principal(http_request))
+
+    @application.get("/api/updates/profiles/{profile_id}")
+    def update_profile(profile_id: str, http_request: Request):
+        principal = session_principal(http_request)
+        profile = run_update(lambda: autonomous_updates.profile(profile_id))
+        return {
+            "profile": profile.model_dump(mode="json"),
+            "permissions": update_permissions(principal),
+        }
+
+    @application.get("/api/updates/candidates")
+    def update_candidates(http_request: Request, profile_id: str | None = None):
+        principal = session_principal(http_request)
+        return {
+            "candidates": [
+                update_candidate_view(candidate)
+                for candidate in autonomous_updates.candidates(profile_id)
+            ],
+            "permissions": update_permissions(principal),
+        }
+
+    @application.get("/api/updates/candidates/{candidate_id}")
+    def update_candidate(candidate_id: str, http_request: Request):
+        principal = session_principal(http_request)
+        candidate = run_update(lambda: autonomous_updates.get(candidate_id))
+        return {
+            "candidate": update_candidate_view(candidate),
+            "permissions": update_permissions(principal),
+        }
+
+    @application.post("/api/updates/candidates", status_code=201)
+    def propose_update(request: UpdateProposalRequest, http_request: Request):
+        principal = mutation_principal(http_request, "system.update")
+        return run_update(
+            lambda: autonomous_updates.propose(request.profile_id, request.prompt, principal)
+        )
+
+    @application.post("/api/updates/candidates/{candidate_id}/stage")
+    def stage_update(candidate_id: str, http_request: Request):
+        mutation_principal(http_request, "system.update")
+        return run_update(lambda: autonomous_updates.stage(candidate_id))
+
+    @application.post("/api/updates/candidates/{candidate_id}/modified")
+    def mark_update_modified(candidate_id: str, http_request: Request):
+        mutation_principal(http_request, "system.update")
+        return run_update(lambda: autonomous_updates.mark_modified(candidate_id))
+
+    @application.post("/api/updates/candidates/{candidate_id}/verify")
+    def verify_update(candidate_id: str, http_request: Request):
+        mutation_principal(http_request, "system.update")
+        return run_update(lambda: autonomous_updates.verify(candidate_id))
+
+    @application.post("/api/updates/candidates/{candidate_id}/commit")
+    def commit_update(candidate_id: str, http_request: Request):
+        mutation_principal(http_request, "system.update")
+        return run_update(lambda: autonomous_updates.commit(candidate_id))
+
+    @application.post("/api/updates/candidates/{candidate_id}/publish")
+    def publish_update(candidate_id: str, http_request: Request):
+        mutation_principal(http_request, "system.update")
+        return run_update(lambda: autonomous_updates.publish(candidate_id))
+
+    @application.post("/api/updates/candidates/{candidate_id}/health")
+    def health_check_update(candidate_id: str, http_request: Request):
+        mutation_principal(http_request, "system.update")
+        return run_update(lambda: autonomous_updates.health_check(candidate_id))
+
+    @application.post("/api/updates/candidates/{candidate_id}/reconcile")
+    def reconcile_update(
+        candidate_id: str, request: UpdateReconcileRequest, http_request: Request
+    ):
+        mutation_principal(http_request, "system.update")
+        return run_update(
+            lambda: autonomous_updates.reconcile(candidate_id, request.transition)
+        )
+
+    @application.post("/api/updates/candidates/{candidate_id}/quarantine")
+    def quarantine_update(
+        candidate_id: str, request: UpdateReasonRequest, http_request: Request
+    ):
+        principal = mutation_principal(http_request, "system.update")
+        return run_update(
+            lambda: autonomous_updates.quarantine(candidate_id, request.reason, principal)
+        )
+
+    @application.post("/api/updates/candidates/{candidate_id}/scope-approval")
+    def approve_update_scope(
+        candidate_id: str, request: RepositoryScopeApprovalRequest, http_request: Request
+    ):
+        principal = mutation_principal(http_request, "system.update")
+        return run_update(lambda: autonomous_updates.approve_repository_scope(
+            candidate_id,
+            request.repository_root,
+            request.checkpoint_digest,
+            request.review_ledger_digest,
+            principal,
+        ))
+
+    @application.post("/api/updates/candidates/{candidate_id}/activate")
+    def activate_update(candidate_id: str, http_request: Request):
+        principal = mutation_principal(http_request, "system.activate")
+        return run_update(lambda: autonomous_updates.activate(candidate_id, principal))
+
+    @application.post("/api/updates/candidates/{candidate_id}/rollback")
+    def rollback_update(candidate_id: str, http_request: Request):
+        principal = mutation_principal(http_request, "system.rollback")
+        return run_update(lambda: autonomous_updates.rollback(candidate_id, principal))
 
     @application.get("/api/connections")
     async def connection_inventory(http_request: Request):
@@ -2761,6 +3080,7 @@ def create_app(
                 hardware.record_runtime_failure(str(error))
             raise HTTPException(status_code=status, detail=str(error)) from error
 
+    application.state.mutation_route_inventory = inventory_mutation_routes(application)
     return application
 
 

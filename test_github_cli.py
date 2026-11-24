@@ -556,6 +556,18 @@ class GitHubPublicationTests(unittest.TestCase):
             self.assertTrue(receipt.reconciled)
             self.assertEqual(receipt.observed_remote_sha, candidate)
 
+    def test_publication_reconciliation_survives_a_fresh_publisher_process(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project, _, initial, candidate = self._repository(Path(directory))
+            self._client().publish_verified(str(project), "main", candidate, initial)
+
+            state = self._client().reconcile_publication(
+                "main", candidate, project_root=str(project)
+            )
+
+            self.assertEqual(state.status, "published")
+            self.assertEqual(state.remote_sha, candidate)
+
     def test_concurrent_publish_attempt_is_rejected_by_os_visible_lock(self):
         """A per-instance threading lock would allow both clients into the push window."""
         with tempfile.TemporaryDirectory() as directory:

@@ -52,6 +52,16 @@ const elements = {
   identityUsers: document.querySelector("#identity-users"),
   identityLogout: document.querySelector("#identity-logout"),
   identityStatus: document.querySelector("#identity-status"),
+  updateProfile: document.querySelector("#update-profile"),
+  updateAutomaticMode: document.querySelector("#update-automatic-mode"),
+  updateActiveBuild: document.querySelector("#update-active-build"),
+  updatePreviousBuild: document.querySelector("#update-previous-build"),
+  updateCandidates: document.querySelector("#update-candidates"),
+  updateProposalForm: document.querySelector("#update-proposal-form"),
+  updateCandidatePrompt: document.querySelector("#update-candidate-prompt"),
+  updatePropose: document.querySelector("#update-propose"),
+  updateRefresh: document.querySelector("#update-refresh"),
+  updateStatus: document.querySelector("#update-status"),
   runtimeDiagnostics: document.querySelector("#runtime-diagnostics"),
   contextCount: document.querySelector("#context-count"),
   attachmentInput: document.querySelector("#attachment-input"),
@@ -230,11 +240,12 @@ const TERMINAL_SESSIONS_KEY = "json_codr_terminal_sessions";
 const TERMINAL_COMMAND_HISTORY_KEY = "json_codr_terminal_command_history";
 const NAVIGATION_DESTINATIONS = new Set(["workspace", "context", "skills", "hardware", "settings"]);
 const HARDWARE_SECTIONS = new Set(["overview", "profiles", "runtimes", "compatibility", "model-search", "benchmarks", "leaderboard", "history", "localperf"]);
-const SETTINGS_SECTIONS = new Set(["interface", "memory", "skills", "components", "disabled", "diagnostics"]);
+const SETTINGS_SECTIONS = new Set(["interface", "access", "updates", "memory", "skills", "components", "disabled", "diagnostics"]);
 const requestedNavigationDestination = window.JSONCodrNavigationRoutes?.destinationFromSearch(
   window.location.search,
   NAVIGATION_DESTINATIONS,
 );
+const requestedSettingsSection = new URLSearchParams(window.location.search).get("settings");
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 const narrowNavigationQuery = window.matchMedia("(max-width: 700px)");
 
@@ -737,6 +748,9 @@ function selectSettingsSection(section, { focus = false } = {}) {
       ?.focus({ preventScroll: true });
   }
   if (section === "diagnostics") loadRuntimeDiagnostics();
+  if (section === "updates") {
+    loadUpdateAdministration().catch((error) => { elements.updateStatus.textContent = error.message; });
+  }
 }
 
 function selectDestination(destination, { persist = true, focus = false } = {}) {
@@ -1387,6 +1401,7 @@ async function loadSettings() {
     applySidebarWidth(settingsState.ui.sidebar_width);
     setSidebarCollapsed(settingsState.ui.sidebar_collapsed, { persist: false });
     selectHardwareSection(settingsState.ui.hardware_section, { persist: false });
+    if (SETTINGS_SECTIONS.has(requestedSettingsSection)) activeSettingsSection = requestedSettingsSection;
     selectDestination(requestedNavigationDestination || settingsState.ui.primary_destination, { persist: false });
   }
   if (skillsRevisionAtStart === skillsChangeRevision) {
@@ -2870,12 +2885,179 @@ async function loadIdentityAccess() {
     return card;
   }));
 }
+
+let updateAdministration = null;
+
+function updateEvidenceBlock(label, value) {
+  const wrapper = document.createElement("details");
+  const summary = document.createElement("summary");
+  const content = document.createElement("pre");
+  summary.textContent = label;
+  content.className = "attachment-preview";
+  content.textContent = value ? JSON.stringify(value, null, 2) : "Not available";
+  wrapper.append(summary, content);
+  return wrapper;
+}
+
+async function updateMutation(path, body = null) {
+  const headers = window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" });
+  const response = await fetch(path, {
+    method: "POST",
+    headers,
+    body: body === null ? undefined : JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.detail || `Update request failed (${response.status})`);
+  return payload;
+}
+
+function updateActionButton(label, permission, action) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  button.disabled = !permission;
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    elements.updateStatus.textContent = `${label} in progress…`;
+    try {
+      await action();
+      await loadUpdateAdministration();
+      elements.updateStatus.textContent = `${label} completed.`;
+    } catch (error) {
+      elements.updateStatus.textContent = error.message;
+    }
+  });
+  return button;
+}
+
+function renderUpdateCandidate(candidate, update) {
+  const card = document.createElement("article");
+  card.className = "dependency-item";
+  const heading = document.createElement("strong");
+  heading.textContent = `${candidate.candidate_id} · ${candidate.state}`;
+  const objective = document.createElement("p");
+  objective.className = "meta";
+  objective.textContent = candidate.prompt;
+  const revisions = document.createElement("p");
+  revisions.className = "meta";
+  revisions.textContent = `Base ${candidate.base_sha || "not staged"} · Commit ${candidate.commit_sha || "not committed"}`;
+  card.append(heading, objective, revisions);
+  card.append(
+    updateEvidenceBlock("Mandatory checks", update.profiles.find((item) => item.profile_id === candidate.profile_id)?.mandatory_checks),
+    updateEvidenceBlock("Manifest", candidate.verification_receipt),
+    updateEvidenceBlock("Publication receipt", candidate.publication_receipt),
+    updateEvidenceBlock("Health receipt", candidate.health_receipt),
+    updateEvidenceBlock("Activation receipt", candidate.activation_receipt),
+    updateEvidenceBlock("Rollback receipt", candidate.rollback_receipt),
+    updateEvidenceBlock("Retrieved lesson evidence", candidate.lesson_evidence),
+  );
+  if (candidate.scope_request) card.append(updateEvidenceBlock("Exact repository scope request", candidate.scope_request));
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  const lifecycle = {
+    proposed: ["Stage", "stage"],
+    scope_approved: ["Stage", "stage"],
+    staged: ["Record modifications", "modified"],
+    modified: ["Verify", "verify"],
+    verified: ["Commit", "commit"],
+    committed: ["Publish", "publish"],
+    published: ["Run health checks", "health"],
+  }[candidate.state];
+  if (lifecycle) {
+    actions.append(updateActionButton(lifecycle[0], update.permissions.propose, () => (
+      updateMutation(`/api/updates/candidates/${encodeURIComponent(candidate.candidate_id)}/${lifecycle[1]}`)
+    )));
+  }
+  if (candidate.state === "scope_approval_required" && candidate.scope_request) {
+    actions.append(updateActionButton("Approve exact repository scope", update.permissions.propose, async () => {
+      if (!window.confirm(`Authorize only ${candidate.scope_request.repository_root} for read/write access?`)) return;
+      return updateMutation(`/api/updates/candidates/${encodeURIComponent(candidate.candidate_id)}/scope-approval`, {
+        repository_root: candidate.scope_request.repository_root,
+        checkpoint_digest: candidate.scope_request.checkpoint_digest,
+        review_ledger_digest: candidate.scope_request.review_ledger_digest,
+      });
+    }));
+  }
+  if (candidate.state === "healthy") {
+    actions.append(updateActionButton("Activate", update.permissions.activate, () => (
+      updateMutation(`/api/updates/candidates/${encodeURIComponent(candidate.candidate_id)}/activate`)
+    )));
+  }
+  if (candidate.state === "activated") {
+    actions.append(updateActionButton("Rollback", update.permissions.rollback, () => (
+      updateMutation(`/api/updates/candidates/${encodeURIComponent(candidate.candidate_id)}/rollback`)
+    )));
+  }
+  if (!["activated", "rolled_back", "quarantined"].includes(candidate.state)) {
+    actions.append(updateActionButton("Quarantine", update.permissions.quarantine, async () => {
+      const reason = window.prompt("Reason for quarantining this candidate:", "Administrator review");
+      if (!reason?.trim()) return;
+      return updateMutation(`/api/updates/candidates/${encodeURIComponent(candidate.candidate_id)}/quarantine`, { reason: reason.trim() });
+    }));
+  }
+  card.append(actions);
+  return card;
+}
+
+async function loadUpdateAdministration() {
+  elements.updateStatus.textContent = "Loading verified update evidence…";
+  const response = await fetch("/api/updates");
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.detail || "Sign in to view verified updates");
+  }
+  const update = await response.json();
+  updateAdministration = update;
+  elements.updateProfile.textContent = JSON.stringify(update.profiles, null, 2);
+  elements.updateActiveBuild.textContent = update.builds.active ? JSON.stringify(update.builds.active, null, 2) : "Not registered";
+  elements.updatePreviousBuild.textContent = update.builds.previous ? JSON.stringify(update.builds.previous, null, 2) : "Not registered";
+  const automatic = update.automatic_mode;
+  elements.updateAutomaticMode.textContent = automatic.ready
+    ? "Automatic mode prerequisites are complete."
+    : `Automatic mode disabled · ${automatic.missing_prerequisites.join(" · ")}`;
+  elements.updatePropose.disabled = !update.permissions.propose;
+  elements.updateCandidates.replaceChildren();
+  if (!update.candidates.length) {
+    const empty = document.createElement("p");
+    empty.className = "meta";
+    empty.textContent = "No self-update candidates have been proposed.";
+    elements.updateCandidates.append(empty);
+  } else {
+    elements.updateCandidates.append(...update.candidates.map((candidate) => renderUpdateCandidate(candidate, update)));
+  }
+  elements.updateStatus.textContent = `Loaded ${update.candidates.length} candidate${update.candidates.length === 1 ? "" : "s"}.`;
+}
+
 for (const button of elements.settingsSectionButtons) {
   button.addEventListener("click", () => {
     selectSettingsSection(button.dataset.settingsSection, { focus: true });
     if (button.dataset.settingsSection === "access") loadIdentityAccess().catch((error) => { elements.identityStatus.textContent = error.message; });
   });
 }
+
+elements.updateRefresh?.addEventListener("click", () => {
+  loadUpdateAdministration().catch((error) => { elements.updateStatus.textContent = error.message; });
+});
+elements.updateProposalForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!updateAdministration?.permissions.propose) return;
+  elements.updatePropose.disabled = true;
+  elements.updateStatus.textContent = "Recording candidate proposal…";
+  try {
+    const profileId = updateAdministration.profiles[0]?.profile_id;
+    if (!profileId) throw new Error("No update profile is configured");
+    await updateMutation("/api/updates/candidates", {
+      profile_id: profileId,
+      prompt: elements.updateCandidatePrompt.value.trim(),
+    });
+    elements.updateCandidatePrompt.value = "";
+    await loadUpdateAdministration();
+  } catch (error) {
+    elements.updateStatus.textContent = error.message;
+  } finally {
+    elements.updatePropose.disabled = !updateAdministration?.permissions.propose;
+  }
+});
 
 elements.identityLoginForm?.addEventListener("submit", async (event) => {
   event.preventDefault();

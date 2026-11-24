@@ -9,7 +9,7 @@
     <title>JSON_CODR · Local model console</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/static/vendor/xterm.css" />
-    <link rel="stylesheet" href="/static/app.css?v=1.3.9" />
+    <link rel="stylesheet" href="/static/app.css?v=1.4.0" />
     <link rel="stylesheet" href="/static/fonts/fonts.css?v=1.2.0" />
     <link rel="stylesheet" href="/static/gamma.css?v=1.3.2" />
   </head>
@@ -52,6 +52,7 @@
           <div id="settings-subnavigation" class="sidebar-subnavigation" hidden>
             <button type="button" data-settings-section="interface" aria-current="page">Interface</button>
             <button type="button" data-settings-section="access">Users &amp; Access</button>
+            <button type="button" data-settings-section="updates">Verified updates</button>
             <button type="button" data-settings-section="memory">Memory &amp; RAG</button>
             <button type="button" data-settings-section="skills">Skills</button>
             <button type="button" data-settings-section="components">Components</button>
@@ -65,7 +66,7 @@
       <header class="topbar">
         <a class="brand" href="/" aria-label="JSON CODR home">
           <span class="brand-mark">{ }</span>
-          <span><strong>JSON_CODR</strong><small>V1.3.9 · unified local agent</small></span>
+          <span><strong>JSON_CODR</strong><small>V1.4.0 · unified local agent</small></span>
         </a>
         <div id="health-status" class="health" role="status" aria-live="polite">
           <span class="health-dot"></span><span>Connecting</span>
@@ -379,6 +380,29 @@
           </div>
           <p id="identity-status" class="meta" role="status" aria-live="polite"></p>
         </section>
+        <section class="dependency-review" data-settings-view="updates" aria-labelledby="update-heading" hidden>
+          <div class="dependency-head">
+            <div><span class="eyebrow">VERIFIED SELF-UPDATE</span><strong id="update-heading">Candidate administration</strong></div>
+            <button id="update-refresh" type="button">Refresh evidence</button>
+          </div>
+          <p class="meta">Candidates are staged outside the live checkout. Server-owned policy, verification, publication, health, activation, and rollback gates remain authoritative.</p>
+          <div id="update-automatic-mode" class="identity-warning" role="status">Automatic mode is disabled until every proof prerequisite is complete.</div>
+          <div class="dependency-list">
+            <article class="dependency-item"><strong>Update profile</strong><pre id="update-profile" class="attachment-preview">Loading profile…</pre></article>
+            <article class="dependency-item"><strong>Active build</strong><pre id="update-active-build" class="attachment-preview">Not registered</pre></article>
+            <article class="dependency-item"><strong>Previous build</strong><pre id="update-previous-build" class="attachment-preview">Not registered</pre></article>
+          </div>
+          <form id="update-proposal-form" class="identity-login-form">
+            <label for="update-candidate-prompt">Candidate objective
+              <textarea id="update-candidate-prompt" rows="4" maxlength="65536" placeholder="Describe the bounded JSON_CODR update" required></textarea>
+            </label>
+            <button id="update-propose" class="primary" type="submit" data-update-permission="propose" disabled>Propose candidate</button>
+          </form>
+          <p id="update-status" class="meta" role="status" aria-live="polite">Sign in to load candidate evidence.</p>
+          <div class="dependency-head"><div><strong>Candidates</strong><p class="meta">Mandatory checks · Manifest · Publication receipt · Health receipt</p></div></div>
+          <div id="update-candidates" class="dependency-list" aria-live="polite"><p class="meta">No candidate status loaded.</p></div>
+          <p class="meta">Administrator actions: Quarantine · Activate · Rollback. Controls appear only when the authenticated server response grants the corresponding permission.</p>
+        </section>
         <section class="dependency-review" data-settings-view="memory" hidden>
           <div class="dependency-head"><div><span class="eyebrow">LOCAL RETRIEVAL</span><strong>Memory &amp; RAG</strong></div></div>
           <p class="meta">Canonical memory is stored in scoped SQLite records and searched through FTS5. Vector indexes remain optional, rebuildable projections and are not an authority.</p>
@@ -651,6 +675,6 @@
     <script src="/static/ui_customization.js?v=1.3.2" defer></script>
     <script src="/static/disclosure_groups.js?v=1.3.2" defer></script>
     <script src="/static/navigation_routes.js?v=1.3.2" defer></script>
-    <script src="/static/app.js?v=1.3.9" defer></script>
+    <script src="/static/app.js?v=1.4.0" defer></script>
   </body>
 </html>

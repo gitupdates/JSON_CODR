@@ -37,7 +37,7 @@
     <div id="sidebar-resize-handle" class="sidebar-resize-handle" role="separator" aria-label="Resize navigation" aria-orientation="vertical" aria-valuemin="220" aria-valuemax="380" aria-valuenow="260" tabindex="0"></div>
   </nav>
 <main class="shell"><div class="source-content">
-  <header class="topbar"><a class="brand" href="/" aria-label="JSON CODR home"><span class="brand-mark">{ }</span><span><strong>JSON_CODR</strong><small>V1.3.9 · unified local agent</small></span></a><div class="source-topbar-actions"><a class="source-back-link" href="/">Back to workspace</a><button id="mobile-navigation-toggle" class="panel-toggle mobile-navigation-toggle" type="button" aria-controls="app-sidebar" aria-expanded="false">Menu</button></div></header>
+  <header class="topbar"><a class="brand" href="/" aria-label="JSON CODR home"><span class="brand-mark">{ }</span><span><strong>JSON_CODR</strong><small>V1.4.0 · unified local agent</small></span></a><div class="source-topbar-actions"><a class="source-back-link" href="/">Back to workspace</a><button id="mobile-navigation-toggle" class="panel-toggle mobile-navigation-toggle" type="button" aria-controls="app-sidebar" aria-expanded="false">Menu</button></div></header>
   <section class="context-panel source-card connect-panel" id="github-connect-panel" aria-labelledby="connect-heading">
     <p class="source-intro">Connect an authenticated GitHub account, choose the repository and branch you intend to use, then compare and safely update an explicit local checkout. Credentials remain in GitHub CLI on this machine.</p>
     <div class="section-title"><div><p class="step-label">Guided connection</p><h2 id="connect-heading">Connect GitHub and check your build</h2></div><button id="refresh-account" type="button">Refresh account</button></div>
@@ -160,6 +160,12 @@
     <div class="actions"><button id="create-branch" type="button" disabled>Create branch</button><button id="stage-files" type="button" disabled>Stage selected files</button><button id="commit-files" type="button" disabled>Commit staged files</button><button id="fetch-files" type="button" disabled>Fetch origin</button><button id="pull-files" type="button" disabled>Fast-forward pull</button><button id="push-files" type="button" disabled>Push current branch</button></div>
     <div id="changed-files"><p class="muted">Inspect a local repository to see changed files.</p></div>
     <details><summary>Git broker details</summary><pre id="broker-details"></pre></details>
+  </section>
+
+  <section class="context-panel source-card" aria-labelledby="verified-update-heading">
+    <h2 id="verified-update-heading">Verified self-update</h2>
+    <p>Inspect isolated candidates, signed check evidence, publication receipts, and the active/previous build pointers from the Administrator controls.</p>
+    <a class="source-back-link" href="/?view=settings&amp;settings=updates">Open verified update administration</a>
   </section>
 
   <section class="context-panel source-card"><h2>Permission boundary</h2><p>GitHub operations use the local GitHub CLI identity; Git uses the local Git executable. Every write and local sync operation requires browser confirmation and a request-level confirmation flag. Repository deletion additionally requires typing its exact owner/repository name. Account credentials, secrets, and workflow administration remain outside this page.</p></section>

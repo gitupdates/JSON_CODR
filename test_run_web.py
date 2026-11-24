@@ -1,5 +1,7 @@
 import json
+import os
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -28,7 +30,7 @@ class RunWebTests(unittest.TestCase):
         self.assertEqual(payload["host"], "127.0.0.1")
         self.assertEqual(payload["port"], 8765)
         self.assertEqual(payload["url"], "http://127.0.0.1:8765")
-        self.assertEqual(payload["version"], "V1.3.9")
+        self.assertEqual(payload["version"], "V1.4.0")
         self.assertTrue(payload["python"])
         subprocess.run(
             [payload["python"], "-c", "from uuid import uuid7"],
@@ -53,6 +55,30 @@ class RunWebTests(unittest.TestCase):
         self.assertTrue(payload["ollamaNoCloud"])
         self.assertTrue(payload["stableLauncher"])
         self.assertTrue(Path(payload["activeBuildPointer"]).is_absolute())
+
+    def test_stable_launcher_and_web_controller_share_the_live_data_root(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            environment = dict(os.environ)
+            environment["JSON_CODR_DATA_ROOT"] = temporary
+            environment.pop("JSON_CODR_LAUNCHER_ROOT", None)
+            process = subprocess.run(
+                [
+                    "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-File", str(ROOT / "run_web.ps1"), "-ValidateOnly",
+                ],
+                cwd=ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(process.returncode, 0, process.stderr)
+            payload = json.loads(process.stdout)
+            data_root = Path(temporary).resolve()
+            self.assertEqual(Path(payload["dataRoot"]), data_root)
+            self.assertEqual(
+                Path(payload["activeBuildPointer"]),
+                data_root / "launcher" / "pointer" / "active-build.json",
+            )
 
     def test_launcher_is_valid_powershell(self):
         command = (

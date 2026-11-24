@@ -7,7 +7,9 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid7
@@ -144,9 +146,19 @@ class WorktreeRuntime:
         working = Path(session.working_root)
         if not working.is_dir():
             raise FileNotFoundError("candidate worktree no longer exists")
-        owner = self._read_owner(Path(session.lock_path))
-        if owner.token != session.lock_token or owner.candidate_id != session.candidate_id:
-            raise RepositoryBusy(owner)
+        lock_path = Path(session.lock_path)
+        with self._metadata_guard(lock_path):
+            owner = self._read_owner(lock_path)
+            if owner.token != session.lock_token or owner.candidate_id != session.candidate_id:
+                raise RepositoryBusy(owner)
+            if owner.owner_pid != os.getpid():
+                if self._process_alive(owner.owner_pid):
+                    raise RepositoryBusy(owner)
+                owner = owner.model_copy(update={
+                    "owner_pid": os.getpid(),
+                    "expires_at": self._clock() + self._lock_ttl,
+                })
+                self._write_owner(lock_path, owner)
         self._held[session.session_id] = owner
 
     def apply(self, session: WorktreeSession, *, approved_fingerprint: str) -> None:
@@ -246,24 +258,15 @@ class WorktreeRuntime:
             token=str(uuid7()),
             repository_root=str(source),
         )
-        for _ in range(2):
-            try:
-                descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            except FileExistsError:
+        with self._metadata_guard(path):
+            if path.exists():
                 existing = self._read_owner(path)
                 if existing.expires_at <= now and not self._process_alive(existing.owner_pid):
-                    try:
-                        path.unlink()
-                    except FileNotFoundError:
-                        pass
-                    continue
-                raise RepositoryBusy(existing)
-            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                stream.write(owner.model_dump_json())
-                stream.flush()
-                os.fsync(stream.fileno())
-            return owner, path
-        raise RepositoryBusy(self._read_owner(path))
+                    path.unlink(missing_ok=True)
+                else:
+                    raise RepositoryBusy(existing)
+            self._write_owner(path, owner, exclusive=True)
+        return owner, path
 
     @staticmethod
     def _read_owner(path: Path) -> RepositoryLockOwner:
@@ -273,18 +276,82 @@ class WorktreeRuntime:
             raise RuntimeError(f"repository lock metadata is unreadable: {path}") from error
 
     def _release(self, path: Path, token: str) -> None:
+        with self._metadata_guard(path):
+            try:
+                owner = self._read_owner(path)
+            except FileNotFoundError:
+                return
+            except RuntimeError:
+                return
+            if owner.token == token:
+                path.unlink(missing_ok=True)
+
+    @staticmethod
+    def _write_owner(
+        path: Path, owner: RepositoryLockOwner, *, exclusive: bool = False
+    ) -> None:
+        if exclusive:
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            temporary = None
+        else:
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+            )
+            temporary = Path(temporary_name)
         try:
-            owner = self._read_owner(path)
-        except FileNotFoundError:
-            return
-        except RuntimeError:
-            return
-        if owner.token != token:
-            return
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(owner.model_dump_json())
+                stream.flush()
+                os.fsync(stream.fileno())
+            if temporary is not None:
+                os.replace(temporary, path)
+        except Exception:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+            raise
+
+    @staticmethod
+    @contextmanager
+    def _metadata_guard(path: Path):
+        guard_path = path.with_name(f"{path.name}.guard")
+        descriptor = os.open(guard_path, os.O_RDWR | os.O_CREAT, 0o600)
+        locked = False
         try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
+            if os.fstat(descriptor).st_size == 0:
+                os.write(descriptor, b"0")
+                os.fsync(descriptor)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            deadline = time.monotonic() + 5
+            while not locked:
+                try:
+                    if os.name == "nt":
+                        import msvcrt
+
+                        msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    locked = True
+                except OSError as error:
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError(
+                            f"repository lock metadata is busy: {path}"
+                        ) from error
+                    time.sleep(0.05)
+            yield
+        finally:
+            if locked:
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
 
     @classmethod
     def _assert_no_linked_paths(cls, root: Path) -> None:
