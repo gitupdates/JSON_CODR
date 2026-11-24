@@ -14,6 +14,49 @@ from web_app.core.contracts import FrozenContract
 from web_app.core.verification_profiles import VerificationProfileStore, render_profile_arguments
 
 
+class _WindowsJob:
+    """Minimal Windows Job Object wrapper used to retain descendants after their parent exits."""
+
+    def __init__(self, process_id: int) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        self._kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        self._kernel32.CreateJobObjectW.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR)
+        self._kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        self._kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        self._kernel32.OpenProcess.restype = wintypes.HANDLE
+        self._kernel32.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
+        self._kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+        self._kernel32.TerminateJobObject.argtypes = (wintypes.HANDLE, wintypes.UINT)
+        self._kernel32.TerminateJobObject.restype = wintypes.BOOL
+        self._kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        self._kernel32.CloseHandle.restype = wintypes.BOOL
+        self._handle = self._kernel32.CreateJobObjectW(None, None)
+        if not self._handle:
+            raise OSError(ctypes.get_last_error(), "failed to create verifier job object")
+        process_handle = self._kernel32.OpenProcess(0x0001 | 0x0100 | 0x0400, False, process_id)
+        if not process_handle:
+            error = ctypes.get_last_error()
+            self.close()
+            raise OSError(error, "failed to open verifier process for job assignment")
+        try:
+            if not self._kernel32.AssignProcessToJobObject(self._handle, process_handle):
+                error = ctypes.get_last_error()
+                self.close()
+                raise OSError(error, "failed to assign verifier process to job object")
+        finally:
+            self._kernel32.CloseHandle(process_handle)
+
+    def terminate(self) -> bool:
+        return bool(self._handle and self._kernel32.TerminateJobObject(self._handle, 1))
+
+    def close(self) -> None:
+        if self._handle:
+            self._kernel32.CloseHandle(self._handle)
+            self._handle = None
+
+
 class CommandPolicy(FrozenContract):
     argv: tuple[str, ...] = Field(min_length=1)
     cwd: str
@@ -110,6 +153,14 @@ class CommandRuntime:
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             **process_options,
         )
+        windows_job: _WindowsJob | None = None
+        if os.name == "nt":
+            try:
+                windows_job = _WindowsJob(process.pid)
+            except OSError as error:
+                process.kill()
+                await process.wait()
+                raise RuntimeError("failed to establish verifier process-tree boundary") from error
         stdout = bytearray()
         stderr = bytearray()
         remaining = policy.max_output_bytes
@@ -133,14 +184,28 @@ class CommandRuntime:
         )
         timed_out = False
         try:
-            await asyncio.wait_for(
-                asyncio.gather(process.wait(), *readers),
-                policy.timeout_seconds,
-            )
-        except (TimeoutError, asyncio.TimeoutError):
-            timed_out = True
-            await self._terminate_process_tree(process)
-            await asyncio.gather(*readers, return_exceptions=True)
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(process.wait(), *readers),
+                    policy.timeout_seconds,
+                )
+            except (TimeoutError, asyncio.TimeoutError):
+                timed_out = True
+                termination_error: RuntimeError | None = None
+                try:
+                    await self._terminate_process_tree(process, windows_job=windows_job)
+                except RuntimeError as error:
+                    termination_error = error
+                try:
+                    await asyncio.wait_for(asyncio.gather(*readers, return_exceptions=True), 5)
+                except (TimeoutError, asyncio.TimeoutError):
+                    for reader in readers:
+                        reader.cancel()
+                if termination_error is not None:
+                    raise termination_error
+        finally:
+            if windows_job is not None:
+                windows_job.close()
         redact = lambda value: self.SECRET_PATTERN.sub(lambda match: f"{match.group(1)}=[REDACTED]", value.decode("utf-8", errors="replace"))
         return CommandResult(
             argv=policy.argv, cwd=str(cwd), exit_code=-1 if timed_out else int(process.returncode or 0),
@@ -149,21 +214,20 @@ class CommandRuntime:
         )
 
     @staticmethod
-    async def _terminate_process_tree(process: asyncio.subprocess.Process) -> None:
-        if process.returncode is not None:
-            return
+    async def _terminate_process_tree(
+        process: asyncio.subprocess.Process,
+        *,
+        windows_job: _WindowsJob | None = None,
+    ) -> None:
         if os.name == "nt":
-            try:
-                taskkill = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "taskkill.exe"
-                terminator = await asyncio.create_subprocess_exec(
-                    str(taskkill), "/PID", str(process.pid), "/T", "/F",
-                    stdin=asyncio.subprocess.DEVNULL,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                await asyncio.wait_for(terminator.wait(), 5)
-            except (FileNotFoundError, TimeoutError, asyncio.TimeoutError):
-                process.kill()
+            terminated = windows_job is not None and windows_job.terminate()
+            if not terminated:
+                terminated = await CommandRuntime._taskkill_tree(process.pid)
+            if not terminated:
+                if process.returncode is None:
+                    process.kill()
+                    await process.wait()
+                raise RuntimeError("failed to terminate verifier process tree")
         else:
             try:
                 os.killpg(process.pid, signal.SIGKILL)
@@ -175,3 +239,17 @@ class CommandRuntime:
             except (TimeoutError, asyncio.TimeoutError):
                 process.kill()
                 await process.wait()
+
+    @staticmethod
+    async def _taskkill_tree(process_id: int) -> bool:
+        try:
+            taskkill = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "taskkill.exe"
+            terminator = await asyncio.create_subprocess_exec(
+                str(taskkill), "/PID", str(process_id), "/T", "/F",
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            return await asyncio.wait_for(terminator.wait(), 5) == 0
+        except (FileNotFoundError, TimeoutError, asyncio.TimeoutError):
+            return False

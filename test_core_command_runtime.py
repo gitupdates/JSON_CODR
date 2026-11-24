@@ -1,8 +1,10 @@
 import asyncio
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from web_app.core.command_runtime import CommandPolicy, CommandRuntime
 from web_app.core.verification_profiles import VerificationProfile, VerificationProfileStore
@@ -34,7 +36,7 @@ class CommandRuntimeProfileTests(unittest.IsolatedAsyncioTestCase):
             VerificationProfile(
                 profile_id="python-version",
                 executable=sys.executable,
-                argument_template=("-c", "import sys; print(sys.argv[1])", "{value}"),
+                argument_template=("-c", "import sys; print(sys.argv[1])", "{value:token}"),
                 cwd_rule="project_root",
                 timeout_seconds=10,
                 max_output_bytes=4096,
@@ -96,7 +98,7 @@ class CommandRuntimeProfileTests(unittest.IsolatedAsyncioTestCase):
             VerificationProfile(
                 profile_id="network-probe",
                 executable=sys.executable,
-                argument_template=("-c", "import urllib.request; urllib.request.urlopen({url!r})"),
+                argument_template=("-c", "import urllib.request; urllib.request.urlopen(sys.argv[1])", "{url:token}"),
                 cwd_rule="project_root",
                 timeout_seconds=10,
                 max_output_bytes=4096,
@@ -116,6 +118,8 @@ class CommandRuntimeProfileTests(unittest.IsolatedAsyncioTestCase):
             r"C:\outside",
             r"C:outside",
             r"--config=C:\outside",
+            "--config=outside-link",
+            "@outside-link",
             "../outside",
         )
         for value in hostile_values:
@@ -133,9 +137,20 @@ class CommandRuntimeProfileTests(unittest.IsolatedAsyncioTestCase):
         except OSError:
             self.skipTest("symlink or junction creation is unavailable")
         self.addCleanup(outside.rmdir)
+        self.store.replace((
+            VerificationProfile(
+                profile_id="project-path",
+                executable=sys.executable,
+                argument_template=("-c", "print('unused')", "--config={config:project_path}"),
+                cwd_rule="project_root",
+                timeout_seconds=10,
+                max_output_bytes=4096,
+                network_policy="allow",
+            ),
+        ), credential="admin-token")
         with self.assertRaisesRegex(ValueError, "escape"):
             await runtime.run_profile(
-                profile_id="python-version", values={"value": "outside-link"}, project_root=self.root
+                profile_id="project-path", values={"config": "outside-link"}, project_root=self.root
             )
 
     async def test_profile_output_is_streamed_with_a_hard_memory_limit(self):
@@ -182,6 +197,47 @@ class CommandRuntimeProfileTests(unittest.IsolatedAsyncioTestCase):
         ), credential="admin-token")
         result = await CommandRuntime(self.store).run_profile(
             profile_id="timeout-tree", values={}, project_root=self.root
+        )
+        self.assertTrue(result.timed_out)
+        await asyncio.sleep(2.5)
+        self.assertFalse(sentinel.exists())
+
+    @unittest.skipUnless(os.name == "nt", "Windows taskkill fallback behavior")
+    async def test_taskkill_failure_is_reported_after_fallback_kill(self):
+        """A nonzero taskkill result must not be silently treated as cleanup success."""
+        process = MagicMock()
+        process.pid = 1234
+        process.returncode = None
+        process.wait = AsyncMock()
+        with patch.object(CommandRuntime, "_taskkill_tree", new=AsyncMock(return_value=False)):
+            with self.assertRaisesRegex(RuntimeError, "process tree"):
+                await CommandRuntime._terminate_process_tree(process, windows_job=None)
+        process.kill.assert_called_once()
+
+    async def test_timeout_terminates_descendant_after_parent_has_exited(self):
+        """A verifier child must be cleaned even after its direct parent exits."""
+        sentinel = self.root / "parent-exited-descendant.txt"
+        child = (
+            "import pathlib,time; time.sleep(2); "
+            f"pathlib.Path({str(sentinel)!r}).write_text('escaped', encoding='utf-8')"
+        )
+        parent = (
+            "import subprocess,sys,time; "
+            f"subprocess.Popen([sys.executable, '-c', {child!r}]); time.sleep(0.2)"
+        )
+        self.store.replace((
+            VerificationProfile(
+                profile_id="parent-exited-tree",
+                executable=sys.executable,
+                argument_template=("-c", parent),
+                cwd_rule="project_root",
+                timeout_seconds=1,
+                max_output_bytes=4096,
+                network_policy="allow",
+            ),
+        ), credential="admin-token")
+        result = await CommandRuntime(self.store).run_profile(
+            profile_id="parent-exited-tree", values={}, project_root=self.root
         )
         self.assertTrue(result.timed_out)
         await asyncio.sleep(2.5)

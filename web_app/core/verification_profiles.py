@@ -7,6 +7,8 @@ import os
 import re
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from types import MappingProxyType
+from typing import Mapping
 from uuid import uuid4
 
 from pydantic import Field, field_validator
@@ -16,7 +18,9 @@ from web_app.core.auth import load_or_create_protected_key
 
 
 _PROFILE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
-_PLACEHOLDER = re.compile(r"\{([A-Za-z][A-Za-z0-9_]*)\}")
+_PLACEHOLDER = re.compile(r"\{([A-Za-z][A-Za-z0-9_]*):(token|project_path)\}")
+_PLACEHOLDER_CANDIDATE = re.compile(r"\{[A-Za-z][A-Za-z0-9_]*(?::[^{}]+)?\}")
+_TOKEN_VALUE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+~-]*$")
 _INTERPRETERS = frozenset({
     "cmd", "cmd.exe", "command.com", "powershell", "powershell.exe", "pwsh", "pwsh.exe",
     "bash", "bash.exe", "sh", "sh.exe", "zsh", "zsh.exe",
@@ -65,6 +69,14 @@ class VerificationProfile(FrozenContract):
                 raise ValueError("argument template contains control characters")
             if _is_absolute(value):
                 raise ValueError("absolute path arguments are not allowed")
+            matches = tuple(_PLACEHOLDER.finditer(value))
+            candidates = tuple(_PLACEHOLDER_CANDIDATE.finditer(value))
+            if len(matches) != len(candidates):
+                raise ValueError("argument substitutions require a typed placeholder")
+            if len(matches) > 1:
+                raise ValueError("each argument may contain only one typed placeholder")
+            if matches and matches[0].group(2) == "token" and matches[0].group(0) != value:
+                raise ValueError("token placeholders must occupy an entire argument")
         return values
 
     @field_validator("cwd_rule")
@@ -101,6 +113,8 @@ class VerificationProfileStore:
         protected_root = Path(security_root) if security_root is not None else self._root.parent / f".{self._root.name}-identity"
         self.integrity_key_path = protected_root / "verification_profiles.key.dpapi"
         self._integrity_key = bytes(integrity_key) if integrity_key is not None else load_or_create_protected_key(self.integrity_key_path)
+        self._active_profiles: Mapping[str, VerificationProfile] | None = None
+        self._active_digest: str | None = None
 
     def replace(self, profiles: tuple[VerificationProfile, ...], *, credential: str | None = None) -> str:
         self._require_administrator(credential)
@@ -121,7 +135,16 @@ class VerificationProfileStore:
             os.replace(temporary, self.path)
         finally:
             temporary.unlink(missing_ok=True)
+        self._activate_document(document)
         return str(document["digest"])
+
+    def activate(self, expected_digest: str, *, credential: str | None = None) -> None:
+        """Authenticate and activate a disk profile set against a separately trusted digest."""
+        self._require_administrator(credential)
+        document = self._document()
+        if not hmac.compare_digest(str(document["digest"]), expected_digest):
+            raise ValueError("verification profile document does not match the trusted digest")
+        self._activate_document(document)
 
     def _require_administrator(self, credential: str | None) -> None:
         if not credential or self._administration_resolver is None:
@@ -146,15 +169,21 @@ class VerificationProfileStore:
         return self._profiles()[profile_id]
 
     def profile_digest(self) -> str:
-        document = self._document()
-        return str(document["digest"])
+        if self._active_digest is None:
+            raise RuntimeError("verification profiles require authenticated activation")
+        return self._active_digest
 
-    def _profiles(self) -> dict[str, VerificationProfile]:
-        document = self._document()
+    def _activate_document(self, document: dict[str, object]) -> None:
         profiles = tuple(VerificationProfile.model_validate(item) for item in document["profiles"])
         if len({profile.profile_id for profile in profiles}) != len(profiles):
             raise ValueError("verification profile ids must be unique")
-        return {profile.profile_id: profile for profile in profiles}
+        self._active_profiles = MappingProxyType({profile.profile_id: profile for profile in profiles})
+        self._active_digest = str(document["digest"])
+
+    def _profiles(self) -> Mapping[str, VerificationProfile]:
+        if self._active_profiles is None:
+            raise RuntimeError("verification profiles require authenticated activation")
+        return self._active_profiles
 
     def _document(self) -> dict[str, object]:
         try:
@@ -183,21 +212,23 @@ def render_profile_arguments(
     *,
     project_root: str | Path,
 ) -> tuple[str, ...]:
-    """Expand only named profile placeholders using scalar, non-path values."""
-    placeholders = set()
+    """Expand administrator-typed placeholders without allowing caller-defined argument structure."""
+    placeholders: dict[str, str] = {}
     for template in profile.argument_template:
-        placeholders.update(_PLACEHOLDER.findall(template))
-    if set(values) != placeholders:
+        for name, value_type in _PLACEHOLDER.findall(template):
+            existing = placeholders.setdefault(name, value_type)
+            if existing != value_type:
+                raise ValueError("a profile placeholder cannot use multiple types")
+    if set(values) != set(placeholders):
         raise ValueError("profile template values do not match the profile")
+    root = Path(project_root).resolve(strict=True)
     rendered: list[str] = []
     for template in profile.argument_template:
         def substitute(match: re.Match[str]) -> str:
             value = values[match.group(1)]
-            if not isinstance(value, (str, int, float, bool)):
-                raise ValueError("profile template value must be scalar")
-            if isinstance(value, str):
-                _validate_candidate_string(value, Path(project_root).resolve(strict=True))
-            return str(value)
+            if match.group(2) == "project_path":
+                return _render_project_path(value, root)
+            return _render_token(value)
 
         value = _PLACEHOLDER.sub(substitute, template)
         if "\x00" in value or "\n" in value or "\r" in value:
@@ -208,13 +239,25 @@ def render_profile_arguments(
     return tuple(rendered)
 
 
-def _validate_candidate_string(value: str, root: Path) -> None:
+def _render_token(value: object) -> str:
+    if not isinstance(value, (str, int, float, bool)):
+        raise ValueError("profile token value must be scalar")
+    rendered = str(value)
+    if not _TOKEN_VALUE.fullmatch(rendered):
+        raise ValueError("profile token cannot contain path, option, or response-file syntax")
+    return rendered
+
+
+def _render_project_path(value: object, root: Path) -> str:
+    if not isinstance(value, str):
+        raise ValueError("profile project path value must be a string")
     if "\x00" in value or "\n" in value or "\r" in value:
         raise ValueError("profile argument contains control characters")
-    if "/" in value or "\\" in value or re.search(r"(?:^|=)[A-Za-z]:", value):
-        raise ValueError("profile template values cannot contain path spellings")
+    if not value or value.startswith(("-", "@")) or _is_absolute(value) or PureWindowsPath(value).drive:
+        raise ValueError("profile project path must be a relative path")
     if value in {".", ".."}:
         raise ValueError("profile template value cannot escape the project root")
     candidate = (root / value).resolve()
     if not candidate.is_relative_to(root):
         raise ValueError("profile template value escapes the project root")
+    return str(candidate.relative_to(root))

@@ -1,5 +1,6 @@
 import json
 import hashlib
+import hmac
 import sys
 import tempfile
 import unittest
@@ -33,7 +34,7 @@ class VerificationProfileStoreTests(unittest.TestCase):
         self.profile = VerificationProfile(
             profile_id="unit-tests",
             executable=sys.executable,
-            argument_template=("-m", "unittest", "{target}"),
+            argument_template=("-m", "unittest", "{target:token}"),
             cwd_rule="project_root",
             timeout_seconds=60,
             max_output_bytes=1048576,
@@ -48,8 +49,8 @@ class VerificationProfileStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(PermissionError, "profile administration"):
             self.store.replace((self.profile,))
 
-    def test_resolve_and_digest_detect_profile_tampering(self):
-        """Skipping profile-digest verification must fail this test."""
+    def test_active_profiles_are_immutable_when_the_disk_document_is_tampered(self):
+        """Disk changes must not alter the effective in-memory profile set."""
         self.store.replace((self.profile,), credential="admin-token")
         digest = self.store.profile_digest()
         self.assertEqual(self.store.resolve("unit-tests"), self.profile)
@@ -58,9 +59,40 @@ class VerificationProfileStoreTests(unittest.TestCase):
         document["profiles"][0]["executable"] = "cmd.exe"
         self.store.path.write_text(json.dumps(document), encoding="utf-8")
 
-        with self.assertRaisesRegex(ValueError, "digest"):
-            self.store.resolve("unit-tests")
+        self.assertEqual(self.store.resolve("unit-tests"), self.profile)
+        self.assertEqual(self.store.profile_digest(), digest)
         self.assertTrue(digest.startswith("hmac-sha256:"))
+
+    def test_restart_requires_authenticated_activation_against_a_trusted_digest(self):
+        """Knowing the HMAC key must not make a rewritten disk profile effective after restart."""
+        key = b"profile-integrity-test-key"
+        trusted_digest = self.store.replace((self.profile,), credential="admin-token")
+        document = json.loads(self.store.path.read_text(encoding="utf-8"))
+        document["profiles"][0]["executable"] = sys.executable + ".tampered"
+        canonical = json.dumps(
+            {"profiles": document["profiles"]},
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        attacker_digest = f"hmac-sha256:{hmac.new(key, canonical, hashlib.sha256).hexdigest()}"
+        document["digest"] = attacker_digest
+        self.store.path.write_text(json.dumps(document), encoding="utf-8")
+
+        restarted = VerificationProfileStore(
+            self.root,
+            administration_resolver=_resolve_administrator,
+            integrity_key=key,
+        )
+        with self.assertRaisesRegex(RuntimeError, "activation"):
+            restarted.resolve("unit-tests")
+        with self.assertRaisesRegex(PermissionError, "administration"):
+            restarted.activate(attacker_digest)
+        with self.assertRaisesRegex(ValueError, "trusted digest"):
+            restarted.activate(trusted_digest, credential="admin-token")
+        with self.assertRaisesRegex(RuntimeError, "activation"):
+            restarted.resolve("unit-tests")
 
     def test_profile_rejects_interpreters_and_absolute_arguments(self):
         """Allowing shell interpreters or absolute arguments must fail this test."""
@@ -76,6 +108,14 @@ class VerificationProfileStoreTests(unittest.TestCase):
                     cwd_rule="project_root", timeout_seconds=10, max_output_bytes=4096, network_policy="allow",
                 ),
             ), credential="admin-token")
+
+    def test_profile_requires_typed_placeholders(self):
+        """Untyped caller substitutions must never enter executable arguments."""
+        with self.assertRaisesRegex(ValueError, "typed placeholder"):
+            VerificationProfile(
+                profile_id="untyped", executable=sys.executable, argument_template=("{target}",),
+                cwd_rule="project_root", timeout_seconds=10, max_output_bytes=4096, network_policy="allow",
+            )
 
     def test_profile_requires_an_exact_executable_path(self):
         """Resolving an executable through mutable PATH state must fail this test."""
@@ -105,8 +145,13 @@ class VerificationProfileStoreTests(unittest.TestCase):
         document["digest"] = f"sha256:{hashlib.sha256(canonical).hexdigest()}"
         self.store.path.write_text(json.dumps(document), encoding="utf-8")
 
+        restarted = VerificationProfileStore(
+            self.root,
+            administration_resolver=_resolve_administrator,
+            integrity_key=b"profile-integrity-test-key",
+        )
         with self.assertRaisesRegex(ValueError, "integrity"):
-            self.store.resolve("unit-tests")
+            restarted.activate(document["digest"], credential="admin-token")
 
     def test_profile_administration_requires_authenticated_administrator_role(self):
         """A resolver result without an Administrator role must fail this test."""
