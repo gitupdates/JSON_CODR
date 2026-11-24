@@ -83,6 +83,8 @@ from web_app.core.capability_registry import CapabilityDefinition as PolicyCapab
 from web_app.core.capability_discovery import discover_project_profile
 from web_app.core.canonical import canonical_digest
 from web_app.core.terminal_adapter import TerminalAdapter
+from web_app.core.command_runtime import CommandRuntime
+from web_app.core.verification_profiles import VerificationProfileStore
 from web_app.dependencies import DependencyService
 from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, ConnectionPreviewRequest, ConnectionRecoveryRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GitHubAuthCancelRequest, GitHubAuthLoginRequest, GitHubBuildCheckRequest, GitHubBuildUpdateRequest, GitHubConfirmedWrite, GitHubIssueCommentRequest, GitHubIssueCreateRequest, GitHubIssueUpdateRequest, GitHubLocalBranchRequest, GitHubLocalCloneRequest, GitHubLocalCommitRequest, GitHubLocalPushRequest, GitHubLocalStageRequest, GitHubLocalSyncRequest, GitHubPullRequestCreateRequest, GitHubPullRequestMergeRequest, GitHubPullRequestUpdateRequest, GitHubReleaseCreateRequest, GitHubReleaseUpdateRequest, GitHubRemoteBranchCreateRequest, GitHubRepositoryCreateRequest, GitHubRepositoryDeleteRequest, GitHubRepositoryUpdateRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, OptimizedModelInstallRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
 from web_app.model_run_store import ModelRunStore, RequestKeyConflict
@@ -396,7 +398,16 @@ def create_app(
                 skill_library.install,
                 DuplicateSkillPack,
             )
-            native_primitives = NativePrimitiveAdapter(core_project_adapter, core_terminal_adapter)
+            verification_profiles = VerificationProfileStore(
+                workspace.data_root,
+                administration_resolver=identity.resolve_credential,
+            )
+            application.state.verification_profiles = verification_profiles
+            native_primitives = NativePrimitiveAdapter(
+                core_project_adapter,
+                core_terminal_adapter,
+                CommandRuntime(verification_profiles),
+            )
             adapters = {
                 "git.execute": core_git_adapter,
                 "inference.generate": core_inference_adapter,

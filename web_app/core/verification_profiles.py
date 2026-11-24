@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from uuid import uuid4
 
 from pydantic import Field, field_validator
 
 from web_app.core.contracts import FrozenContract
+from web_app.core.auth import load_or_create_protected_key
 
 
 _PROFILE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
@@ -84,13 +87,23 @@ class VerificationProfile(FrozenContract):
 class VerificationProfileStore:
     """Tamper-evident profile store below the application data root."""
 
-    def __init__(self, data_root: str | Path) -> None:
+    def __init__(
+        self,
+        data_root: str | Path,
+        *,
+        administration_resolver: Callable[..., object] | None = None,
+        integrity_key: bytes | None = None,
+        security_root: str | Path | None = None,
+    ) -> None:
         self._root = Path(data_root).resolve()
         self.path = self._root / "core" / "verification_profiles.json"
+        self._administration_resolver = administration_resolver
+        protected_root = Path(security_root) if security_root is not None else self._root.parent / f".{self._root.name}-identity"
+        self.integrity_key_path = protected_root / "verification_profiles.key.dpapi"
+        self._integrity_key = bytes(integrity_key) if integrity_key is not None else load_or_create_protected_key(self.integrity_key_path)
 
-    def replace(self, profiles: tuple[VerificationProfile, ...], *, scopes: tuple[str, ...] = ()) -> str:
-        if PROFILE_ADMINISTRATION_SCOPE not in scopes:
-            raise PermissionError("verification profile administration scope is required")
+    def replace(self, profiles: tuple[VerificationProfile, ...], *, credential: str | None = None) -> str:
+        self._require_administrator(credential)
         if len({profile.profile_id for profile in profiles}) != len(profiles):
             raise ValueError("verification profile ids must be unique")
         canonical_profiles = [profile.model_dump(mode="json") for profile in sorted(profiles, key=lambda item: item.profile_id)]
@@ -109,6 +122,25 @@ class VerificationProfileStore:
         finally:
             temporary.unlink(missing_ok=True)
         return str(document["digest"])
+
+    def _require_administrator(self, credential: str | None) -> None:
+        if not credential or self._administration_resolver is None:
+            raise PermissionError("authenticated verification profile administration is required")
+        try:
+            principal = self._administration_resolver(
+                credential,
+                required_scope=PROFILE_ADMINISTRATION_SCOPE,
+            )
+        except (KeyError, PermissionError, ValueError) as error:
+            raise PermissionError("authenticated verification profile administration is required") from error
+        roles = set(getattr(principal, "roles", ()))
+        scopes = set(getattr(principal, "scopes", ()))
+        if not roles.intersection({"owner", "administrator"}):
+            raise PermissionError("verification profile administration requires an Administrator")
+        if PROFILE_ADMINISTRATION_SCOPE not in scopes:
+            raise PermissionError("verification profile administration scope is required")
+        if not getattr(principal, "credential_id", None) or not getattr(principal, "authentication_source", None):
+            raise PermissionError("authenticated verification profile administration is required")
 
     def resolve(self, profile_id: str) -> VerificationProfile:
         return self._profiles()[profile_id]
@@ -132,20 +164,25 @@ class VerificationProfileStore:
         if not isinstance(document, dict) or not isinstance(document.get("profiles"), list) or not isinstance(document.get("digest"), str):
             raise ValueError("verification profile store is invalid")
         expected = self._digest({"profiles": document["profiles"]})
-        if document["digest"] != expected:
-            raise ValueError("verification profile digest does not match")
+        if not hmac.compare_digest(document["digest"], expected):
+            raise ValueError("verification profile integrity digest does not match")
         return document
 
     @staticmethod
     def _canonical(value: object) -> str:
         return json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":"))
 
-    @classmethod
-    def _digest(cls, document: dict[str, object]) -> str:
-        return f"sha256:{hashlib.sha256(cls._canonical(document).encode('utf-8')).hexdigest()}"
+    def _digest(self, document: dict[str, object]) -> str:
+        payload = self._canonical(document).encode("utf-8")
+        return f"hmac-sha256:{hmac.new(self._integrity_key, payload, hashlib.sha256).hexdigest()}"
 
 
-def render_profile_arguments(profile: VerificationProfile, values: dict[str, object]) -> tuple[str, ...]:
+def render_profile_arguments(
+    profile: VerificationProfile,
+    values: dict[str, object],
+    *,
+    project_root: str | Path,
+) -> tuple[str, ...]:
     """Expand only named profile placeholders using scalar, non-path values."""
     placeholders = set()
     for template in profile.argument_template:
@@ -158,6 +195,8 @@ def render_profile_arguments(profile: VerificationProfile, values: dict[str, obj
             value = values[match.group(1)]
             if not isinstance(value, (str, int, float, bool)):
                 raise ValueError("profile template value must be scalar")
+            if isinstance(value, str):
+                _validate_candidate_string(value, Path(project_root).resolve(strict=True))
             return str(value)
 
         value = _PLACEHOLDER.sub(substitute, template)
@@ -167,3 +206,15 @@ def render_profile_arguments(profile: VerificationProfile, values: dict[str, obj
             raise ValueError("absolute path arguments are not allowed")
         rendered.append(value)
     return tuple(rendered)
+
+
+def _validate_candidate_string(value: str, root: Path) -> None:
+    if "\x00" in value or "\n" in value or "\r" in value:
+        raise ValueError("profile argument contains control characters")
+    if "/" in value or "\\" in value or re.search(r"(?:^|=)[A-Za-z]:", value):
+        raise ValueError("profile template values cannot contain path spellings")
+    if value in {".", ".."}:
+        raise ValueError("profile template value cannot escape the project root")
+    candidate = (root / value).resolve()
+    if not candidate.is_relative_to(root):
+        raise ValueError("profile template value escapes the project root")

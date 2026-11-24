@@ -34,6 +34,7 @@ class ExecutionContext(FrozenContract):
     task_id: TaskId
     project_id: ProjectId
     principal: str
+    principal_scopes: tuple[str, ...] = ()
     credential_refs: tuple[str, ...] = ()
 
 

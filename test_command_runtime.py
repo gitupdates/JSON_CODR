@@ -18,7 +18,7 @@ class CommandRuntimeTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(result.exit_code, 0)
         self.assertIn("token=[REDACTED]", result.stdout)
-        self.assertIn("process_constrained", result.isolation_level)
+        self.assertEqual(result.isolation_level, "output_bounded")
         self.assertNotIn("no_network", result.isolation_level)
         self.assertEqual(result.argv, policy.argv)
 

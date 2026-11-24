@@ -125,7 +125,62 @@ class NativePrimitiveTests(unittest.IsolatedAsyncioTestCase):
             arguments={"argv": ["cmd.exe", "/c", "echo unsafe"]},
         )
         with self.assertRaisesRegex(ValueError, "profile_id"):
-            [event async for event in adapter.execute(call, self.context)]
+            [event async for event in adapter.execute(
+                call,
+                self.context.model_copy(update={"principal": "admin-user"}),
+            )]
+
+    async def test_authenticated_administrator_dispatches_raw_argv_interactively(self):
+        """Removing the supervised Administrator raw-shell route must fail this test."""
+        from web_app.core.command_runtime import CommandResult
+        from web_app.core.native_primitives import NativePrimitiveAdapter
+        from web_app.core.project_adapter import ProjectAdapter
+        from web_app.core.terminal_adapter import TerminalAdapter
+
+        commands = AsyncMock()
+        commands.run_interactive_admin.return_value = CommandResult(
+            argv=("tool.exe", "--version"), cwd=str(self.root), exit_code=0,
+            stdout="ok\n", stderr="", timed_out=False, truncated=False,
+            isolation_level="output_bounded",
+        )
+        adapter = NativePrimitiveAdapter(
+            ProjectAdapter(self.state),
+            TerminalAdapter(_TerminalService()),
+            commands,
+        )
+        context = self.context.model_copy(update={
+            "principal": "admin-user",
+            "principal_scopes": ("terminal.write",),
+        })
+        call = CapabilityCall(
+            capability_id="native.shell", operation="command", project_root=str(self.root),
+            arguments={"argv": ["tool.exe", "--version"], "cwd": ".", "timeout": 15},
+        )
+
+        events = [event async for event in adapter.execute(call, context)]
+
+        self.assertEqual(events[0].payload["mode"], "interactive_admin")
+        commands.run_interactive_admin.assert_awaited_once()
+        commands.run_profile.assert_not_awaited()
+
+    def test_default_profile_store_uses_application_data_root_once(self):
+        """Nesting profiles below data_root/core/core must fail this test."""
+        from web_app.core.native_primitives import NativePrimitiveAdapter
+        from web_app.core.project_adapter import ProjectAdapter
+        from web_app.core.terminal_adapter import TerminalAdapter
+
+        data_root = self.root / "application-data"
+        project = ProjectAdapter(data_root / "core" / "project-state")
+        adapter = NativePrimitiveAdapter(
+            project,
+            TerminalAdapter(_TerminalService()),
+            data_root=data_root,
+        )
+
+        self.assertEqual(
+            adapter._commands.profile_store_path,
+            data_root.resolve() / "core" / "verification_profiles.json",
+        )
 
 
 if __name__ == "__main__":

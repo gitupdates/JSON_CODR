@@ -51,12 +51,14 @@ class CoreService:
         command: TaskCommand,
         *,
         principal: str = "user",
+        principal_scopes: tuple[str, ...] = (),
         approval_lease: ApprovalLease | None = None,
         trusted_schedule_id: str | None = None,
     ) -> TaskRecord:
         record = await self.start(
             command,
             principal=principal,
+            principal_scopes=principal_scopes,
             approval_lease=approval_lease,
             trusted_schedule_id=trusted_schedule_id,
         )
@@ -74,6 +76,7 @@ class CoreService:
         command: TaskCommand,
         *,
         principal: str = "user",
+        principal_scopes: tuple[str, ...] = (),
         approval_lease: ApprovalLease | None = None,
         trusted_schedule_id: str | None = None,
     ) -> TaskRecord:
@@ -179,6 +182,7 @@ class CoreService:
                     task_id=command.task_id,
                     project_id=command.project_id,
                     principal=principal,
+                    principal_scopes=principal_scopes,
                     credential_refs=call.credential_refs,
                 )
                 run = asyncio.create_task(
@@ -292,6 +296,7 @@ class CoreService:
         task_id: str,
         *,
         principal: str = "user",
+        principal_scopes: tuple[str, ...] = (),
         scope: str = "project",
         proposal_id: str | None = None,
     ) -> TaskRecord:
@@ -308,9 +313,12 @@ class CoreService:
             if not isinstance(child_task_id, str):
                 raise ValueError("approval request is invalid")
             await self.approve(
-                child_task_id, principal=principal, scope=scope, proposal_id=proposal_id,
+                child_task_id, principal=principal, principal_scopes=principal_scopes,
+                scope=scope, proposal_id=proposal_id,
             )
-            return await self.submit(command, principal=principal)
+            return await self.submit(
+                command, principal=principal, principal_scopes=principal_scopes,
+            )
         call = self._registry.normalize(CapabilityCall.model_validate(command.payload))
         if self._approval_store is not None:
             if proposal_id is None:
@@ -329,6 +337,7 @@ class CoreService:
             return await self.submit(
                 command,
                 principal=principal,
+                principal_scopes=principal_scopes,
                 approval_lease=lease,
                 trusted_schedule_id=call.schedule_id,
             )
@@ -344,6 +353,7 @@ class CoreService:
         return await self.submit(
             command,
             principal=principal,
+            principal_scopes=principal_scopes,
             trusted_schedule_id=call.schedule_id,
         )
 

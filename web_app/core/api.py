@@ -208,7 +208,11 @@ def create_core_router(
         http_request: Request,
     ):
         principal = require_agent_mutation(http_request)
-        record = await runtime()[0].submit(command, principal=principal.user_id)
+        record = await runtime()[0].submit(
+            command,
+            principal=principal.user_id,
+            principal_scopes=principal.scopes,
+        )
         if record.events and record.events[-1].event_type == "task.permission_required":
             response.status_code = 202
         return record
@@ -331,6 +335,7 @@ def create_core_router(
             return await runtime()[0].approve(
                 task_id,
                 principal=principal.user_id,
+                principal_scopes=principal.scopes,
                 scope=request.scope,
                 proposal_id=request.proposal_id,
             )

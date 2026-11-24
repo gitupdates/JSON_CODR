@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import tempfile
 import unittest
@@ -7,11 +8,28 @@ from web_app.core.command_runtime import CommandPolicy, CommandRuntime
 from web_app.core.verification_profiles import VerificationProfile, VerificationProfileStore
 
 
+class _Administrator:
+    roles = ("administrator",)
+    scopes = ("verification.profiles.manage",)
+    credential_id = "credential-1"
+    authentication_source = "browser_session"
+
+
+def _resolve_administrator(token, *, required_scope):
+    if token != "admin-token" or required_scope != "verification.profiles.manage":
+        raise PermissionError("invalid administrator credential")
+    return _Administrator()
+
+
 class CommandRuntimeProfileTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
-        self.store = VerificationProfileStore(self.root / "data")
+        self.store = VerificationProfileStore(
+            self.root / "data",
+            administration_resolver=_resolve_administrator,
+            integrity_key=b"profile-integrity-test-key",
+        )
         self.store.replace((
             VerificationProfile(
                 profile_id="python-version",
@@ -22,7 +40,7 @@ class CommandRuntimeProfileTests(unittest.IsolatedAsyncioTestCase):
                 max_output_bytes=4096,
                 network_policy="allow",
             ),
-        ), scopes=("verification.profiles.manage",))
+        ), credential="admin-token")
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -62,7 +80,7 @@ class CommandRuntimeProfileTests(unittest.IsolatedAsyncioTestCase):
             {"value": str(self.root.resolve())},
         ):
             with self.subTest(values=values):
-                with self.assertRaisesRegex(ValueError, "absolute path|interpreter"):
+                with self.assertRaisesRegex(ValueError, "path|interpreter"):
                     await runtime.run_profile(profile_id="python-version", values=values, project_root=self.root)
         with self.assertRaisesRegex(ValueError, "environment"):
             await runtime.run_profile(
@@ -84,8 +102,87 @@ class CommandRuntimeProfileTests(unittest.IsolatedAsyncioTestCase):
                 max_output_bytes=4096,
                 network_policy="deny",
             ),
-        ), scopes=("verification.profiles.manage",))
+        ), credential="admin-token")
         with self.assertRaisesRegex(ValueError, "network"):
             await CommandRuntime(self.store).run_profile(
                 profile_id="network-probe", values={"url": "https://example.invalid"}, project_root=self.root
             )
+
+    async def test_profile_values_cannot_escape_or_follow_outside_links(self):
+        """Candidate-controlled path spellings and reparse targets must fail this test."""
+        runtime = CommandRuntime(self.store)
+        hostile_values = (
+            r"..\outside",
+            r"C:\outside",
+            r"C:outside",
+            r"--config=C:\outside",
+            "../outside",
+        )
+        for value in hostile_values:
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "path|escape"):
+                    await runtime.run_profile(
+                        profile_id="python-version", values={"value": value}, project_root=self.root
+                    )
+
+        outside = self.root.parent / f"{self.root.name}-outside"
+        outside.mkdir()
+        link = self.root / "outside-link"
+        try:
+            link.symlink_to(outside, target_is_directory=True)
+        except OSError:
+            self.skipTest("symlink or junction creation is unavailable")
+        self.addCleanup(outside.rmdir)
+        with self.assertRaisesRegex(ValueError, "escape"):
+            await runtime.run_profile(
+                profile_id="python-version", values={"value": "outside-link"}, project_root=self.root
+            )
+
+    async def test_profile_output_is_streamed_with_a_hard_memory_limit(self):
+        """Buffering the complete child output before truncation must fail this test."""
+        self.store.replace((
+            VerificationProfile(
+                profile_id="large-output",
+                executable=sys.executable,
+                argument_template=("-c", "import sys; sys.stdout.write('x' * 200000)"),
+                cwd_rule="project_root",
+                timeout_seconds=10,
+                max_output_bytes=4096,
+                network_policy="allow",
+            ),
+        ), credential="admin-token")
+        result = await CommandRuntime(self.store).run_profile(
+            profile_id="large-output", values={}, project_root=self.root
+        )
+        self.assertEqual(len(result.stdout.encode("utf-8")), 4096)
+        self.assertTrue(result.truncated)
+        self.assertEqual(result.isolation_level, "output_bounded")
+
+    async def test_timeout_terminates_descendant_process_tree(self):
+        """A timed-out verifier descendant must not survive to mutate the project."""
+        sentinel = self.root / "descendant-survived.txt"
+        child = (
+            "import pathlib,time; time.sleep(2); "
+            f"pathlib.Path({str(sentinel)!r}).write_text('escaped', encoding='utf-8')"
+        )
+        parent = (
+            "import subprocess,sys,time; "
+            f"subprocess.Popen([sys.executable, '-c', {child!r}]); time.sleep(30)"
+        )
+        self.store.replace((
+            VerificationProfile(
+                profile_id="timeout-tree",
+                executable=sys.executable,
+                argument_template=("-c", parent),
+                cwd_rule="project_root",
+                timeout_seconds=1,
+                max_output_bytes=4096,
+                network_policy="allow",
+            ),
+        ), credential="admin-token")
+        result = await CommandRuntime(self.store).run_profile(
+            profile_id="timeout-tree", values={}, project_root=self.root
+        )
+        self.assertTrue(result.timed_out)
+        await asyncio.sleep(2.5)
+        self.assertFalse(sentinel.exists())
