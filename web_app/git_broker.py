@@ -5,12 +5,14 @@ import json
 import os
 import stat
 import subprocess
+import tempfile
 import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from web_app.core.git_adapter import VerificationReceipt
 from web_app.models import BrokerActionRequest
 
 
@@ -166,6 +168,10 @@ class GitBrokerService:
         model: str,
         grant_id: str,
         authorized: Callable[[], bool] | None = None,
+        *,
+        verification_receipt: VerificationReceipt | None = None,
+        verification_runner: Callable[..., VerificationReceipt] | None = None,
+        receipt_validator: Callable[[VerificationReceipt], bool] | None = None,
     ) -> BrokerActionResult:
         request = self.validate_request(request)
         project = self._project(request.project_root)
@@ -181,6 +187,8 @@ class GitBrokerService:
                 "model": model, "profile": "broker", "grant_id": grant_id,
             })
             commit = None
+            receipt = verification_receipt
+            base_sha = snapshot.head
             touched_paths: list[str] = []
             status = "completed"
             outputs: dict = {"files": {}, "checks": {}, "diff": ""}
@@ -203,19 +211,19 @@ class GitBrokerService:
                                 encoding="utf-8", errors="replace"
                             )[:self._MAX_OUTPUT_BYTES]
                     elif action.kind == "verify":
-                        for check_name in action.checks:
-                            argv = self.verification_checks.get(check_name)
-                            if not argv:
-                                raise ValueError(f"Verification check is not configured: {check_name}")
-                            result = subprocess.run(
-                                argv, cwd=project, check=False, capture_output=True, text=True,
-                                encoding="utf-8", errors="replace", env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+                        base_sha = self._git(project, "rev-parse", "HEAD")
+                        tree_sha = self._tree_sha(project)
+                        if verification_runner is not None:
+                            receipt = verification_runner(
+                                action, candidate_id=grant_id, base_sha=base_sha, tree_sha=tree_sha,
                             )
-                            if result.returncode:
-                                raise RuntimeError(
-                                    result.stderr[:self._MAX_OUTPUT_BYTES].strip() or f"Verification failed: {check_name}"
-                                )
-                            outputs["checks"][check_name] = result.stdout[:self._MAX_OUTPUT_BYTES].strip()
+                            if not isinstance(receipt, VerificationReceipt):
+                                raise RuntimeError("Verification did not produce a trusted receipt")
+                            if receipt.checks != tuple(action.checks):
+                                raise RuntimeError("verification receipt does not cover the requested profiles")
+                            outputs["checks"] = {name: "verified" for name in receipt.checks}
+                        else:
+                            raise RuntimeError("trusted verification runner is not configured")
                     elif action.kind == "status":
                         summary = self._git(project, "status", "--short", "--untracked-files=all")
                         diff = self._git(project, "diff", "--no-ext-diff", "--")
@@ -223,7 +231,13 @@ class GitBrokerService:
                     elif action.kind == "commit":
                         if not touched_paths:
                             raise RuntimeError("Commit requires files changed by an apply_patch action")
-                        self._git(project, "add", "--", *list(dict.fromkeys(touched_paths)))
+                        self._require_receipt(
+                            project, receipt, receipt_validator, candidate_id=grant_id, base_sha=base_sha,
+                            phase="commit",
+                        )
+                        self._git(project, "add", "--all")
+                        if self._git(project, "write-tree") != receipt.tree_sha:
+                            raise RuntimeError("staged candidate tree does not match final verification receipt")
                         message = (action.message or "Apply JSON_CODR model changes").strip()
                         message += (
                             f"\n\nJSON-CODR-Model: {model}\n"
@@ -232,6 +246,10 @@ class GitBrokerService:
                         )
                         self._git(project, "commit", "-m", message)
                         commit = self._git(project, "rev-parse", "HEAD")
+                        if self._git(project, "rev-parse", "HEAD^{tree}") != receipt.tree_sha:
+                            raise RuntimeError("commit tree does not match final verification receipt")
+                        if not self.inspect(project).clean:
+                            raise RuntimeError("candidate worktree is not clean after commit")
                         status = "committed"
                     elif action.kind == "sync":
                         current = self.inspect(project)
@@ -240,6 +258,10 @@ class GitBrokerService:
                         self._git(project, "fetch", "--quiet")
                         self._git(project, "rebase", current.upstream)
                     elif action.kind == "push":
+                        self._require_receipt(
+                            project, receipt, receipt_validator, candidate_id=grant_id, base_sha=base_sha,
+                            phase="push",
+                        )
                         current = self.inspect(project)
                         if not current.branch or not current.upstream:
                             raise RuntimeError("Checked-out branch must have an upstream")
@@ -257,6 +279,56 @@ class GitBrokerService:
             except Exception:
                 self.record_audit({"id": task_id, "status": "failed"})
                 raise
+
+    @classmethod
+    def _tree_sha(cls, project: Path) -> str:
+        descriptor, index_path = tempfile.mkstemp(prefix="json-codr-tree-", suffix=".index")
+        os.close(descriptor)
+        os.unlink(index_path)
+        environment = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_INDEX_FILE": index_path}
+
+        def git_index(*args: str) -> str:
+            result = subprocess.run(
+                ["git", *args], cwd=project, check=False, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", env=environment,
+            )
+            if result.returncode:
+                raise ValueError(result.stderr.strip() or result.stdout.strip() or "Git tree calculation failed")
+            return result.stdout.strip()
+
+        try:
+            git_index("read-tree", "HEAD")
+            git_index("add", "--all")
+            return git_index("write-tree")
+        finally:
+            Path(index_path).unlink(missing_ok=True)
+
+    @classmethod
+    def _require_receipt(
+        cls,
+        project: Path,
+        receipt: VerificationReceipt | None,
+        receipt_validator: Callable[[VerificationReceipt], bool] | None,
+        *,
+        candidate_id: str,
+        base_sha: str,
+        phase: str,
+    ) -> None:
+        if receipt is None or receipt_validator is None or not receipt_validator(receipt):
+            raise RuntimeError("publication requires a trusted final verification receipt")
+        if receipt.candidate_id != candidate_id:
+            raise RuntimeError("verification receipt belongs to a different candidate")
+        if receipt.base_sha != base_sha:
+            raise RuntimeError("verification receipt belongs to a different base")
+        if phase == "commit" and cls._git(project, "rev-parse", "HEAD") != receipt.base_sha:
+            raise RuntimeError("candidate base changed after verification")
+        if cls._tree_sha(project) != receipt.tree_sha:
+            raise RuntimeError("candidate final tree changed after verification")
+        if phase == "push":
+            if cls._git(project, "rev-parse", "HEAD^{tree}") != receipt.tree_sha:
+                raise RuntimeError("commit tree does not match final verification receipt")
+            if not cls._git(project, "status", "--porcelain=v2", "--untracked-files=all") == "":
+                raise RuntimeError("candidate worktree is not clean before push")
 
     def inspect(self, project_root: Path | str) -> RepositorySnapshot:
         project = self._project(project_root)

@@ -89,9 +89,18 @@ class BrokerActionRequest(BaseModel):
         if "push" in kinds and kinds[-1] != "push":
             raise ValueError("push must be the final action")
         if "commit" in kinds:
+            if kinds.count("commit") != 1:
+                raise ValueError("publication workflow permits exactly one commit")
             commit_index = kinds.index("commit")
             if "apply_patch" not in kinds[:commit_index]:
                 raise ValueError("commit requires a preceding apply_patch action")
+            if commit_index == 0 or kinds[commit_index - 1] != "verify":
+                raise ValueError("verify must immediately precede commit")
+            verify_action = self.actions[commit_index - 1]
+            if not verify_action.checks:
+                raise ValueError("verify before commit requires at least one check")
+            if any(kind in {"apply_patch", "sync"} for kind in kinds[commit_index + 1:]):
+                raise ValueError("no tree-changing action may follow commit")
         if "push" in kinds and "commit" not in kinds[:kinds.index("push")]:
             raise ValueError("push requires a preceding commit action")
         return self

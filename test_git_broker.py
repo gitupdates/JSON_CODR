@@ -1,11 +1,12 @@
 import subprocess
 import tempfile
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import ValidationError
 
-from web_app.git_broker import GitBrokerService
+from web_app.git_broker import GitBrokerService, VerificationReceipt
 from web_app.models import BrokerActionRequest
 
 
@@ -60,6 +61,33 @@ class GitBrokerContractTests(unittest.TestCase):
                 actions=[{"kind": "read", "paths": ["../secret"]}],
                 baseline_fingerprint="clean",
             )
+
+    def test_publication_requires_verify_immediately_before_commit(self):
+        """Removing final verification or moving it before an edit must reject publication."""
+        values = {
+            "schema_version": 1,
+            "project_root": "C:/repo",
+            "baseline_fingerprint": "clean",
+        }
+        for actions, message in (
+            ([{"kind": "apply_patch", "patch": "diff"}, {"kind": "commit"}], "verify"),
+            ([
+                {"kind": "apply_patch", "patch": "diff"},
+                {"kind": "verify", "checks": ["unit-tests"]},
+                {"kind": "apply_patch", "patch": "diff"},
+                {"kind": "commit"},
+            ], "immediately"),
+            ([
+                {"kind": "apply_patch", "patch": "diff"},
+                {"kind": "verify", "checks": ["unit-tests"]},
+                {"kind": "commit"},
+                {"kind": "apply_patch", "patch": "diff"},
+                {"kind": "push"},
+            ], "tree-changing"),
+        ):
+            with self.subTest(actions=actions):
+                with self.assertRaisesRegex(ValidationError, message):
+                    BrokerActionRequest(actions=actions, **values)
         with self.assertRaises(ValidationError):
             BrokerActionRequest(
                 schema_version=1,
@@ -155,22 +183,46 @@ class GitBrokerExecutionTests(unittest.TestCase):
         git(project, "push", "-u", "origin", "main")
         return project, remote
 
+    def _receipt(self, *, candidate_id: str, base_sha: str, tree_sha: str, profile_digest: str = "profiles-v1"):
+        return VerificationReceipt(
+            candidate_id=candidate_id,
+            base_sha=base_sha,
+            tree_sha=tree_sha,
+            profile_digest=profile_digest,
+            checks=("unit-tests",),
+            verified_at=datetime.now(UTC),
+            verifier_credential_id="verifier-credential",
+        )
+
     def test_execute_applies_commits_rebases_and_pushes_with_attribution(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             project, remote = self._repository(root)
             service = GitBrokerService(root / "data")
             baseline = service.inspect(project)
+            patch = "diff --git a/README.md b/README.md\nindex e79c5e8..b03d9db 100644\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-initial\n+updated\n"
+            receipt = None
+
+            def verify(action, *, candidate_id, base_sha, tree_sha):
+                nonlocal receipt
+                receipt = self._receipt(candidate_id=candidate_id, base_sha=base_sha, tree_sha=tree_sha)
+                return receipt
+
             request = BrokerActionRequest(
                 schema_version=1, project_root=str(project), baseline_fingerprint=baseline.dirty_fingerprint,
                 actions=[
-                    {"kind": "apply_patch", "patch": "diff --git a/README.md b/README.md\nindex e79c5e8..b03d9db 100644\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-initial\n+updated\n"},
+                    {"kind": "apply_patch", "patch": patch},
+                    {"kind": "verify", "checks": ["unit-tests"]},
                     {"kind": "commit", "message": "Update readme"},
                     {"kind": "push"},
                 ],
             )
 
-            result = service.execute(request, model="qwen2.5-coder:7b", grant_id="grant-1")
+            result = service.execute(
+                request, model="qwen2.5-coder:7b", grant_id="grant-1",
+                verification_runner=verify,
+                receipt_validator=lambda received: received == receipt,
+            )
 
             self.assertEqual(result.status, "pushed")
             self.assertEqual(git(project, "show", "-s", "--format=%an <%ae>", "HEAD"), "Test User <test@example.com>")
@@ -179,6 +231,61 @@ class GitBrokerExecutionTests(unittest.TestCase):
             self.assertIn("JSON-CODR-Profile: broker", message)
             self.assertIn("JSON-CODR-Grant: grant-1", message)
             self.assertEqual(git(remote, "show", "main:README.md"), "updated")
+
+    def test_execute_rejects_failed_or_untrusted_final_verification(self):
+        """A failed check or receipt that is not verifier-issued cannot authorize a commit."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project, _ = self._repository(root)
+            service = GitBrokerService(root / "data")
+            baseline = service.inspect(project)
+            patch = "diff --git a/README.md b/README.md\nindex e79c5e8..b03d9db 100644\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-initial\n+updated\n"
+            request = BrokerActionRequest(
+                schema_version=1, project_root=str(project), baseline_fingerprint=baseline.dirty_fingerprint,
+                actions=[
+                    {"kind": "apply_patch", "patch": patch},
+                    {"kind": "verify", "checks": ["unit-tests"]},
+                    {"kind": "commit", "message": "Update readme"},
+                ],
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "Verification failed"):
+                service.execute(
+                    request, model="qwen", grant_id="candidate-1",
+                    verification_runner=lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("Verification failed: unit-tests")),
+                    receipt_validator=lambda receipt: True,
+                )
+
+            self.assertEqual(git(project, "rev-parse", "HEAD"), baseline.head)
+
+    def test_execute_rejects_a_tree_changed_after_verification(self):
+        """Changing the candidate after a receipt is issued must block the commit."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project, _ = self._repository(root)
+            service = GitBrokerService(root / "data")
+            baseline = service.inspect(project)
+            patch = "diff --git a/README.md b/README.md\nindex e79c5e8..b03d9db 100644\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-initial\n+updated\n"
+            request = BrokerActionRequest(
+                schema_version=1, project_root=str(project), baseline_fingerprint=baseline.dirty_fingerprint,
+                actions=[
+                    {"kind": "apply_patch", "patch": patch},
+                    {"kind": "verify", "checks": ["unit-tests"]},
+                    {"kind": "commit", "message": "Update readme"},
+                ],
+            )
+
+            def verify(action, *, candidate_id, base_sha, tree_sha):
+                receipt = self._receipt(candidate_id=candidate_id, base_sha=base_sha, tree_sha=tree_sha)
+                (project / "uncommitted.txt").write_text("changed after verify\n", encoding="utf-8")
+                return receipt
+
+            with self.assertRaisesRegex(RuntimeError, "final tree"):
+                service.execute(
+                    request, model="qwen", grant_id="candidate-1",
+                    verification_runner=verify, receipt_validator=lambda receipt: True,
+                )
+            self.assertEqual(git(project, "rev-parse", "HEAD"), baseline.head)
 
     def test_execute_stops_when_baseline_does_not_match(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -225,9 +332,7 @@ class GitBrokerExecutionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             project, _ = self._repository(root)
-            service = GitBrokerService(root / "data", verification_checks={
-                "python-smoke": ["python", "-c", "print('CHECK_OK')"],
-            })
+            service = GitBrokerService(root / "data")
             baseline = service.inspect(project)
             patch = (
                 "diff --git a/hello.py b/hello.py\nnew file mode 100644\nindex 0000000..b376c99\n"
@@ -238,18 +343,24 @@ class GitBrokerExecutionTests(unittest.TestCase):
                 actions=[
                     {"kind": "apply_patch", "patch": patch},
                     {"kind": "read", "paths": ["hello.py"]},
-                    {"kind": "verify", "checks": ["python-smoke"]},
+                    {"kind": "verify", "checks": ["unit-tests"]},
                     {"kind": "status"},
                 ],
             )
 
-            result = service.execute(request, model="qwen", grant_id="grant-1")
+            result = service.execute(
+                request, model="qwen", grant_id="grant-1",
+                verification_runner=lambda action, **values: self._receipt(
+                    candidate_id=values["candidate_id"], base_sha=values["base_sha"], tree_sha=values["tree_sha"],
+                ),
+                receipt_validator=lambda receipt: True,
+            )
 
             self.assertEqual(result.outputs["files"]["hello.py"], "print('hello')\n")
-            self.assertEqual(result.outputs["checks"]["python-smoke"], "CHECK_OK")
+            self.assertEqual(result.outputs["checks"]["unit-tests"], "verified")
             self.assertIn("hello.py", result.outputs["diff"])
 
-    def test_execute_rejects_unconfigured_verification_command(self):
+    def test_execute_rejects_verification_without_a_trusted_profile_runner(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             project, _ = self._repository(root)
@@ -259,7 +370,7 @@ class GitBrokerExecutionTests(unittest.TestCase):
                 schema_version=1, project_root=str(project), baseline_fingerprint=baseline.dirty_fingerprint,
                 actions=[{"kind": "verify", "checks": ["arbitrary-shell"]}],
             )
-            with self.assertRaisesRegex(ValueError, "not configured"):
+            with self.assertRaisesRegex(RuntimeError, "trusted verification runner"):
                 service.execute(request, model="qwen", grant_id="grant-1")
 
     def test_execute_rechecks_authorization_after_waiting_for_project_lock(self):

@@ -60,7 +60,7 @@ from web_app.core.api import create_core_router
 from web_app.core.artifact_store import ArtifactStore
 from web_app.core.assimilation import AssimilationService, FunctionalProbeResult, SkillInstallAdapter
 from web_app.core.contracts import CompletionCriterion, CriterionKind, GoalSpec, TaskCommand, TaskStatus
-from web_app.core.git_adapter import GitExecutionAdapter
+from web_app.core.git_adapter import GitExecutionAdapter, GitVerificationService
 from web_app.core.inference_adapter import InferenceAdapter
 from web_app.core.identity import IdentityService
 from web_app.core.http_identity import MutationAuthorizer
@@ -85,6 +85,7 @@ from web_app.core.canonical import canonical_digest
 from web_app.core.terminal_adapter import TerminalAdapter
 from web_app.core.command_runtime import CommandRuntime
 from web_app.core.verification_profiles import VerificationProfileStore
+from web_app.core.verifier_identity import VerifierIdentityService
 from web_app.dependencies import DependencyService
 from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, ConnectionPreviewRequest, ConnectionRecoveryRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GitHubAuthCancelRequest, GitHubAuthLoginRequest, GitHubBuildCheckRequest, GitHubBuildUpdateRequest, GitHubConfirmedWrite, GitHubIssueCommentRequest, GitHubIssueCreateRequest, GitHubIssueUpdateRequest, GitHubLocalBranchRequest, GitHubLocalCloneRequest, GitHubLocalCommitRequest, GitHubLocalPushRequest, GitHubLocalStageRequest, GitHubLocalSyncRequest, GitHubPullRequestCreateRequest, GitHubPullRequestMergeRequest, GitHubPullRequestUpdateRequest, GitHubReleaseCreateRequest, GitHubReleaseUpdateRequest, GitHubRemoteBranchCreateRequest, GitHubRepositoryCreateRequest, GitHubRepositoryDeleteRequest, GitHubRepositoryUpdateRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, OptimizedModelInstallRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
 from web_app.model_run_store import ModelRunStore, RequestKeyConflict
@@ -388,10 +389,6 @@ def create_app(
                 prepare_prompt=prepare_inference_prompt,
                 model_registry=model_registry if isinstance(service, OllamaService) else None,
             )
-            core_git_adapter = GitExecutionAdapter(
-                git_broker,
-                lambda grant_id, project_root: coding_agents.authorized_grant(grant_id, project_root, "broker"),
-            )
             component_adapter = SkillInstallAdapter(
                 AssimilationService(core_root / "components", probe_component),
                 resolve_skill_install,
@@ -403,10 +400,18 @@ def create_app(
                 administration_resolver=identity.resolve_credential,
             )
             application.state.verification_profiles = verification_profiles
+            verifier_identity = VerifierIdentityService(identity, workspace.data_root)
+            verifier_identity.ensure_service_account()
+            verification_runtime = CommandRuntime(verification_profiles)
+            core_git_adapter = GitExecutionAdapter(
+                git_broker,
+                lambda grant_id, project_root: coding_agents.authorized_grant(grant_id, project_root, "broker"),
+                GitVerificationService(verification_runtime, verification_profiles, verifier_identity),
+            )
             native_primitives = NativePrimitiveAdapter(
                 core_project_adapter,
                 core_terminal_adapter,
-                CommandRuntime(verification_profiles),
+                verification_runtime,
             )
             adapters = {
                 "git.execute": core_git_adapter,
