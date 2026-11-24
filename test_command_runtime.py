@@ -1,3 +1,5 @@
+import asyncio
+import os
 import sys
 import tempfile
 import unittest
@@ -37,6 +39,33 @@ class CommandRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     project_root=directory,
                     administrator_scopes=("terminal.write",),
                 )
+
+    @unittest.skipUnless(os.name == "nt", "Windows detached-process behavior")
+    async def test_interactive_admin_detached_child_survives_parent_completion(self):
+        """Applying verifier Job containment to interactive commands must fail this test."""
+        with tempfile.TemporaryDirectory() as directory:
+            sentinel = Path(directory) / "interactive-detached-child.txt"
+            child = (
+                "import pathlib,time; time.sleep(0.5); "
+                f"pathlib.Path({str(sentinel)!r}).write_text('survived', encoding='utf-8')"
+            )
+            parent = (
+                "import subprocess,sys; "
+                f"subprocess.Popen([sys.executable, '-c', {child!r}], "
+                "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, "
+                "close_fds=True, creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)"
+            )
+            result = await CommandRuntime().run_interactive_admin(
+                CommandPolicy(argv=(sys.executable, "-c", parent), cwd=".", timeout_seconds=5),
+                project_root=directory,
+                administrator_scopes=("terminal.write",),
+            )
+            self.assertEqual(result.exit_code, 0)
+            for _ in range(40):
+                if sentinel.exists():
+                    break
+                await asyncio.sleep(0.05)
+            self.assertTrue(sentinel.exists())
 
 
 if __name__ == "__main__":

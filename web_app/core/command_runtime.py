@@ -164,7 +164,7 @@ class CommandRuntime:
         """Run an administrator-approved, interactive command without claiming isolation."""
         if "terminal.write" not in administrator_scopes:
             raise PermissionError("interactive command execution requires an administrator terminal scope")
-        return await self._run(policy, project_root=project_root)
+        return await self._run(policy, project_root=project_root, enforce_process_tree=False)
 
     async def run_profile(
         self,
@@ -193,9 +193,15 @@ class CommandRuntime:
             cwd="." if profile.cwd_rule == "project_root" else profile.cwd_rule,
             timeout_seconds=profile.timeout_seconds,
             max_output_bytes=profile.max_output_bytes,
-        ), project_root=project_root)
+        ), project_root=project_root, enforce_process_tree=True)
 
-    async def _run(self, policy: CommandPolicy, *, project_root: str | Path) -> CommandResult:
+    async def _run(
+        self,
+        policy: CommandPolicy,
+        *,
+        project_root: str | Path,
+        enforce_process_tree: bool,
+    ) -> CommandResult:
         root = Path(project_root).resolve(strict=True)
         cwd = Path(policy.cwd)
         cwd = cwd.resolve() if cwd.is_absolute() else (root / cwd).resolve()
@@ -210,7 +216,10 @@ class CommandRuntime:
             environment[key] = value
         process_options: dict[str, object] = {}
         if os.name == "nt":
-            process_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | _CREATE_SUSPENDED
+            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+            if enforce_process_tree:
+                creationflags |= _CREATE_SUSPENDED
+            process_options["creationflags"] = creationflags
         else:
             process_options["start_new_session"] = True
         process = await asyncio.create_subprocess_exec(
@@ -220,7 +229,7 @@ class CommandRuntime:
             **process_options,
         )
         windows_job: _WindowsJob | None = None
-        if os.name == "nt":
+        if os.name == "nt" and enforce_process_tree:
             try:
                 windows_job = _WindowsJob(process.pid)
                 windows_job.resume()
