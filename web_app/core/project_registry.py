@@ -60,17 +60,22 @@ class ProjectRegistry:
         if not resolved.is_dir():
             raise ValueError("project root must be an existing directory")
         display_root = str(resolved)
-        normalized = os.path.normcase(display_root)
-        stable_id = "project:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
+        root_key = self._root_key(display_root)
+        stable_id = "project:" + hashlib.sha256(root_key.encode("utf-8")).hexdigest()[:24]
         project_id = project_id or stable_id
         fingerprint = self._root_fingerprint(resolved)
         now = datetime.now(UTC).isoformat()
         with self._lock, self._connection:
             if parent_project_id is not None:
                 self.resolve(parent_project_id)
-            existing = self._connection.execute(
-                "SELECT * FROM registered_projects WHERE lower(root) = ?", (normalized,)
-            ).fetchone()
+            if self._case_insensitive_paths():
+                existing = self._connection.execute(
+                    "SELECT * FROM registered_projects WHERE root = ? COLLATE NOCASE", (display_root,)
+                ).fetchone()
+            else:
+                existing = self._connection.execute(
+                    "SELECT * FROM registered_projects WHERE root = ?", (display_root,)
+                ).fetchone()
             if existing is None:
                 self._connection.execute(
                     """INSERT INTO registered_projects
@@ -139,6 +144,18 @@ class ProjectRegistry:
         stat = root.stat()
         material = f"{os.path.normcase(str(root))}\0{stat.st_dev}\0{stat.st_ino}"
         return "sha256:" + hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _case_insensitive_paths() -> bool:
+        return os.name == "nt"
+
+    @classmethod
+    def _root_key(cls, root: str | Path, *, case_insensitive: bool | None = None) -> str:
+        value = str(root)
+        is_case_insensitive = cls._case_insensitive_paths() if case_insensitive is None else case_insensitive
+        if is_case_insensitive:
+            return value.casefold()
+        return value
 
     @staticmethod
     def _record(row: sqlite3.Row) -> RegisteredProject:

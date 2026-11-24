@@ -103,3 +103,31 @@ Commit: `124f7284f574ace0a92ec39802cd0b58e3fbc3f9` (`fix(policy): harden capabil
 
 - `ProjectRegistry` registration remains the trust boundary for non-default Git and terminal roots; endpoint authorization determines which local roots may be registered.
 - The full unrelated web API suite was not rerun; earlier Task 1 authentication-fixture expectation drift remains outside this scoped change.
+
+## Fix round 3: cross-platform project root identity
+
+### Delivered
+
+- Replaced the unconditional SQLite `lower(root)` lookup with platform-aware identity matching: exact canonical root strings on case-sensitive filesystems and `COLLATE NOCASE` matching on Windows.
+- Added `_root_key` for stable project IDs, preserving POSIX case distinctions while folding Windows path identity.
+- Added a portable direct regression test that asserts both POSIX and Windows key behavior without relying on the host filesystem's case rules.
+
+### Tests and verification
+
+- RED: `C:\Python315\python.exe -m unittest test_core_project_registry.py` — failed as intended with `AttributeError: ProjectRegistry has no attribute _root_key` before the implementation.
+- GREEN: `C:\Python315\python.exe -m unittest test_core_project_registry.py test_core_automation.py test_core_service.py test_core_api.py test_core_approval.py` — 44 passed.
+- `C:\Python315\python.exe -m py_compile web_app\core\project_registry.py` and `git diff --check` — passed.
+
+### Self-review
+
+- Confirmed a POSIX-style mixed-case root has an exact identity key, so it can be re-registered without either a missed row or collision with a differently cased path.
+- Confirmed Windows identity remains case-insensitive both for stable IDs and existing-row lookup.
+
+### Files
+
+- `web_app/core/project_registry.py`
+- `test_core_project_registry.py`
+
+### Concerns
+
+- Windows `NOCASE` matching follows SQLite's built-in case behavior; unusual non-ASCII filesystem case-equivalence remains governed by the Windows/SQLite boundary.

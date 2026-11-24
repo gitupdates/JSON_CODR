@@ -34,6 +34,19 @@ class ProjectRegistryTests(unittest.TestCase):
         finally:
             second.close()
 
+    def test_root_key_preserves_posix_case_and_folds_windows_case(self):
+        upper = "/Users/Alice/Repo"
+        lower = "/users/alice/repo"
+
+        self.assertNotEqual(
+            ProjectRegistry._root_key(upper, case_insensitive=False),
+            ProjectRegistry._root_key(lower, case_insensitive=False),
+        )
+        self.assertEqual(
+            ProjectRegistry._root_key(upper, case_insensitive=True),
+            ProjectRegistry._root_key(lower, case_insensitive=True),
+        )
+
     def test_unknown_missing_and_replaced_roots_are_rejected(self):
         registry = ProjectRegistry(self.database)
         record = registry.register(self.root)
