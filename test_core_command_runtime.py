@@ -2,11 +2,12 @@ import asyncio
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from web_app.core.command_runtime import CommandPolicy, CommandRuntime
+from web_app.core.command_runtime import CommandPolicy, CommandRuntime, _WindowsJob
 from web_app.core.verification_profiles import VerificationProfile, VerificationProfileStore
 
 
@@ -241,4 +242,73 @@ class CommandRuntimeProfileTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(result.timed_out)
         await asyncio.sleep(2.5)
+        self.assertFalse(sentinel.exists())
+
+    @unittest.skipUnless(os.name == "nt", "Windows suspended launch behavior")
+    async def test_process_cannot_spawn_before_job_assignment(self):
+        """A fast verifier must remain suspended until its enforcing job is assigned."""
+        sentinel = self.root / "pre-assignment-escape.txt"
+        child = (
+            "import pathlib,time; time.sleep(0.2); "
+            f"pathlib.Path({str(sentinel)!r}).write_text('escaped', encoding='utf-8')"
+        )
+        parent = (
+            "import subprocess,sys; "
+            f"subprocess.Popen([sys.executable, '-c', {child!r}], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)"
+        )
+        self.store.replace((
+            VerificationProfile(
+                profile_id="assignment-race",
+                executable=sys.executable,
+                argument_template=("-c", parent),
+                cwd_rule="project_root",
+                timeout_seconds=5,
+                max_output_bytes=4096,
+                network_policy="allow",
+            ),
+        ), credential="admin-token")
+        original_init = _WindowsJob.__init__
+
+        def delayed_assignment(job, process_id):
+            time.sleep(0.5)
+            original_init(job, process_id)
+
+        with patch.object(_WindowsJob, "__init__", delayed_assignment):
+            result = await CommandRuntime(self.store).run_profile(
+                profile_id="assignment-race", values={}, project_root=self.root
+            )
+        self.assertEqual(result.exit_code, 0)
+        await asyncio.sleep(0.5)
+        self.assertFalse(sentinel.exists())
+
+    @unittest.skipUnless(os.name == "nt", "Windows Job Object close behavior")
+    async def test_normal_parent_completion_closes_job_and_kills_redirected_descendant(self):
+        """A descendant with redirected I/O must not outlive a normally completed verifier."""
+        sentinel = self.root / "normal-parent-descendant.txt"
+        child = (
+            "import pathlib,time; time.sleep(1); "
+            f"pathlib.Path({str(sentinel)!r}).write_text('escaped', encoding='utf-8')"
+        )
+        parent = (
+            "import subprocess,sys; "
+            f"subprocess.Popen([sys.executable, '-c', {child!r}], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)"
+        )
+        self.store.replace((
+            VerificationProfile(
+                profile_id="normal-parent-tree",
+                executable=sys.executable,
+                argument_template=("-c", parent),
+                cwd_rule="project_root",
+                timeout_seconds=5,
+                max_output_bytes=4096,
+                network_policy="allow",
+            ),
+        ), credential="admin-token")
+        result = await CommandRuntime(self.store).run_profile(
+            profile_id="normal-parent-tree", values={}, project_root=self.root
+        )
+        self.assertEqual(result.exit_code, 0)
+        await asyncio.sleep(1.5)
         self.assertFalse(sentinel.exists())

@@ -14,6 +14,9 @@ from web_app.core.contracts import FrozenContract
 from web_app.core.verification_profiles import VerificationProfileStore, render_profile_arguments
 
 
+_CREATE_SUSPENDED = 0x00000004
+
+
 class _WindowsJob:
     """Minimal Windows Job Object wrapper used to retain descendants after their parent exits."""
 
@@ -21,9 +24,47 @@ class _WindowsJob:
         import ctypes
         from ctypes import wintypes
 
+        class IoCounters(ctypes.Structure):
+            _fields_ = (
+                ("ReadOperationCount", ctypes.c_ulonglong),
+                ("WriteOperationCount", ctypes.c_ulonglong),
+                ("OtherOperationCount", ctypes.c_ulonglong),
+                ("ReadTransferCount", ctypes.c_ulonglong),
+                ("WriteTransferCount", ctypes.c_ulonglong),
+                ("OtherTransferCount", ctypes.c_ulonglong),
+            )
+
+        class BasicLimitInformation(ctypes.Structure):
+            _fields_ = (
+                ("PerProcessUserTimeLimit", ctypes.c_longlong),
+                ("PerJobUserTimeLimit", ctypes.c_longlong),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            )
+
+        class ExtendedLimitInformation(ctypes.Structure):
+            _fields_ = (
+                ("BasicLimitInformation", BasicLimitInformation),
+                ("IoInfo", IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            )
+
         self._kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        self._ntdll = ctypes.WinDLL("ntdll")
         self._kernel32.CreateJobObjectW.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR)
         self._kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        self._kernel32.SetInformationJobObject.argtypes = (
+            wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
+        )
+        self._kernel32.SetInformationJobObject.restype = wintypes.BOOL
         self._kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
         self._kernel32.OpenProcess.restype = wintypes.HANDLE
         self._kernel32.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
@@ -32,26 +73,51 @@ class _WindowsJob:
         self._kernel32.TerminateJobObject.restype = wintypes.BOOL
         self._kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
         self._kernel32.CloseHandle.restype = wintypes.BOOL
+        self._ntdll.NtResumeProcess.argtypes = (wintypes.HANDLE,)
+        self._ntdll.NtResumeProcess.restype = wintypes.LONG
+        self._process_handle = None
         self._handle = self._kernel32.CreateJobObjectW(None, None)
         if not self._handle:
             raise OSError(ctypes.get_last_error(), "failed to create verifier job object")
-        process_handle = self._kernel32.OpenProcess(0x0001 | 0x0100 | 0x0400, False, process_id)
-        if not process_handle:
+        limits = ExtendedLimitInformation()
+        limits.BasicLimitInformation.LimitFlags = 0x00002000
+        if not self._kernel32.SetInformationJobObject(
+            self._handle, 9, ctypes.byref(limits), ctypes.sizeof(limits),
+        ):
+            error = ctypes.get_last_error()
+            self.close()
+            raise OSError(error, "failed to configure verifier job object")
+        self._process_handle = self._kernel32.OpenProcess(
+            0x0001 | 0x0100 | 0x0400 | 0x0800, False, process_id,
+        )
+        if not self._process_handle:
             error = ctypes.get_last_error()
             self.close()
             raise OSError(error, "failed to open verifier process for job assignment")
-        try:
-            if not self._kernel32.AssignProcessToJobObject(self._handle, process_handle):
-                error = ctypes.get_last_error()
-                self.close()
-                raise OSError(error, "failed to assign verifier process to job object")
-        finally:
-            self._kernel32.CloseHandle(process_handle)
+        if not self._kernel32.AssignProcessToJobObject(self._handle, self._process_handle):
+            error = ctypes.get_last_error()
+            self.close()
+            raise OSError(error, "failed to assign verifier process to job object")
+
+    def resume(self) -> None:
+        import ctypes
+
+        if not self._process_handle:
+            raise RuntimeError("verifier process handle is unavailable")
+        status = self._ntdll.NtResumeProcess(self._process_handle)
+        self._kernel32.CloseHandle(self._process_handle)
+        self._process_handle = None
+        if status != 0:
+            self.close()
+            raise OSError(ctypes.c_ulong(status).value, "failed to resume verifier process")
 
     def terminate(self) -> bool:
         return bool(self._handle and self._kernel32.TerminateJobObject(self._handle, 1))
 
     def close(self) -> None:
+        if self._process_handle:
+            self._kernel32.CloseHandle(self._process_handle)
+            self._process_handle = None
         if self._handle:
             self._kernel32.CloseHandle(self._handle)
             self._handle = None
@@ -144,7 +210,7 @@ class CommandRuntime:
             environment[key] = value
         process_options: dict[str, object] = {}
         if os.name == "nt":
-            process_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            process_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | _CREATE_SUSPENDED
         else:
             process_options["start_new_session"] = True
         process = await asyncio.create_subprocess_exec(
@@ -157,8 +223,12 @@ class CommandRuntime:
         if os.name == "nt":
             try:
                 windows_job = _WindowsJob(process.pid)
+                windows_job.resume()
             except OSError as error:
-                process.kill()
+                if windows_job is not None:
+                    windows_job.close()
+                if process.returncode is None:
+                    process.kill()
                 await process.wait()
                 raise RuntimeError("failed to establish verifier process-tree boundary") from error
         stdout = bytearray()
