@@ -1235,7 +1235,7 @@ async function approveWorkspaceAgentAction() {
   try {
     const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/approve`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ scope: "project", proposal_id: proposalId }),
     });
     const payload = await response.json();
@@ -2700,6 +2700,12 @@ async function submitPrompt(event) {
     }, null, 2);
     elements.result.hidden = false;
     renderWorkspaceActivityNotice(`${payload.route} · ${payload.status}`, payload.status);
+    if (payload.status === "approval_required") {
+      if (!showWorkspaceAgentApproval(payload.result?.task, payload.task_id)) {
+        throw new Error("Agent approval is missing its proposal identity");
+      }
+      elements.summary.textContent = "Project action approval required";
+    }
     if (payload.route === "multi-model") localStorage.setItem("json_codr_active_model_run", payload.task_id);
     void userMessage;
     setPending(false);
