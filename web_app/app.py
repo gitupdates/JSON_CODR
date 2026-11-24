@@ -12,7 +12,7 @@ from typing import Callable, Literal
 from uuid import uuid7
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from ag_ui.core import RunAgentInput
 from ag_ui.encoder import EventEncoder
@@ -286,19 +286,26 @@ def create_app(
 
     @application.middleware("http")
     async def enforce_mutation_route_metadata(request: Request, call_next):
-        method = request.method.upper()
-        if method in {"POST", "PUT", "PATCH", "DELETE"}:
-            for route in application.router.routes:
-                match, _child_scope = route.matches(request.scope)
-                if getattr(match, "name", "") != "FULL":
-                    continue
-                policy = getattr(route, "mutation_policies", {}).get(method)
-                if policy is not None:
-                    if policy.path == "/api/identity/login":
-                        require_csrf(request)
-                    elif policy.scope is not None:
-                        mutation_principal(request, policy.scope)
-                break
+        try:
+            method = request.method.upper()
+            if method in {"POST", "PUT", "PATCH", "DELETE"}:
+                for route in application.router.routes:
+                    match, _child_scope = route.matches(request.scope)
+                    if getattr(match, "name", "") != "FULL":
+                        continue
+                    policy = getattr(route, "mutation_policies", {}).get(method)
+                    if policy is not None:
+                        if policy.path == "/api/identity/login":
+                            require_csrf(request)
+                        elif policy.scope is not None:
+                            mutation_principal(request, policy.scope)
+                    break
+        except HTTPException as error:
+            return JSONResponse(
+                status_code=error.status_code,
+                content={"detail": error.detail},
+                headers=error.headers,
+            )
         return await call_next(request)
     component_manager = None
     component_root = workspace.data_root / "core" / "component-registry"

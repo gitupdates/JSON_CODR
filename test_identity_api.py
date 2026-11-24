@@ -89,6 +89,26 @@ class IdentityApiTests(unittest.TestCase):
         self.assertNotIn("token", response.text.casefold())
         self.assertIn("json_codr_session", response.cookies)
 
+    def test_mutation_middleware_returns_json_auth_error(self):
+        client = TestClient(self.app, raise_server_exceptions=False)
+        try:
+            response = client.post(
+                "/api/workspace/tasks",
+                json={
+                    "project_root": ".",
+                    "session_id": self.session_id,
+                    "engine_id": "borg",
+                    "model_selection": "auto",
+                    "prompt": "Inspect the project",
+                    "context_references": [],
+                },
+            )
+            self.assertEqual(response.status_code, 401)
+            self.assertEqual(response.headers["content-type"], "application/json")
+            self.assertEqual(response.json(), {"detail": "Authentication required"})
+        finally:
+            client.close()
+
     def test_login_failure_is_generic_and_session_supports_logout(self):
         csrf = self.csrf()
         failure = self.client.post(

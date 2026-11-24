@@ -2676,8 +2676,8 @@ async function submitPrompt(event) {
         context_references: attachmentIds,
       }),
     });
+    if (!response.ok) throw new Error(await responseErrorMessage(response, "Workspace task failed"));
     const payload = await response.json();
-    if (!response.ok) throw new Error(payload.detail || "Workspace task failed");
     if (activeCoreTaskId !== payload.task_id) {
       activePlanReview = null;
       elements.taskPlanReviewOpen.hidden = true;

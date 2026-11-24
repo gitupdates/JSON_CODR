@@ -498,6 +498,7 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
 
         self.assertIn("async function responseErrorMessage", script)
         self.assertIn('responseErrorMessage(response, "Hardware detection failed")', script)
+        self.assertIn('responseErrorMessage(response, "Workspace task failed")', script)
 
     def test_runtime_observability_is_progressive_not_a_new_destination(self):
         html = self.client.get("/").text
