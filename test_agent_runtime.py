@@ -25,6 +25,7 @@ from web_app.core.contracts import (
 from web_app.core.memory import MemoryStore
 from web_app.core.policy import PolicyService
 from web_app.core.project_intelligence import ProjectReader
+from web_app.core.project_registry import ProjectRegistry
 from web_app.core.router import ExecutionCandidate, ExecutionRouter, RouteConsentRequired
 from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
@@ -129,11 +130,14 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.tasks = TaskStore(self.root / "tasks.sqlite")
         self.policy = PolicyService(self.root / "policy.sqlite")
         self.memory = MemoryStore(self.root / "memory.sqlite")
+        self.projects = ProjectRegistry(self.root / "projects.sqlite")
+        self.projects.register(self.root, project_id="project-1")
 
     async def asyncTearDown(self):
         self.memory.close()
         self.policy.close()
         self.tasks.close()
+        self.projects.close()
         self.temporary.cleanup()
 
     def create_root_task(self, *, accepted=True, project_root=None, objective="Complete the requested coding task"):
@@ -149,8 +153,9 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         payload = {"goal_spec": goal.model_dump(mode="json")}
         if project_root is not None:
             payload["project_root"] = str(project_root)
+        project_id = "project-1" if project_root is None else self.projects.register(project_root).project_id
         command = TaskCommand(
-            command_id=str(uuid7()), task_id=task_id, thread_id="thread-1", project_id="project-1",
+            command_id=str(uuid7()), task_id=task_id, thread_id="thread-1", project_id=project_id,
             command_type="agent.run", payload=payload,
         )
         self.tasks.create(command)
@@ -158,7 +163,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_agent_loop_submits_every_action_through_core_service(self):
         adapter = RecordingAdapter()
-        core = CoreService(self.tasks, self.policy, {"project.read": adapter, "project.patch": adapter, "test.run": adapter})
+        core = CoreService(self.tasks, self.policy, {"project.read": adapter, "project.patch": adapter, "test.run": adapter}, project_roots=self.projects)
         calls = [
             CapabilityCall(capability_id="project.read", operation="read", project_root=str(self.root)),
             CapabilityCall(capability_id="project.patch", operation="replace", project_root=str(self.root)),
@@ -197,6 +202,52 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_planner_rejection_never_reserves_an_executable_child_command(self):
+        runtime = AgentRuntime(
+            self.tasks,
+            CoreService(self.tasks, self.policy, {"project.read": RecordingAdapter()}, project_roots=self.projects),
+            ContextService(self.tasks, self.memory),
+            DeterministicPlanner([
+                CapabilityCall(capability_id="unregistered.planner", operation="read", project_root=str(self.root)),
+            ]),
+            DeterministicVerifier(),
+            lambda _root: "sha256:" + "1" * 64,
+        )
+        task_id = self.create_root_task()
+
+        with self.assertRaisesRegex(LookupError, "unknown capability"):
+            await runtime.run(task_id)
+
+        self.assertEqual(self.tasks.children(task_id), ())
+        self.assertNotIn("agent.step_planned", [event.event_type for event in self.tasks.get(task_id).events])
+
+    async def test_planner_child_command_is_server_canonical_before_atomic_reservation(self):
+        projects = ProjectRegistry(self.root / "projects.sqlite")
+        projects.register(self.root, project_id="project-1")
+        (self.root / "alias").mkdir()
+        adapter = RecordingAdapter()
+        runtime = AgentRuntime(
+            self.tasks,
+            CoreService(self.tasks, self.policy, {"project.read": adapter}, project_roots=projects),
+            ContextService(self.tasks, self.memory),
+            DeterministicPlanner([
+                CapabilityCall(
+                    capability_id="project.read", operation="read", project_root=str(self.root / "alias" / ".."),
+                ),
+            ]),
+            DeterministicVerifier(),
+            lambda _root: "sha256:" + "1" * 64,
+        )
+        task_id = self.create_root_task()
+        try:
+            await runtime.run(task_id)
+            child = self.tasks.children(task_id)[0]
+            command = self.tasks.command(child.task_id)
+            self.assertEqual(command.payload["operation"], "read")
+            self.assertEqual(command.payload["project_root"], str(self.root.resolve()))
+        finally:
+            projects.close()
+
     async def test_planner_context_is_bounded_for_local_model_stability(self):
         observed = []
 
@@ -212,7 +263,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         )
         runtime = AgentRuntime(
             self.tasks,
-            CoreService(self.tasks, self.policy, {}),
+            CoreService(self.tasks, self.policy, {}, project_roots=self.projects),
             ContextService(self.tasks, self.memory),
             RecordingPlanner(),
             DeterministicVerifier(),
@@ -241,7 +292,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         planner = OneShotPlanner()
         runtime = AgentRuntime(
             self.tasks,
-            CoreService(self.tasks, self.policy, {"project.read": adapter}),
+            CoreService(self.tasks, self.policy, {"project.read": adapter}, project_roots=self.projects),
             ContextService(self.tasks, self.memory),
             planner,
             DeterministicVerifier(),
@@ -258,7 +309,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         adapter = RecordingAdapter()
         planner = DeterministicPlanner([])
         runtime = AgentRuntime(
-            self.tasks, CoreService(self.tasks, self.policy, {"project.read": adapter}),
+            self.tasks, CoreService(self.tasks, self.policy, {"project.read": adapter}, project_roots=self.projects),
             ContextService(self.tasks, self.memory), planner, DeterministicVerifier(),
             lambda _root: "sha256:" + "1" * 64,
         )
@@ -278,7 +329,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         verifier = DeterministicVerifier()
         runtime = AgentRuntime(
             self.tasks,
-            CoreService(self.tasks, self.policy, {}),
+            CoreService(self.tasks, self.policy, {}, project_roots=self.projects),
             ContextService(self.tasks, self.memory),
             DeterministicPlanner([]),
             verifier,
@@ -314,7 +365,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         runtime = AgentRuntime(
             self.tasks,
-            CoreService(self.tasks, self.policy, {}),
+            CoreService(self.tasks, self.policy, {}, project_roots=self.projects),
             ContextService(self.tasks, self.memory),
             RecordingPlanner(),
             DeterministicVerifier(satisfied=False),
@@ -356,10 +407,10 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             capability_id="project.patch", operation="replace",
             project_root=str(project), target_path=str(target),
         )
-        self.policy.grant("user", "project-1", call, scope="project")
+        self.policy.grant("user", self.projects.register(project).project_id, call, scope="project")
         runtime = AgentRuntime(
             self.tasks,
-            CoreService(self.tasks, self.policy, {"project.patch": adapter}),
+            CoreService(self.tasks, self.policy, {"project.patch": adapter}, project_roots=self.projects),
             context,
             DeterministicPlanner([call]),
             EventEvidenceVerifier(),
@@ -389,7 +440,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         runtime = AgentRuntime(
-            self.tasks, CoreService(self.tasks, self.policy, {"project.patch": adapter}),
+            self.tasks, CoreService(self.tasks, self.policy, {"project.patch": adapter}, project_roots=self.projects),
             ContextService(self.tasks, self.memory), CancellingPlanner(),
             DeterministicVerifier(), lambda _root: "sha256:" + "1" * 64,
         )
@@ -405,7 +456,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             capability_id="component.install", operation="install",
             project_root=str(self.root), target_path=str(self.root / "file.py"),
         )
-        core = CoreService(self.tasks, self.policy, {"component.install": adapter})
+        core = CoreService(self.tasks, self.policy, {"component.install": adapter}, project_roots=self.projects)
         runtime = AgentRuntime(
             self.tasks, core, ContextService(self.tasks, self.memory),
             DeterministicPlanner([call]), DeterministicVerifier(),
@@ -452,7 +503,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         approvals = ApprovalStore(self.root / "approvals.sqlite")
         core = CoreService(
             self.tasks, self.policy, {"project.patch": adapter},
-            approval_store=approvals, project_fingerprint=fingerprint,
+            approval_store=approvals, project_fingerprint=fingerprint, project_roots=self.projects,
         )
         runtime = AgentRuntime(
             self.tasks, core, ContextService(self.tasks, self.memory),
@@ -489,7 +540,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.policy.grant("user", "project-1", call, scope="project")
         runtime = AgentRuntime(
             self.tasks,
-            CoreService(self.tasks, self.policy, {"project.read": adapter}),
+            CoreService(self.tasks, self.policy, {"project.read": adapter}, project_roots=self.projects),
             ContextService(self.tasks, self.memory),
             DeterministicPlanner([call, call]),
             DeterministicVerifier(),
@@ -520,7 +571,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.tasks.create(child_command)
         self.tasks.append(child_id, TaskEventDraft(event_type="task.started"))
         runtime = AgentRuntime(
-            self.tasks, CoreService(self.tasks, self.policy, {"project.read": RecordingAdapter()}),
+            self.tasks, CoreService(self.tasks, self.policy, {"project.read": RecordingAdapter()}, project_roots=self.projects),
             ContextService(self.tasks, self.memory), DeterministicPlanner([call]),
             DeterministicVerifier(), lambda _root: "sha256:" + "1" * 64,
         )
@@ -533,7 +584,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_planner_silence_cannot_complete_when_verification_fails(self):
         runtime = AgentRuntime(
-            self.tasks, CoreService(self.tasks, self.policy, {}),
+            self.tasks, CoreService(self.tasks, self.policy, {}, project_roots=self.projects),
             ContextService(self.tasks, self.memory), DeterministicPlanner([]),
             DeterministicVerifier(satisfied=False), lambda _root: "sha256:" + "1" * 64,
         )
@@ -553,7 +604,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         planner = DeterministicPlanner([None, call, None])
         runtime = AgentRuntime(
             self.tasks,
-            CoreService(self.tasks, self.policy, {"project.read": adapter}),
+            CoreService(self.tasks, self.policy, {"project.read": adapter}, project_roots=self.projects),
             ContextService(self.tasks, self.memory),
             planner,
             SequencedVerifier([False, True]),
@@ -593,7 +644,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             capability_id="test.run", operation="test", project_root=str(self.root)
         )
         runtime = AgentRuntime(
-            self.tasks, CoreService(self.tasks, self.policy, {"test.run": adapter}),
+            self.tasks, CoreService(self.tasks, self.policy, {"test.run": adapter}, project_roots=self.projects),
             ContextService(self.tasks, self.memory), DeterministicPlanner([call, call]),
             DeterministicVerifier(), lambda _root: "sha256:" + "1" * 64,
         )

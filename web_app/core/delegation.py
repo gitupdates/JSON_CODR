@@ -37,10 +37,13 @@ class DelegationService:
     ) -> TaskRecord:
         if call.capability_id not in set(allowed_capabilities):
             raise PermissionError("child capability is outside its delegated tool scope")
+        parent = self._tasks.get(parent_task_id)
+        child_project_id = parent.project_id
         if editing:
             if self._create_worktree is None:
                 raise RuntimeError("editing delegation requires worktree isolation")
             worktree = self._create_worktree(call.project_root, child_task_id)
+            child_project_id = self._core.register_delegated_worktree(parent.project_id, worktree)
             call = call.model_copy(update={"project_root": str(worktree)})
         decision = self._budget.evaluate(sample)
         if not decision.allowed:
@@ -49,12 +52,11 @@ class DelegationService:
                 "operation": "resource_override",
                 "arguments": {**dict(call.arguments), "resource_reason": decision.reason},
             })
-        parent = self._tasks.get(parent_task_id)
         return await self._core.submit(TaskCommand(
             command_id=f"delegate-{child_task_id}",
             task_id=child_task_id,
             thread_id=parent.thread_id,
-            project_id=parent.project_id,
+            project_id=child_project_id if editing else parent.project_id,
             parent_task_id=parent_task_id,
             command_type="delegate.child",
             payload=call.model_dump(mode="json"),

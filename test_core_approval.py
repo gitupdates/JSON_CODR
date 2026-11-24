@@ -8,6 +8,7 @@ from web_app.core.adapters import AdapterEvent
 from web_app.core.approval import ApprovalStore
 from web_app.core.contracts import TaskCommand, TaskStatus
 from web_app.core.policy import PolicyEffect, PolicyService
+from web_app.core.project_registry import ProjectRegistry
 from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
 
@@ -134,6 +135,8 @@ class ExactApprovalServiceTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(self.temporary.name)
         self.tasks = TaskStore(self.root / "tasks.sqlite")
         self.policy = PolicyService(self.root / "policy.sqlite")
+        self.projects = ProjectRegistry(self.root / "projects.sqlite")
+        self.projects.register(self.root, project_id="project-1")
         self.approvals = ApprovalStore(self.root / "approvals.sqlite")
         self.adapter = RecordingAdapter()
         self.fingerprint = "sha256:" + "1" * 64
@@ -143,6 +146,7 @@ class ExactApprovalServiceTests(unittest.IsolatedAsyncioTestCase):
             {"git.execute": self.adapter},
             approval_store=self.approvals,
             project_fingerprint=lambda _root: self.fingerprint,
+            project_roots=self.projects,
         )
 
     async def asyncTearDown(self):
@@ -150,6 +154,7 @@ class ExactApprovalServiceTests(unittest.IsolatedAsyncioTestCase):
         self.approvals.close()
         self.policy.close()
         self.tasks.close()
+        self.projects.close()
         self.temporary.cleanup()
 
     def command(self, suffix="1"):

@@ -157,9 +157,14 @@ class PolicyService:
 
     @staticmethod
     def _argument_digest(call: CapabilityCall) -> str:
+        root = Path(call.project_root).resolve()
+        target_path = None
+        if call.target_path is not None:
+            target = Path(call.target_path)
+            target_path = str(target.resolve() if target.is_absolute() else (root / target).resolve())
         return canonical_digest({
-            "project_root": str(Path(call.project_root).resolve()),
-            "target_path": call.target_path,
+            "project_root": str(root),
+            "target_path": target_path,
             "mode": call.mode.value,
             "privacy_boundary": call.privacy_boundary,
             "approved_privacy_boundary": call.approved_privacy_boundary,

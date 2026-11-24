@@ -376,15 +376,27 @@ class CoreService:
             raise ValueError("capability project root does not match the registered project root")
         return call.model_copy(update={"project_root": str(root)})
 
+    def prepare_capability_call(
+        self,
+        project_id: str,
+        call: CapabilityCall,
+        *,
+        trusted_schedule_id: str | None = None,
+    ) -> CapabilityCall:
+        """Return the server-bound form safe to persist or execute."""
+        return self._prepare_call(project_id, call, trusted_schedule_id=trusted_schedule_id)
+
+    def register_delegated_worktree(self, parent_project_id: str, root: str | Path) -> str:
+        if not isinstance(self._project_roots, ProjectRegistry):
+            raise RuntimeError("delegated worktrees require a project registry")
+        return self._project_roots.register_child(parent_project_id, root).project_id
+
     def _resolve_project_root(self, project_id: str) -> Path | None:
         if self._project_roots is None:
-            return None
+            raise RuntimeError("capability execution requires a project registry")
         if isinstance(self._project_roots, ProjectRegistry):
             return self._project_roots.resolve(project_id)
-        try:
-            return Path(self._project_roots[project_id]).resolve(strict=True)
-        except KeyError as error:
-            raise ValueError("project is not registered") from error
+        raise RuntimeError("capability execution requires a project registry")
 
 
 def _redact(value: Mapping[str, JsonValue]) -> dict[str, JsonValue]:

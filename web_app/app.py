@@ -2013,11 +2013,12 @@ def create_app(
 
     async def execute_git_through_core(action_request, model: str, grant_id: str):
         core_service, _, _ = get_core_runtime()
+        project = application.state.core_project_registry.register(action_request.project_root)
         operation = "git"
         call = CapabilityCall(
             capability_id="git.execute",
             operation=operation,
-            project_root=action_request.project_root,
+            project_root=project.root,
             arguments={
                 "request": action_request.model_dump(mode="json"),
                 "model": model,
@@ -2029,7 +2030,7 @@ def create_app(
             command_id=str(uuid7()),
             task_id=task_id,
             thread_id=f"legacy:{task_id}",
-            project_id=application.state.core_default_project_id,
+            project_id=project.project_id,
             command_type="git.execute",
             payload=call.model_dump(mode="json"),
         ))
@@ -2263,10 +2264,11 @@ def create_app(
         cwd = Path(request.cwd).resolve() if request.cwd else Path(__file__).resolve().parent.parent
         try:
             core_service, _, _ = get_core_runtime()
+            project = application.state.core_project_registry.register(cwd)
             call = CapabilityCall(
                 capability_id="terminal.session",
                 operation="session",
-                project_root=str(cwd),
+                project_root=project.root,
                 arguments={"shell": request.shell},
             )
             task_id = str(uuid7())
@@ -2274,7 +2276,7 @@ def create_app(
                 command_id=str(uuid7()),
                 task_id=task_id,
                 thread_id=f"terminal:{task_id}",
-                project_id=application.state.core_default_project_id,
+                project_id=project.project_id,
                 command_type="terminal.session",
                 payload=call.model_dump(mode="json"),
             ))
@@ -2298,10 +2300,12 @@ def create_app(
 
     async def submit_terminal_mutation(operation: str, terminal_id: str) -> None:
         core_service, _, _ = get_core_runtime()
+        terminal = terminals.get(terminal_id)
+        project = application.state.core_project_registry.register(terminal.cwd)
         call = CapabilityCall(
             capability_id=f"terminal.{operation}",
             operation=operation,
-            project_root=str(Path(__file__).resolve().parent.parent),
+            project_root=project.root,
             arguments={"terminal_id": terminal_id},
         )
         task_id = str(uuid7())
@@ -2309,7 +2313,7 @@ def create_app(
             command_id=str(uuid7()),
             task_id=task_id,
             thread_id=f"terminal:{terminal_id}",
-            project_id=application.state.core_default_project_id,
+            project_id=project.project_id,
             command_type=f"terminal.{operation}",
             payload=call.model_dump(mode="json"),
         ))

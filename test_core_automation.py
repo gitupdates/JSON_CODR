@@ -7,6 +7,7 @@ from web_app.core.contracts import TaskCommand, TaskStatus
 from web_app.core.delegation import DelegationService
 from web_app.core.hooks import HookRegistry
 from web_app.core.policy import PolicyService
+from web_app.core.project_registry import ProjectRegistry
 from web_app.core.resources import ResourceBudget, ResourceSample
 from web_app.core.scheduler import ScheduleService
 from web_app.core.service import CoreService
@@ -29,11 +30,13 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         self.store = TaskStore(self.root / "tasks.sqlite")
         self.policy = PolicyService(self.root / "policy.sqlite")
         self.adapter = RecordingAdapter()
+        self.projects = ProjectRegistry(self.root / "projects.sqlite")
+        self.projects.register(self.root, project_id="project-1")
         self.core = CoreService(self.store, self.policy, {
             "project.read": self.adapter,
             "project.patch": self.adapter,
             "git.push": self.adapter,
-        })
+        }, project_roots=self.projects)
         self.parent = TaskCommand(
             command_id="parent-command", task_id="parent-task", thread_id="thread-1",
             project_id="project-1", command_type="parent", payload={
@@ -43,6 +46,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         await self.core.submit(self.parent)
 
     async def asyncTearDown(self):
+        self.projects.close()
         self.policy.close()
         self.store.close()
         self.temporary.cleanup()
@@ -54,7 +58,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         worktrees = []
         delegation = DelegationService(
             self.core, self.store, ResourceBudget(max_concurrency=2, max_vram_mb=4096),
-            create_worktree=lambda parent, child: worktrees.append((parent, child)) or self.root / child,
+            create_worktree=lambda parent, child: worktrees.append((parent, child)) or (self.root / child).mkdir() or self.root / child,
         )
 
         inspection = await delegation.create_child(
@@ -80,6 +84,30 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
                 "parent-task", "child-denied", self.call("git.push", "push"),
                 allowed_capabilities={"project.read"}, sample=ResourceSample(active_tasks=0, vram_mb=0),
             )
+
+    async def test_editing_delegation_registers_a_distinct_worktree_lineage(self):
+        worktree = self.root / "child-worktree"
+
+        def create_worktree(_parent, _child):
+            worktree.mkdir()
+            return worktree
+
+        delegation = DelegationService(
+            self.core, self.store, ResourceBudget(max_concurrency=2, max_vram_mb=4096),
+            create_worktree=create_worktree,
+        )
+
+        record = await delegation.create_child(
+            "parent-task", "child-worktree", self.call("project.patch", "replace"),
+            allowed_capabilities={"project.patch"},
+            sample=ResourceSample(active_tasks=0, vram_mb=0), editing=True,
+        )
+
+        command = self.store.command(record.task_id)
+        self.assertNotEqual(command.project_id, "project-1")
+        registered = self.projects.get(command.project_id)
+        self.assertEqual(registered.parent_project_id, "project-1")
+        self.assertEqual(registered.root, str(worktree.resolve()))
 
     async def test_resource_limits_and_schedules_request_permission_without_direct_execution(self):
         delegation = DelegationService(self.core, self.store, ResourceBudget(1, 1024))

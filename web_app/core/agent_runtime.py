@@ -155,6 +155,7 @@ class AgentRuntime:
                     )
                     return self._tasks.get(task_id)
                 continue
+            call = self._core.prepare_capability_call(root.project_id, call)
             call_digest = canonical_digest(call.model_dump(mode="json"))
             project_fingerprint = self._project_fingerprint(call.project_root)
             repeated_success = next(

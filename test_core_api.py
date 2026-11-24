@@ -14,6 +14,7 @@ from web_app.core.contracts import TaskCommand
 from web_app.core.memory import MemoryStore
 from web_app.models import MemorySettings
 from web_app.core.policy import PolicyService
+from web_app.core.project_registry import ProjectRegistry
 from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
 from web_app.core.auth import require_identity_scope
@@ -36,6 +37,8 @@ class CoreApiTests(unittest.TestCase):
         root = Path(self.temporary.name)
         self.tasks = TaskStore(root / "tasks.sqlite")
         self.policy = PolicyService(root / "policy.sqlite")
+        self.projects = ProjectRegistry(root / "projects.sqlite")
+        self.projects.register(root, project_id="project-1")
         self.approvals = ApprovalStore(root / "approvals.sqlite")
         self.artifacts = ArtifactStore(root / "artifacts", root / "artifacts.sqlite")
         self.memory = MemoryStore(root / "memory.sqlite")
@@ -47,6 +50,7 @@ class CoreApiTests(unittest.TestCase):
             {"project.read": self.adapter, "component.install": self.adapter},
             approval_store=self.approvals,
             project_fingerprint=lambda _root: "sha256:" + "1" * 64,
+            project_roots=self.projects,
         )
         self.identity = IdentityService(root / "identity")
         self.user = self.identity.bootstrap("production", "Administrator").user
@@ -74,6 +78,7 @@ class CoreApiTests(unittest.TestCase):
         self.approvals.close()
         self.policy.close()
         self.tasks.close()
+        self.projects.close()
         self.temporary.cleanup()
 
     def command(self, *, capability_id="project.read", operation="read", command_id="command-1", task_id="task-1"):

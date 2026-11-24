@@ -1,4 +1,5 @@
 import sqlite3
+import os
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
@@ -116,6 +117,32 @@ class PersistentGrantTests(unittest.TestCase):
                         policy.evaluate("user", "project", changed).effect,
                         PolicyEffect.require_approval,
                     )
+        finally:
+            policy.close()
+
+    def test_grant_does_not_survive_an_in_project_link_retarget(self):
+        from web_app.core.policy import PolicyEffect, PolicyService
+
+        first = self.root / "first.txt"
+        second = self.root / "second.txt"
+        link = self.root / "linked.txt"
+        first.write_text("first", encoding="utf-8")
+        second.write_text("second", encoding="utf-8")
+        try:
+            os.symlink(first, link)
+        except (NotImplementedError, OSError) as error:
+            self.skipTest(f"symlink setup unavailable: {error}")
+        policy = PolicyService(self.root / "policy.sqlite")
+        try:
+            granted = self.call().model_copy(update={"target_path": "linked.txt"})
+            policy.grant("user", "project", granted, scope="project")
+            link.unlink()
+            os.symlink(second, link)
+
+            self.assertEqual(
+                policy.evaluate("user", "project", granted).effect,
+                PolicyEffect.require_approval,
+            )
         finally:
             policy.close()
 

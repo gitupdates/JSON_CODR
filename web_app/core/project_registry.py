@@ -14,6 +14,7 @@ class RegisteredProject(FrozenContract):
     project_id: str
     root: str
     root_fingerprint: str
+    parent_project_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -30,16 +31,26 @@ class ProjectRegistry:
                 project_id TEXT PRIMARY KEY,
                 root TEXT NOT NULL UNIQUE,
                 root_fingerprint TEXT NOT NULL,
+                parent_project_id TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )"""
         )
+        columns = {row[1] for row in self._connection.execute("PRAGMA table_info(registered_projects)")}
+        if "parent_project_id" not in columns:
+            self._connection.execute("ALTER TABLE registered_projects ADD COLUMN parent_project_id TEXT")
         self._lock = threading.RLock()
 
     def close(self) -> None:
         self._connection.close()
 
-    def register(self, root: str | Path, *, project_id: str | None = None) -> RegisteredProject:
+    def register(
+        self,
+        root: str | Path,
+        *,
+        project_id: str | None = None,
+        parent_project_id: str | None = None,
+    ) -> RegisteredProject:
         supplied = Path(root).absolute()
         self._reject_links(supplied)
         try:
@@ -48,21 +59,29 @@ class ProjectRegistry:
             raise ValueError("project root must be an existing directory") from error
         if not resolved.is_dir():
             raise ValueError("project root must be an existing directory")
-        normalized = os.path.normcase(str(resolved))
+        display_root = str(resolved)
+        normalized = os.path.normcase(display_root)
         stable_id = "project:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
         project_id = project_id or stable_id
         fingerprint = self._root_fingerprint(resolved)
         now = datetime.now(UTC).isoformat()
         with self._lock, self._connection:
+            if parent_project_id is not None:
+                self.resolve(parent_project_id)
             existing = self._connection.execute(
-                "SELECT * FROM registered_projects WHERE root = ?", (normalized,)
+                "SELECT * FROM registered_projects WHERE lower(root) = ?", (normalized,)
             ).fetchone()
             if existing is None:
                 self._connection.execute(
-                    "INSERT INTO registered_projects VALUES (?, ?, ?, ?, ?)",
-                    (project_id, normalized, fingerprint, now, now),
+                    """INSERT INTO registered_projects
+                    (project_id, root, root_fingerprint, parent_project_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)""",
+                    (project_id, display_root, fingerprint, parent_project_id, now, now),
                 )
-            elif existing["root_fingerprint"] != fingerprint:
+            elif (
+                existing["root_fingerprint"] != fingerprint
+                or existing["parent_project_id"] != parent_project_id
+            ):
                 raise ValueError("registered project root identity changed")
             else:
                 project_id = existing["project_id"]
@@ -71,6 +90,9 @@ class ProjectRegistry:
                     (now, project_id),
                 )
         return self.get(project_id)
+
+    def register_child(self, parent_project_id: str, root: str | Path) -> RegisteredProject:
+        return self.register(root, parent_project_id=parent_project_id)
 
     def get(self, project_id: str) -> RegisteredProject:
         with self._lock:
@@ -123,6 +145,7 @@ class ProjectRegistry:
         return RegisteredProject(
             project_id=row["project_id"], root=row["root"],
             root_fingerprint=row["root_fingerprint"],
+            parent_project_id=row["parent_project_id"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )

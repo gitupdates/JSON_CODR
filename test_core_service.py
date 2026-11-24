@@ -121,10 +121,13 @@ class CoreServiceTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(self.temporary.name)
         self.store = TaskStore(self.root / "core.sqlite")
         self.policy = PolicyService(self.root / "policy.sqlite")
+        self.projects = ProjectRegistry(self.root / "projects.sqlite")
+        self.projects.register(self.root, project_id="project-1")
 
     async def asyncTearDown(self) -> None:
         self.policy.close()
         self.store.close()
+        self.projects.close()
         self.temporary.cleanup()
 
     def command(self, task_id: str = "task-1", command_id: str = "command-1") -> TaskCommand:
@@ -172,7 +175,7 @@ class CoreServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_agent_runner_fails_only_agent_task(self):
         adapter = RecordingAdapter()
-        service = CoreService(self.store, self.policy, {"project.read": adapter})
+        service = CoreService(self.store, self.policy, {"project.read": adapter}, project_roots=self.projects)
 
         agent = await service.submit(self.agent_command())
         direct = await service.submit(self.command(task_id="direct-task", command_id="direct-command"))
@@ -191,7 +194,7 @@ class CoreServiceTests(unittest.IsolatedAsyncioTestCase):
             "system.rollback",
         ):
             adapter = RecordingAdapter()
-            service = CoreService(self.store, self.policy, {capability_id: adapter})
+            service = CoreService(self.store, self.policy, {capability_id: adapter}, project_roots=self.projects)
             command = self.command(task_id=f"spoof-{capability_id}", command_id=f"spoof-command-{capability_id}")
             payload = dict(command.payload)
             payload.update({"capability_id": capability_id, "operation": "read"})
@@ -238,6 +241,15 @@ class CoreServiceTests(unittest.IsolatedAsyncioTestCase):
         finally:
             projects.close()
 
+    async def test_capability_execution_requires_a_registered_project_root(self):
+        service = CoreService(self.store, self.policy, {"project.read": RecordingAdapter()})
+
+        with self.assertRaisesRegex(RuntimeError, "project registry"):
+            await service.submit(self.command())
+
+        with self.assertRaises(KeyError):
+            self.store.command("task-1")
+
     async def test_unregistered_adapter_is_rejected_during_service_startup(self):
         with self.assertRaisesRegex(ValueError, "require capability definitions"):
             CoreService(self.store, self.policy, {"untrusted.execute": RecordingAdapter()})
@@ -262,7 +274,7 @@ class CoreServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_permission_required_task_runs_after_explicit_approval(self):
         adapter = RecordingAdapter()
-        service = CoreService(self.store, self.policy, {"component.install": adapter})
+        service = CoreService(self.store, self.policy, {"component.install": adapter}, project_roots=self.projects)
         payload = dict(self.command().payload)
         payload.update({"capability_id": "component.install", "operation": "install"})
         command = self.command().model_copy(update={"payload": payload})
@@ -276,7 +288,7 @@ class CoreServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_submit_executes_once_per_idempotency_key_and_redacts_credentials(self):
         adapter = RecordingAdapter()
-        service = CoreService(self.store, self.policy, {"project.read": adapter})
+        service = CoreService(self.store, self.policy, {"project.read": adapter}, project_roots=self.projects)
 
         first = await service.submit(self.command())
         second = await service.submit(self.command())
@@ -288,7 +300,7 @@ class CoreServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("credential:github", persisted)
 
     async def test_adapter_failure_is_a_truthful_failed_attempt(self):
-        service = CoreService(self.store, self.policy, {"project.read": RecordingAdapter(fail=True)})
+        service = CoreService(self.store, self.policy, {"project.read": RecordingAdapter(fail=True)}, project_roots=self.projects)
 
         record = await service.submit(self.command())
 
@@ -303,6 +315,7 @@ class CoreServiceTests(unittest.IsolatedAsyncioTestCase):
             self.policy,
             {"project.read": RecordingAdapter()},
             restore_checkpoint=restored.append,
+            project_roots=self.projects,
         )
 
         service.restore("checkpoint-1")
@@ -311,7 +324,7 @@ class CoreServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_start_returns_before_adapter_completion_and_persists_live_events(self):
         adapter = BlockingAdapter()
-        service = CoreService(self.store, self.policy, {"project.read": adapter})
+        service = CoreService(self.store, self.policy, {"project.read": adapter}, project_roots=self.projects)
 
         started = await service.start(self.command())
         await adapter.first_consumed.wait()
@@ -333,7 +346,7 @@ class CoreServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_wait_for_events_returns_only_sequences_after_the_cursor(self):
         adapter = BlockingAdapter()
-        service = CoreService(self.store, self.policy, {"project.read": adapter})
+        service = CoreService(self.store, self.policy, {"project.read": adapter}, project_roots=self.projects)
         started = await service.start(self.command())
         await adapter.first_consumed.wait()
         cursor = next(event.sequence for event in service.subscribe("task-1") if event.event_type == "adapter.delta")
