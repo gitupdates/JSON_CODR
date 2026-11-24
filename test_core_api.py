@@ -44,7 +44,7 @@ class CoreApiTests(unittest.TestCase):
         self.core = CoreService(
             self.tasks,
             self.policy,
-            {"project.read": self.adapter},
+            {"project.read": self.adapter, "component.install": self.adapter},
             approval_store=self.approvals,
             project_fingerprint=lambda _root: "sha256:" + "1" * 64,
         )
@@ -76,7 +76,7 @@ class CoreApiTests(unittest.TestCase):
         self.tasks.close()
         self.temporary.cleanup()
 
-    def command(self, *, operation="read", command_id="command-1", task_id="task-1"):
+    def command(self, *, capability_id="project.read", operation="read", command_id="command-1", task_id="task-1"):
         return TaskCommand(
             command_id=command_id,
             task_id=task_id,
@@ -84,7 +84,7 @@ class CoreApiTests(unittest.TestCase):
             project_id="project-1",
             command_type="capability.execute",
             payload=CapabilityCall(
-                capability_id="project.read",
+                capability_id=capability_id,
                 operation=operation,
                 project_root=self.temporary.name,
             ).model_dump(mode="json"),
@@ -105,7 +105,9 @@ class CoreApiTests(unittest.TestCase):
 
         permission = self.client.post(
             "/api/tasks",
-            json=self.command(operation="push", command_id="command-2", task_id="task-2"),
+            json=self.command(
+                capability_id="git.push", operation="push", command_id="command-2", task_id="task-2",
+            ),
         )
         self.assertEqual(permission.status_code, 202)
         self.assertEqual(permission.json()["status"], "pending")
@@ -144,7 +146,9 @@ class CoreApiTests(unittest.TestCase):
         self.assertEqual(allowed.status_code, 200)
 
     def test_permission_required_task_has_explicit_approval_route(self):
-        command = self.command(operation="install", command_id="command-install", task_id="task-install")
+        command = self.command(
+            capability_id="component.install", operation="install", command_id="command-install", task_id="task-install",
+        )
         pending = self.client.post("/api/tasks", json=command)
         proposal_id = pending.json()["events"][-1]["payload"]["proposal_id"]
 

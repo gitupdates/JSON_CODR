@@ -76,8 +76,14 @@ class PolicyServiceTests(unittest.TestCase):
             "user", "project", self.call("project.read", "read", target_path=str(self.root.parent / "secret"))
         )
         self.assertEqual(escaped.effect, PolicyEffect.deny)
-        for operation in ("network", "install", "commit", "push", "destructive"):
-            decision = self.policy.evaluate("user", "project", self.call("terminal.execute", operation))
+        for capability, operation in (
+            ("terminal.execute", "command"),
+            ("component.install", "install"),
+            ("git.commit", "commit"),
+            ("git.push", "push"),
+            ("checkpoint.restore", "destructive"),
+        ):
+            decision = self.policy.evaluate("user", "project", self.call(capability, operation))
             self.assertEqual(decision.effect, PolicyEffect.require_approval)
 
     def test_schedule_scoped_grant_persists_and_can_be_revoked(self):
@@ -168,6 +174,30 @@ class CoreServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(agent.events[-1].payload.get("reason"), "agent runtime unavailable")
         self.assertEqual(direct.status, TaskStatus.completed)
 
+    async def test_operation_spoof_is_rejected_before_the_registered_adapter_runs(self):
+        for capability_id in (
+            "native.shell",
+            "native.write",
+            "native.edit",
+            "git.execute",
+            "system.activate",
+            "system.rollback",
+        ):
+            adapter = RecordingAdapter()
+            service = CoreService(self.store, self.policy, {capability_id: adapter})
+            command = self.command(task_id=f"spoof-{capability_id}", command_id=f"spoof-command-{capability_id}")
+            payload = dict(command.payload)
+            payload.update({"capability_id": capability_id, "operation": "read"})
+
+            with self.subTest(capability_id=capability_id):
+                record = await service.submit(command.model_copy(update={"payload": payload}))
+                self.assertEqual(record.status, TaskStatus.failed)
+                self.assertEqual(adapter.calls, [])
+
+    async def test_unregistered_adapter_is_rejected_during_service_startup(self):
+        with self.assertRaisesRegex(ValueError, "require capability definitions"):
+            CoreService(self.store, self.policy, {"untrusted.execute": RecordingAdapter()})
+
     async def test_running_agent_task_resumes_once_after_service_restart(self):
         command = self.agent_command()
         self.store.create(command)
@@ -188,9 +218,9 @@ class CoreServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_permission_required_task_runs_after_explicit_approval(self):
         adapter = RecordingAdapter()
-        service = CoreService(self.store, self.policy, {"project.read": adapter})
+        service = CoreService(self.store, self.policy, {"component.install": adapter})
         payload = dict(self.command().payload)
-        payload["operation"] = "install"
+        payload.update({"capability_id": "component.install", "operation": "install"})
         command = self.command().model_copy(update={"payload": payload})
 
         pending = await service.submit(command)

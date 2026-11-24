@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from web_app.core.adapters import AdapterEvent, CapabilityAdapter, CapabilityCall, CapabilityExecutionError, ExecutionContext
 from web_app.core.approval import ApprovalLease, ApprovalStore
 from web_app.core.canonical import canonical_digest
+from web_app.core.capability_registry import CapabilityRegistry
 from web_app.core.contracts import JsonValue, TaskCommand, TaskEvent, TaskEventDraft, TaskRecord, TaskStatus
 from web_app.core.policy import PolicyEffect, PolicyService
 from web_app.core.store import TaskStore
@@ -26,10 +27,13 @@ class CoreService:
         agent_runner: Callable[[str], Awaitable[TaskRecord]] | None = None,
         approval_store: ApprovalStore | None = None,
         project_fingerprint: Callable[[str], str] | None = None,
+        registry: CapabilityRegistry | None = None,
     ) -> None:
         self._tasks = task_store
         self._policy = policy
         self._adapters = dict(adapters)
+        self._registry = registry or CapabilityRegistry.default()
+        self._registry.require_registered(self._adapters)
         self._restore_checkpoint = restore_checkpoint
         self._agent_runner = agent_runner
         self._approval_store = approval_store
@@ -87,7 +91,7 @@ class CoreService:
             if record.status is not TaskStatus.pending or (len(record.events) > 1 and not permission_wait):
                 return record
             try:
-                call = CapabilityCall.model_validate(command.model_dump(mode="json")["payload"])
+                call = self._registry.normalize(CapabilityCall.model_validate(command.model_dump(mode="json")["payload"]))
                 decision = self._policy.evaluate(principal, command.project_id, call)
                 if decision.effect is PolicyEffect.deny:
                     self._append(
@@ -284,7 +288,7 @@ class CoreService:
                 child_task_id, principal=principal, scope=scope, proposal_id=proposal_id,
             )
             return await self.submit(command, principal=principal)
-        call = CapabilityCall.model_validate(command.payload)
+        call = self._registry.normalize(CapabilityCall.model_validate(command.payload))
         if self._approval_store is not None:
             if proposal_id is None:
                 raise ValueError("exact approval proposal id is required")

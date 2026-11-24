@@ -79,6 +79,7 @@ from web_app.core.component_manager import ComponentManager
 from web_app.core.component_catalog import active_component_command
 from web_app.core.component_adapter import LazyComponentExecutionAdapter
 from web_app.core.capability_catalog import CapabilityCatalog, CapabilityDefinition, lifecycle_definitions
+from web_app.core.capability_registry import CapabilityDefinition as PolicyCapabilityDefinition, CapabilityRegistry
 from web_app.core.capability_discovery import discover_project_profile
 from web_app.core.canonical import canonical_digest
 from web_app.core.terminal_adapter import TerminalAdapter
@@ -344,7 +345,6 @@ def create_app(
             core_conformance = ModelConformanceStore(core_root / "model-conformance.sqlite")
             application.state.core_model_conformance = core_conformance
             core_tasks = TaskStore(core_root / "tasks.sqlite")
-            core_policy = PolicyService(core_root / "policy.sqlite")
             core_terminal_adapter = TerminalAdapter(terminals)
             core_project_adapter = ProjectAdapter(core_root / "project-state")
             def prepare_inference_prompt(call, prompt):
@@ -424,6 +424,16 @@ def create_app(
             )
             adapters.update(mcp_adapters)
             core_mcp_backends.extend(mcp_backends)
+            capability_registry = CapabilityRegistry.default(
+                PolicyCapabilityDefinition(
+                    capability_id=capability_id,
+                    operation="mcp",
+                    risk="sensitive",
+                    autonomous=False,
+                )
+                for capability_id in mcp_adapters
+            )
+            core_policy = PolicyService(core_root / "policy.sqlite", registry=capability_registry)
             project_root = Path(__file__).resolve().parent.parent
             definitions = list(lifecycle_definitions())
             defined_ids = {item.capability_id for item in definitions}
@@ -473,6 +483,7 @@ def create_app(
                 agent_runner=run_agent,
                 approval_store=core_approvals,
                 project_fingerprint=agent_project_fingerprint,
+                registry=capability_registry,
             )
             resolver = ProjectContextResolver(core_projects)
             core_memory = MemoryStore(core_root / "memory.sqlite")
@@ -2001,10 +2012,7 @@ def create_app(
 
     async def execute_git_through_core(action_request, model: str, grant_id: str):
         core_service, _, _ = get_core_runtime()
-        operation = next(
-            (kind for kind in ("push", "commit", "sync") if any(action.kind == kind for action in action_request.actions)),
-            "bounded_edit" if any(action.kind == "apply_patch" for action in action_request.actions) else "read",
-        )
+        operation = "git"
         call = CapabilityCall(
             capability_id="git.execute",
             operation=operation,

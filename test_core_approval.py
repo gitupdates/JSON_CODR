@@ -154,7 +154,7 @@ class ExactApprovalServiceTests(unittest.IsolatedAsyncioTestCase):
 
     def command(self, suffix="1"):
         call = CapabilityCall(
-            capability_id="git.execute", operation="commit", project_root=str(self.root),
+            capability_id="git.execute", operation="git", project_root=str(self.root),
             arguments={"request_id": suffix},
         )
         return TaskCommand(

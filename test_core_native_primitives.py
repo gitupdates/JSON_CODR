@@ -105,7 +105,7 @@ class NativePrimitiveTests(unittest.IsolatedAsyncioTestCase):
 
         shell = CapabilityCall(
             capability_id="native.shell",
-            operation="shell",
+            operation="command",
             project_root=str(self.root),
             arguments={"argv": ["python", "-V"], "timeout": 15},
         )

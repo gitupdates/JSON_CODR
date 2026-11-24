@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
 
 from pydantic import Field
 
 from web_app.core.adapters import CapabilityCall
+from web_app.core.capability_registry import CapabilityRegistry
+from web_app.core.canonical import canonical_digest
 from web_app.core.contracts import FrozenContract
 
 
@@ -22,17 +25,24 @@ class PolicyDecision(FrozenContract):
     reason: str = Field(min_length=1)
 
 
-_AUTOMATIC_OPERATIONS = {"read", "search", "discover", "generate"}
-_SENSITIVE_OPERATIONS = {"network", "install", "commit", "push", "destructive"}
-
-
 class PolicyService:
-    def __init__(self, database: str | Path) -> None:
+    def __init__(self, database: str | Path, *, registry: CapabilityRegistry | None = None) -> None:
         database_path = Path(database)
         database_path.parent.mkdir(parents=True, exist_ok=True)
         self._connection = sqlite3.connect(database_path, check_same_thread=False)
         self._lock = threading.RLock()
-        self._connection.execute(
+        self._registry = registry or CapabilityRegistry.default()
+        self._migrate_grants()
+
+    def _migrate_grants(self) -> None:
+        columns = {
+            row[1] for row in self._connection.execute("PRAGMA table_info(policy_grants)").fetchall()
+        }
+        required = {"principal", "project_id", "capability_id", "operation", "scope", "scope_key", "argument_digest", "expires_at"}
+        with self._connection:
+            if columns and not required.issubset(columns):
+                self._connection.execute("ALTER TABLE policy_grants RENAME TO policy_legacy_grants")
+            self._connection.execute(
             """CREATE TABLE IF NOT EXISTS policy_grants (
                 principal TEXT NOT NULL,
                 project_id TEXT NOT NULL,
@@ -40,14 +50,18 @@ class PolicyService:
                 operation TEXT NOT NULL,
                 scope TEXT NOT NULL,
                 scope_key TEXT NOT NULL,
-                PRIMARY KEY(principal, project_id, capability_id, operation, scope, scope_key)
+                argument_digest TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                PRIMARY KEY(principal, project_id, capability_id, operation, scope, scope_key, argument_digest)
             )"""
-        )
+            )
 
     def close(self) -> None:
         self._connection.close()
 
-    def evaluate(self, principal: str, project_id: str, call: CapabilityCall) -> PolicyDecision:
+    def evaluate(
+        self, principal: str, project_id: str, call: CapabilityCall, *, now: datetime | None = None,
+    ) -> PolicyDecision:
         root = Path(call.project_root).resolve()
         if call.target_path is not None:
             target = Path(call.target_path)
@@ -59,37 +73,56 @@ class PolicyService:
             or call.cost_boundary != call.approved_cost_boundary
         ):
             return PolicyDecision(effect=PolicyEffect.deny, reason="brokered route crosses an approved boundary")
-        if self._has_grant(principal, project_id, call):
+        call = self._registry.normalize(call)
+        if self._has_grant(principal, project_id, call, now=now):
             return PolicyDecision(effect=PolicyEffect.allow, reason="matching persistent grant")
-        if call.operation in _AUTOMATIC_OPERATIONS:
+        if self._registry.resolve(call.capability_id).autonomous:
             return PolicyDecision(effect=PolicyEffect.allow, reason="local bounded operation")
-        if call.operation in _SENSITIVE_OPERATIONS:
-            return PolicyDecision(effect=PolicyEffect.require_approval, reason="sensitive operation requires approval")
-        return PolicyDecision(effect=PolicyEffect.require_approval, reason="operation has no automatic policy")
+        return PolicyDecision(effect=PolicyEffect.require_approval, reason="registered operation requires approval")
 
-    def grant(self, principal: str, project_id: str, call: CapabilityCall, *, scope: str) -> None:
+    def grant(
+        self, principal: str, project_id: str, call: CapabilityCall, *, scope: str,
+        expires_at: datetime | None = None,
+    ) -> None:
+        call = self._registry.normalize(call)
         scope_key = self._scope_key(call, scope)
+        expiry = expires_at or datetime.now(UTC) + timedelta(days=30)
+        if expiry.tzinfo is None:
+            raise ValueError("grant expiry must include a timezone")
         with self._lock, self._connection:
             self._connection.execute(
-                "INSERT OR REPLACE INTO policy_grants VALUES (?, ?, ?, ?, ?, ?)",
-                (principal, project_id, call.capability_id, call.operation, scope, scope_key),
+                "INSERT OR REPLACE INTO policy_grants VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    principal, project_id, call.capability_id, call.operation, scope, scope_key,
+                    self._argument_digest(call), expiry.astimezone(UTC).isoformat(),
+                ),
             )
 
     def revoke(self, principal: str, project_id: str, call: CapabilityCall, *, scope: str) -> None:
+        call = self._registry.normalize(call)
         scope_key = self._scope_key(call, scope)
         with self._lock, self._connection:
             self._connection.execute(
-                "DELETE FROM policy_grants WHERE principal=? AND project_id=? AND capability_id=? AND operation=? AND scope=? AND scope_key=?",
-                (principal, project_id, call.capability_id, call.operation, scope, scope_key),
+                "DELETE FROM policy_grants WHERE principal=? AND project_id=? AND capability_id=? AND operation=? AND scope=? AND scope_key=? AND argument_digest=?",
+                (principal, project_id, call.capability_id, call.operation, scope, scope_key, self._argument_digest(call)),
             )
 
-    def _has_grant(self, principal: str, project_id: str, call: CapabilityCall) -> bool:
+    def _has_grant(self, principal: str, project_id: str, call: CapabilityCall, *, now: datetime | None = None) -> bool:
         with self._lock:
             rows = self._connection.execute(
-                "SELECT scope, scope_key FROM policy_grants WHERE principal=? AND project_id=? AND capability_id=? AND operation=?",
-                (principal, project_id, call.capability_id, call.operation),
+                "SELECT scope, scope_key, expires_at FROM policy_grants WHERE principal=? AND project_id=? AND capability_id=? AND operation=? AND argument_digest=?",
+                (principal, project_id, call.capability_id, call.operation, self._argument_digest(call)),
             ).fetchall()
-        return any(scope == "project" or (scope == "schedule" and key == (call.schedule_id or "")) for scope, key in rows)
+        current = (now or datetime.now(UTC)).astimezone(UTC)
+        return any(
+            datetime.fromisoformat(expires_at).astimezone(UTC) > current
+            and (scope == "project" or (scope == "schedule" and key == (call.schedule_id or "")))
+            for scope, key, expires_at in rows
+        )
+
+    @staticmethod
+    def _argument_digest(call: CapabilityCall) -> str:
+        return canonical_digest({"target_path": call.target_path, "arguments": call.arguments})
 
     @staticmethod
     def _scope_key(call: CapabilityCall, scope: str) -> str:
