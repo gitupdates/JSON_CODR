@@ -112,9 +112,13 @@
       delete payload.result;
       delete payload.error;
       delete payload.persisted;
+      const baseHeaders = { "Content-Type": "application/json" };
+      const headers = global.JSONCodrHttpIdentity?.mutationHeaders
+        ? global.JSONCodrHttpIdentity.mutationHeaders(baseHeaders)
+        : baseHeaders;
       const response = await this.fetch(
         `/api/sessions/${encodeURIComponent(this.sessionId)}/conversation`,
-        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+        { method: "POST", headers, body: JSON.stringify(payload) },
       );
       if (!response.ok) throw new Error("Unable to save conversation message");
     }

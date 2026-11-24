@@ -59,6 +59,23 @@ console.log(JSON.stringify(view.snapshot()));
         self.assertIn("/references/", source)
         self.assertNotIn("reference.target", source)
 
+    def test_persist_uses_identity_mutation_headers(self):
+        result = self.run_node("""
+global.JSONCodrHttpIdentity = {
+  mutationHeaders(headers) { return { ...headers, 'X-CSRF-Token': 'csrf-test' }; },
+};
+let captured;
+const view = new ConversationView({ fetchImpl: async (url, options) => {
+  captured = { url, options };
+  return { ok: true };
+} });
+view.sessionId = 'session-1';
+view.appendUser('Hello').then(() => console.log(JSON.stringify(captured)));
+""")
+        self.assertEqual(result["url"], "/api/sessions/session-1/conversation")
+        self.assertEqual(result["options"]["headers"]["Content-Type"], "application/json")
+        self.assertEqual(result["options"]["headers"]["X-CSRF-Token"], "csrf-test")
+
 
 if __name__ == "__main__":
     unittest.main()
