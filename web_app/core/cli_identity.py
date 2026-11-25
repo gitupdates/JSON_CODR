@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import json
 import os
+import ipaddress
 from pathlib import Path
 import socket
 from urllib.parse import urlsplit
@@ -35,6 +36,13 @@ def normalize_server_origin(value: str) -> str:
     host = parsed.hostname.encode("idna").decode("ascii").casefold().rstrip(".")
     if not host:
         raise ValueError("JSON_CODR server origin is invalid")
+    if host != "localhost":
+        try:
+            address = ipaddress.ip_address(host)
+            if not address.is_loopback or getattr(address, "ipv4_mapped", None) is not None:
+                raise ValueError("JSON_CODR server origin must be loopback")
+        except ValueError as error:
+            raise ValueError("JSON_CODR server origin must be loopback") from error
     rendered_host = f"[{host}]" if ":" in host else host
     if port is None or (scheme == "http" and port == 80) or (scheme == "https" and port == 443):
         return f"{scheme}://{rendered_host}"

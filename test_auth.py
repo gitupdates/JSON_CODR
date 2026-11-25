@@ -121,6 +121,41 @@ class CredentialLifecycleTests(unittest.TestCase):
         self.assertNotIn(self.service._hmac_key, database_bytes)
         self.assertNotEqual(self.service.protected_key_path.read_bytes(), self.service._hmac_key)
 
+    def test_production_transition_atomically_replaces_development_password_and_revokes_credentials(self):
+        transition_root = self.root / "transition"
+        transition_security = self.root / "transition-security"
+        service = IdentityService(
+            transition_root,
+            now=self.clock.now,
+            security_root=transition_security,
+        )
+        administrator = service.bootstrap_nonproduction_administrator(
+            "Password123", "Administrator"
+        ).user
+        browser = service.issue_credential(
+            administrator.user_id, "browser_session", "development browser", ("identity.self",)
+        )
+        cli = service.issue_credential(
+            administrator.user_id, "cli", "development cli", ("lesson.read",)
+        )
+        service_token = service.issue_credential(
+            administrator.user_id, "service", "development service", ("lesson.read",)
+        )
+        self.assertEqual(browser.expires_at, self.clock.now() + timedelta(days=36_500))
+        self.assertIsNone(browser.idle_expires_at)
+
+        replacement = service.activate_production()
+
+        self.assertEqual(service.bootstrap_state().mode, "production")
+        self.assertEqual(replacement.expires_at, self.clock.now() + timedelta(minutes=30))
+        self.assertFalse(service.authenticate_password("Administrator", "Password123"))
+        self.assertTrue(service.authenticate_password("Administrator", replacement.secret))
+        self.assertTrue(service.get_user(administrator.user_id).require_password_change)
+        for credential in (browser, cli, service_token):
+            with self.subTest(kind=credential.kind):
+                with self.assertRaisesRegex(PermissionError, "revoked"):
+                    service.resolve_credential(credential.token)
+
 
 if __name__ == "__main__":
     unittest.main()

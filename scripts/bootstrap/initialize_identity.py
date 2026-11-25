@@ -24,7 +24,7 @@ def main() -> int:
     result = identity.bootstrap_nonproduction_administrator(password, args.username)
     cli = CliIdentityService(identity, DpapiTokenStore(Path.home() / ".json_codr" / "credentials" / "cli.dpapi"))
     cli.login(args.username, password, machine="JSON_CODR bootstrap", server_origin=args.origin)
-    print(json.dumps({"created": result.created, "account": result.user.username, "credential_policy": "non-expiring, revocable (non-production)"}))
+    print(json.dumps({"created": result.created, "account": result.user.username, "identity_mode": "development", "credential_policy": "non-expiring and revocable"}))
     return 0
 
 

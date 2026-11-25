@@ -205,11 +205,11 @@ class CoreCliTests(unittest.TestCase):
     def test_authenticated_submission_rejects_cross_origin_redirects_without_a_second_request(self):
         for status in (301, 302, 303, 307, 308):
             with self.subTest(status=status):
-                source_origin = "http://source.test"
+                source_origin = "http://127.0.0.1:8765"
                 transport = _RedirectTransport(
                     f"{source_origin}/api/tasks/live",
                     status,
-                    "http://target.test/capture",
+                    "http://localhost:8765/capture",
                 )
 
                 class Store:
@@ -229,7 +229,7 @@ class CoreCliTests(unittest.TestCase):
                 self.assertIn("authenticated request refused redirect", stderr.getvalue())
 
     def test_authenticated_submission_rejects_same_origin_redirects(self):
-        source_origin = "http://source.test"
+        source_origin = "http://127.0.0.1:8765"
         transport = _RedirectTransport(
             f"{source_origin}/api/tasks/live",
             302,
@@ -254,7 +254,7 @@ class CoreCliTests(unittest.TestCase):
         self.assertIn("authenticated request refused redirect", stderr.getvalue())
 
     def test_redirect_failure_does_not_output_location_credentials(self):
-        source_origin = "http://source.test"
+        source_origin = "http://127.0.0.1:8765"
         transport = _RedirectTransport(
             f"{source_origin}/api/tasks/live",
             302,
@@ -304,9 +304,15 @@ class CoreCliTests(unittest.TestCase):
 
     def test_server_origin_normalization_is_exact_and_safe(self):
         self.assertEqual(normalize_server_origin("HTTP://LOCALHOST:80/"), "http://localhost")
-        self.assertEqual(normalize_server_origin("https://Example.COM:443"), "https://example.com")
-        with self.assertRaises(ValueError):
-            normalize_server_origin("http://user@localhost:8772")
+        self.assertEqual(normalize_server_origin("http://[::1]:8772/"), "http://[::1]:8772")
+        for origin in (
+            "https://Example.COM:443",
+            "http://user@localhost:8772",
+            "http://127.0.0.1:8772@evil.example",
+            "http://[::ffff:127.0.0.1]:8772",
+        ):
+            with self.subTest(origin=origin), self.assertRaises(ValueError):
+                normalize_server_origin(origin)
 
     def test_run_fails_closed_when_the_current_cli_token_is_missing(self):
         class Store:

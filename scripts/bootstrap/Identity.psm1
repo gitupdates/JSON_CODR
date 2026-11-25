@@ -3,7 +3,7 @@ Set-StrictMode -Version Latest
 function Initialize-JsonCodrAdministrator {
   [CmdletBinding()]
   param([Parameter(Mandatory=$true)]$Runtime,[Parameter(Mandatory=$true)]$Environment,[Parameter(Mandatory=$true)][string]$DataRoot)
-  $password = Read-Host 'Create a permanent non-production Administrator password' -AsSecureString
+  $password = Read-Host 'Create a permanent development Administrator password' -AsSecureString
   $confirm = Read-Host 'Confirm Administrator password' -AsSecureString
   $first = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($password)
   $second = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($confirm)

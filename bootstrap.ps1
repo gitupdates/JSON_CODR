@@ -66,7 +66,7 @@ try {
   $github = Test-JsonCodrGitHubReadiness -Root $Root -NoGitHub:$NoGitHub -Interactive:([Environment]::UserInteractive)
   if($github.state -ne 'ready' -and -not $NoGitHub){ Complete-Bootstrap (New-BootstrapResult 'ACTION REQUIRED' 10 $github.detail $source $plan $model $github) }
   $status = if($NoGitHub){'READY (LOCAL ONLY)'}else{'READY'}
-  Complete-Bootstrap (New-BootstrapResult $status 0 'Local loopback service, permanent revocable non-production Administrator, Ollama, and selected GitHub readiness were proven.' $source $plan $model $github)
+  Complete-Bootstrap (New-BootstrapResult $status 0 'Local loopback service, permanent revocable development Administrator, Ollama, and selected GitHub readiness were proven.' $source $plan $model $github)
 } catch {
   Complete-Bootstrap (New-BootstrapResult 'BLOCKED' 30 $_.Exception.Message $null $null $null $null)
 }

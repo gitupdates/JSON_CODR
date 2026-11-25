@@ -133,7 +133,10 @@ class IdentityServiceTests(unittest.TestCase):
         service = self.service()
         administrator = service.bootstrap("production", "Administrator").user
 
-        self.assertEqual(service.cli_scopes(administrator.user_id, ()), service.lesson_scopes(administrator.user_id))
+        self.assertEqual(
+            service.cli_scopes(administrator.user_id, ()),
+            (*service.lesson_scopes(administrator.user_id), "agent.launch"),
+        )
         self.assertIn("git.commit", service.cli_scopes(administrator.user_id, ("git.commit",)))
         with self.assertRaisesRegex(PermissionError, "not allowed"):
             service.cli_scopes(administrator.user_id, ("unknown.scope",))

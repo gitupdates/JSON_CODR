@@ -88,6 +88,51 @@ class IdentityApiTests(unittest.TestCase):
         self.assertEqual(response.json()["username"], "Administrator")
         self.assertNotIn("token", response.text.casefold())
         self.assertIn("json_codr_session", response.cookies)
+        self.assertEqual(self.client.cookies.get("json_codr_csrf"), csrf)
+        session_cookie = next(
+            value for value in response.headers.get_list("set-cookie")
+            if value.startswith("json_codr_session=")
+        )
+        self.assertIn("HttpOnly", session_cookie)
+        self.assertIn("SameSite=strict", session_cookie)
+        self.assertNotIn("Domain=", session_cookie)
+
+    def test_identity_http_boundary_rejects_host_rebinding_cross_origin_and_malformed_ipv6(self):
+        for host in (
+            "evil.example:8765",
+            "127.0.0.1.evil.example:8765",
+            "127.0.0.1:8765@evil.example",
+            "::1:8765",
+        ):
+            with self.subTest(host=host):
+                response = self.client.get("/api/identity/bootstrap", headers={"Host": host})
+                self.assertEqual(response.status_code, 400)
+
+        forwarded = self.client.get(
+            "/api/identity/bootstrap", headers={"X-Forwarded-Host": "127.0.0.1:8765"}
+        )
+        self.assertEqual(forwarded.status_code, 400)
+
+        csrf = self.csrf()
+        cross_origin = self.client.post(
+            "/api/identity/login",
+            headers={"X-CSRF-Token": csrf, "Origin": "http://evil.example"},
+            json={"username": "Administrator", "password": ""},
+        )
+        self.assertEqual(cross_origin.status_code, 403)
+
+    def test_bracketed_ipv6_loopback_origin_is_accepted(self):
+        with TestClient(self.app, base_url="http://[::1]") as ipv6:
+            bootstrap = ipv6.get("/api/identity/bootstrap")
+            self.assertEqual(bootstrap.status_code, 200)
+            self.assertEqual(bootstrap.json()["mode"], "development")
+            csrf = ipv6.cookies.get("json_codr_csrf")
+            login = ipv6.post(
+                "/api/identity/login",
+                headers={"X-CSRF-Token": csrf, "Origin": "http://[::1]"},
+                json={"username": "Administrator", "password": ""},
+            )
+            self.assertEqual(login.status_code, 200)
 
     def test_mutation_middleware_returns_json_auth_error(self):
         client = TestClient(self.app, raise_server_exceptions=False)
@@ -187,7 +232,9 @@ class IdentityApiTests(unittest.TestCase):
         self.assertEqual(self.client.post("/mcp", json=payload).status_code, 403)
 
         service = self.credential("service", ("agent.launch",))
-        with TestClient(self.app, client=("127.0.0.1", 50001)) as loopback:
+        with TestClient(
+            self.app, base_url="http://127.0.0.1", client=("127.0.0.1", 50001)
+        ) as loopback:
             accepted = loopback.post(
                 "/mcp", json=payload,
                 headers={"Authorization": f"Bearer {service.token}"},

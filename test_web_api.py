@@ -302,11 +302,8 @@ class WebApiTests(unittest.TestCase):
     def test_well_known_discovery_does_not_trust_an_arbitrary_host(self):
         response = self.client.get("/.well-known/json-codr", headers={"host": "attacker.example"})
 
-        self.assertEqual(response.status_code, 200)
-        document = response.json()
-        self.assertNotIn("attacker.example", json.dumps(document))
-        self.assertEqual(document["service"]["base_url"], "http://127.0.0.1:8874")
-        self.assertNotIn("authorization", json.dumps(document).casefold())
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "Host header must use loopback")
 
     def test_vscode_language_model_config_exposes_each_installed_model(self):
         response = self.client.get("/api/integrations/vscode/language-models")

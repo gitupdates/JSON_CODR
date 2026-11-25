@@ -2,6 +2,7 @@ from pathlib import Path
 
 import asyncio
 from dataclasses import asdict
+import ipaddress
 import os
 import re
 import secrets
@@ -9,6 +10,7 @@ import sys
 import threading
 import time
 from typing import Callable, Literal
+from urllib.parse import urlsplit
 from uuid import uuid7
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
@@ -241,6 +243,67 @@ def create_app(
     identity = IdentityService(workspace.data_root)
     application.state.identity = identity
 
+    forwarded_headers = {
+        "forwarded", "via", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto",
+        "x-real-ip", "x-t3-relay", "x-json-codr-relay", "x-envoy-external-address",
+    }
+
+    def authority_parts(authority: str, *, allow_test_host: bool) -> tuple[str, int | None]:
+        if not authority or any(character in authority for character in "/?#"):
+            raise ValueError("invalid Host header")
+        try:
+            parsed = urlsplit(f"http://{authority}")
+            port = parsed.port
+        except ValueError as error:
+            raise ValueError("invalid Host header") from error
+        if parsed.username is not None or parsed.password is not None or not parsed.hostname:
+            raise ValueError("invalid Host header")
+        host = parsed.hostname.casefold().rstrip(".")
+        if allow_test_host and host == "testserver":
+            return host, port
+        if host != "localhost":
+            try:
+                address = ipaddress.ip_address(host)
+                if not address.is_loopback or getattr(address, "ipv4_mapped", None) is not None:
+                    raise ValueError("Host header must use loopback")
+            except ValueError as error:
+                raise ValueError("Host header must use loopback") from error
+        return host, port
+
+    def require_loopback_http_boundary(headers, client_host: str | None, scheme: str) -> None:
+        names = {name.casefold() for name in headers.keys()}
+        if forwarded_headers & names:
+            raise ValueError("forwarded requests are not accepted")
+        allow_test_host = client_host == "testclient"
+        if not allow_test_host and not is_loopback_host(client_host):
+            raise ValueError("JSON_CODR accepts direct loopback requests only")
+        host, port = authority_parts(headers.get("host", ""), allow_test_host=allow_test_host)
+        default_port = 443 if scheme == "https" else 80
+        expected = (scheme, host, port or default_port)
+        origin = headers.get("origin")
+        if not origin:
+            return
+        try:
+            parsed = urlsplit(origin)
+            origin_port = parsed.port
+        except ValueError as error:
+            raise PermissionError("request Origin is invalid") from error
+        if (
+            parsed.scheme.casefold() not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise PermissionError("request Origin is invalid")
+        origin_scheme = parsed.scheme.casefold()
+        origin_host = parsed.hostname.casefold().rstrip(".")
+        origin_default = 443 if origin_scheme == "https" else 80
+        if (origin_scheme, origin_host, origin_port or origin_default) != expected:
+            raise PermissionError("cross-origin request rejected")
+
     def identity_cookie_names(request: Request) -> tuple[str, str, bool]:
         secure = request.url.scheme == "https"
         prefix = "__Host-" if secure else ""
@@ -287,6 +350,11 @@ def create_app(
     @application.middleware("http")
     async def enforce_mutation_route_metadata(request: Request, call_next):
         try:
+            require_loopback_http_boundary(
+                request.headers,
+                request.client.host if request.client else None,
+                request.url.scheme,
+            )
             method = request.method.upper()
             if method in {"POST", "PUT", "PATCH", "DELETE"}:
                 for route in application.router.routes:
@@ -300,11 +368,13 @@ def create_app(
                         elif policy.scope is not None:
                             mutation_principal(request, policy.scope)
                     break
-        except HTTPException as error:
+        except (HTTPException, ValueError, PermissionError) as error:
+            status_code = error.status_code if isinstance(error, HTTPException) else (403 if isinstance(error, PermissionError) else 400)
+            detail = error.detail if isinstance(error, HTTPException) else str(error)
             return JSONResponse(
-                status_code=error.status_code,
-                content={"detail": error.detail},
-                headers=error.headers,
+                status_code=status_code,
+                content={"detail": detail},
+                headers=error.headers if isinstance(error, HTTPException) else None,
             )
         return await call_next(request)
     component_manager = None
@@ -1175,7 +1245,11 @@ def create_app(
         return {
             "completed": state.completed,
             "mode": state.mode,
-            "credential_policy": "non-expiring, revocable (non-production)" if state.mode == "non-production" else None,
+            "credential_policy": (
+                "non-expiring and revocable (development)"
+                if state.mode == "development" and state.credentials_permanent
+                else "expiring and revocable (development)" if state.mode == "development" else None
+            ),
             "development_bypass": {
                 "enabled": bypass.enabled,
                 "do_not_expire": bypass.do_not_expire,
@@ -2800,10 +2874,13 @@ def create_app(
     @application.websocket("/ws/terminals/{terminal_id}")
     async def terminal_socket(websocket: WebSocket, terminal_id: str):
         scheme = "https" if websocket.url.scheme == "wss" else "http"
-        port = websocket.url.port
-        default_port = 443 if scheme == "https" else 80
-        expected_origin = f"{scheme}://{websocket.url.hostname}" + (f":{port}" if port and port != default_port else "")
-        if websocket.headers.get("origin") != expected_origin:
+        try:
+            require_loopback_http_boundary(
+                websocket.headers,
+                websocket.client.host if websocket.client else None,
+                scheme,
+            )
+        except (ValueError, PermissionError):
             await websocket.close(code=1008)
             return
         try:

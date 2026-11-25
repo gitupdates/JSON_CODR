@@ -34,6 +34,7 @@ IdentityRoleName = Literal[
     "reviewer",
     "viewer",
 ]
+IdentityMode = Literal["development", "production"]
 
 
 MUTATION_SCOPES = (
@@ -96,8 +97,9 @@ class AuthenticatedPrincipal:
 @dataclass(frozen=True)
 class BootstrapState:
     completed: bool
-    mode: str | None
+    mode: IdentityMode | None
     administrator_user_id: str | None
+    credentials_permanent: bool = False
 
 
 @dataclass(frozen=True)
@@ -239,6 +241,7 @@ class IdentityService:
             singleton INTEGER PRIMARY KEY CHECK(singleton = 1), completed INTEGER NOT NULL,
             mode TEXT, administrator_user_id TEXT, development_expires_at TEXT,
             development_do_not_expire INTEGER NOT NULL DEFAULT 0,
+            development_credentials_permanent INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL
         );
         """
@@ -247,6 +250,11 @@ class IdentityService:
             columns = {row[1] for row in connection.execute("PRAGMA table_info(identity_sessions)")}
             if "credential_purpose" not in columns:
                 connection.execute("ALTER TABLE identity_sessions ADD COLUMN credential_purpose TEXT")
+            state_columns = {row[1] for row in connection.execute("PRAGMA table_info(identity_bootstrap_state)")}
+            if "development_credentials_permanent" not in state_columns:
+                connection.execute(
+                    "ALTER TABLE identity_bootstrap_state ADD COLUMN development_credentials_permanent INTEGER NOT NULL DEFAULT 0"
+                )
             for name, grants in _ROLE_GRANTS.items():
                 connection.execute(
                     "INSERT OR IGNORE INTO identity_roles(role_name, grants_json) VALUES (?, ?)",
@@ -255,6 +263,14 @@ class IdentityService:
             connection.execute(
                 "INSERT OR IGNORE INTO identity_bootstrap_state(singleton, completed, updated_at) VALUES (1, 0, ?)",
                 (self._iso(self._now()),),
+            )
+            connection.execute(
+                """UPDATE identity_bootstrap_state SET development_credentials_permanent=1
+                    WHERE mode='non-production'"""
+            )
+            connection.execute(
+                """UPDATE identity_bootstrap_state SET mode='development'
+                    WHERE mode IN ('non-production', 'migration')"""
             )
 
     @staticmethod
@@ -315,7 +331,7 @@ class IdentityService:
         state = self.bootstrap_state()
         existing = self._user_by_normalized(self._normalize(administrator_name))
         if state.completed or existing:
-            if existing and state.mode == "non-production":
+            if existing and state.mode == "development":
                 return BootstrapResult(created=False, user=existing)
             raise RuntimeError("an existing identity installation must be reconciled manually")
         user = self.create_user(
@@ -329,7 +345,9 @@ class IdentityService:
         )
         with self._connect() as connection:
             connection.execute(
-                "UPDATE identity_bootstrap_state SET completed=1, mode='non-production', administrator_user_id=?, updated_at=? WHERE singleton=1",
+                """UPDATE identity_bootstrap_state SET completed=1, mode='development',
+                    administrator_user_id=?, development_credentials_permanent=1,
+                    updated_at=? WHERE singleton=1""",
                 (user.user_id, self._iso(self._now())),
             )
         self._audit(
@@ -341,15 +359,60 @@ class IdentityService:
         )
         return BootstrapResult(created=True, user=user)
 
+    def activate_production(self) -> TemporaryCredential:
+        """Atomically leave development mode and invalidate every development credential."""
+        now = self._now()
+        secret = secrets.token_urlsafe(32)
+        expires_at = now + timedelta(minutes=30)
+        password_hash = self._hasher.hash(secret)
+        revoked = 0
+        administrator_user_id: str | None = None
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            state = connection.execute(
+                "SELECT mode, administrator_user_id FROM identity_bootstrap_state WHERE singleton=1"
+            ).fetchone()
+            if not state or state["mode"] != "development" or not state["administrator_user_id"]:
+                raise RuntimeError("production activation requires a completed development identity")
+            administrator_user_id = str(state["administrator_user_id"])
+            timestamp = self._iso(now)
+            revoked = connection.execute(
+                "UPDATE identity_sessions SET revoked_at=? WHERE revoked_at IS NULL",
+                (timestamp,),
+            ).rowcount
+            connection.execute(
+                """UPDATE identity_users SET password_hash=?, password_expires_at=?,
+                    require_password_change=1, updated_at=? WHERE user_id=?""",
+                (password_hash, self._iso(expires_at), timestamp, administrator_user_id),
+            )
+            connection.execute(
+                """UPDATE identity_bootstrap_state SET mode='production',
+                    development_expires_at=NULL, development_do_not_expire=0,
+                    development_credentials_permanent=0,
+                    updated_at=? WHERE singleton=1""",
+                (timestamp,),
+            )
+        self._audit(
+            "identity.production_activated",
+            actor_id=administrator_user_id,
+            target_id=administrator_user_id,
+            reason="development identity retired for production activation",
+            changed_fields={"revoked_credentials": revoked, "password_reset_required": True},
+        )
+        return TemporaryCredential(secret=secret, expires_at=expires_at)
+
     def bootstrap_state(self) -> BootstrapState:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT completed, mode, administrator_user_id FROM identity_bootstrap_state WHERE singleton=1"
+                """SELECT completed, mode, administrator_user_id,
+                    development_credentials_permanent
+                    FROM identity_bootstrap_state WHERE singleton=1"""
             ).fetchone()
         return BootstrapState(
             completed=bool(row["completed"]),
             mode=row["mode"],
             administrator_user_id=row["administrator_user_id"],
+            credentials_permanent=bool(row["development_credentials_permanent"]),
         )
 
     def bootstrap_migrated(self, administrator_name: str = "Administrator") -> BootstrapResult:
@@ -366,7 +429,7 @@ class IdentityService:
         )
         with self._connect() as connection:
             connection.execute(
-                """UPDATE identity_bootstrap_state SET completed=1, mode='migration',
+                """UPDATE identity_bootstrap_state SET completed=1, mode='development',
                     administrator_user_id=?, development_expires_at=NULL,
                     development_do_not_expire=0, updated_at=? WHERE singleton=1""",
                 (user.user_id, self._iso(self._now())),
@@ -376,9 +439,11 @@ class IdentityService:
     def development_bypass(self) -> DevelopmentBypassSettings:
         with self._connect() as connection:
             row = connection.execute(
-                """SELECT development_expires_at, development_do_not_expire
+                """SELECT mode, development_expires_at, development_do_not_expire
                     FROM identity_bootstrap_state WHERE singleton=1"""
             ).fetchone()
+        if row["mode"] != "development":
+            return DevelopmentBypassSettings()
         do_not_expire = bool(row["development_do_not_expire"])
         expires_at = datetime.fromisoformat(row["development_expires_at"]) if row["development_expires_at"] else None
         enabled = do_not_expire or bool(expires_at and expires_at > self._now())
@@ -398,10 +463,12 @@ class IdentityService:
         evidence.require_direct_loopback(configured_host)
         with self._connect() as connection:
             state = connection.execute(
-                "SELECT administrator_user_id FROM identity_bootstrap_state WHERE singleton=1"
+                "SELECT mode, administrator_user_id FROM identity_bootstrap_state WHERE singleton=1"
             ).fetchone()
             if not state or not state["administrator_user_id"]:
                 raise RuntimeError("identity bootstrap is incomplete")
+            if state["mode"] != "development":
+                raise PermissionError("development bypass is unavailable in production mode")
             expires_at = None if do_not_expire else self._now() + timedelta(days=30)
             connection.execute(
                 """UPDATE identity_users SET password_hash=?, password_expires_at=NULL,
@@ -755,7 +822,7 @@ class IdentityService:
         return tuple(dict.fromkeys((*user.roles, *group_roles)))
 
     def credential_scopes(self, user_id: str) -> tuple[str, ...]:
-        scopes = self.lesson_scopes(user_id)
+        scopes = ("identity.self", *self.lesson_scopes(user_id))
         if not set(self._effective_roles(user_id)) & {"owner", "administrator"}:
             return scopes
         return tuple(dict.fromkeys((*scopes, *MUTATION_SCOPES)))
@@ -867,12 +934,20 @@ class IdentityService:
         if _purpose and not purpose_scopes:
             raise PermissionError("credential purpose is not allowed")
         now = self._now()
-        if self.bootstrap_state().mode == "non-production":
+        with self._connect() as connection:
+            state = connection.execute(
+                """SELECT mode, development_credentials_permanent
+                    FROM identity_bootstrap_state WHERE singleton=1"""
+            ).fetchone()
+        permanent_development = bool(
+            state and state["mode"] == "development" and state["development_credentials_permanent"]
+        )
+        if permanent_development:
             lifetime = timedelta(days=36_500)
         else:
             lifetime = lifetime or timedelta(days=30)
         expires_at = now + lifetime
-        idle_expires_at = None if self.bootstrap_state().mode == "non-production" else (now + timedelta(hours=12) if credential_kind is CredentialKind.browser_session else None)
+        idle_expires_at = None if permanent_development else (now + timedelta(hours=12) if credential_kind is CredentialKind.browser_session else None)
         token = secrets.token_urlsafe(48)
         credential_id = str(uuid4())
         normalized_scopes = purpose_scopes or tuple(dict.fromkeys(scopes))
