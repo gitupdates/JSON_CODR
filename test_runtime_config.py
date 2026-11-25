@@ -57,6 +57,16 @@ class RuntimeConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "undeclared environment override"):
                 RuntimeConfig.load()
 
+    def test_stable_launcher_supervisor_pid_is_a_declared_runtime_input(self):
+        with patch.dict(os.environ, {"JSON_CODR_SUPERVISOR_PID": "12345"}, clear=False):
+            try:
+                config = RuntimeConfig.load()
+            except ValueError as error:
+                self.fail(str(error))
+
+        self.assertIn("JSON_CODR_SUPERVISOR_PID", config.allowed_environment_overrides)
+        self.assertIn(("JSON_CODR_SUPERVISOR_PID", "12345"), config.environment_overrides)
+
     def test_config_rejects_unknown_schema_keys(self):
         """Typos in the machine-readable contract must fail instead of being ignored."""
         with tempfile.TemporaryDirectory() as temporary:
