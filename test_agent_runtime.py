@@ -491,6 +491,10 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         adapter = RecordingAdapter()
         calls = (
             CapabilityCall(
+                capability_id="project.read", operation="read", project_root=str(self.root),
+                target_path="context.txt", arguments={},
+            ),
+            CapabilityCall(
                 capability_id="project.patch", operation="replace", project_root=str(self.root),
                 target_path="one.py", arguments={"content": "one = 1\n"},
             ),
@@ -502,7 +506,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         approvals = ApprovalStore(self.root / "envelope-approvals.sqlite")
         fingerprint = lambda _root=None: "sha256:" + "1" * 64
         core = CoreService(
-            self.tasks, self.policy, {"project.patch": adapter},
+            self.tasks, self.policy, {"project.read": adapter, "project.patch": adapter},
             approval_store=approvals, project_fingerprint=fingerprint, project_roots=self.projects,
         )
         runtime = AgentRuntime(
@@ -522,7 +526,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 event for event in waiting.events if event.event_type == "agent.approval_required"
             )
             self.assertEqual(approval.payload["call_count"], 2)
-            self.assertEqual(adapter.calls, [])
+            self.assertEqual(adapter.calls, [calls[0]])
 
             completed = await core.approve(
                 task_id, principal="administrator-1", principal_scopes=("agent.launch",),
@@ -542,6 +546,41 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             len([event for event in completed.events if event.event_type == "agent.approval_required"]),
             1,
         )
+
+    async def test_failed_autonomous_preflight_does_not_emit_a_phantom_approval(self):
+        adapter = FailingAdapter()
+        calls = (
+            CapabilityCall(
+                capability_id="project.read", operation="read", project_root=str(self.root),
+                target_path="missing.txt", arguments={},
+            ),
+            CapabilityCall(
+                capability_id="project.patch", operation="replace", project_root=str(self.root),
+                target_path="never.py", arguments={"content": "never = True\n"},
+            ),
+        )
+        approvals = ApprovalStore(self.root / "failed-preflight-approvals.sqlite")
+        fingerprint = lambda _root=None: "sha256:" + "1" * 64
+        core = CoreService(
+            self.tasks, self.policy, {"project.read": adapter, "project.patch": adapter},
+            approval_store=approvals, project_fingerprint=fingerprint, project_roots=self.projects,
+        )
+        runtime = AgentRuntime(
+            self.tasks, core, ContextService(self.tasks, self.memory), BatchPlanner(calls),
+            DeterministicVerifier(satisfied=False), fingerprint, approval_store=approvals,
+        )
+        task_id = self.create_root_task()
+
+        try:
+            result = await runtime.run(task_id)
+        finally:
+            approvals.close()
+
+        self.assertEqual(adapter.calls, [calls[0]])
+        self.assertFalse(any(
+            event.event_type == "agent.approval_required" for event in result.events
+        ))
+        self.assertIn("agent.preflight_aborted", [event.event_type for event in result.events])
 
     async def test_exact_approval_ignores_runtime_churn_and_applies_requested_edit(self):
         project = self.root / "project"

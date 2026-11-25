@@ -499,30 +499,6 @@ class AgentRuntime:
                     "envelope_id": None if envelope is None else envelope.envelope_id,
                 },
             ))
-            if envelope is not None:
-                self._tasks.append(task_id, TaskEventDraft(
-                    event_type="agent.approval_required",
-                    payload={
-                        "batch_id": batch_id,
-                        "envelope_id": envelope.envelope_id,
-                        "task_revision": goal.revision,
-                        "project_root": prepared[0].project_root,
-                        "project_fingerprint": envelope.project_fingerprint,
-                        "expires_at": envelope.expires_at.isoformat(),
-                        "call_count": len(envelope.calls),
-                        "calls": [
-                            {
-                                "ordinal": item.ordinal,
-                                "capability_id": item.capability_id,
-                                "operation": item.operation,
-                                "target_path": item.target_path,
-                                "call_digest": item.call_digest,
-                            }
-                            for item in envelope.calls
-                        ],
-                    },
-                ))
-                return _WAITING_FOR_APPROVAL
             preflight = next(
                 event for event in reversed(self._tasks.get(task_id).events)
                 if event.event_type == "agent.preflight_planned"
@@ -553,8 +529,42 @@ class AgentRuntime:
                 raise RuntimeError("agent preflight approval store is unavailable")
             envelope = self._approval_store.get_envelope(envelope_id)
             if envelope.status == "pending":
-                return _WAITING_FOR_APPROVAL
-            if envelope.status not in {"approved", "consumed"}:
+                principal, _principal_scopes = self._principal_context(root)
+                current_call = calls[ordinal]
+                if (
+                    self._core.approval_required(root.project_id, current_call, principal=principal)
+                    and not requires_separate_approval(current_call)
+                ):
+                    already_requested = any(
+                        event.event_type == "agent.approval_required"
+                        and event.payload.get("envelope_id") == envelope.envelope_id
+                        for event in root.events
+                    )
+                    if not already_requested:
+                        self._tasks.append(task_id, TaskEventDraft(
+                            event_type="agent.approval_required",
+                            payload={
+                                "batch_id": batch_id,
+                                "envelope_id": envelope.envelope_id,
+                                "task_revision": goal.revision,
+                                "project_root": current_call.project_root,
+                                "project_fingerprint": envelope.project_fingerprint,
+                                "expires_at": envelope.expires_at.isoformat(),
+                                "call_count": len(envelope.calls),
+                                "calls": [
+                                    {
+                                        "ordinal": item.ordinal,
+                                        "capability_id": item.capability_id,
+                                        "operation": item.operation,
+                                        "target_path": item.target_path,
+                                        "call_digest": item.call_digest,
+                                    }
+                                    for item in envelope.calls
+                                ],
+                            },
+                        ))
+                    return _WAITING_FOR_APPROVAL
+            elif envelope.status not in {"approved", "consumed"}:
                 raise PermissionError(f"approval envelope is {envelope.status}")
         return calls[ordinal], batch_id, ordinal, len(calls), envelope_id
 
