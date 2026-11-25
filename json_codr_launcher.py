@@ -248,6 +248,31 @@ class PointerStore:
                 self._atomic_write(self.pointer_path, updated)
             return updated
 
+    def refresh_mutable_fallback(self, fallback: dict[str, Any]) -> dict[str, Any]:
+        with _file_lock(self.lock_path):
+            pointer = self.load()
+            if pointer is None:
+                raise RuntimeError("active build pointer is missing")
+            is_mutable_fallback = (
+                pointer.get("runner") == "local"
+                and pointer.get("generation") == 0
+                and pointer.get("previous_revision") is None
+                and pointer.get("manifest_digest") == f"fallback:{pointer.get('revision')}"
+                and Path(str(pointer.get("root", ""))).resolve()
+                == Path(str(fallback["root"])).resolve()
+            )
+            if not is_mutable_fallback or pointer.get("revision") == fallback.get("revision"):
+                return pointer
+            updated = dict(fallback)
+            updated["schema_version"] = 1
+            updated["generation"] = 0
+            updated["known_good"] = True
+            updated.setdefault("activated_at", _utc_now())
+            updated.setdefault("previous_revision", None)
+            self._validate_pointer(updated)
+            self._atomic_write(self.pointer_path, updated)
+            return updated
+
     def compare_and_swap(
         self, expected_generation: int, target: dict[str, Any]
     ) -> dict[str, Any]:
@@ -851,6 +876,7 @@ def load_pointer(
     }
     store = PointerStore(path)
     store.ensure_known_good(fallback)
+    store.refresh_mutable_fallback(fallback)
     return store.set_missing_defaults({"data_root": data_root})
 
 

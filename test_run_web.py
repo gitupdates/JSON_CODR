@@ -6,13 +6,37 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from json_codr_launcher import LocalProcessRunner
+from json_codr_launcher import LocalProcessRunner, load_pointer
 from web_app.runtime_config import RuntimeConfig
 
 ROOT = Path(__file__).resolve().parent
 
 
 class RunWebTests(unittest.TestCase):
+    def test_stable_launcher_refreshes_a_mutable_fallback_pointer_to_the_checked_out_revision(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pointer_path = root / "launcher" / "pointer" / "active-build.json"
+            first = load_pointer(
+                pointer_path,
+                fallback_root=str(root),
+                fallback_revision="a" * 40,
+                fallback_version="V1.4.0",
+                data_root=str(root / "data"),
+            )
+            refreshed = load_pointer(
+                pointer_path,
+                fallback_root=str(root),
+                fallback_revision="b" * 40,
+                fallback_version="V1.4.1",
+                data_root=str(root / "data"),
+            )
+
+        self.assertEqual(first["revision"], "a" * 40)
+        self.assertEqual(refreshed["revision"], "b" * 40)
+        self.assertEqual(refreshed["version"], "V1.4.1")
+        self.assertEqual(refreshed["manifest_digest"], "fallback:" + "b" * 40)
+
     def test_local_launcher_propagates_unique_server_identity(self):
         pointer = {
             "root": str(ROOT),
