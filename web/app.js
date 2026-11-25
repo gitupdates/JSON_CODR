@@ -2844,13 +2844,11 @@ elements.prompt.addEventListener("input", () => {
   clearTimeout(recommendationTimer);
   recommendationTimer = setTimeout(() => previewSkillRecommendations().catch((error) => showError(error.message)), 300);
 });
-elements.autoAttachSkills.addEventListener("change", async () => {
-  const response = await fetch(`/api/sessions/${sessionId}/skill-routing`, {
-    method: "PATCH", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ auto_attach_skills: elements.autoAttachSkills.checked }),
-  });
-  if (!response.ok) return showError((await response.json()).detail || "Unable to update automatic attachment");
-  await previewSkillRecommendations();
+window.JSONCodrSkillRouting.bindAutoAttachControl({
+  control: elements.autoAttachSkills,
+  sessionId: () => sessionId,
+  preview: previewSkillRecommendations,
+  showError,
 });
 elements.destructiveSubmit.addEventListener("click", async () => {
   if (!pendingDestructiveAction) return;

@@ -10,6 +10,7 @@ from web_app.skillsets import SkillsetService
 
 
 GENERIC_TERMS = frozenset({"help", "task", "skill", "use", "create", "build", "make", "work", "project"})
+ROUTING_NOISE_TERMS = frozenset({"output"})
 PROVIDER_TERMS = frozenset({"claude", "cursor", "copilot", "gemini", "anthropic"})
 EXPLICIT_ONLY_SKILLS = frozenset({
     "readteam:readteam-secondary-review",
@@ -103,7 +104,8 @@ class SkillRecommendationService:
             return SkillRecommendationResult(recommendations=manual + catalog[:remaining])
         if not prompt_tokens or prompt_tokens.issubset(GENERIC_TERMS):
             return SkillRecommendationResult(recommendations=manual)
-        expanded = prompt_tokens | {ROUTING_SYNONYMS[token] for token in prompt_tokens if token in ROUTING_SYNONYMS}
+        routing_tokens = prompt_tokens - ROUTING_NOISE_TERMS
+        expanded = routing_tokens | {ROUTING_SYNONYMS[token] for token in routing_tokens if token in ROUTING_SYNONYMS}
         prompt_stems = {_stem(token) for token in expanded}
         suffixes = {Path(item.display_name).suffix.casefold() for item in session.attachments if item.included}
         sets = self.skillsets.reconcile()
@@ -126,9 +128,9 @@ class SkillRecommendationService:
             description_tokens = _tokens(skill.description)
             capability_match = re.search(r"(?mi)^(?:capabilities|required-capabilities):\s*([^\n]+)", skill.content)
             capability_tokens = _tokens(capability_match.group(1)) if capability_match else set()
-            name_hits = sorted(prompt_tokens & name_tokens)
-            capability_hits = sorted(prompt_tokens & capability_tokens)
-            description_hits = sorted(prompt_tokens & description_tokens)
+            name_hits = sorted(routing_tokens & name_tokens)
+            capability_hits = sorted(routing_tokens & capability_tokens)
+            description_hits = sorted(routing_tokens & description_tokens)
             if name_hits:
                 score += 8
                 reasons.append(f"name: {name_hits[0]}")

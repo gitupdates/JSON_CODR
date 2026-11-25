@@ -477,12 +477,17 @@ class NativeOllamaTransport:
     @staticmethod
     def _is_transient_runner_error(error: OllamaUnavailableError) -> bool:
         cause = error.__cause__
-        if isinstance(cause, ConnectionResetError) or "forcibly closed" in str(error):
+        message = str(error).casefold()
+        if (
+            isinstance(cause, ConnectionResetError)
+            or "forcibly closed" in message
+            or "connection attempt failed" in message
+        ):
             return True
         return (
             isinstance(cause, HTTPError)
             and cause.code >= 500
-            and str(error).strip() == "Ollama request failed"
+            and message.strip() == "ollama request failed"
         )
 
     @staticmethod

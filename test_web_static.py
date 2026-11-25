@@ -699,6 +699,50 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         self.assertEqual(payload["headers"], {"X-CSRF-Token": "csrf-value"})
         self.assertEqual(payload["protocol"], "json-codr-csrf.csrf-value")
 
+    def test_auto_attach_control_sends_csrf_authenticated_routing_update(self):
+        script = r'''
+global.document = {cookie: 'json_codr_csrf=csrf-value'};
+global.JSONCodrHttpIdentity = require('./web/http_identity.js');
+const {bindAutoAttachControl} = require('./web/skill_routing.js');
+const listeners = {};
+const control = {
+  checked: false,
+  addEventListener(name, callback) { listeners[name] = callback; },
+};
+const requests = [];
+let previewCalls = 0;
+const errors = [];
+bindAutoAttachControl({
+  control,
+  sessionId: 'session-1',
+  fetchImpl: async (url, options) => {
+    requests.push({url, options});
+    return {ok: true, json: async () => ({})};
+  },
+  preview: async () => { previewCalls += 1; },
+  showError: message => errors.push(message),
+});
+listeners.change().then(() => process.stdout.write(JSON.stringify({requests, previewCalls, errors})));
+'''
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload, {
+            "requests": [{
+                "url": "/api/sessions/session-1/skill-routing",
+                "options": {
+                    "method": "PATCH",
+                    "headers": {
+                        "Content-Type": "application/json",
+                        "X-CSRF-Token": "csrf-value",
+                    },
+                    "body": '{"auto_attach_skills":false}',
+                },
+            }],
+            "previewCalls": 1,
+            "errors": [],
+        })
+
     def test_embedded_conpty_terminal_has_xterm_tabs_resize_and_reconnect(self):
         html = self.client.get("/").text
         javascript = self.client.get("/static/app.js").text

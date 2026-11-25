@@ -500,6 +500,44 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
         sleep.assert_awaited_once_with(0.5)
         self.assertEqual(events[-1]["result"].content, "OK")
 
+    async def test_stream_chat_retries_detailed_tokenizer_connection_failure(self):
+        from web_app.core.native_ollama import NativeOllamaTransport
+
+        calls = 0
+        body = b"".join([
+            json.dumps({"message": {"content": "Recovered"}, "done": False}).encode() + b"\n",
+            json.dumps({"message": {"content": ""}, "done": True}).encode() + b"\n",
+        ])
+
+        def fake_urlopen(_request, timeout):
+            nonlocal calls
+            del timeout
+            calls += 1
+            if calls == 1:
+                raise HTTPError(
+                    "http://localhost:11434/api/chat",
+                    500,
+                    "Internal Server Error",
+                    {},
+                    io.BytesIO(json.dumps({
+                        "error": 'Post "http://127.0.0.1:65000/tokenize": '
+                        "connectex: A connection attempt failed because the connected party "
+                        "did not properly respond after a period of time."
+                    }).encode()),
+                )
+            return _Response(body)
+
+        transport = NativeOllamaTransport("http://localhost:11434")
+        with (
+            patch("web_app.core.native_ollama.urlopen", side_effect=fake_urlopen),
+            patch("web_app.core.native_ollama.asyncio.sleep", new_callable=AsyncMock) as sleep,
+        ):
+            events = [event async for event in transport.stream_chat("deepseek-coder:6.7b", "Reply")]
+
+        self.assertEqual(calls, 2)
+        sleep.assert_awaited_once_with(0.5)
+        self.assertEqual(events[-1]["result"].content, "Recovered")
+
     async def test_stream_chat_keeps_partial_content_when_runner_resets_after_generation(self):
         from web_app.core.native_ollama import NativeOllamaTransport
 

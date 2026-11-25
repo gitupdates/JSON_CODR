@@ -75,6 +75,21 @@ class RecommendationTests(unittest.TestCase):
         self.session.auto_attach_skills = False
         self.assertEqual(self.service.recommend(self.session, "python").recommendations, [])
 
+    def test_neutral_output_instruction_does_not_attach_a_skill_for_output_metadata(self):
+        packs = self.library.list()
+        packs[0].skills.append(SkillRecord(
+            id="output-format",
+            name="Formatter",
+            description="Generate structured output",
+            content="capabilities: output\nFormat generated content",
+        ))
+        self.library._save(packs)
+        self.skillsets.reconcile()
+
+        result = self.service.recommend(self.session, "Output only VALUE_42_OK.")
+
+        self.assertEqual(result.recommendations, [])
+
     def test_skill_catalog_question_uses_real_enabled_skill_records(self):
         result = self.service.recommend(
             self.session,
