@@ -201,7 +201,8 @@ try {
   Invoke-SafeGit @('config', 'user.email', 'verifier@example.invalid') | Out-Null
   Invoke-SafeGit @('remote', 'add', 'origin', 'https://github.com/json-codr-verifier/disposable.git') | Out-Null
   [IO.File]::WriteAllText((Join-Path $projectRoot 'README.md'), "disposable verification`n", [Text.UTF8Encoding]::new($false))
-  Invoke-SafeGit @('add', '--', 'README.md') | Out-Null
+  [IO.File]::WriteAllText((Join-Path $projectRoot '.gitignore'), "__pycache__/`n*.pyc`n", [Text.UTF8Encoding]::new($false))
+  Invoke-SafeGit @('add', '--', 'README.md', '.gitignore') | Out-Null
   Invoke-SafeGit @('commit', '-m', 'Initial disposable repository') | Out-Null
 
   $escapeLink = Join-Path $projectRoot 'escape-link'

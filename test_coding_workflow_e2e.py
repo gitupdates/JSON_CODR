@@ -62,6 +62,7 @@ class DisposableWorkflowSecurityTests(unittest.TestCase):
             text.index("'--literal-pathspecs', 'add'"),
             text.index("'diff', '--cached'"),
         )
+        self.assertIn("__pycache__/", text)
 
     def test_local_commit_does_not_execute_repository_hooks(self):
         project = repository(self.root)
