@@ -79,6 +79,39 @@ class AgentServicesTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "exact capability envelope"):
             await planner.plan(context)
 
+    async def test_batch_planner_returns_one_finite_server_rooted_call_set(self):
+        async def generate_single(_model, _prompt):
+            raise AssertionError("batch generation must not fall back to one-call planning")
+
+        async def generate_batch(model, prompt):
+            self.assertEqual(model, "local-model")
+            self.assertIn("finite ordered call set", prompt)
+            return json.dumps({"calls": [
+                {
+                    "capability_id": "project.patch", "operation": "replace",
+                    "target_path": "one.py", "arguments": {"content": "one = 1\n"},
+                },
+                {
+                    "capability_id": "project.patch", "operation": "replace",
+                    "target_path": "two.py", "arguments": {"content": "two = 2\n"},
+                },
+            ]})
+
+        context = ContextBundle(
+            thread_id="thread-1", task_id="task-1", text="create two files",
+            sources=(ContextSource(
+                kind="project_snapshot", source_ref="snapshot", mandatory=True,
+                content=json.dumps({"project_root": str(self.root.resolve())}),
+            ),),
+        )
+        calls = await InferencePlanner(
+            generate_single, model="local-model", generate_batch=generate_batch,
+        ).plan_batch(context)
+
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(call.project_root == str(self.root.resolve()) for call in calls))
+        self.assertEqual([call.target_path for call in calls], ["one.py", "two.py"])
+
     async def test_planner_repeats_authoritative_goal_after_project_context(self):
         captured = {}
 

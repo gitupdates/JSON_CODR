@@ -730,9 +730,30 @@ def create_app(
                     raise ValueError("planner model returned no completed result")
                 return (await service.chat(model, prompt)).content
 
+            async def generate_agent_batch(model: str, prompt: str) -> str:
+                json_chat = getattr(inference_backend, "json_chat", None)
+                if callable(json_chat):
+                    return await json_chat(
+                        model,
+                        prompt,
+                        capability_catalog.planner_batch_schema(set(project_profile.kinds)),
+                    )
+                stream_chat = getattr(inference_backend, "stream_chat", None)
+                if callable(stream_chat):
+                    async for event in stream_chat(model, prompt):
+                        if event.get("type") == "completed":
+                            return event["result"].content
+                    raise ValueError("batch planner model returned no completed result")
+                return (await service.chat(model, prompt)).content
             planner = InferencePlanner(
                 generate_agent_plan,
                 model=select_agent_planner_model(native_config),
+                generate_batch=(
+                    generate_agent_batch
+                    if callable(getattr(inference_backend, "json_chat", None))
+                    or callable(getattr(inference_backend, "stream_chat", None))
+                    else None
+                ),
             )
             agent_runtime = AgentRuntime(
                 core_tasks,
@@ -742,6 +763,7 @@ def create_app(
                 EventEvidenceVerifier(),
                 agent_project_fingerprint,
                 project_reader_resolver=resolver.resolve,
+                approval_store=core_approvals,
             )
             application.state.agent_runtime = agent_runtime
             core_capabilities = tuple({

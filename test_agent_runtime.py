@@ -67,6 +67,21 @@ class DeterministicPlanner:
         return self.calls.pop(0) if self.calls else None
 
 
+class BatchPlanner:
+    def __init__(self, calls):
+        self.calls = tuple(calls)
+        self.planned = False
+
+    async def plan_batch(self, context):
+        if self.planned:
+            return ()
+        self.planned = True
+        return self.calls
+
+    async def plan(self, context):
+        raise AssertionError("batch-capable planners must use one preflight")
+
+
 class DeterministicVerifier:
     def __init__(self, satisfied=True, project_fingerprint=None):
         self.satisfied = satisfied
@@ -471,6 +486,62 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(completed.status, TaskStatus.completed)
         self.assertEqual(len(adapter.calls), 1)
+
+    async def test_one_envelope_approves_two_exact_agent_actions_and_emits_receipt(self):
+        adapter = RecordingAdapter()
+        calls = (
+            CapabilityCall(
+                capability_id="project.patch", operation="replace", project_root=str(self.root),
+                target_path="one.py", arguments={"content": "one = 1\n"},
+            ),
+            CapabilityCall(
+                capability_id="project.patch", operation="replace", project_root=str(self.root),
+                target_path="two.py", arguments={"content": "two = 2\n"},
+            ),
+        )
+        approvals = ApprovalStore(self.root / "envelope-approvals.sqlite")
+        fingerprint = lambda _root=None: "sha256:" + "1" * 64
+        core = CoreService(
+            self.tasks, self.policy, {"project.patch": adapter},
+            approval_store=approvals, project_fingerprint=fingerprint, project_roots=self.projects,
+        )
+        runtime = AgentRuntime(
+            self.tasks, core, ContextService(self.tasks, self.memory), BatchPlanner(calls),
+            DeterministicVerifier(), fingerprint, approval_store=approvals,
+        )
+        core._agent_runner = runtime.run
+        task_id = self.create_root_task()
+        self.tasks.append(task_id, TaskEventDraft(
+            event_type="task.principal_bound",
+            payload={"principal": "administrator-1", "principal_scopes": ["agent.launch"]},
+        ))
+
+        try:
+            waiting = await runtime.run(task_id)
+            approval = next(
+                event for event in waiting.events if event.event_type == "agent.approval_required"
+            )
+            self.assertEqual(approval.payload["call_count"], 2)
+            self.assertEqual(adapter.calls, [])
+
+            completed = await core.approve(
+                task_id, principal="administrator-1", principal_scopes=("agent.launch",),
+                envelope_id=approval.payload["envelope_id"],
+            )
+        finally:
+            approvals.close()
+
+        self.assertEqual(completed.status, TaskStatus.completed)
+        self.assertEqual(adapter.calls, list(calls))
+        receipts = [
+            event for event in completed.events if event.event_type == "agent.approval_receipt"
+        ]
+        self.assertEqual(len(receipts), 1)
+        self.assertEqual(receipts[0].payload["outcomes"], ("completed", "completed"))
+        self.assertEqual(
+            len([event for event in completed.events if event.event_type == "agent.approval_required"]),
+            1,
+        )
 
     async def test_exact_approval_ignores_runtime_churn_and_applies_requested_edit(self):
         project = self.root / "project"

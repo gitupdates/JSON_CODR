@@ -70,6 +70,22 @@ class CapabilityCatalog:
             "required": ["done", "capability_id", "operation", "target_path", "arguments"],
         }
 
+    def planner_batch_schema(self, project_types: Set[str]) -> dict:
+        call_schema = self.planner_schema(project_types)
+        call_schema["properties"].pop("done")
+        call_schema["required"] = ["capability_id", "operation", "target_path", "arguments"]
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "calls": {
+                    "type": "array", "minItems": 1, "maxItems": 8,
+                    "items": call_schema,
+                },
+            },
+            "required": ["calls"],
+        }
+
 
 _LIFECYCLE_CAPABILITIES = {
     "project.read": ("read", "automatic", (), "none"),

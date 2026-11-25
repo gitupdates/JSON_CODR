@@ -1127,7 +1127,10 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         self.assertIn('event.event_type === "agent.action_completed"', javascript)
         self.assertIn("!completedSteps.has(event.payload?.step_id)", javascript)
         self.assertIn("if (!showWorkspaceAgentApproval(payload, taskId))", javascript)
-        self.assertIn("elements.workspaceAgentApprove.dataset.proposalId = approval.payload.proposal_id", javascript)
+        self.assertIn("elements.workspaceAgentApprove.dataset.proposalId = proposalId ||", javascript)
+        self.assertIn("elements.workspaceAgentApprove.dataset.envelopeId = envelopeId ||", javascript)
+        self.assertIn("review ${exactCalls.length} exact project actions once", javascript)
+        self.assertIn("...(envelopeId ? { envelope_id: envelopeId }", javascript)
 
     def test_verified_update_administration_is_thin_and_permission_derived(self):
         html = self.client.get("/").text

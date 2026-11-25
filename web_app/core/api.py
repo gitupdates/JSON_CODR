@@ -41,6 +41,7 @@ class TaskApprovalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scope: str = Field(pattern=r"^(project|schedule)$")
     proposal_id: str | None = Field(default=None, min_length=1, max_length=200)
+    envelope_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class ComponentInstallApproval(BaseModel):
@@ -385,6 +386,7 @@ def create_core_router(
                 principal_scopes=principal.scopes,
                 scope=request.scope,
                 proposal_id=request.proposal_id,
+                envelope_id=request.envelope_id,
             )
         except KeyError as error:
             raise HTTPException(status_code=404, detail="task not found") from error

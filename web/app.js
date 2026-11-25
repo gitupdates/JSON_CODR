@@ -1218,25 +1218,43 @@ function showWorkspaceAgentApproval(task, taskId) {
     (event) => event.event_type === "agent.approval_required"
       && !completedSteps.has(event.payload?.step_id),
   );
-  if (!approval?.payload?.proposal_id) return false;
+  const proposalId = approval?.payload?.proposal_id;
+  const envelopeId = approval?.payload?.envelope_id;
+  if (!proposalId && !envelopeId) return false;
   elements.workspaceAgentApprove.dataset.taskId = taskId;
-  elements.workspaceAgentApprove.dataset.proposalId = approval.payload.proposal_id;
+  elements.workspaceAgentApprove.dataset.proposalId = proposalId || "";
+  elements.workspaceAgentApprove.dataset.envelopeId = envelopeId || "";
   elements.workspaceAgentApprove.hidden = false;
-  elements.workspaceAgentStatus.textContent = "Approval required · review and approve the proposed project action";
+  const exactCalls = approval.payload.calls || [];
+  if (envelopeId) {
+    elements.workspaceAgentResult.textContent = JSON.stringify({
+      approval_envelope: envelopeId,
+      task_revision: approval.payload.task_revision,
+      expires_at: approval.payload.expires_at,
+      exact_calls: exactCalls,
+    }, null, 2);
+    elements.workspaceAgentStatus.textContent = `Approval required · review ${exactCalls.length} exact project actions once`;
+  } else {
+    elements.workspaceAgentStatus.textContent = "Approval required · review and approve the proposed project action";
+  }
   return true;
 }
 
 async function approveWorkspaceAgentAction() {
   const taskId = elements.workspaceAgentApprove.dataset.taskId;
   const proposalId = elements.workspaceAgentApprove.dataset.proposalId;
-  if (!taskId || !proposalId) return;
+  const envelopeId = elements.workspaceAgentApprove.dataset.envelopeId;
+  if (!taskId || (!proposalId && !envelopeId)) return;
   elements.workspaceAgentApprove.disabled = true;
   elements.workspaceAgentStatus.textContent = "Executing the approved project action…";
   try {
     const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/approve`, {
       method: "POST",
       headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ scope: "project", proposal_id: proposalId }),
+      body: JSON.stringify({
+        scope: "project",
+        ...(envelopeId ? { envelope_id: envelopeId } : { proposal_id: proposalId }),
+      }),
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || "Unable to approve the project action");

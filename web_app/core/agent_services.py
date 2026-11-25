@@ -73,9 +73,61 @@ class ProjectContextResolver:
 
 
 class InferencePlanner:
-    def __init__(self, generate: Callable[[str, str], Awaitable[str]], *, model: str) -> None:
+    def __init__(
+        self,
+        generate: Callable[[str, str], Awaitable[str]],
+        *,
+        model: str,
+        generate_batch: Callable[[str, str], Awaitable[str]] | None = None,
+    ) -> None:
         self._generate = generate
         self._model = model
+        self._generate_batch = generate_batch
+
+    async def plan_batch(self, context: ContextBundle) -> tuple[CapabilityCall, ...]:
+        if self._generate_batch is None:
+            call = await self.plan(context)
+            return () if call is None else (call,)
+        project_root = self._project_root(context)
+        current_goal = next(
+            (
+                source.content for source in reversed(context.sources)
+                if source.event_type == "agent.goal_registered"
+            ),
+            "",
+        )
+        prompt = (
+            "Act as a local coding planner. Return one finite ordered call set as a JSON object "
+            "with exactly one calls array containing 1 to 8 exact capability calls. Each call "
+            "must contain exactly capability_id, operation, target_path, and arguments. Include "
+            "every action needed for this bounded attempt in execution order. Never include a "
+            "project_root, credential, wildcard, markdown, or prose. Use these exact core "
+            "contracts: project.read uses operation read and arguments {}; project.search uses "
+            "operation search, target_path '.', and arguments {\"query\":\"text\"}; project.patch "
+            "uses operation replace and arguments {\"content\":\"the complete UTF-8 replacement "
+            "file content\"}.\n\nCONTEXT:\n" + context.text
+            + "\n\nAUTHORITATIVE CURRENT GOAL:\n" + current_goal
+        )
+        raw = await self._generate_batch(self._effective_model(context), prompt)
+        value = self._decode_object(raw)
+        if not isinstance(value, dict) or set(value) != {"calls"}:
+            raise ValueError("batch planner must return exactly one calls array")
+        raw_calls = value.get("calls")
+        if not isinstance(raw_calls, list) or not 1 <= len(raw_calls) <= 8:
+            raise ValueError("batch planner calls must contain 1 to 8 items")
+        expected = {"capability_id", "operation", "target_path", "arguments"}
+        calls = []
+        for raw_call in raw_calls:
+            if not isinstance(raw_call, dict) or set(raw_call) != expected:
+                raise ValueError("batch planner call must match the exact capability envelope")
+            contract_error = self._core_contract_error(raw_call)
+            if contract_error is not None:
+                raise ValueError(f"batch planner call is invalid: {contract_error}")
+            try:
+                calls.append(CapabilityCall.model_validate({**raw_call, "project_root": project_root}))
+            except ValidationError as error:
+                raise ValueError("batch planner call must be valid capability JSON") from error
+        return tuple(calls)
 
     async def plan(self, context: ContextBundle) -> CapabilityCall | None:
         project_root = self._project_root(context)
@@ -98,22 +150,11 @@ class InferencePlanner:
             "Never invent argument names.\n\nCONTEXT:\n" + context.text
             + "\n\nAUTHORITATIVE CURRENT GOAL:\n" + current_goal
         )
-        model = self._model
-        for source in reversed(context.sources):
-            if source.event_type != "agent.model_route":
-                continue
-            try:
-                route = json.loads(source.content)
-                candidate = route.get("payload", {}).get("effective_model")
-            except (json.JSONDecodeError, AttributeError):
-                candidate = None
-            if isinstance(candidate, str) and candidate:
-                model = candidate
-                break
         expected = {"done", "capability_id", "operation", "target_path", "arguments"}
         has_completed_action = any(
             source.event_type == "agent.action_completed" for source in context.sources
         )
+        model = self._effective_model(context)
         for attempt in range(3):
             raw = await self._generate(model, prompt)
             try:
@@ -161,6 +202,21 @@ class InferencePlanner:
             return CapabilityCall.model_validate({**call_value, "project_root": project_root})
         except ValidationError as error:
             raise ValueError("planner must return valid capability JSON") from error
+
+    def _effective_model(self, context: ContextBundle) -> str:
+        model = self._model
+        for source in reversed(context.sources):
+            if source.event_type != "agent.model_route":
+                continue
+            try:
+                route = json.loads(source.content)
+                candidate = route.get("payload", {}).get("effective_model")
+            except (json.JSONDecodeError, AttributeError):
+                candidate = None
+            if isinstance(candidate, str) and candidate:
+                model = candidate
+                break
+        return model
 
     @staticmethod
     def _project_root(context: ContextBundle) -> str:

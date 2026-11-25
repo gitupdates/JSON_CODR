@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 
 from web_app.core.adapters import AdapterEvent, CapabilityAdapter, CapabilityCall, CapabilityExecutionError, ExecutionContext
-from web_app.core.approval import ApprovalLease, ApprovalStore
+from web_app.core.approval import ApprovalEnvelopeLease, ApprovalLease, ApprovalStore
 from web_app.core.canonical import canonical_digest
 from web_app.core.capability_registry import CapabilityRegistry
 from web_app.core.contracts import JsonValue, TaskCommand, TaskEvent, TaskEventDraft, TaskRecord, TaskStatus
@@ -52,7 +52,7 @@ class CoreService:
         *,
         principal: str = "user",
         principal_scopes: tuple[str, ...] = (),
-        approval_lease: ApprovalLease | None = None,
+        approval_lease: ApprovalLease | ApprovalEnvelopeLease | None = None,
         trusted_schedule_id: str | None = None,
     ) -> TaskRecord:
         record = await self.start(
@@ -77,7 +77,7 @@ class CoreService:
         *,
         principal: str = "user",
         principal_scopes: tuple[str, ...] = (),
-        approval_lease: ApprovalLease | None = None,
+        approval_lease: ApprovalLease | ApprovalEnvelopeLease | None = None,
         trusted_schedule_id: str | None = None,
     ) -> TaskRecord:
         async with self._submission_lock:
@@ -90,6 +90,18 @@ class CoreService:
                 command = command.model_copy(update={"payload": call.model_dump(mode="json")})
             record = self._tasks.create(command)
             if command.command_type == "agent.run":
+                bound = next(
+                    (event for event in record.events if event.event_type == "task.principal_bound"),
+                    None,
+                )
+                if bound is None:
+                    self._append(command.task_id, TaskEventDraft(
+                        event_type="task.principal_bound",
+                        payload={"principal": principal, "principal_scopes": list(principal_scopes)},
+                    ))
+                    record = self._tasks.get(command.task_id)
+                elif bound.payload.get("principal") != principal:
+                    raise PermissionError("agent task principal does not match")
                 if record.status in {
                     TaskStatus.completed, TaskStatus.failed, TaskStatus.cancelled, TaskStatus.interrupted,
                 } or command.task_id in self._runs:
@@ -288,6 +300,8 @@ class CoreService:
 
     def cancel(self, task_id: str) -> TaskRecord:
         record = self._tasks.request_cancel(task_id)
+        if self._approval_store is not None:
+            self._approval_store.revoke_task(task_id)
         self._event_signals.setdefault(task_id, asyncio.Event()).set()
         return record
 
@@ -299,6 +313,7 @@ class CoreService:
         principal_scopes: tuple[str, ...] = (),
         scope: str = "project",
         proposal_id: str | None = None,
+        envelope_id: str | None = None,
     ) -> TaskRecord:
         command = self._tasks.command(task_id)
         record = self._tasks.get(task_id)
@@ -309,6 +324,34 @@ class CoreService:
             )
             if approval is None:
                 raise ValueError("task is not awaiting approval")
+            requested_envelope = approval.payload.get("envelope_id")
+            if isinstance(requested_envelope, str):
+                if envelope_id != requested_envelope:
+                    raise ValueError("exact approval envelope id is required")
+                if self._approval_store is None or self._project_fingerprint is None:
+                    raise RuntimeError("approval envelopes require an approval store and project fingerprinting")
+                project_root = approval.payload.get("project_root")
+                task_revision = approval.payload.get("task_revision")
+                if not isinstance(project_root, str) or not isinstance(task_revision, int):
+                    raise ValueError("approval envelope request is invalid")
+                envelope = self._approval_store.approve_envelope(
+                    envelope_id,
+                    principal=principal,
+                    project_id=command.project_id,
+                    project_fingerprint=self._project_fingerprint(project_root),
+                    task_revision=task_revision,
+                )
+                self._append(task_id, TaskEventDraft(
+                    event_type="agent.approval_granted",
+                    payload={
+                        "envelope_id": envelope.envelope_id,
+                        "task_revision": envelope.task_revision,
+                        "approved_at": envelope.approved_at.isoformat() if envelope.approved_at else None,
+                    },
+                ))
+                return await self.submit(
+                    command, principal=principal, principal_scopes=principal_scopes,
+                )
             child_task_id = approval.payload.get("child_task_id")
             if not isinstance(child_task_id, str):
                 raise ValueError("approval request is invalid")
@@ -356,6 +399,12 @@ class CoreService:
             principal_scopes=principal_scopes,
             trusted_schedule_id=call.schedule_id,
         )
+
+    def approval_required(
+        self, project_id: str, call: CapabilityCall, *, principal: str = "user"
+    ) -> bool:
+        normalized = self._prepare_call(project_id, call, trusted_schedule_id=None)
+        return self._policy.evaluate(principal, project_id, normalized).effect is PolicyEffect.require_approval
 
     def subscribe(self, task_id: str, after_sequence: int = -1) -> tuple[TaskEvent, ...]:
         return self._tasks.events(task_id, after_sequence)
