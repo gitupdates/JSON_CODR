@@ -1,11 +1,27 @@
 {
-  "schema_version": "1",
+  "schema_version": "2",
+  "policy_version": "2026-11-24.1",
+  "probe": {
+    "prompt": "Return one JSON object with a single status field whose value is JSON_CODR_MODEL_PROBE_OK.",
+    "expected": "JSON_CODR_MODEL_PROBE_OK",
+    "timeout_seconds": 30,
+    "maximum_tokens": 32
+  },
   "models": [
     {
-      "name": "llama3.2:3b",
-      "purpose": "general local inference",
+      "name": "qwen2.5-coder:3b",
+      "digest": "sha256:f72c60cabf6237b07f6e632b2c48d533cef25eda2efbd34bed21c5e9c01e6225",
+      "purpose": "reviewed local coding",
       "maximum_download_bytes": 3000000000,
-      "license": "Llama 3.2 Community License",
+      "license": "Apache-2.0",
+      "source": "Ollama library"
+    },
+    {
+      "name": "qwen2.5-coder:0.5b",
+      "digest": "sha256:4ff64a7f502a08b7616edb8ca0a79eb1853fc363d842b7df4b46915d11a3fb09",
+      "purpose": "reviewed local coding",
+      "maximum_download_bytes": 750000000,
+      "license": "Apache-2.0",
       "source": "Ollama library"
     }
   ]

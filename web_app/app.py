@@ -502,13 +502,17 @@ def create_app(
 
             from cli import load_config
             from web_app.core.model_tags import ModelTagRegistry
+            from web_app.core.model_policy import ModelPolicy
             from web_app.core.native_primitives import NativePrimitiveAdapter
             from web_app.core.native_ollama import NativeOllamaTransport
 
             model_registry = ModelTagRegistry.load(Path(__file__).resolve().parent.parent / "zero_layer_models.json")
+            model_policy = ModelPolicy.load(
+                Path(__file__).resolve().parent.parent / "config" / "bootstrap-models.json"
+            )
             native_config = load_config()
             inference_backend = (
-                NativeOllamaTransport(str(native_config["host"]))
+                NativeOllamaTransport(str(native_config["host"]), model_policy=model_policy)
                 if isinstance(service, OllamaService)
                 else (inference_router or service)
             )

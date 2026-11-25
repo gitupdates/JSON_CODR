@@ -45,6 +45,88 @@ class _BlockingStreamResponse:
         yield json.dumps({"message": {"content": ""}, "done": True}).encode() + b"\n"
 
 
+class ModelPolicyTests(unittest.TestCase):
+    _PREFERRED_DIGEST = "sha256:" + "a" * 64
+    _FALLBACK_DIGEST = "sha256:" + "b" * 64
+
+    def _policy(self):
+        from web_app.core.model_policy import ModelPolicy
+
+        return ModelPolicy.from_document({
+            "schema_version": "2",
+            "policy_version": "2026-11-24.99",
+            "probe": {
+                "prompt": "Return only JSON_CODR_MODEL_PROBE_OK",
+                "expected": "JSON_CODR_MODEL_PROBE_OK",
+                "timeout_seconds": 5,
+                "maximum_tokens": 16,
+            },
+            "models": [
+                {
+                    "name": "preferred-code:1b",
+                    "digest": self._PREFERRED_DIGEST,
+                    "purpose": "reviewed local coding",
+                    "maximum_download_bytes": 100,
+                },
+                {
+                    "name": "fallback-code:0.5b",
+                    "digest": self._FALLBACK_DIGEST,
+                    "purpose": "reviewed local coding",
+                    "maximum_download_bytes": 50,
+                },
+            ],
+        })
+
+    def test_missing_preferred_model_selects_reviewed_fallback(self):
+        policy = self._policy()
+
+        evidence = policy.select(
+            [{"name": "fallback-code:0.5b", "digest": "b" * 64}],
+            probe=lambda _model, _probe: True,
+        )
+
+        self.assertEqual(evidence.model, "fallback-code:0.5b")
+        self.assertEqual(evidence.digest, self._FALLBACK_DIGEST)
+        self.assertIn("preferred-code:1b is not installed", evidence.fallback_reason)
+
+    def test_mutable_tag_digest_drift_is_rejected(self):
+        from web_app.core.model_policy import ModelPolicyError
+
+        policy = self._policy()
+        with self.assertRaisesRegex(ModelPolicyError, "digest"):
+            policy.select(
+                [{"name": "preferred-code:1b", "digest": "c" * 64}],
+                probe=lambda _model, _probe: True,
+            )
+
+    def test_failed_coding_probe_is_rejected(self):
+        from web_app.core.model_policy import ModelPolicyError
+
+        policy = self._policy()
+        with self.assertRaisesRegex(ModelPolicyError, "probe"):
+            policy.select(
+                [{"name": "preferred-code:1b", "digest": "a" * 64}],
+                probe=lambda _model, _probe: False,
+            )
+
+    def test_valid_fallback_records_policy_digest_probe_and_reason(self):
+        policy = self._policy()
+
+        evidence = policy.select(
+            [
+                {"name": "preferred-code:1b", "digest": "c" * 64},
+                {"name": "fallback-code:0.5b", "digest": "b" * 64},
+            ],
+            probe=lambda model, _probe: model == "fallback-code:0.5b",
+        )
+
+        self.assertEqual(evidence.policy_version, "2026-11-24.99")
+        self.assertEqual(evidence.model, "fallback-code:0.5b")
+        self.assertEqual(evidence.digest, self._FALLBACK_DIGEST)
+        self.assertTrue(evidence.probe_passed)
+        self.assertIn("digest drift", evidence.fallback_reason)
+
+
 class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
     def test_rejects_non_loopback_endpoint(self):
         from web_app.core.native_ollama import NativeOllamaTransport
@@ -70,6 +152,52 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
             ("http://127.0.0.1:11434/api/tags", "GET", 17),
             ("http://127.0.0.1:11434/api/tags", "GET", 17),
         ])
+
+    async def test_reviewed_model_digest_drift_is_rejected_before_inference(self):
+        from web_app.core.model_policy import ModelPolicy, ModelPolicyError
+        from web_app.core.native_ollama import NativeOllamaTransport
+
+        expected = "sha256:" + "a" * 64
+        policy = ModelPolicy.from_document({
+            "schema_version": "2",
+            "policy_version": "2026-11-24.99",
+            "probe": {
+                "prompt": "Return JSON status",
+                "expected": "JSON_CODR_MODEL_PROBE_OK",
+                "timeout_seconds": 5,
+                "maximum_tokens": 16,
+            },
+            "models": [
+                {
+                    "name": "reviewed-code:1b",
+                    "digest": expected,
+                    "purpose": "reviewed local coding",
+                    "maximum_download_bytes": 100,
+                },
+                {
+                    "name": "fallback-code:0.5b",
+                    "digest": "sha256:" + "b" * 64,
+                    "purpose": "reviewed local coding",
+                    "maximum_download_bytes": 50,
+                },
+            ],
+        })
+        calls = []
+
+        def fake_urlopen(request, timeout):
+            calls.append((request.full_url, request.method, timeout))
+            return _Response(json.dumps({
+                "models": [{"name": "reviewed-code:1b", "digest": "c" * 64}]
+            }).encode())
+
+        transport = NativeOllamaTransport(
+            "http://127.0.0.1:11434", timeout_seconds=17, model_policy=policy
+        )
+        with patch("web_app.core.native_ollama.urlopen", side_effect=fake_urlopen):
+            with self.assertRaisesRegex(ModelPolicyError, "digest drift"):
+                _ = [event async for event in transport.stream_chat("reviewed-code:1b", "code")]
+
+        self.assertEqual(calls, [("http://127.0.0.1:11434/api/tags", "GET", 17)])
 
     async def test_model_discovery_recovers_from_a_transient_connection_reset(self):
         from web_app.core.native_ollama import NativeOllamaTransport

@@ -9,9 +9,40 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 MODULE = ROOT / "scripts" / "bootstrap" / "SourceTrust.psm1"
 WORKSPACE_STATE_MODULE = ROOT / "scripts" / "bootstrap" / "WorkspaceState.psm1"
+MODEL_MANIFEST_MODULE = ROOT / "scripts" / "bootstrap" / "Manifest.psm1"
 
 
 class SourceTrustTests(unittest.TestCase):
+    def test_bootstrap_model_manifest_is_a_versioned_digest_bound_coding_policy(self):
+        environment = dict(os.environ)
+        environment.update({
+            "JSON_CODR_MODEL_MANIFEST_MODULE": str(MODEL_MANIFEST_MODULE),
+            "JSON_CODR_MODEL_MANIFEST_ROOT": str(ROOT),
+        })
+        command = (
+            "Import-Module -Name $env:JSON_CODR_MODEL_MANIFEST_MODULE -Force; "
+            "Import-JsonCodrModelManifest -Root $env:JSON_CODR_MODEL_MANIFEST_ROOT | "
+            "ConvertTo-Json -Depth 8 -Compress"
+        )
+
+        process = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=environment,
+        )
+
+        self.assertEqual(process.returncode, 0, process.stderr)
+        policy = json.loads(process.stdout)
+        self.assertEqual(policy["schema_version"], "2")
+        self.assertRegex(policy["policy_version"], r"^[0-9]{4}-[0-9]{2}-[0-9]{2}\.[0-9]+$")
+        self.assertGreaterEqual(len(policy["models"]), 2)
+        for model in policy["models"]:
+            self.assertEqual(model["purpose"], "reviewed local coding")
+            self.assertRegex(model["digest"], r"^sha256:[0-9a-f]{64}$")
+
     def test_workspace_state_migration_preserves_content_without_executing_it(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "source"

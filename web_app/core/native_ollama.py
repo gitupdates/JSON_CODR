@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from web_app.models import ChatResult, ReasoningEntry, ReasoningTrace
+from web_app.core.model_policy import ModelPolicy
 from web_app.inference.protocol import InferenceEvent, InferenceFinishReason, InferenceRequest
 from web_app.ollama_service import ModelOutputError, ModelTimeoutError, OllamaUnavailableError
 from web_app.reasoning import ReasoningNormalizer
@@ -20,7 +21,13 @@ from web_app.reasoning import ReasoningNormalizer
 class NativeOllamaTransport:
     supports_model_options = True
 
-    def __init__(self, endpoint: str, timeout_seconds: int = 180) -> None:
+    def __init__(
+        self,
+        endpoint: str,
+        timeout_seconds: int = 180,
+        *,
+        model_policy: ModelPolicy | None = None,
+    ) -> None:
         parsed = urlparse(endpoint)
         if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
             raise ValueError("native Ollama endpoint must use HTTP on loopback")
@@ -28,6 +35,7 @@ class NativeOllamaTransport:
             raise ValueError("native Ollama endpoint must be a plain loopback origin")
         self.endpoint = endpoint.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.model_policy = model_policy
 
     async def health(self) -> dict[str, bool]:
         try:
@@ -43,7 +51,13 @@ class NativeOllamaTransport:
             raise ModelOutputError("Ollama returned a malformed model list")
         return [item for item in models if isinstance(item, dict)]
 
+    async def _verify_reviewed_model_digest(self, model: str) -> str | None:
+        if self.model_policy is None or self.model_policy.reviewed_model(model) is None:
+            return None
+        return self.model_policy.require_installed_digest(model, await self.list_models())
+
     async def json_chat(self, model: str, prompt: str, schema: dict) -> str:
+        await self._verify_reviewed_model_digest(model)
         constrained_prompt = (
             f"{prompt}\n\nReturn only one valid JSON object matching this schema exactly. "
             "Do not include markdown or prose.\nJSON SCHEMA:\n"
@@ -107,6 +121,7 @@ class NativeOllamaTransport:
         public_reasoning: bool = False,
         model_options: dict[str, int | float] | None = None,
     ):
+        await self._verify_reviewed_model_digest(model)
         messages = []
         if public_reasoning:
             messages.append({
@@ -248,6 +263,7 @@ class NativeOllamaTransport:
         return await self._run_request(perform)
 
     async def generate(self, request: InferenceRequest):
+        await self._verify_reviewed_model_digest(request.model)
         messages = []
         for message in request.messages:
             text = "".join(part.text or "" for part in message.content if part.type.value == "text")
