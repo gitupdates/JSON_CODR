@@ -5,7 +5,7 @@ import base64
 import json
 import queue
 import threading
-from contextlib import suppress
+from contextlib import aclosing, suppress
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -154,8 +154,47 @@ class NativeOllamaTransport:
         content_parts: list[str] = []
         reasoning_entries: list[ReasoningEntry] = []
         warnings: list[str] = []
-        normalizer = ReasoningNormalizer()
+        async with aclosing(self._stream_response(
+            request, reasoning_entries, content_parts, warnings,
+        )) as response_stream:
+            async for event in response_stream:
+                yield event
+        if not content_parts and public_reasoning and reasoning_entries:
+            warning = (
+                "The model exhausted its response budget in reasoning; "
+                "retried once in final-answer mode."
+            )
+            warnings.append(warning)
+            yield {"type": "warning", "text": warning}
+            fallback_request = {
+                **request,
+                "messages": [user_message],
+                "think": False,
+            }
+            async with aclosing(self._stream_response(
+                fallback_request, reasoning_entries, content_parts, warnings,
+            )) as response_stream:
+                async for event in response_stream:
+                    yield event
+        content = "".join(content_parts).strip()
+        if not content:
+            raise ModelOutputError("Model returned no answer content")
+        summary = next((line.strip() for line in content.splitlines() if line.strip()), "Model response")[:240]
+        reasoning = ReasoningTrace(entries=reasoning_entries, warnings=warnings) if reasoning_entries or warnings else None
+        yield {
+            "type": "completed",
+            "result": ChatResult(model=model, status="success", summary=summary, content=content, reasoning=reasoning),
+        }
+
+    async def _stream_response(
+        self,
+        request: dict,
+        reasoning_entries: list[ReasoningEntry],
+        content_parts: list[str],
+        warnings: list[str],
+    ):
         runner_restart_delays = (0.5, 1.0, 2.0, 4.0)
+        normalizer = ReasoningNormalizer()
         for attempt in range(len(runner_restart_delays) + 1):
             lines = self._stream_request("/api/chat", request)
             normalizer = ReasoningNormalizer()
@@ -212,15 +251,6 @@ class NativeOllamaTransport:
             event = self._stream_delta(delta, reasoning_entries, content_parts, warnings)
             if event:
                 yield event
-        content = "".join(content_parts).strip()
-        if not content:
-            raise ModelOutputError("Model returned no answer content")
-        summary = next((line.strip() for line in content.splitlines() if line.strip()), "Model response")[:240]
-        reasoning = ReasoningTrace(entries=reasoning_entries, warnings=warnings) if reasoning_entries or warnings else None
-        yield {
-            "type": "completed",
-            "result": ChatResult(model=model, status="success", summary=summary, content=content, reasoning=reasoning),
-        }
 
     async def _json_request(self, path: str) -> dict:
         def perform() -> dict:
