@@ -1,7 +1,10 @@
 import io
+import os
 import tempfile
 import unittest
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
@@ -236,7 +239,7 @@ class CoreApiTests(unittest.TestCase):
 
     def test_runtime_telemetry_and_heartbeat_are_read_only(self):
         self.tasks.record_telemetry("runtime.started", {"pid": 42})
-        self.tasks.record_heartbeat("web", 42, "ready")
+        self.tasks.record_heartbeat("web", os.getpid(), "ready")
 
         telemetry = self.client.get("/api/runtime/telemetry")
         heartbeats = self.client.get("/api/runtime/heartbeats")
@@ -246,11 +249,74 @@ class CoreApiTests(unittest.TestCase):
         self.assertEqual(heartbeats.status_code, 200)
         self.assertEqual(heartbeats.json()[0]["runtime_id"], "web")
 
-        status = self.client.get("/api/runtime/status")
+        environment = {
+            "JSON_CODR_REVISION": "a" * 40,
+            "JSON_CODR_INSTANCE_ID": "active-test-instance",
+            "JSON_CODR_STARTED_AT": "2026-11-24T12:00:00+00:00",
+            "JSON_CODR_ARTIFACT_MANIFEST": "fallback:" + "a" * 40,
+        }
+        with patch.dict(os.environ, environment, clear=False):
+            status = self.client.get("/api/runtime/status")
         self.assertEqual(status.status_code, 200)
         self.assertTrue(status.json()["local_only"])
         self.assertEqual(status.json()["health"], "healthy")
+        self.assertIn("management_state", status.json())
+        self.assertEqual(status.json()["management_state"], "managed")
+        self.assertEqual(status.json()["current_process"]["pid"], os.getpid())
+        self.assertEqual(status.json()["revision"], "a" * 40)
+        self.assertEqual(status.json()["instance_id"], "active-test-instance")
         self.assertEqual(status.json()["telemetry"][0]["kind"], "runtime.started")
+
+    def test_runtime_status_reports_the_answering_process_not_a_stale_foreign_heartbeat(self):
+        self.tasks.record_heartbeat("web", 424242, "exited")
+        old = (datetime.now(UTC) - timedelta(minutes=10)).isoformat()
+        with self.tasks._transaction():
+            self.tasks._connection.execute(
+                "UPDATE runtime_heartbeats SET observed_at = ? WHERE runtime_id = 'web'",
+                (old,),
+            )
+        environment = {
+            "JSON_CODR_REVISION": "b" * 40,
+            "JSON_CODR_INSTANCE_ID": "active-live-instance",
+            "JSON_CODR_STARTED_AT": "2026-11-24T12:00:00+00:00",
+            "JSON_CODR_ARTIFACT_MANIFEST": "fallback:" + "b" * 40,
+        }
+
+        with patch.dict(os.environ, environment, clear=False):
+            status = self.client.get("/api/runtime/status")
+
+        payload = status.json()
+        self.assertEqual(status.status_code, 200)
+        self.assertEqual(payload["health"], "healthy")
+        self.assertEqual(payload["management_state"], "unmanaged")
+        self.assertEqual(payload["heartbeats"], [{
+            "runtime_id": "web",
+            "pid": os.getpid(),
+            "status": "ready",
+            "stale": False,
+        }])
+        self.assertEqual(payload["historical_heartbeats"][0]["pid"], 424242)
+        self.assertTrue(payload["historical_heartbeats"][0]["stale"])
+
+    def test_runtime_status_degrades_when_build_identity_is_missing(self):
+        identity_names = {
+            "JSON_CODR_REVISION": "",
+            "JSON_CODR_INSTANCE_ID": "",
+            "JSON_CODR_STARTED_AT": "",
+            "JSON_CODR_ARTIFACT_MANIFEST": "",
+        }
+
+        with patch.dict(os.environ, identity_names, clear=False):
+            status = self.client.get("/api/runtime/status")
+
+        self.assertEqual(status.status_code, 200)
+        self.assertEqual(status.json()["health"], "degraded")
+        self.assertIn("identity_state", status.json())
+        self.assertEqual(status.json()["identity_state"], "incomplete")
+        self.assertEqual(
+            status.json()["missing_identity"],
+            ["revision", "instance_id", "started_at", "manifest_digest"],
+        )
 
     def test_privileged_scope_dependency_rejects_legacy_principal_header(self):
         identity = self.identity

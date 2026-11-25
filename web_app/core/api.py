@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Callable, Mapping, Sequence
 from typing import Annotated, Any, Literal
 
@@ -18,6 +19,7 @@ from web_app.core.component_manager import ComponentManager
 from web_app.core.component_registry import ComponentRequest, ComponentScope
 from web_app.core.memory import MemoryDraft, MemoryPolicyError, MemoryStore
 from web_app.core.http_identity import MutationAuthorizer
+from web_app.core.runtime_status import build_runtime_status
 from web_app.models import MemorySettings
 
 
@@ -436,15 +438,11 @@ def create_core_router(
     @router.get("/api/runtime/status")
     def runtime_status():
         store = runtime()[1]
-        heartbeats = store.runtime_heartbeats()
-        telemetry = store.telemetry()
-        degraded = any(item.stale or item.status not in {"running", "ready", "healthy"} for item in heartbeats)
-        return {
-            "local_only": True,
-            "health": "degraded" if degraded else "healthy",
-            "heartbeats": heartbeats,
-            "telemetry": telemetry[-100:],
-        }
+        return build_runtime_status(
+            store,
+            environment=os.environ,
+            current_pid=os.getpid(),
+        )
 
     @router.get("/api/tasks/{task_id}/artifacts/{artifact_id}")
     def download_artifact(task_id: str, artifact_id: str):

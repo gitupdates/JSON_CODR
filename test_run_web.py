@@ -4,13 +4,35 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from json_codr_launcher import LocalProcessRunner
 from web_app.runtime_config import RuntimeConfig
 
 ROOT = Path(__file__).resolve().parent
 
 
 class RunWebTests(unittest.TestCase):
+    def test_local_launcher_propagates_unique_server_identity(self):
+        pointer = {
+            "root": str(ROOT),
+            "revision": "c" * 40,
+            "version": "V1.4.1",
+            "data_root": str(ROOT / ".runtime-test-data"),
+            "manifest_digest": "fallback:" + "c" * 40,
+            "launch_argv": ["python", "-m", "uvicorn", "web_app.app:app", "--host", "{host}", "--port", "{port}"],
+        }
+
+        with patch("json_codr_launcher.subprocess.Popen") as popen:
+            LocalProcessRunner().start(pointer, "127.0.0.1", 8765)
+
+        environment = popen.call_args.kwargs["env"]
+        self.assertEqual(environment["JSON_CODR_REVISION"], "c" * 40)
+        self.assertEqual(environment["JSON_CODR_ARTIFACT_MANIFEST"], "fallback:" + "c" * 40)
+        self.assertIn("JSON_CODR_INSTANCE_ID", environment)
+        self.assertRegex(environment["JSON_CODR_INSTANCE_ID"], r"^active-[0-9a-f]{32}$")
+        self.assertRegex(environment["JSON_CODR_STARTED_AT"], r"^2026-11-2[45]T")
+
     def test_launcher_validation_reports_localhost_runtime(self):
         config = RuntimeConfig.load()
         process = subprocess.run(

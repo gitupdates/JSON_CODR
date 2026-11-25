@@ -543,12 +543,15 @@ class LocalProcessRunner:
         command = [
             item.format(host=host, port=port) for item in pointer["launch_argv"]
         ]
+        identity = uuid4().hex
         environment = {
             **os.environ,
             "JSON_CODR_REVISION": pointer["revision"],
             "JSON_CODR_EXPECTED_VERSION": pointer["version"],
             "JSON_CODR_DATA_ROOT": pointer.get("data_root", ""),
             "JSON_CODR_ARTIFACT_MANIFEST": pointer["manifest_digest"],
+            "JSON_CODR_INSTANCE_ID": f"active-{identity}",
+            "JSON_CODR_STARTED_AT": _utc_now(),
             "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",
         }
