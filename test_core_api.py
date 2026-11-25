@@ -318,6 +318,23 @@ class CoreApiTests(unittest.TestCase):
             ["revision", "instance_id", "started_at", "manifest_digest"],
         )
 
+    def test_runtime_status_recognizes_the_answering_process_stable_launcher_parent(self):
+        environment = {
+            "JSON_CODR_REVISION": "d" * 40,
+            "JSON_CODR_INSTANCE_ID": "active-parented-instance",
+            "JSON_CODR_STARTED_AT": "2026-11-24T12:00:00+00:00",
+            "JSON_CODR_ARTIFACT_MANIFEST": "fallback:" + "d" * 40,
+            "JSON_CODR_SUPERVISOR_PID": str(os.getppid()),
+        }
+
+        with patch.dict(os.environ, environment, clear=False):
+            status = self.client.get("/api/runtime/status")
+
+        self.assertEqual(status.status_code, 200)
+        self.assertEqual(status.json()["management_state"], "managed")
+        self.assertEqual(status.json()["management_source"], "stable-launcher")
+        self.assertEqual(status.json()["supervisor_pid"], os.getppid())
+
     def test_privileged_scope_dependency_rejects_legacy_principal_header(self):
         identity = self.identity
         credential = identity.issue_credential(self.user.user_id, "browser_session", "test", ("lesson.edit",))

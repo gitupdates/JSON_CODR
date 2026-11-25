@@ -577,6 +577,7 @@ class LocalProcessRunner:
             "JSON_CODR_ARTIFACT_MANIFEST": pointer["manifest_digest"],
             "JSON_CODR_INSTANCE_ID": f"active-{identity}",
             "JSON_CODR_STARTED_AT": _utc_now(),
+            "JSON_CODR_SUPERVISOR_PID": str(os.getpid()),
             "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",
         }

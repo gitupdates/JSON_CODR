@@ -56,6 +56,8 @@ class RunWebTests(unittest.TestCase):
         self.assertIn("JSON_CODR_INSTANCE_ID", environment)
         self.assertRegex(environment["JSON_CODR_INSTANCE_ID"], r"^active-[0-9a-f]{32}$")
         self.assertRegex(environment["JSON_CODR_STARTED_AT"], r"^2026-11-2[45]T")
+        self.assertIn("JSON_CODR_SUPERVISOR_PID", environment)
+        self.assertEqual(environment["JSON_CODR_SUPERVISOR_PID"], str(os.getpid()))
 
     def test_launcher_validation_reports_localhost_runtime(self):
         config = RuntimeConfig.load()
