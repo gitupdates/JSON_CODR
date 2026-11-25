@@ -256,9 +256,39 @@ def _local_json(endpoint: str, path: str, *, payload: Mapping[str, object] | Non
         return json.loads(response.read())
 
 
+def _retrying_local_json(
+    endpoint: str,
+    path: str,
+    *,
+    payload: Mapping[str, object] | None,
+    timeout: int,
+) -> Any:
+    deadline = time.monotonic() + timeout
+    for attempt, delay in enumerate((0.0, 0.5, 1.0)):
+        if delay:
+            remaining = deadline - time.monotonic()
+            if remaining <= delay:
+                break
+            time.sleep(delay)
+        try:
+            return _local_json(
+                endpoint,
+                path,
+                payload=payload,
+                timeout=max(1, int(deadline - time.monotonic())),
+            )
+        except HTTPError as error:
+            if error.code < 500 or attempt == 2 or time.monotonic() >= deadline:
+                raise
+        except (URLError, ConnectionResetError, TimeoutError):
+            if attempt == 2 or time.monotonic() >= deadline:
+                raise
+    raise TimeoutError("bounded Ollama policy request did not complete")
+
+
 def evaluate_local_policy(policy: ModelPolicy, endpoint: str) -> ModelSelectionEvidence:
     origin = _loopback_endpoint(endpoint)
-    tags = _local_json(origin, "/api/tags", payload=None, timeout=5)
+    tags = _retrying_local_json(origin, "/api/tags", payload=None, timeout=5)
     if not isinstance(tags, Mapping) or not isinstance(tags.get("models"), list):
         raise ModelPolicyError("Ollama returned a malformed model inventory")
 
@@ -275,25 +305,12 @@ def evaluate_local_policy(policy: ModelPolicy, endpoint: str) -> ModelSelectionE
                 "num_ctx": 1024,
             },
         }
-        deadline = time.monotonic() + spec.timeout_seconds
-        result: Any = None
-        for attempt, delay in enumerate((0.0, 0.5, 1.0)):
-            if delay:
-                remaining = deadline - time.monotonic()
-                if remaining <= delay:
-                    break
-                time.sleep(delay)
-            try:
-                result = _local_json(
-                    origin,
-                    "/api/generate",
-                    payload=payload,
-                    timeout=max(1, int(deadline - time.monotonic())),
-                )
-                break
-            except (HTTPError, URLError, ConnectionResetError, TimeoutError):
-                if attempt == 2 or time.monotonic() >= deadline:
-                    raise
+        result = _retrying_local_json(
+            origin,
+            "/api/generate",
+            payload=payload,
+            timeout=spec.timeout_seconds,
+        )
         response = result.get("response") if isinstance(result, Mapping) else None
         try:
             structured = json.loads(response) if isinstance(response, str) else None

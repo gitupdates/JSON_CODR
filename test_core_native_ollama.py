@@ -126,6 +126,29 @@ class ModelPolicyTests(unittest.TestCase):
         self.assertTrue(evidence.probe_passed)
         self.assertIn("digest drift", evidence.fallback_reason)
 
+    def test_local_policy_recovers_from_transient_inventory_connection_reset(self):
+        from web_app.core.model_policy import evaluate_local_policy
+
+        policy = self._policy()
+        responses = [
+            ConnectionResetError("daemon recycled the inventory connection"),
+            _Response(json.dumps({
+                "models": [{"name": "preferred-code:1b", "digest": "a" * 64}]
+            }).encode()),
+            _Response(json.dumps({
+                "response": json.dumps({"status": "JSON_CODR_MODEL_PROBE_OK"})
+            }).encode()),
+        ]
+
+        with (
+            patch("web_app.core.model_policy.urlopen", side_effect=responses),
+            patch("web_app.core.model_policy.time.sleep") as sleep,
+        ):
+            evidence = evaluate_local_policy(policy, "http://127.0.0.1:11434")
+
+        self.assertEqual(evidence.model, "preferred-code:1b")
+        sleep.assert_called_once_with(0.5)
+
 
 class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
     def test_rejects_non_loopback_endpoint(self):
