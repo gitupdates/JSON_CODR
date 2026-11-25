@@ -58,6 +58,10 @@ class DisposableWorkflowSecurityTests(unittest.TestCase):
         ):
             with self.subTest(evidence=evidence):
                 self.assertIn(evidence, text)
+        self.assertLess(
+            text.index("'--literal-pathspecs', 'add'"),
+            text.index("'diff', '--cached'"),
+        )
 
     def test_local_commit_does_not_execute_repository_hooks(self):
         project = repository(self.root)

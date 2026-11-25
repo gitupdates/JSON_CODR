@@ -252,7 +252,8 @@ if __name__ == '__main__':
   $crafted = Invoke-Capability 'native.write' 'bounded_edit' $craftedName @{ content = "filename is data`n" }
   Add-Step 'crafted_filename' $crafted @{ path = $craftedName; checkpoint_id = (Get-CheckpointId $crafted) }
 
-  $diffText = Invoke-SafeGit @('diff', '--binary', '--', 'calculator.py', 'test_calculator.py', $craftedName)
+  Invoke-SafeGit @('--literal-pathspecs', 'add', '--', 'calculator.py', 'test_calculator.py', $craftedName) | Out-Null
+  $diffText = Invoke-SafeGit @('diff', '--cached', '--binary', '--', 'calculator.py', 'test_calculator.py', $craftedName)
   if (-not $diffText) { throw 'Disposable repository did not produce a Git diff' }
   $receipt.steps += [ordered]@{ name = 'diff'; status = 'completed'; evidence = @{ digest = (Get-Sha256Text $diffText) } }
 
@@ -261,7 +262,6 @@ if __name__ == '__main__':
   $hookTarget = $hookSentinel.Replace('\', '/')
   [IO.File]::WriteAllText($hookPath, "#!/bin/sh`nprintf escaped > `"$hookTarget`"`n", [Text.UTF8Encoding]::new($false))
 
-  Invoke-SafeGit @('--literal-pathspecs', 'add', '--', 'calculator.py', 'test_calculator.py', $craftedName) | Out-Null
   $gitRoute = 'local-adapter'
   if ($authOutput -match 'git\.edit' -and $authOutput -match 'git\.commit') {
     Invoke-JsonApi 'POST' '/api/github/local/stage' @{ confirmed = $true; project_root = $projectRoot; paths = @('calculator.py', 'test_calculator.py', $craftedName) } | Out-Null
