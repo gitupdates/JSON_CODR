@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any, TextIO
 from uuid import uuid4
 
+from cli import load_config, resolve_model_name
 from web_app.core.cli_identity import CliIdentityService, DpapiTokenStore, normalize_server_origin
 from web_app.runtime_config import RuntimeConfig
 
@@ -97,7 +99,7 @@ def run_cli(
             "operation": args.operation,
             "project_root": project_root,
             "mode": "native",
-            "arguments": {"prompt": args.prompt},
+            "arguments": {"model": args.model, "prompt": args.prompt},
         },
     }
     try:
@@ -155,15 +157,73 @@ def _default_auth_service() -> CliIdentityService:
 
 def _http_submitter(base_url: str, token: str) -> Submitter:
     def submit(command: Mapping[str, Any]) -> Mapping[str, Any]:
+        tasks_path = RuntimeConfig.load().tasks_path.rstrip("/")
+        opener = urllib.request.build_opener(_RejectAuthenticatedRedirects())
+
+        def read_json(request: urllib.request.Request) -> Any:
+            retry_delays = (0.5, 1.0, 2.0, 4.0, 8.0)
+            for attempt in range(len(retry_delays) + 1):
+                try:
+                    with opener.open(request, timeout=10.0) as response:
+                        return json.load(response)
+                except urllib.error.HTTPError:
+                    raise
+                except (ConnectionResetError, TimeoutError, urllib.error.URLError) as error:
+                    reason = getattr(error, "reason", error)
+                    transient_reset = (
+                        isinstance(reason, (ConnectionResetError, TimeoutError))
+                        or "forcibly closed" in str(error)
+                        or "connection reset" in str(error).casefold()
+                        or "timed out" in str(error).casefold()
+                    )
+                    if attempt == len(retry_delays) or not transient_reset:
+                        raise
+                    time.sleep(retry_delays[attempt])
+            raise ConnectionError("JSON_CODR loopback request failed")
+
         request = urllib.request.Request(
-            f"{base_url.rstrip('/')}{RuntimeConfig.load().tasks_path}",
+            f"{base_url.rstrip('/')}{tasks_path}/live",
             data=json.dumps(command).encode("utf-8"),
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
             method="POST",
         )
-        opener = urllib.request.build_opener(_RejectAuthenticatedRedirects())
-        with opener.open(request) as response:
-            return json.load(response)
+        record = read_json(request)
+        if not isinstance(record, Mapping):
+            raise ValueError("JSON_CODR returned a malformed task record")
+        terminal = {"completed", "failed", "cancelled", "interrupted"}
+        deadline = time.monotonic() + 300.0
+        while True:
+            events = record.get("events")
+            permission_required = isinstance(events, list) and any(
+                isinstance(event, Mapping) and event.get("event_type") == "task.permission_required"
+                for event in events
+            )
+            if record.get("status") in terminal or permission_required:
+                return record
+            task_id = record.get("task_id")
+            if not isinstance(task_id, str) or not task_id:
+                raise ValueError("JSON_CODR returned a task record without an identifier")
+            if time.monotonic() >= deadline:
+                raise TimeoutError("JSON_CODR task did not reach a terminal state within 300 seconds")
+            time.sleep(5.0)
+            poll = urllib.request.Request(
+                f"{base_url.rstrip('/')}{tasks_path}/{task_id}/status",
+                headers={"Authorization": f"Bearer {token}"},
+                method="GET",
+            )
+            record = read_json(poll)
+            if not isinstance(record, Mapping):
+                raise ValueError("JSON_CODR returned a malformed task record")
+            if record.get("status") in terminal or record.get("permission_required") is True:
+                result_request = urllib.request.Request(
+                    f"{base_url.rstrip('/')}{tasks_path}/{task_id}/result",
+                    headers={"Authorization": f"Bearer {token}"},
+                    method="GET",
+                )
+                record = read_json(result_request)
+                if not isinstance(record, Mapping):
+                    raise ValueError("JSON_CODR returned a malformed task record")
+                return record
 
     return submit
 
@@ -218,6 +278,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--thread")
     run.add_argument("--capability", default="inference.generate")
     run.add_argument("--operation", default="generate")
+    run.add_argument("--model", default=resolve_model_name(None, load_config()))
     run.add_argument("--output", choices=("text", "json", "stream-json"), default="text")
     run.add_argument("--url", default=runtime.url)
     status = subparsers.add_parser("status")

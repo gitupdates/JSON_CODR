@@ -106,6 +106,22 @@ class ModelRunServiceTests(unittest.IsolatedAsyncioTestCase):
             request_key=f"request-{profile}",
         ))
 
+    async def test_capability_prompt_is_direct_without_session_context_and_canonical_with_context(self):
+        from web_app.model_runs import capability_inference_prompt
+
+        task = "Reply with exactly: CLI is working"
+        self.assertEqual(
+            capability_inference_prompt(model="deepcoder:1.5b", task=task),
+            task,
+        )
+        contextual = capability_inference_prompt(
+            model="deepcoder:1.5b",
+            task=task,
+            assembled_prompt=f"ACTIVE SKILL:\nreview\n\nUSER REQUEST:\n{task}",
+        )
+        self.assertIn("CANONICAL MULTI-MODEL REQUEST", contextual)
+        self.assertIn(f"USER TASK (authoritative):\n{task}", contextual)
+
     async def test_snapshots_installed_roster_reports_unavailable_and_preserves_order(self):
         run = await self.create()
         self.assertEqual(run.roster, ["model-b", "model-a"])

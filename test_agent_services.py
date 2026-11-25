@@ -323,6 +323,22 @@ class AgentServicesTests(unittest.IsolatedAsyncioTestCase):
             "verified_tool_models": ["missing:4b"],
         }), "qwen2.5-coder:0.5b")
 
+    def test_canonical_config_routes_normal_defaults_to_the_verified_stable_model(self):
+        from cli import load_config, resolve_model_name
+        from web_app.core.agent_services import select_agent_planner_model
+
+        config = load_config()
+        stable_model = "qwen2.5-coder:3b"
+
+        self.assertEqual(config["model"], stable_model)
+        self.assertEqual(config["primary_base_model"], stable_model)
+        self.assertEqual(config["synthesizer_model"], stable_model)
+        self.assertEqual(config["tool_fallback_model"], stable_model)
+        self.assertIn(stable_model, config["verified_tool_models"])
+        self.assertIn(stable_model, config["jury_models"])
+        self.assertEqual(resolve_model_name(None, config), stable_model)
+        self.assertEqual(select_agent_planner_model(config), stable_model)
+
     async def test_verifier_uses_persisted_action_evidence_not_model_claims(self):
         store = TaskStore(Path(self.temporary.name) / "tasks.sqlite")
         try:

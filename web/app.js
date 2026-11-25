@@ -2376,7 +2376,8 @@ function renderRecommendations(recommendations) {
       button.addEventListener("click", async () => {
         excludedSkillIds = [...new Set([...excludedSkillIds, recommendation.reference])];
         const response = await fetch(`/api/sessions/${sessionId}/skill-routing`, {
-          method: "PATCH", headers: { "Content-Type": "application/json" },
+          method: "PATCH",
+          headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify({ excluded_skill_ids: excludedSkillIds }),
         });
         if (!response.ok) return showError((await response.json()).detail || "Unable to dismiss recommendation");
@@ -2393,7 +2394,9 @@ async function previewSkillRecommendations() {
   if (!prompt) return renderRecommendations([]);
   await ensureSession();
   const response = await fetch(`/api/sessions/${sessionId}/skill-recommendations`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt }),
+    method: "POST",
+    headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ prompt }),
   });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.detail || "Unable to preview skill recommendations");
@@ -2661,9 +2664,44 @@ async function submitPrompt(event) {
   elements.error.hidden = true;
   try {
     const attachmentIds = [...elements.attachmentList.querySelectorAll("[data-attachment-id]")].map((item) => item.dataset.attachmentId);
-    const userMessage = await conversationView.appendUser(prompt, attachmentIds);
     elements.empty.hidden = true;
     elements.prompt.value = "";
+    const directModelRun = elements.workspaceAgentSelect.value === "direct"
+      && elements.model.value !== "multi-model";
+    if (directModelRun) {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          model: elements.model.value,
+          prompt,
+          session_id: sessionId,
+        }),
+      });
+      if (!response.ok) throw new Error(await responseErrorMessage(response, "Local model request failed"));
+      const payload = await response.json();
+      await conversationView.restore(sessionId);
+      activeCoreTaskId = null;
+      activeWorkspaceRoute = "local-model";
+      elements.taskRequestedModel.textContent = elements.model.value;
+      elements.taskEffectiveModel.textContent = payload.model;
+      elements.responseModel.textContent = payload.model;
+      elements.summary.textContent = payload.summary;
+      elements.content.textContent = payload.content;
+      elements.result.hidden = false;
+      renderAttachedSkills(payload.attached_skills || []);
+      renderRecommendations(payload.skill_recommendations || []);
+      renderActions(payload.action_proposals || []);
+      elements.artifactOutput.hidden = !payload.artifact;
+      if (payload.artifact) {
+        elements.artifactOutput.href = payload.artifact.url;
+        elements.artifactOutput.textContent = `Download ${payload.artifact.filename}`;
+      }
+      renderWorkspaceActivityNotice("local-model · completed", "completed");
+      setPending(false);
+      return;
+    }
+    const userMessage = await conversationView.appendUser(prompt, attachmentIds);
     const response = await fetch("/api/workspace/tasks", {
       method: "POST",
       headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
@@ -2689,7 +2727,7 @@ async function submitPrompt(event) {
     elements.taskEffectiveModel.textContent = payload.effective_model || "All installed models";
     elements.responseModel.textContent = payload.effective_model || payload.route;
     elements.summary.textContent = payload.status === "running"
-      ? "Multi-model run started"
+      ? (payload.route === "multi-model" ? "Multi-model run started" : "Agent task started")
       : payload.status === "completed"
         ? "Workspace task completed"
         : payload.status === "approval_required"

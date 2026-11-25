@@ -101,7 +101,7 @@ from web_app.core.verifier_identity import VerifierIdentityService
 from web_app.dependencies import DependencyService
 from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, ConnectionPreviewRequest, ConnectionRecoveryRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GitHubAuthCancelRequest, GitHubAuthLoginRequest, GitHubBuildCheckRequest, GitHubBuildUpdateRequest, GitHubConfirmedWrite, GitHubIssueCommentRequest, GitHubIssueCreateRequest, GitHubIssueUpdateRequest, GitHubLocalBranchRequest, GitHubLocalCloneRequest, GitHubLocalCommitRequest, GitHubLocalPushRequest, GitHubLocalStageRequest, GitHubLocalSyncRequest, GitHubPullRequestCreateRequest, GitHubPullRequestMergeRequest, GitHubPullRequestUpdateRequest, GitHubReleaseCreateRequest, GitHubReleaseUpdateRequest, GitHubRemoteBranchCreateRequest, GitHubRepositoryCreateRequest, GitHubRepositoryDeleteRequest, GitHubRepositoryUpdateRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, OptimizedModelInstallRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
 from web_app.model_run_store import ModelRunStore, RequestKeyConflict
-from web_app.model_runs import ModelRunService, canonical_model_prompt
+from web_app.model_runs import ModelRunService, canonical_model_prompt, capability_inference_prompt
 from web_app.ollama_service import (
     ModelOutputError,
     ModelTimeoutError,
@@ -484,11 +484,11 @@ def create_app(
                     raise ValueError("inference generation requires model")
                 session_id = call.arguments.get("session_id")
                 if not isinstance(session_id, str):
-                    return canonical_model_prompt(model=model, task=prompt, assembled_prompt=prompt), {}
+                    return capability_inference_prompt(model=model, task=prompt), {}
                 session = workspace.get_session(session_id)
                 recommendation_result = recommendations.recommend(session, prompt)
                 context_result = context_assembler.build(session, prompt, recommendation_result)
-                return canonical_model_prompt(
+                return capability_inference_prompt(
                     model=model,
                     task=prompt,
                     assembled_prompt=context_result.prompt,
@@ -3024,6 +3024,20 @@ def create_app(
         if not request.prompt.strip():
             raise HTTPException(status_code=400, detail="Prompt must not be empty")
         try:
+            if request.model.strip().casefold() == "auto":
+                installed_models = [
+                    item["name"]
+                    for item in await (
+                        inference_router.list_models() if inference_router else service.list_models()
+                    )
+                    if item.get("installed", True) and isinstance(item.get("name"), str)
+                ]
+                if not installed_models:
+                    raise OllamaUnavailableError("No installed local model is available")
+                configured_model = str(getattr(service, "config", {}).get("model", "")).strip()
+                request.model = (
+                    configured_model if configured_model in installed_models else installed_models[0]
+                )
             original_prompt = request.prompt.strip()
             model_prompt = original_prompt
             model_images = []
@@ -3112,7 +3126,7 @@ def create_app(
                     request.session_id,
                     ChatMessage(
                         role="assistant",
-                        content=f"{result.summary}\n\n{result.content}",
+                        content=result.content,
                         task_id=canonical_run.run_id,
                     ),
                 )

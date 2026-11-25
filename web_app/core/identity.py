@@ -770,7 +770,8 @@ class IdentityService:
         allowed = set(self.credential_scopes(user_id))
         if any(scope not in allowed for scope in requested):
             raise PermissionError("requested CLI scope is not allowed")
-        return tuple(dict.fromkeys((*self.lesson_scopes(user_id), *requested)))
+        task_submission = ("agent.launch",) if "agent.launch" in allowed else ()
+        return tuple(dict.fromkeys((*self.lesson_scopes(user_id), *task_submission, *requested)))
 
     def _purpose_scopes(
         self,

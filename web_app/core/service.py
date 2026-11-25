@@ -401,6 +401,11 @@ class CoreService:
             raise RuntimeError("delegated worktrees require a project registry")
         return self._project_roots.register_child(parent_project_id, root).project_id
 
+    def register_project_root(self, project_id: str, root: str | Path) -> str:
+        if not isinstance(self._project_roots, ProjectRegistry):
+            raise RuntimeError("capability execution requires a project registry")
+        return self._project_roots.register(root, project_id=project_id).project_id
+
     def _resolve_project_root(self, project_id: str) -> Path | None:
         if self._project_roots is None:
             raise RuntimeError("capability execution requires a project registry")

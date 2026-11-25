@@ -1,11 +1,13 @@
 {
   "host": "http://127.0.0.1:11434",
-  "model": "qwen2.5-coder:0.5b",
-  "primary_base_model": "qwen2.5-coder:0.5b",
-  "synthesizer_model": "qwen2.5-coder:0.5b",
-  "tool_fallback_model": "",
+  "model": "qwen2.5-coder:3b",
+  "primary_base_model": "qwen2.5-coder:3b",
+  "synthesizer_model": "qwen2.5-coder:3b",
+  "tool_fallback_model": "qwen2.5-coder:3b",
   "verified_tool_models": [
+    "qwen2.5-coder:3b",
     "qwen2.5-coder:7b-instruct-q4_K_M",
+    "deepcoder:1.5b",
     "qwen3:4b",
     "qwen3:8b",
     "qwen3.5:9b"

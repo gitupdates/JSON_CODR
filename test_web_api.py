@@ -1648,6 +1648,28 @@ class WebApiTests(unittest.TestCase):
             self.assertEqual(response.json()["status"], "ready")
             self.assertIsNone(response.json()["error"])
 
+    def test_chat_auto_selects_the_configured_installed_model(self):
+        self.service.config["model"] = "qwen2.5-coder:7b-instruct-q4_K_M"
+        identity = self.client.app.state.identity
+        administrator = identity.bootstrap("development", "Administrator").user
+        credential = identity.issue_credential(
+            administrator.user_id,
+            "browser_session",
+            "test browser",
+            identity.browser_session_scopes(administrator.user_id),
+        )
+        self.client.cookies.set("json_codr_session", credential.token)
+        self.client.cookies.set("json_codr_csrf", "test-csrf")
+
+        response = self.client.post(
+            "/api/chat",
+            headers={"X-CSRF-Token": "test-csrf"},
+            json={"model": "auto", "prompt": "Hello"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["model"], "qwen2.5-coder:7b-instruct-q4_K_M")
+
     def test_empty_prompt_is_rejected(self):
         response = self.client.post("/api/chat", json={"model": "qwen", "prompt": "   "})
         self.assertEqual(response.status_code, 400)

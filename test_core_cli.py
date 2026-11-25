@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.response import addinfourl
 
+from cli import load_config, resolve_model_name
 from web_app.core.cli import run_cli
 from web_app.core.cli_identity import normalize_server_origin
 from web_app.runtime_config import RuntimeConfig
@@ -103,7 +104,8 @@ class CoreCliTests(unittest.TestCase):
                 return False
 
         class Opener:
-            def open(self, request):
+            def open(self, request, timeout):
+                self.assert_timeout = timeout
                 request_headers.update(dict(request.header_items()))
                 return Response(b'{"task_id":"task-1","status":"completed","events":[]}')
 
@@ -122,12 +124,90 @@ class CoreCliTests(unittest.TestCase):
         self.assertEqual(request_headers["Authorization"], "Bearer cli-secret")
         self.assertNotIn("cli-secret", output.getvalue())
 
+    def test_authenticated_submission_starts_live_then_polls_to_a_terminal_record(self):
+        requests = []
+
+        class Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        class Opener:
+            poll_calls = 0
+
+            def open(self, request, timeout):
+                self.assert_timeout = timeout
+                requests.append((request.full_url, request.method, dict(request.header_items())))
+                if request.method == "POST":
+                    return Response(b'{"task_id":"task-1","status":"running","events":[]}')
+                if not request.full_url.endswith("/status"):
+                    return Response(b'{"task_id":"task-1","status":"completed","events":[]}')
+                self.poll_calls += 1
+                if self.poll_calls == 1:
+                    raise ConnectionResetError("loopback connection was recycled")
+                if self.poll_calls == 2:
+                    raise TimeoutError("loopback read timed out")
+                return Response(b'{"task_id":"task-1","status":"completed","permission_required":false}')
+
+        class Store:
+            def load(self):
+                return {"token": "cli-secret", "server_origin": RuntimeConfig.load().url}
+
+        with (
+            patch("web_app.core.cli.urllib.request.build_opener", return_value=Opener()),
+            patch("web_app.core.cli.time.sleep"),
+        ):
+            code = run_cli(
+                ["run", "--project", ".", "inspect"],
+                auth_service=SimpleNamespace(store=Store()),
+                stdout=io.StringIO(),
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            [(url, method) for url, method, _headers in requests],
+            [
+                (f"{RuntimeConfig.load().url}/api/tasks/live", "POST"),
+                (f"{RuntimeConfig.load().url}/api/tasks/task-1/status", "GET"),
+                (f"{RuntimeConfig.load().url}/api/tasks/task-1/status", "GET"),
+                (f"{RuntimeConfig.load().url}/api/tasks/task-1/status", "GET"),
+                (f"{RuntimeConfig.load().url}/api/tasks/task-1/result", "GET"),
+            ],
+        )
+        self.assertTrue(all(headers["Authorization"] == "Bearer cli-secret" for _, _, headers in requests))
+
+    def test_documented_run_submits_the_configured_default_model_and_accepts_an_override(self):
+        submitted = []
+
+        def submit(command):
+            submitted.append(command)
+            return {"task_id": command["task_id"], "status": "completed", "events": []}
+
+        output = io.StringIO()
+        self.assertEqual(run_cli(["run", "--project", ".", "inspect"], submit=submit, stdout=output), 0)
+        self.assertEqual(
+            submitted[-1]["payload"]["arguments"],
+            {"model": resolve_model_name(None, load_config()), "prompt": "inspect"},
+        )
+
+        self.assertEqual(
+            run_cli(
+                ["run", "--project", ".", "--model", "qwen3:4b", "inspect"],
+                submit=submit,
+                stdout=output,
+            ),
+            0,
+        )
+        self.assertEqual(submitted[-1]["payload"]["arguments"]["model"], "qwen3:4b")
+
     def test_authenticated_submission_rejects_cross_origin_redirects_without_a_second_request(self):
         for status in (301, 302, 303, 307, 308):
             with self.subTest(status=status):
                 source_origin = "http://source.test"
                 transport = _RedirectTransport(
-                    f"{source_origin}/api/tasks",
+                    f"{source_origin}/api/tasks/live",
                     status,
                     "http://target.test/capture",
                 )
@@ -151,7 +231,7 @@ class CoreCliTests(unittest.TestCase):
     def test_authenticated_submission_rejects_same_origin_redirects(self):
         source_origin = "http://source.test"
         transport = _RedirectTransport(
-            f"{source_origin}/api/tasks",
+            f"{source_origin}/api/tasks/live",
             302,
             f"{source_origin}/redirected",
         )
@@ -176,7 +256,7 @@ class CoreCliTests(unittest.TestCase):
     def test_redirect_failure_does_not_output_location_credentials(self):
         source_origin = "http://source.test"
         transport = _RedirectTransport(
-            f"{source_origin}/api/tasks",
+            f"{source_origin}/api/tasks/live",
             302,
             "http://redirect-user:redirect-password@target.test/capture",
         )

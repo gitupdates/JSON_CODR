@@ -208,7 +208,14 @@ def create_core_router(
         http_request: Request,
     ):
         principal = require_agent_mutation(http_request)
-        record = await runtime()[0].submit(
+        service = runtime()[0]
+        if command.command_type != "agent.run":
+            project_root = command.payload.get("project_root")
+            if isinstance(project_root, str):
+                command = command.model_copy(update={
+                    "project_id": service.register_project_root(command.project_id, project_root),
+                })
+        record = await service.submit(
             command,
             principal=principal.user_id,
             principal_scopes=principal.scopes,
@@ -220,9 +227,21 @@ def create_core_router(
     @router.post("/api/tasks/live", status_code=202)
     async def start_task(
         command: TaskCommand,
-        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+        http_request: Request,
     ):
-        return await runtime()[0].start(command, principal=principal)
+        principal = require_agent_mutation(http_request)
+        service = runtime()[0]
+        if command.command_type != "agent.run":
+            project_root = command.payload.get("project_root")
+            if isinstance(project_root, str):
+                command = command.model_copy(update={
+                    "project_id": service.register_project_root(command.project_id, project_root),
+                })
+        return await service.start(
+            command,
+            principal=principal.user_id,
+            principal_scopes=principal.scopes,
+        )
 
     @router.get("/api/tasks/{task_id}")
     def get_task(task_id: str):
@@ -230,6 +249,32 @@ def create_core_router(
             return runtime()[1].get(task_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="task not found") from error
+
+    @router.get("/api/tasks/{task_id}/status")
+    def get_task_status(task_id: str):
+        try:
+            record = runtime()[1].get(task_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="task not found") from error
+        return {
+            "task_id": record.task_id,
+            "status": record.status,
+            "permission_required": bool(
+                record.events and record.events[-1].event_type == "task.permission_required"
+            ),
+            "last_sequence": record.events[-1].sequence if record.events else -1,
+        }
+
+    @router.get("/api/tasks/{task_id}/result")
+    def get_task_result(task_id: str):
+        try:
+            record = runtime()[1].get(task_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="task not found") from error
+        terminal_events = tuple(
+            event for event in record.events if not event.event_type.endswith(".delta")
+        )
+        return record.model_copy(update={"events": terminal_events})
 
     @router.get("/api/tasks/{task_id}/events")
     def get_events(task_id: str, after_sequence: int = -1):

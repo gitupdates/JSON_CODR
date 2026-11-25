@@ -41,6 +41,20 @@ class CliIdentityTests(unittest.TestCase):
         self.assertNotIn("identity.admin", principal.scopes)
         self.assertNotIn(self.store.load()["token"], self.store.path.read_text(encoding="ascii"))
 
+    def test_administrator_login_can_submit_the_documented_cli_run_command_by_default(self):
+        self.service.login(
+            "Administrator",
+            "",
+            machine="WORKSTATION",
+            server_origin="http://127.0.0.1:8772",
+        )
+
+        document = self.store.load()
+        principal = self.identity.resolve_credential(document["token"], required_kind="cli")
+
+        self.assertEqual(principal.username, "Administrator")
+        self.assertIn("agent.launch", principal.scopes)
+
     def test_logout_revokes_cli_without_revoking_browser_session(self):
         browser = self.identity.issue_credential(
             self.user.user_id, "browser_session", "browser", ("lesson.read",)

@@ -53,6 +53,17 @@ def canonical_model_prompt(
     )
 
 
+def capability_inference_prompt(
+    *,
+    model: str,
+    task: str,
+    assembled_prompt: str | None = None,
+) -> str:
+    if assembled_prompt is None:
+        return task
+    return canonical_model_prompt(model=model, task=task, assembled_prompt=assembled_prompt)
+
+
 def canonical_content_matches(model: str, content: str) -> bool:
     return bool(content.strip())
 

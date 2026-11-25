@@ -55,27 +55,34 @@ class NativeOllamaTransport:
             "stream": True,
             "format": "json",
             "think": False,
+            "keep_alive": "5m",
             "options": {"temperature": 0.0, "num_ctx": 2048, "num_predict": 512},
         }
-        for attempt in range(3):
+        runner_restart_delays = (0.5, 1.0, 2.0, 4.0)
+        for attempt in range(len(runner_restart_delays) + 1):
             content_parts: list[str] = []
             try:
                 async for line in self._stream_request("/api/chat", request):
                     chunk = json.loads(line)
+                    error_detail = chunk.get("error")
+                    if isinstance(error_detail, str) and error_detail.strip():
+                        raise OllamaUnavailableError(
+                            f"Ollama request failed: {error_detail.strip()}"
+                        )
                     message = chunk.get("message")
                     if not isinstance(message, dict):
                         raise ModelOutputError("Ollama returned a malformed JSON chat stream")
                     content_parts.append(str(message.get("content") or ""))
+                    if chunk.get("done"):
+                        break
             except OllamaUnavailableError as error:
                 response = "".join(content_parts).strip()
                 if self._is_complete_json_object(response):
                     return response
-                transient_runner_restart = (
-                    isinstance(error.__cause__, ConnectionResetError)
-                    or "forcibly closed" in str(error)
-                )
-                if attempt == 2 or not transient_runner_restart:
+                transient_runner_restart = self._is_transient_runner_error(error)
+                if attempt == len(runner_restart_delays) or not transient_runner_restart:
                     raise
+                await asyncio.sleep(runner_restart_delays[attempt])
                 continue
             except json.JSONDecodeError as error:
                 raise ModelOutputError("Ollama returned malformed JSON chat stream") from error
@@ -114,34 +121,78 @@ class NativeOllamaTransport:
         if encoded_images:
             user_message["images"] = encoded_images
         messages.append(user_message)
-        request = {"model": model, "messages": messages, "stream": True}
-        if public_reasoning:
-            request["think"] = True
+        request = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "think": public_reasoning,
+            "keep_alive": "5m",
+        }
+        options: dict[str, int | float] = {
+            "num_ctx": 2048,
+            "num_predict": 512,
+            "temperature": 0.0,
+        }
         if model_options:
-            request["options"] = model_options
-        lines = self._stream_request("/api/chat", request)
-        normalizer = ReasoningNormalizer()
+            options.update(model_options)
+        request["options"] = options
         content_parts: list[str] = []
         reasoning_entries: list[ReasoningEntry] = []
         warnings: list[str] = []
-        try:
-            async for line in lines:
-                try:
-                    chunk = json.loads(line)
-                except json.JSONDecodeError as error:
-                    raise ModelOutputError("Ollama returned malformed stream JSON") from error
-                message = chunk.get("message", {})
-                if not isinstance(message, dict):
-                    raise ModelOutputError("Ollama returned a malformed stream message")
-                for delta in normalizer.feed({
-                    "content": str(message.get("content") or ""),
-                    "reasoning": str(message.get("thinking") or ""),
-                }):
-                    event = self._stream_delta(delta, reasoning_entries, content_parts, warnings)
-                    if event:
-                        yield event
-        finally:
-            await lines.aclose()
+        normalizer = ReasoningNormalizer()
+        runner_restart_delays = (0.5, 1.0, 2.0, 4.0)
+        for attempt in range(len(runner_restart_delays) + 1):
+            lines = self._stream_request("/api/chat", request)
+            normalizer = ReasoningNormalizer()
+            attempt_has_output = False
+            attempt_salvaged = False
+            retry_delay: float | None = None
+            try:
+                async for line in lines:
+                    try:
+                        chunk = json.loads(line)
+                    except json.JSONDecodeError as error:
+                        raise ModelOutputError("Ollama returned malformed stream JSON") from error
+                    error_detail = chunk.get("error")
+                    if isinstance(error_detail, str) and error_detail.strip():
+                        raise OllamaUnavailableError(
+                            f"Ollama request failed: {error_detail.strip()}"
+                        )
+                    message = chunk.get("message", {})
+                    if not isinstance(message, dict):
+                        raise ModelOutputError("Ollama returned a malformed stream message")
+                    raw_content = str(message.get("content") or "")
+                    raw_reasoning = str(message.get("thinking") or "")
+                    attempt_has_output = attempt_has_output or bool(raw_content or raw_reasoning)
+                    for delta in normalizer.feed({
+                        "content": raw_content,
+                        "reasoning": raw_reasoning,
+                    }):
+                        event = self._stream_delta(delta, reasoning_entries, content_parts, warnings)
+                        if event:
+                            yield event
+                    if chunk.get("done"):
+                        break
+            except OllamaUnavailableError as error:
+                transient_restart = self._is_transient_runner_error(error)
+                if transient_restart and content_parts:
+                    warnings.append(
+                        "Ollama runner reset after usable content; preserved the generated answer."
+                    )
+                    attempt_salvaged = True
+                elif (
+                    attempt_has_output
+                    or attempt == len(runner_restart_delays)
+                    or not transient_restart
+                ):
+                    raise
+                else:
+                    retry_delay = runner_restart_delays[attempt]
+            finally:
+                await lines.aclose()
+            if attempt_salvaged or retry_delay is None:
+                break
+            await asyncio.sleep(retry_delay)
         for delta in normalizer.finish():
             event = self._stream_delta(delta, reasoning_entries, content_parts, warnings)
             if event:
@@ -165,7 +216,20 @@ class NativeOllamaTransport:
                 raise ModelOutputError("Ollama returned malformed JSON")
             return payload
 
-        return await self._run_request(perform)
+        connection_restart_delays = (0.25, 0.5, 1.0)
+        for attempt in range(len(connection_restart_delays) + 1):
+            try:
+                return await self._run_request(perform)
+            except OllamaUnavailableError as error:
+                cause = error.__cause__
+                transient_restart = (
+                    isinstance(cause, ConnectionResetError)
+                    or "forcibly closed" in str(cause)
+                )
+                if attempt == len(connection_restart_delays) or not transient_restart:
+                    raise
+                await asyncio.sleep(connection_restart_delays[attempt])
+        raise OllamaUnavailableError("Ollama request failed")
 
     async def _post_json(self, path: str, payload: dict) -> dict:
         def perform() -> dict:
@@ -188,7 +252,12 @@ class NativeOllamaTransport:
         for message in request.messages:
             text = "".join(part.text or "" for part in message.content if part.type.value == "text")
             messages.append({"role": message.role.value, "content": text})
-        payload = {"model": request.model, "messages": messages, "stream": True}
+        payload = {
+            "model": request.model,
+            "messages": messages,
+            "stream": True,
+            "keep_alive": "5m",
+        }
         options = {}
         if request.temperature is not None:
             options["temperature"] = request.temperature
@@ -240,6 +309,7 @@ class NativeOllamaTransport:
                     finish_reason=InferenceFinishReason.stop,
                     cancellation_token=cancellation_token,
                 )
+                break
 
     async def _stream_request(self, path: str, payload: dict):
         items: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=1)
@@ -329,6 +399,17 @@ class NativeOllamaTransport:
             raise OllamaUnavailableError("Ollama request failed") from error
         except json.JSONDecodeError as error:
             raise ModelOutputError("Ollama returned malformed JSON") from error
+
+    @staticmethod
+    def _is_transient_runner_error(error: OllamaUnavailableError) -> bool:
+        cause = error.__cause__
+        if isinstance(cause, ConnectionResetError) or "forcibly closed" in str(error):
+            return True
+        return (
+            isinstance(cause, HTTPError)
+            and cause.code >= 500
+            and str(error).strip() == "Ollama request failed"
+        )
 
     @staticmethod
     def _stream_delta(delta, reasoning_entries, content_parts, warnings):

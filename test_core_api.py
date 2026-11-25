@@ -118,6 +118,19 @@ class CoreApiTests(unittest.TestCase):
         self.assertEqual(permission.json()["status"], "pending")
         self.assertEqual(permission.json()["events"][-1]["event_type"], "task.permission_required")
 
+    def test_cli_style_submission_resolves_project_root_to_the_registered_project_identity(self):
+        command = self.command(command_id="cli-command", task_id="cli-task")
+        command["project_id"] = "project-cli-path-hash"
+
+        try:
+            response = self.client.post("/api/tasks", json=command)
+        except KeyError as error:
+            self.fail(f"documented CLI project root was not registered: {error}")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["status"], "completed")
+        self.assertEqual(self.tasks.command("cli-task").project_id, "project-1")
+
     def test_task_submission_uses_verified_agent_launch_principal_not_caller_header(self):
         missing = self.client.post(
             "/api/tasks",
@@ -210,7 +223,16 @@ class CoreApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 202)
         self.assertIn(response.json()["status"], {"running", "completed"})
         task = self.client.get("/api/tasks/task-1")
+        status = self.client.get("/api/tasks/task-1/status")
+        result = self.client.get("/api/tasks/task-1/result")
         self.assertEqual(task.status_code, 200)
+        self.assertEqual(status.status_code, 200)
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(status.json()["task_id"], "task-1")
+        self.assertIn(status.json()["status"], {"running", "completed"})
+        self.assertFalse(any(
+            event["event_type"].endswith(".delta") for event in result.json()["events"]
+        ))
 
     def test_runtime_telemetry_and_heartbeat_are_read_only(self):
         self.tasks.record_telemetry("runtime.started", {"pid": 42})

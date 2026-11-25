@@ -78,8 +78,11 @@
       <header id="workspace-header" class="workspace-header" aria-label="Workspace controls">
         <div class="workspace-project"><span class="eyebrow">ACTIVE PROJECT</span><strong>JSON_CODR</strong></div>
         <div class="workspace-execution-controls">
-          <label for="workspace-agent-select">Agent
-            <select id="workspace-agent-select"><option value="borg">BORG local agent</option></select>
+          <label for="workspace-agent-select">Mode
+            <select id="workspace-agent-select">
+              <option value="direct" selected>Direct local model</option>
+              <option value="borg">BORG project agent</option>
+            </select>
           </label>
           <label for="model-select">Model
             <select id="model-select" name="model" aria-describedby="model-detail" disabled>
@@ -675,6 +678,6 @@
     <script src="/static/ui_customization.js?v=1.3.2" defer></script>
     <script src="/static/disclosure_groups.js?v=1.3.2" defer></script>
     <script src="/static/navigation_routes.js?v=1.3.2" defer></script>
-    <script src="/static/app.js?v=1.4.1" defer></script>
+    <script src="/static/app.js?v=1.4.1-sol56b" defer></script>
   </body>
 </html>
