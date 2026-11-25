@@ -154,11 +154,37 @@ class NativeOllamaTransport:
         content_parts: list[str] = []
         reasoning_entries: list[ReasoningEntry] = []
         warnings: list[str] = []
-        async with aclosing(self._stream_response(
-            request, reasoning_entries, content_parts, warnings,
-        )) as response_stream:
-            async for event in response_stream:
-                yield event
+        try:
+            async with aclosing(self._stream_response(
+                request, reasoning_entries, content_parts, warnings,
+            )) as response_stream:
+                async for event in response_stream:
+                    yield event
+        except OllamaUnavailableError as error:
+            unsupported_thinking = (
+                public_reasoning
+                and not content_parts
+                and not reasoning_entries
+                and self._is_unsupported_thinking_error(error)
+            )
+            if not unsupported_thinking:
+                raise
+            warning = (
+                "The model does not support provider reasoning; "
+                "retried once with thinking disabled."
+            )
+            warnings.append(warning)
+            yield {"type": "warning", "text": warning}
+            compatibility_request = {
+                **request,
+                "messages": [user_message],
+                "think": False,
+            }
+            async with aclosing(self._stream_response(
+                compatibility_request, reasoning_entries, content_parts, warnings,
+            )) as response_stream:
+                async for event in response_stream:
+                    yield event
         if not content_parts and public_reasoning and reasoning_entries:
             warning = (
                 "The model did not produce final answer content after reasoning; "
@@ -458,6 +484,10 @@ class NativeOllamaTransport:
             and cause.code >= 500
             and str(error).strip() == "Ollama request failed"
         )
+
+    @staticmethod
+    def _is_unsupported_thinking_error(error: OllamaUnavailableError) -> bool:
+        return "does not support thinking" in str(error).casefold()
 
     @staticmethod
     def _stream_delta(delta, reasoning_entries, content_parts, warnings):

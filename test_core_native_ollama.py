@@ -321,6 +321,40 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
             for warning in events[-1]["result"].reasoning.warnings
         ))
 
+    async def test_stream_chat_retries_with_thinking_disabled_for_incompatible_model(self):
+        from web_app.core.native_ollama import NativeOllamaTransport
+
+        payloads = []
+        responses = [
+            _Response(json.dumps({
+                "error": '"qwen2.5-coder:0.5b" does not support thinking',
+            }).encode() + b"\n"),
+            _Response(b"".join([
+                json.dumps({"message": {"content": "Recovered answer."}, "done": False}).encode()
+                + b"\n",
+                json.dumps({"message": {"content": ""}, "done": True}).encode() + b"\n",
+            ])),
+        ]
+
+        def fake_urlopen(request, timeout):
+            del timeout
+            payloads.append(json.loads(request.data))
+            return responses.pop(0)
+
+        transport = NativeOllamaTransport("http://localhost:11434")
+        with patch("web_app.core.native_ollama.urlopen", side_effect=fake_urlopen):
+            events = [event async for event in transport.stream_chat(
+                "qwen2.5-coder:0.5b", "Reply", public_reasoning=True,
+            )]
+
+        self.assertEqual([payload["think"] for payload in payloads], [True, False])
+        self.assertEqual(payloads[1]["messages"], [{"role": "user", "content": "Reply"}])
+        self.assertEqual(events[-1]["result"].content, "Recovered answer.")
+        self.assertTrue(any(
+            "thinking disabled" in warning
+            for warning in events[-1]["result"].reasoning.warnings
+        ))
+
     async def test_stream_chat_retries_without_thinking_when_runner_resets_after_reasoning(self):
         from web_app.core.native_ollama import NativeOllamaTransport
 
