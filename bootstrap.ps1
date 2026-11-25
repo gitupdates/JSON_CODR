@@ -28,11 +28,19 @@ try {
   if([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or -not [Environment]::Is64BitOperatingSystem -or [Environment]::OSVersion.Version.Build -lt 22000){
     Complete-Bootstrap (New-BootstrapResult 'BLOCKED' 20 'JSON_CODR bootstrap supports Windows 11 x64 only.' $null $null $null $null)
   }
-  $modules = 'Manifest.psm1','Planner.psm1','Install.psm1','Materialize.psm1','Lifecycle.psm1','Identity.psm1','Proof.psm1','GitHub.psm1','SourceTrust.psm1'
+  $modules = 'Manifest.psm1','Planner.psm1','Install.psm1','Materialize.psm1','Lifecycle.psm1','Identity.psm1','Proof.psm1','GitHub.psm1','SourceTrust.psm1','WorkspaceState.psm1'
   foreach($module in $modules){ Import-Module (Join-Path $Root (Join-Path 'scripts\bootstrap' $module)) -Force }
   $runtimePath = Join-Path $Root 'config\runtime.json'
   $runtime = Get-Content -LiteralPath $runtimePath -Raw | ConvertFrom-Json
   if($runtime.host -ne '127.0.0.1' -or [int]$runtime.port -ne 8765){ throw 'Canonical runtime is not loopback-only on port 8765.' }
+  $dataRoot = if($env:JSON_CODR_DATA_ROOT){$env:JSON_CODR_DATA_ROOT}else{Join-Path $env:LOCALAPPDATA $runtime.default_roots.data_root_segment}
+  if($Repair){
+    Write-BootstrapProgress 'Migrating legacy workspace runtime state to the external data root with hash verification.'
+    $workspaceState = Move-JsonCodrWorkspaceState -Root $Root -DataRoot $dataRoot
+    if($workspaceState.status -eq 'migrated'){
+      Write-BootstrapProgress ("Preserved legacy workspace state at {0}; receipt: {1}" -f $workspaceState.destination,$workspaceState.receipt_path)
+    }
+  }
   $source = Get-JsonCodrSourceEvidence -Root $Root -DevelopmentSource:$DevelopmentSource
   if($source.trustState -eq 'untrusted'){
     Complete-Bootstrap (New-BootstrapResult 'BLOCKED' 21 ("Trusted source validation failed: {0}. Use -DevelopmentSource only for explicitly unverified local development." -f $source.reason) $source $null $null $null)
@@ -54,7 +62,6 @@ try {
   $model = Test-JsonCodrOllamaModel -Root $Root -AllowPull -Interactive:([Environment]::UserInteractive)
   if($model.state -ne 'ready'){ Complete-Bootstrap (New-BootstrapResult 'ACTION REQUIRED' 10 $model.detail $source $plan $model $github) }
   $running = Start-JsonCodrSafely -Runtime $runtime -Environment $environment
-  $dataRoot = if($env:JSON_CODR_DATA_ROOT){$env:JSON_CODR_DATA_ROOT}else{Join-Path $env:LOCALAPPDATA $runtime.default_roots.data_root_segment}
   if(-not $running.reused){ Initialize-JsonCodrAdministrator -Runtime $runtime -Environment $environment -DataRoot $dataRoot }
   $github = Test-JsonCodrGitHubReadiness -Root $Root -NoGitHub:$NoGitHub -Interactive:([Environment]::UserInteractive)
   if($github.state -ne 'ready' -and -not $NoGitHub){ Complete-Bootstrap (New-BootstrapResult 'ACTION REQUIRED' 10 $github.detail $source $plan $model $github) }

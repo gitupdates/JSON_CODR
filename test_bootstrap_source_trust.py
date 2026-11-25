@@ -8,9 +8,121 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 MODULE = ROOT / "scripts" / "bootstrap" / "SourceTrust.psm1"
+WORKSPACE_STATE_MODULE = ROOT / "scripts" / "bootstrap" / "WorkspaceState.psm1"
 
 
 class SourceTrustTests(unittest.TestCase):
+    def test_workspace_state_migration_preserves_content_without_executing_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "source"
+            data_root = Path(temporary) / "data"
+            scratch = root / ".tmp"
+            scratch.mkdir(parents=True)
+            marker = Path(temporary) / "executed.txt"
+            payload = scratch / "payload.py"
+            payload.write_text(
+                f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\n",
+                encoding="utf-8",
+            )
+            payload_bytes = payload.read_bytes()
+            nested = scratch / "logs" / "server.log"
+            nested.parent.mkdir()
+            nested.write_text("preserve me\n", encoding="utf-8")
+
+            process = self._workspace_migration(root, data_root)
+
+            self.assertEqual(process.returncode, 0, process.stderr)
+            receipt = json.loads(process.stdout)
+            self.assertEqual(receipt["status"], "migrated")
+            self.assertFalse(scratch.exists())
+            self.assertFalse(marker.exists())
+            destination = Path(receipt["destination"])
+            self.assertTrue(destination.name.startswith("workspace-tmp-"), receipt)
+            self.assertEqual((destination / "payload.py").read_bytes(), payload_bytes)
+            self.assertEqual((destination / "logs" / "server.log").read_text(encoding="utf-8"), "preserve me\n")
+            self.assertTrue(Path(receipt["receipt_path"]).is_file())
+            self.assertEqual(len(receipt["files"]), 2)
+            self.assertTrue(all(item["source_sha256"] == item["destination_sha256"] for item in receipt["files"]))
+
+    def test_workspace_state_migration_rejects_reparse_points(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "source"
+            data_root = Path(temporary) / "data"
+            outside = Path(temporary) / "outside"
+            scratch = root / ".tmp"
+            scratch.mkdir(parents=True)
+            outside.mkdir()
+            junction = scratch / "escape"
+            command = (
+                f"New-Item -ItemType Junction -Path '{junction}' -Target '{outside}' | Out-Null"
+            )
+            created = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-Command", command],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(created.returncode, 0, created.stderr)
+
+            process = self._workspace_migration(root, data_root)
+
+            self.assertNotEqual(process.returncode, 0)
+            self.assertIn("reparse", process.stderr.casefold())
+            self.assertTrue(scratch.exists())
+            self.assertFalse((data_root / "migration-receipts").exists())
+
+    def test_workspace_state_hash_verification_rejects_changed_destination(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "source"
+            destination = Path(temporary) / "destination"
+            source.mkdir()
+            destination.mkdir()
+            (source / "evidence.log").write_text("original\n", encoding="utf-8")
+            (destination / "evidence.log").write_text("changed\n", encoding="utf-8")
+            environment = dict(os.environ)
+            environment.update({
+                "JSON_CODR_WORKSPACE_STATE_MODULE": str(WORKSPACE_STATE_MODULE),
+                "JSON_CODR_MIGRATION_SOURCE": str(source),
+                "JSON_CODR_MIGRATION_DESTINATION": str(destination),
+            })
+            command = (
+                "Import-Module -Name $env:JSON_CODR_WORKSPACE_STATE_MODULE -Force; "
+                "Test-JsonCodrMigrationContent -Source $env:JSON_CODR_MIGRATION_SOURCE "
+                "-Destination $env:JSON_CODR_MIGRATION_DESTINATION | ConvertTo-Json -Compress"
+            )
+
+            process = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                env=environment,
+            )
+
+            self.assertNotEqual(process.returncode, 0)
+            self.assertIn("hash", process.stderr.casefold())
+
+    def test_workspace_state_migration_recovers_an_interrupted_staging_copy(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "source"
+            data_root = Path(temporary) / "data"
+            scratch = root / ".tmp"
+            scratch.mkdir(parents=True)
+            (scratch / "state.log").write_text("complete\n", encoding="utf-8")
+            stale = data_root / "workspace-migrations" / ".interrupted.staging"
+            stale.mkdir(parents=True)
+            (stale / "partial.log").write_text("partial\n", encoding="utf-8")
+
+            process = self._workspace_migration(root, data_root)
+
+            self.assertEqual(process.returncode, 0, process.stderr)
+            receipt = json.loads(process.stdout)
+            self.assertFalse(stale.exists())
+            self.assertEqual(
+                (Path(receipt["destination"]) / "state.log").read_text(encoding="utf-8"),
+                "complete\n",
+            )
+
     def test_clean_commit_reachable_from_origin_is_trusted(self):
         """Removing the remote reachability proof must make a normal bootstrap untrusted."""
         with self._repository() as repository:
@@ -115,6 +227,27 @@ class SourceTrustTests(unittest.TestCase):
         )
         self.assertEqual(process.returncode, 0, process.stderr)
         return json.loads(process.stdout)
+
+    def _workspace_migration(self, root: Path, data_root: Path) -> subprocess.CompletedProcess[str]:
+        environment = dict(os.environ)
+        environment.update({
+            "JSON_CODR_WORKSPACE_STATE_MODULE": str(WORKSPACE_STATE_MODULE),
+            "JSON_CODR_WORKSPACE_STATE_ROOT": str(root),
+            "JSON_CODR_WORKSPACE_STATE_DATA_ROOT": str(data_root),
+        })
+        command = (
+            "Import-Module -Name $env:JSON_CODR_WORKSPACE_STATE_MODULE -Force; "
+            "Move-JsonCodrWorkspaceState -Root $env:JSON_CODR_WORKSPACE_STATE_ROOT "
+            "-DataRoot $env:JSON_CODR_WORKSPACE_STATE_DATA_ROOT | ConvertTo-Json -Depth 8 -Compress"
+        )
+        return subprocess.run(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=environment,
+        )
 
     def _repository(self, root: Path | None = None, remote_name: str = "origin"):
         temporary = tempfile.TemporaryDirectory()
