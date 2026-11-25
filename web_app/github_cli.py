@@ -1048,6 +1048,18 @@ class GitHubCLI:
         binary = self._executable_finder(executable)
         if not binary:
             raise GitHubCLIError(f"{executable} is not installed", 503)
+        environment = None
+        if executable == "git":
+            environment = {
+                key: value for key, value in os.environ.items()
+                if not key.casefold().startswith("git_")
+            }
+            environment.update({
+                "GIT_TERMINAL_PROMPT": "0",
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "core.hooksPath",
+                "GIT_CONFIG_VALUE_0": os.devnull,
+            })
         try:
             result = self._runner(
                 [binary, *arguments],
@@ -1055,6 +1067,7 @@ class GitHubCLI:
                 text=True,
                 timeout=self._timeout,
                 check=False,
+                env=environment,
             )
         except subprocess.TimeoutExpired as error:
             raise GitHubCLIError(f"{executable} command timed out", 504) from error

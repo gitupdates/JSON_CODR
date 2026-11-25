@@ -26,6 +26,7 @@ class CheckpointRecord(FrozenContract):
     snapshot_path: str
     existed: bool
     digest: str
+    applied_digest: str | None = None
 
 
 class ProjectAdapter:
@@ -120,6 +121,11 @@ class ProjectAdapter:
             temporary.replace(target)
         finally:
             temporary.unlink(missing_ok=True)
+        checkpoint = checkpoint.model_copy(update={
+            "applied_digest": f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+        })
+        self._records[checkpoint.checkpoint_id] = checkpoint
+        self._persist_checkpoint(checkpoint)
         return checkpoint
 
     def apply_edit(
@@ -191,11 +197,14 @@ class ProjectAdapter:
             digest=f"sha256:{hashlib.sha256(content).hexdigest()}",
         )
         self._records[checkpoint_id] = record
-        manifest = self._checkpoints / f"{checkpoint_id}.json"
+        self._persist_checkpoint(record)
+        return record
+
+    def _persist_checkpoint(self, record: CheckpointRecord) -> None:
+        manifest = self._checkpoints / f"{record.checkpoint_id}.json"
         temporary = manifest.with_suffix(".json.tmp")
         temporary.write_text(record.model_dump_json(), encoding="utf-8")
         temporary.replace(manifest)
-        return record
 
     def restore(self, checkpoint_id: str) -> CheckpointRecord:
         record = self._records.get(checkpoint_id)
@@ -203,6 +212,15 @@ class ProjectAdapter:
             raise KeyError(checkpoint_id)
         target = Path(record.target_path)
         snapshot = Path(record.snapshot_path)
+        snapshot_digest = f"sha256:{hashlib.sha256(snapshot.read_bytes()).hexdigest()}"
+        if snapshot_digest != record.digest:
+            raise PermissionError("checkpoint snapshot digest mismatch")
+        if record.applied_digest is not None:
+            if not target.is_file():
+                raise PermissionError("checkpoint target changed after the approved edit")
+            current_digest = f"sha256:{hashlib.sha256(target.read_bytes()).hexdigest()}"
+            if current_digest != record.applied_digest:
+                raise PermissionError("checkpoint target changed after the approved edit")
         if record.existed:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(snapshot, target)
