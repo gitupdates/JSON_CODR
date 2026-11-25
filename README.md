@@ -1,6 +1,6 @@
 # JSON_CODR
 
-JSON_CODR V1.4.1 is a localhost-only, unified project agent for local Ollama models.
+JSON_CODR V1.4.2 is a localhost-only, unified project agent for local Ollama models.
 
 ## Unified project workflow
 
@@ -8,7 +8,7 @@ Choose a model, describe the outcome in **Chat**, and run it. JSON_CODR creates 
 
 The response panel shows live activity and the requested and effective model identities. Use **Steer** by entering more direction while a task is active, **Stop** to request cancellation, **Retry** to create a linked retry, and **Undo** when the task produced a checkpoint. Execution details stay collapsed until needed. The **Live CLI** is the terminal view of the same local system, with command history, clipboard support, resize/reconnect, and the Ctrl+X then Ctrl+C interrupt chord.
 
-V1.4.1 includes the staged self-update security release plus first-run bootstrap, administrator access, authenticated conversation persistence, live prompt CSRF fixes, approval visibility, and accurate failed-task reporting. Open **Settings → Verified updates** to inspect evidence, reconcile interrupted effects, quarantine candidates, and run explicitly authorized activation or rollback actions. V1.4.0 introduced staged self-update candidates, immutable proposal profiles, signed exact-tree verification and build manifests, strict expected-SHA publication leases, isolated health checks, real-browser checks, and stable activation and rollback supervision.
+V1.4.2 hardens direct CLI and browser coding workflows, adds immutable multi-action approval envelopes, improves live build identity and stable launcher recovery, upgrades development credential handling, and makes Ollama inference robust across reasoning-only, reset-prone, and thinking-incompatible models. V1.4.1 includes the staged self-update security release plus first-run bootstrap, administrator access, authenticated conversation persistence, live prompt CSRF fixes, approval visibility, and accurate failed-task reporting. Open **Settings → Verified updates** to inspect evidence, reconcile interrupted effects, quarantine candidates, and run explicitly authorized activation or rollback actions. V1.4.0 introduced staged self-update candidates, immutable proposal profiles, signed exact-tree verification and build manifests, strict expected-SHA publication leases, isolated health checks, real-browser checks, and stable activation and rollback supervision.
 
 ### Local identity
 
