@@ -321,6 +321,39 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
             for warning in events[-1]["result"].reasoning.warnings
         ))
 
+    async def test_stream_chat_retries_without_thinking_when_runner_resets_after_reasoning(self):
+        from web_app.core.native_ollama import NativeOllamaTransport
+
+        payloads = []
+        responses = [
+            _Response(b"".join([
+                json.dumps({"message": {"thinking": "Partial rationale.", "content": ""}, "done": False}).encode() + b"\n",
+                json.dumps({
+                    "error": "an error was encountered while running the model: "
+                    "wsarecv: An existing connection was forcibly closed by the remote host."
+                }).encode() + b"\n",
+            ])),
+            _Response(b"".join([
+                json.dumps({"message": {"content": "Recovered after reset."}, "done": False}).encode() + b"\n",
+                json.dumps({"message": {"content": ""}, "done": True}).encode() + b"\n",
+            ])),
+        ]
+
+        def fake_urlopen(request, timeout):
+            del timeout
+            payloads.append(json.loads(request.data))
+            return responses.pop(0)
+
+        transport = NativeOllamaTransport("http://localhost:11434")
+        with patch("web_app.core.native_ollama.urlopen", side_effect=fake_urlopen):
+            events = [event async for event in transport.stream_chat(
+                "qwen3:4b", "Reply", public_reasoning=True,
+            )]
+
+        self.assertEqual([payload["think"] for payload in payloads], [True, False])
+        self.assertEqual(events[-1]["result"].content, "Recovered after reset.")
+        self.assertEqual(events[-1]["result"].reasoning.entries[0].text, "Partial rationale.")
+
     async def test_stream_chat_disables_thinking_and_bounds_default_generation(self):
         from web_app.core.native_ollama import NativeOllamaTransport
 

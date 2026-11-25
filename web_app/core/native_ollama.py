@@ -161,7 +161,7 @@ class NativeOllamaTransport:
                 yield event
         if not content_parts and public_reasoning and reasoning_entries:
             warning = (
-                "The model exhausted its response budget in reasoning; "
+                "The model did not produce final answer content after reasoning; "
                 "retried once in final-answer mode."
             )
             warnings.append(warning)
@@ -233,6 +233,8 @@ class NativeOllamaTransport:
                     warnings.append(
                         "Ollama runner reset after usable content; preserved the generated answer."
                     )
+                    attempt_salvaged = True
+                elif transient_restart and request.get("think") is True and reasoning_entries:
                     attempt_salvaged = True
                 elif (
                     attempt_has_output
