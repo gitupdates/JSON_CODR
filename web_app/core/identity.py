@@ -265,12 +265,12 @@ class IdentityService:
                 (self._iso(self._now()),),
             )
             connection.execute(
-                """UPDATE identity_bootstrap_state SET development_credentials_permanent=1
-                    WHERE mode='non-production'"""
-            )
-            connection.execute(
                 """UPDATE identity_bootstrap_state SET mode='development'
                     WHERE mode IN ('non-production', 'migration')"""
+            )
+            connection.execute(
+                """UPDATE identity_bootstrap_state SET development_credentials_permanent=1
+                    WHERE completed=1 AND mode='development'"""
             )
 
     @staticmethod

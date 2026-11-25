@@ -156,6 +156,29 @@ class CredentialLifecycleTests(unittest.TestCase):
                 with self.assertRaisesRegex(PermissionError, "revoked"):
                     service.resolve_credential(credential.token)
 
+    def test_existing_development_install_is_upgraded_to_permanent_credentials(self):
+        transition_root = self.root / "existing-development"
+        transition_security = self.root / "existing-development-security"
+        service = IdentityService(
+            transition_root,
+            now=self.clock.now,
+            security_root=transition_security,
+        )
+        service.bootstrap_nonproduction_administrator("Password123", "Administrator")
+        with closing(sqlite3.connect(service.database_path)) as connection:
+            with connection:
+                connection.execute(
+                    "UPDATE identity_bootstrap_state SET development_credentials_permanent=0 WHERE singleton=1"
+                )
+
+        upgraded = IdentityService(
+            transition_root,
+            now=self.clock.now,
+            security_root=transition_security,
+        )
+
+        self.assertTrue(upgraded.bootstrap_state().credentials_permanent)
+
 
 if __name__ == "__main__":
     unittest.main()
