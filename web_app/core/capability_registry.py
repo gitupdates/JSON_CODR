@@ -43,6 +43,7 @@ _DEFAULT_DEFINITIONS = (
     CapabilityDefinition(capability_id="native.write", operation="bounded_edit", risk="sensitive", autonomous=False),
     CapabilityDefinition(capability_id="native.edit", operation="bounded_edit", risk="sensitive", autonomous=False),
     CapabilityDefinition(capability_id="native.shell", operation="command", risk="sensitive", autonomous=False),
+    CapabilityDefinition(capability_id="git.read", operation="read", risk="low", autonomous=True),
     CapabilityDefinition(capability_id="git.execute", operation="git", risk="sensitive", autonomous=False),
     CapabilityDefinition(capability_id="git.commit", operation="commit", risk="sensitive", autonomous=False),
     CapabilityDefinition(capability_id="git.push", operation="push", risk="sensitive", autonomous=False),

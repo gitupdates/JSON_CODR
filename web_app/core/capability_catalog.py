@@ -101,6 +101,7 @@ _LIFECYCLE_CAPABILITIES = {
     "terminal.close": ("process_control", "exact", (), "none"),
     "checkpoint.create": ("local_state", "exact", (), "none"),
     "checkpoint.restore": ("file_change", "exact", (), "checkpoint"),
+    "git.read": ("read", "automatic", ("git",), "none"),
     "git.execute": ("git_effect", "exact", ("git",), "git"),
     "inference.generate": ("inference", "automatic", (), "none"),
     "component.install": ("installation", "exact", (), "uninstall"),

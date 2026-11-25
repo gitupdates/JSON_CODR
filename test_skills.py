@@ -5,13 +5,12 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from fastapi.testclient import TestClient
-
 from web_app.app import create_app
 from web_app.attachments import AttachmentService
 from web_app.models import SkillPack, SkillRecord
 from web_app.skills import DuplicateSkillPack, GithubSkillService, SkillConverterService, SkillDiscoveryService, SkillLibraryService
 from web_app.workspace import WorkspaceService
+from test_support import authenticated_client
 
 
 class FakeOllamaService:
@@ -80,7 +79,7 @@ class SkillLibraryTests(unittest.TestCase):
             "https://raw.test/SKILL.md": b"---\nname: using-superpowers\n---\nUse skills first.",
         }
         github = GithubSkillService(self.library, self.converter, self.root, fetch=lambda url: responses[url])
-        with TestClient(create_app(FakeOllamaService(), self.workspace, github_skills=github)) as client:
+        with authenticated_client(create_app(FakeOllamaService(), self.workspace, github_skills=github)) as client:
             preview = client.post("/api/skills/github/preview", json={
                 "url": "https://github.com/openai/plugins/blob/main/plugins/superpowers/skills/using-superpowers/SKILL.md"
             })
@@ -193,16 +192,23 @@ Review the supplied artifact.
         self.clients = []
 
     def client(self, app):
-        client = TestClient(app)
+        client = authenticated_client(app)
         self.clients.append(client)
         return client
 
     def tearDown(self):
         for client in reversed(self.clients):
-            if hasattr(client.app.state, "core_policy"):
-                client.app.state.core_policy.close()
-                client.app.state.core_task_store.close()
-                client.app.state.core_memory.close()
+            for name in (
+                "core_policy",
+                "core_task_store",
+                "core_memory",
+                "core_approval_store",
+                "core_project_registry",
+                "core_model_conformance",
+            ):
+                resource = getattr(client.app.state, name, None)
+                if resource is not None:
+                    resource.close()
             client.close()
         self.temporary_directory.cleanup()
 

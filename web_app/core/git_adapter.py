@@ -152,6 +152,10 @@ class GitExecutionAdapter:
         if not isinstance(request_value, Mapping):
             raise ValueError("git execution requires a broker request")
         request = BrokerActionRequest.model_validate(dict(request_value))
+        if call.capability_id == "git.read" and any(
+            action.kind not in {"status", "read"} for action in request.actions
+        ):
+            raise PermissionError("git.read accepts read-only broker actions only")
         model = call.arguments.get("model")
         grant_id = call.arguments.get("grant_id")
         if not isinstance(model, str) or not isinstance(grant_id, str):

@@ -3,13 +3,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fastapi.testclient import TestClient
-
 from web_app.app import create_app
 from web_app.models import DesignerSettings, IdentitySettings, MemorySettings, SettingsUpdate, SkillRoutingSettings, SkillScanSettings, UiSettingsUpdate
 from web_app.settings import SettingsService
 from web_app.version import APP_VERSION
 from web_app.workspace import WorkspaceService
+from test_support import authenticated_client
 
 
 class FakeService:
@@ -115,7 +114,7 @@ class SettingsTests(unittest.TestCase):
 
     def test_api_gets_and_updates_settings(self):
         workspace = WorkspaceService(self.root)
-        client = TestClient(create_app(FakeService(), workspace))
+        client = authenticated_client(create_app(FakeService(), workspace))
 
         self.assertEqual(client.get("/api/settings").json()["app_version"], APP_VERSION)
         self.assertEqual(client.get("/api/settings").json()["ui"]["theme"], "dark")
@@ -130,7 +129,7 @@ class SettingsTests(unittest.TestCase):
 
     def test_partial_ui_patch_preserves_omitted_sibling_fields(self):
         workspace = WorkspaceService(self.root)
-        client = TestClient(create_app(FakeService(), workspace))
+        client = authenticated_client(create_app(FakeService(), workspace))
 
         first = client.patch("/api/settings", json={
             "ui": {"skill_catalog_open": False},
@@ -158,7 +157,7 @@ class SettingsTests(unittest.TestCase):
 
     def test_navigation_layout_defaults_and_round_trips_partial_updates(self):
         workspace = WorkspaceService(self.root)
-        client = TestClient(create_app(FakeService(), workspace))
+        client = authenticated_client(create_app(FakeService(), workspace))
 
         self.assertEqual(client.get("/api/settings").json()["ui"], {
             "skill_catalog_open": True,
@@ -208,7 +207,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(service.get().ui.sidebar_width, 380)
 
         workspace = WorkspaceService(self.root)
-        client = TestClient(create_app(FakeService(), workspace))
+        client = authenticated_client(create_app(FakeService(), workspace))
         invalid_destination = client.patch("/api/settings", json={"ui": {"primary_destination": "missing"}})
         invalid_section = client.patch("/api/settings", json={"ui": {"hardware_section": "missing"}})
 
@@ -216,7 +215,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(invalid_section.status_code, 422)
 
     def test_workspace_is_a_persisted_primary_destination(self):
-        client = TestClient(create_app(FakeService(), WorkspaceService(self.root)))
+        client = authenticated_client(create_app(FakeService(), WorkspaceService(self.root)))
 
         response = client.patch("/api/settings", json={"ui": {"primary_destination": "workspace"}})
 
@@ -227,7 +226,7 @@ class SettingsTests(unittest.TestCase):
 
     def test_api_round_trips_supported_themes(self):
         workspace = WorkspaceService(self.root)
-        client = TestClient(create_app(FakeService(), workspace))
+        client = authenticated_client(create_app(FakeService(), workspace))
 
         for theme in ("light", "dark", "system"):
             updated = client.patch("/api/settings", json={"ui": {"theme": theme}})
@@ -237,7 +236,7 @@ class SettingsTests(unittest.TestCase):
 
     def test_api_rejects_unsupported_theme(self):
         workspace = WorkspaceService(self.root)
-        client = TestClient(create_app(FakeService(), workspace))
+        client = authenticated_client(create_app(FakeService(), workspace))
 
         response = client.patch("/api/settings", json={"ui": {"theme": "neon"}})
 
@@ -245,14 +244,14 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(client.get("/api/settings").json()["ui"]["theme"], "dark")
 
     def test_leaderboard_is_a_persisted_hardware_section(self):
-        client = TestClient(create_app(FakeService(), WorkspaceService(self.root)))
+        client = authenticated_client(create_app(FakeService(), WorkspaceService(self.root)))
         response = client.patch("/api/settings", json={"ui": {"hardware_section": "leaderboard"}})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["ui"]["hardware_section"], "leaderboard")
 
     def test_api_rejects_explicit_null_ui_values(self):
         workspace = WorkspaceService(self.root)
-        client = TestClient(create_app(FakeService(), workspace))
+        client = authenticated_client(create_app(FakeService(), workspace))
 
         for field in (
             "theme", "skill_catalog_open", "sidebar_collapsed", "sidebar_width",
@@ -274,7 +273,7 @@ class SettingsTests(unittest.TestCase):
 
     def test_gpu_profiles_default_to_automatic_and_persist_per_model(self):
         workspace = WorkspaceService(self.root)
-        client = TestClient(create_app(FakeService(), workspace))
+        client = authenticated_client(create_app(FakeService(), workspace))
 
         self.assertEqual(client.get("/api/settings").json()["gpu_optimization"], {
             "default_profile": {"mode": "automatic", "num_gpu": None, "main_gpu": None, "num_ctx": None, "num_batch": None},
@@ -293,7 +292,7 @@ class SettingsTests(unittest.TestCase):
 
     def test_gpu_profile_validation_rejects_unknown_models_and_invalid_advanced_values(self):
         workspace = WorkspaceService(self.root)
-        client = TestClient(create_app(FakeService(), workspace))
+        client = authenticated_client(create_app(FakeService(), workspace))
 
         unknown = client.patch("/api/settings", json={
             "gpu_optimization": {

@@ -34,7 +34,7 @@ class CapabilityRegistryTests(unittest.TestCase):
                     registry.normalize(call)
 
     def test_registry_returns_canonical_definitions(self):
-        from web_app.core.capability_registry import CapabilityRegistry
+        from web_app.core.capability_registry import CapabilityRegistry, CapabilityRisk
 
         registry = CapabilityRegistry.default()
 
@@ -42,6 +42,9 @@ class CapabilityRegistryTests(unittest.TestCase):
         self.assertEqual(registry.resolve("native.write").operation, "bounded_edit")
         self.assertEqual(registry.resolve("native.edit").operation, "bounded_edit")
         self.assertEqual(registry.resolve("git.execute").operation, "git")
+        self.assertEqual(registry.resolve("git.read").operation, "read")
+        self.assertEqual(registry.resolve("git.read").risk, CapabilityRisk.low)
+        self.assertTrue(registry.resolve("git.read").autonomous)
         self.assertEqual(registry.resolve("system.activate").operation, "activation")
         self.assertEqual(registry.resolve("system.rollback").operation, "rollback")
         self.assertEqual(registry.resolve("project.patch").operation, "replace")

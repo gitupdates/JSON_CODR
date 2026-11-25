@@ -2,7 +2,8 @@ import asyncio
 import unittest
 from datetime import UTC, datetime
 
-from web_app.core.git_adapter import GitVerificationService, VerificationReceipt
+from web_app.core.adapters import CapabilityCall, ExecutionContext
+from web_app.core.git_adapter import GitExecutionAdapter, GitVerificationService, VerificationReceipt
 
 
 class _Profiles:
@@ -75,6 +76,41 @@ class GitVerificationServiceTests(unittest.TestCase):
                 candidate_id="candidate-1", base_sha="base", tree_sha="tree",
                 checks=("unit-tests",), project_root="C:/candidate",
             ))
+
+
+class GitExecutionAdapterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_read_capability_rejects_mutating_broker_actions(self):
+        class Broker:
+            def __init__(self):
+                self.called = False
+
+            def execute(self, *args, **kwargs):
+                self.called = True
+                raise AssertionError("mutating request reached the broker")
+
+        broker = Broker()
+        adapter = GitExecutionAdapter(broker, lambda *_args: True)
+        call = CapabilityCall(
+            capability_id="git.read",
+            operation="read",
+            project_root="C:/project",
+            arguments={
+                "request": {
+                    "schema_version": 1,
+                    "project_root": "C:/project",
+                    "baseline_fingerprint": "sha256:baseline",
+                    "actions": [{"kind": "apply_patch", "patch": "diff"}],
+                },
+                "model": "qwen",
+                "grant_id": "grant-1",
+            },
+        )
+        context = ExecutionContext(task_id="task-1", project_id="project-1", principal="user")
+
+        with self.assertRaisesRegex(PermissionError, "read-only"):
+            async for _event in adapter.execute(call, context):
+                pass
+        self.assertFalse(broker.called)
 
 
 if __name__ == "__main__":

@@ -3,13 +3,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fastapi.testclient import TestClient
-
 from web_app.app import create_app
 from web_app.models import SkillPack, SkillRecord
 from web_app.skills import SkillLibraryService
 from web_app.skillsets import SkillsetService
 from web_app.workspace import WorkspaceService
+from test_support import authenticated_client
 
 
 class FakeService:
@@ -79,7 +78,7 @@ class SkillsetServiceTests(unittest.TestCase):
         self.assertEqual([member.reference for member in restored["coding"].members], ["replacement:python"])
 
     def test_api_lists_reconciled_skillsets(self):
-        client = TestClient(create_app(FakeService(), WorkspaceService(self.root)))
+        client = authenticated_client(create_app(FakeService(), WorkspaceService(self.root)))
 
         response = client.get("/api/skillsets")
 

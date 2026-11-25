@@ -2,8 +2,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fastapi.testclient import TestClient
-
 from web_app.app import create_app
 from web_app.models import AttachmentRecord, ExtractionState, SkillPack, SkillRecord
 from web_app.recommendations import SkillRecommendationService
@@ -11,6 +9,7 @@ from web_app.settings import SettingsService
 from web_app.skills import SkillLibraryService
 from web_app.skillsets import SkillsetService
 from web_app.workspace import WorkspaceService
+from test_support import authenticated_client
 
 
 class FakeService:
@@ -135,7 +134,7 @@ class RecommendationTests(unittest.TestCase):
         )
 
     def test_api_previews_reasons_updates_session_controls_and_rejects_unknown_exclusions(self):
-        client = TestClient(create_app(FakeService(), self.workspace))
+        client = authenticated_client(create_app(FakeService(), self.workspace))
 
         preview = client.post(f"/api/sessions/{self.session.id}/skill-recommendations", json={"prompt": "python"})
         self.assertEqual(preview.status_code, 200)
@@ -156,7 +155,7 @@ class RecommendationTests(unittest.TestCase):
         self.assertEqual(rejected.status_code, 422)
 
     def test_recommendations_recalculate_after_skill_pack_removal(self):
-        client = TestClient(create_app(FakeService(), self.workspace))
+        client = authenticated_client(create_app(FakeService(), self.workspace))
         self.assertTrue(client.post(f"/api/sessions/{self.session.id}/skill-recommendations", json={"prompt": "python"}).json()["recommendations"])
 
         self.assertEqual(client.delete("/api/skills/tools").status_code, 204)

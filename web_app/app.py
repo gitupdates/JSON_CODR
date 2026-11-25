@@ -623,6 +623,7 @@ def create_app(
             )
             adapters = {
                 "git.execute": core_git_adapter,
+                "git.read": core_git_adapter,
                 "inference.generate": core_inference_adapter,
                 "project.read": core_project_adapter,
                 "project.search": core_project_adapter,
@@ -2507,9 +2508,11 @@ def create_app(
     async def execute_git_through_core(action_request, model: str, grant_id: str):
         core_service, _, _ = get_core_runtime()
         project = application.state.core_project_registry.register(action_request.project_root)
-        operation = "git"
+        read_only = all(action.kind in {"status", "read"} for action in action_request.actions)
+        capability_id = "git.read" if read_only else "git.execute"
+        operation = "read" if read_only else "git"
         call = CapabilityCall(
-            capability_id="git.execute",
+            capability_id=capability_id,
             operation=operation,
             project_root=project.root,
             arguments={
@@ -2524,7 +2527,7 @@ def create_app(
             task_id=task_id,
             thread_id=f"legacy:{task_id}",
             project_id=project.project_id,
-            command_type="git.execute",
+            command_type=capability_id,
             payload=call.model_dump(mode="json"),
         ))
         if any(event.event_type == "task.permission_required" for event in record.events):

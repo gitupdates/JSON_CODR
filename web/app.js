@@ -376,6 +376,9 @@ function handleCoreRecord(record) {
     const payload = completion.payload.result;
     markOllamaReady();
     elements.responseModel.textContent = completion.payload.effective_model_id || payload.model;
+    elements.summary.textContent = payload.summary;
+    elements.content.textContent = payload.content;
+    elements.result.hidden = false;
     renderAttachedSkills(payload.attached_skills || []);
     renderRecommendations(payload.skill_recommendations || []);
     renderActions(payload.action_proposals || []);
@@ -2687,36 +2690,23 @@ async function submitPrompt(event) {
     const directModelRun = elements.workspaceAgentSelect.value === "direct"
       && elements.model.value !== "multi-model";
     if (directModelRun) {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({
-          model: elements.model.value,
-          prompt,
-          session_id: sessionId,
-        }),
+      const userMessage = await conversationView.appendUser(prompt, attachmentIds);
+      const record = await coreClient.submit({
+        projectId: "legacy",
+        threadId: `chat:${sessionId}`,
+        sessionId,
+        model: elements.model.value,
+        prompt,
+        projectRoot: elements.workspaceProjectRoot.value || ".",
+        attachments: attachmentIds,
       });
-      if (!response.ok) throw new Error(await responseErrorMessage(response, "Local model request failed"));
-      const payload = await response.json();
-      await conversationView.restore(sessionId);
-      activeCoreTaskId = null;
+      activeCoreTaskId = record.task_id;
       activeWorkspaceRoute = "local-model";
-      elements.taskRequestedModel.textContent = elements.model.value;
-      elements.taskEffectiveModel.textContent = payload.model;
-      elements.responseModel.textContent = payload.model;
-      elements.summary.textContent = payload.summary;
-      elements.content.textContent = payload.content;
-      elements.result.hidden = false;
-      renderAttachedSkills(payload.attached_skills || []);
-      renderRecommendations(payload.skill_recommendations || []);
-      renderActions(payload.action_proposals || []);
-      elements.artifactOutput.hidden = !payload.artifact;
-      if (payload.artifact) {
-        elements.artifactOutput.href = payload.artifact.url;
-        elements.artifactOutput.textContent = `Download ${payload.artifact.filename}`;
-      }
-      renderWorkspaceActivityNotice("local-model · completed", "completed");
-      setPending(false);
+      conversationView.beginTask(record.task_id, {
+        requestedModel: elements.model.value,
+        parentMessageId: userMessage.id,
+      });
+      handleCoreRecord(record);
       return;
     }
     const userMessage = await conversationView.appendUser(prompt, attachmentIds);

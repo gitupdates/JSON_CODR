@@ -145,7 +145,7 @@ def load_or_create_protected_key(path: Path, size: int = 32) -> bytes:
         return _crypt_unprotect(payload) if os.name == "nt" else payload
     key = os.urandom(size)
     payload = _crypt_protect(key) if os.name == "nt" else key
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
     descriptor = os.open(path, flags, 0o600)
     try:
         os.write(descriptor, payload)

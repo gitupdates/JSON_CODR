@@ -1,12 +1,14 @@
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 import json
+import os
 import sqlite3
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
+from web_app.core.auth import load_or_create_protected_key
 from web_app.core.identity import IdentityService
 
 
@@ -120,6 +122,17 @@ class CredentialLifecycleTests(unittest.TestCase):
         self.assertNotIn(issued.token.encode(), database_bytes)
         self.assertNotIn(self.service._hmac_key, database_bytes)
         self.assertNotEqual(self.service.protected_key_path.read_bytes(), self.service._hmac_key)
+
+    @unittest.skipUnless(os.name == "nt", "DPAPI is available only on Windows")
+    def test_windows_protected_keys_reopen_reliably(self):
+        key_root = self.root / "dpapi-round-trips"
+        key_root.mkdir()
+
+        for index in range(32):
+            path = key_root / f"key-{index}.dpapi"
+            created = load_or_create_protected_key(path)
+            reopened = load_or_create_protected_key(path)
+            self.assertEqual(reopened, created, f"protected key {index} did not round-trip")
 
     def test_production_transition_atomically_replaces_development_password_and_revokes_credentials(self):
         transition_root = self.root / "transition"

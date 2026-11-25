@@ -5,7 +5,7 @@ from pathlib import Path
 
 from ag_ui.core import RunAgentInput
 from ag_ui.encoder import EventEncoder
-from fastapi.testclient import TestClient
+from test_support import authenticated_client
 
 from web_app.agui import build_prompt, stream_events
 from web_app.app import create_app
@@ -124,7 +124,7 @@ class AGUIEndpointTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             service = FakeService()
             app = create_app(service, workspace=WorkspaceService(Path(directory)))
-            with TestClient(app) as client:
+            with authenticated_client(app) as client:
                 response = client.post(
                     "/api/ag-ui/run",
                     headers={"accept": "text/event-stream"},

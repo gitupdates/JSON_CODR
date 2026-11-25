@@ -4,11 +4,10 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from fastapi.testclient import TestClient
-
 from web_app.attachments import AttachmentService, AttachmentTooLarge
 from web_app.app import create_app
 from web_app.workspace import WorkspaceService
+from test_support import authenticated_client
 
 
 class FakeOllamaService:
@@ -66,12 +65,7 @@ class AttachmentServiceTests(unittest.TestCase):
 
     def test_http_upload_paste_preview_include_and_delete(self):
         app = create_app(FakeOllamaService(), self.workspace, self.service)
-        client = TestClient(app)
-        identity = app.state.identity
-        user = identity.bootstrap("development", "Administrator").user
-        credential = identity.issue_credential(user.user_id, "browser_session", "attachment test", ("session.write",))
-        client.cookies.set("json_codr_session", credential.token)
-        csrf = client.get("/api/identity/bootstrap").cookies["json_codr_csrf"]
+        client = authenticated_client(app)
         upload = client.post(
             f"/api/sessions/{self.session.id}/attachments",
             files={"file": ("notes.txt", b"file context", "text/plain")},
@@ -91,19 +85,17 @@ class AttachmentServiceTests(unittest.TestCase):
         changed = client.patch(
             f"/api/sessions/{self.session.id}/attachments/{attachment_id}",
             json={"included": False},
-            headers={"X-CSRF-Token": csrf},
         )
         self.assertFalse(changed.json()["included"])
         self.assertEqual(
             client.delete(
                 f"/api/sessions/{self.session.id}/attachments/{attachment_id}",
-                headers={"X-CSRF-Token": csrf},
             ).status_code,
             204,
         )
 
     def test_http_folder_upload_preserves_safe_relative_path(self):
-        client = TestClient(create_app(FakeOllamaService(), self.workspace, self.service))
+        client = authenticated_client(create_app(FakeOllamaService(), self.workspace, self.service))
 
         upload = client.post(
             f"/api/sessions/{self.session.id}/attachments",
@@ -115,7 +107,7 @@ class AttachmentServiceTests(unittest.TestCase):
         self.assertEqual(upload.json()["display_name"], "project/src/notes.txt")
 
     def test_http_folder_upload_rejects_unsafe_relative_path(self):
-        client = TestClient(create_app(FakeOllamaService(), self.workspace, self.service))
+        client = authenticated_client(create_app(FakeOllamaService(), self.workspace, self.service))
 
         upload = client.post(
             f"/api/sessions/{self.session.id}/attachments",
@@ -126,7 +118,7 @@ class AttachmentServiceTests(unittest.TestCase):
         self.assertEqual(upload.status_code, 400)
 
     def test_http_original_download_and_extraction_retry(self):
-        client = TestClient(create_app(FakeOllamaService(), self.workspace, self.service))
+        client = authenticated_client(create_app(FakeOllamaService(), self.workspace, self.service))
         upload = client.post(
             f"/api/sessions/{self.session.id}/attachments",
             files={"file": ("review.txt", b"review me", "text/plain")},
@@ -148,7 +140,7 @@ class AttachmentServiceTests(unittest.TestCase):
         self.assertEqual(retried.json()["extraction_state"], "ready")
 
     def test_http_exports_original_attachments_as_zip(self):
-        client = TestClient(create_app(FakeOllamaService(), self.workspace, self.service))
+        client = authenticated_client(create_app(FakeOllamaService(), self.workspace, self.service))
         self.service.import_text(self.session.id, "first", "notes.txt")
         self.service.import_text(self.session.id, "second", "notes.txt")
 

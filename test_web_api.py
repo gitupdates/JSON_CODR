@@ -14,6 +14,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from test_support import authenticated_client
+
 from web_app.app import create_app
 from web_app.app import configure_local_analysis_tools
 from cli import parse_response_content
@@ -270,7 +272,7 @@ class WebApiTests(unittest.TestCase):
                     }
                 }
             }), encoding="utf-8")
-            with TestClient(create_app(FakeService(), workspace)) as client:
+            with authenticated_client(create_app(FakeService(), workspace)) as client:
                 capabilities = client.get("/api/capabilities").json()
 
             self.assertTrue(any(
@@ -296,7 +298,7 @@ class WebApiTests(unittest.TestCase):
         self.service = FakeService()
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.workspace = WorkspaceService(Path(self.temporary_directory.name))
-        self.client = TestClient(create_app(self.service, self.workspace))
+        self.client = authenticated_client(create_app(self.service, self.workspace))
         self._core_clients = [self.client]
 
     def test_well_known_discovery_does_not_trust_an_arbitrary_host(self):
@@ -340,11 +342,12 @@ class WebApiTests(unittest.TestCase):
 
         github = FakeGitHubCLI()
         client = self.track_core_client(
-            TestClient(create_app(self.service, self.workspace, github_cli=github))
+            authenticated_client(create_app(self.service, self.workspace, github_cli=github))
         )
         headers = {"X-JSON-CODR": "1"}
 
-        unauthorized = client.get("/api/github/status")
+        with TestClient(client.app) as anonymous:
+            unauthorized = anonymous.get("/api/github/status")
         status = client.get("/api/github/status", headers=headers)
         repositories = client.get("/api/github/repositories", headers=headers)
         branches = client.get("/api/github/repos/test-user/sample/branches", headers=headers)
@@ -363,7 +366,7 @@ class WebApiTests(unittest.TestCase):
             json={"confirmed": True, "title": "Issue", "body": "Details"},
         )
 
-        self.assertEqual(unauthorized.status_code, 403)
+        self.assertEqual(unauthorized.status_code, 401)
         self.assertEqual(status.json()["login"], "test-user")
         self.assertEqual(repositories.json()[0]["full_name"], "test-user/sample")
         self.assertEqual(branches.json()[0]["name"], "main")
@@ -412,11 +415,13 @@ class WebApiTests(unittest.TestCase):
 
         auth = FakeGitHubAuth()
         headers = {"X-JSON-CODR": "1"}
-        with TestClient(create_app(self.service, self.workspace, github_auth=auth)) as client:
-            self.assertEqual(
-                client.post("/api/github/auth/login", json={"confirmed": True}).status_code,
-                403,
-            )
+        with authenticated_client(create_app(self.service, self.workspace, github_auth=auth)) as client:
+            with TestClient(client.app) as anonymous:
+                self.assertEqual(
+                    anonymous.post("/api/github/auth/login", json={"confirmed": True}).status_code,
+                    401,
+                )
+                self.assertEqual(anonymous.get("/api/github/auth/login/login-1").status_code, 401)
             self.assertEqual(client.post("/api/github/auth/login", headers=headers, json={}).status_code, 422)
             started = client.post(
                 "/api/github/auth/login", headers=headers, json={"confirmed": True},
@@ -424,7 +429,7 @@ class WebApiTests(unittest.TestCase):
             conflict = client.post(
                 "/api/github/auth/login", headers=headers, json={"confirmed": True},
             )
-            self.assertEqual(client.get("/api/github/auth/login/login-1").status_code, 403)
+            self.assertEqual(client.get("/api/github/auth/login/login-1").status_code, 200)
             waiting = client.get("/api/github/auth/login/login-1", headers=headers)
             missing = client.get("/api/github/auth/login/missing", headers=headers)
             self.assertEqual(
@@ -492,7 +497,7 @@ class WebApiTests(unittest.TestCase):
                 return {"status": "pulled"}
 
         github = FakeGitHubCLI()
-        client = self.track_core_client(TestClient(create_app(self.service, self.workspace, github_cli=github)))
+        client = self.track_core_client(authenticated_client(create_app(self.service, self.workspace, github_cli=github)))
         headers = {"X-JSON-CODR": "1"}
 
         missing_confirmation = client.post(
@@ -607,7 +612,7 @@ class WebApiTests(unittest.TestCase):
 
         github = FakeGitHubCLI()
         client = self.track_core_client(
-            TestClient(create_app(self.service, self.workspace, github_cli=github))
+            authenticated_client(create_app(self.service, self.workspace, github_cli=github))
         )
         headers = {"X-JSON-CODR": "1"}
         check_body = {
@@ -616,7 +621,8 @@ class WebApiTests(unittest.TestCase):
             "repository": "test-user/sample",
             "branch": "feature/ui",
         }
-        self.assertEqual(client.post("/api/github/local/check-build", json=check_body).status_code, 403)
+        with TestClient(client.app) as anonymous:
+            self.assertEqual(anonymous.post("/api/github/local/check-build", json=check_body).status_code, 401)
         self.assertEqual(
             client.post(
                 "/api/github/local/check-build",
@@ -700,7 +706,7 @@ class WebApiTests(unittest.TestCase):
             executable_finder=lambda name: f"C:/tools/{name}.exe" if name == "aider" else None,
         )
         client = self.track_core_client(
-            TestClient(create_app(self.service, self.workspace, terminals=terminals, coding_agents=agents))
+            authenticated_client(create_app(self.service, self.workspace, terminals=terminals, coding_agents=agents))
         )
         headers = {"X-JSON-CODR": "1"}
 
@@ -734,7 +740,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(failed.status_code, 403)
         direct = client.post("/api/chat", json={"model": "qwen2.5-coder:7b-instruct-q4_K_M", "prompt": "fallback"})
         self.assertEqual(direct.status_code, 200)
-        self.assertIn("USER TASK (authoritative):\nfallback", direct.json()["content"])
+        self.assertEqual(direct.json()["content"], "Answered: fallback")
 
     def test_broker_status_grant_execute_and_revoke_are_project_scoped(self):
         project = Path(self.temporary_directory.name) / "broker-project"
@@ -748,12 +754,16 @@ class WebApiTests(unittest.TestCase):
         agents = CodingAgentService(self.workspace.data_root, executable_finder=lambda name: None)
         broker = GitBrokerService(self.workspace.data_root)
         client = self.track_core_client(
-            TestClient(create_app(self.service, self.workspace, coding_agents=agents, git_broker=broker))
+            authenticated_client(create_app(self.service, self.workspace, coding_agents=agents, git_broker=broker))
         )
         headers = {"X-JSON-CODR": "1"}
 
-        denied = client.post("/api/git-broker/grants", json={"project_root": str(project), "profile": "broker"})
-        self.assertEqual(denied.status_code, 403)
+        with TestClient(client.app) as anonymous:
+            denied = anonymous.post(
+                "/api/git-broker/grants",
+                json={"project_root": str(project), "profile": "broker"},
+            )
+        self.assertEqual(denied.status_code, 401)
         granted = client.post("/api/git-broker/grants", headers=headers, json={
             "project_root": str(project), "profile": "broker"
         })
@@ -795,7 +805,7 @@ class WebApiTests(unittest.TestCase):
 
         project = Path(self.temporary_directory.name) / "terminal-project"
         project.mkdir()
-        client = self.track_core_client(TestClient(create_app(self.service, self.workspace, terminals=FakeTerminals())))
+        client = self.track_core_client(authenticated_client(create_app(self.service, self.workspace, terminals=FakeTerminals())))
 
         response = client.post(
             "/api/terminals",
@@ -825,12 +835,19 @@ class WebApiTests(unittest.TestCase):
             def __init__(self):
                 self.interrupted = []
                 self.closed = []
+                self.record = None
 
             def create(self, shell, cwd):
-                return type("Record", (), {
+                self.record = type("Record", (), {
                     "id": "terminal-1", "pid": 123, "shell": shell, "cwd": str(cwd),
                     "status": "running", "external": False, "backend": "pipe",
                 })()
+                return self.record
+
+            def get(self, terminal_id):
+                if self.record is None or terminal_id != self.record.id:
+                    raise KeyError(terminal_id)
+                return self.record
 
             def interrupt(self, terminal_id):
                 self.interrupted.append(terminal_id)
@@ -844,7 +861,7 @@ class WebApiTests(unittest.TestCase):
         project = Path(self.temporary_directory.name) / "terminal-lifecycle-project"
         project.mkdir()
         terminals = FakeTerminals()
-        client = self.track_core_client(TestClient(create_app(self.service, self.workspace, terminals=terminals)))
+        client = self.track_core_client(authenticated_client(create_app(self.service, self.workspace, terminals=terminals)))
         headers = {"X-JSON-CODR": "1"}
         created = client.post("/api/terminals", headers=headers, json={"cwd": str(project)})
 
@@ -866,7 +883,7 @@ class WebApiTests(unittest.TestCase):
         response = self.client.post("/api/chat", json={"model": "qwen", "prompt": "hello"})
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("USER TASK (authoritative):\nhello", response.json()["content"])
+        self.assertEqual(response.json()["content"], "Answered: hello")
         with closing(sqlite3.connect(self.workspace.data_root / "core" / "tasks.sqlite")) as database:
             command = database.execute("SELECT command_json FROM tasks").fetchone()[0]
             event_types = [
@@ -930,7 +947,7 @@ class WebApiTests(unittest.TestCase):
         subprocess.run(["git", "add", "README.md"], cwd=project, check=True)
         subprocess.run(["git", "commit", "-m", "initial"], cwd=project, check=True, capture_output=True)
         agents = CodingAgentService(self.workspace.data_root, executable_finder=lambda name: None)
-        client = self.track_core_client(TestClient(create_app(BrokerModelService(), self.workspace, coding_agents=agents)))
+        client = self.track_core_client(authenticated_client(create_app(BrokerModelService(), self.workspace, coding_agents=agents)))
         headers = {"X-JSON-CODR": "1"}
         grant = client.post("/api/git-broker/grants", headers=headers, json={
             "project_root": str(project), "profile": "broker"
@@ -948,7 +965,7 @@ class WebApiTests(unittest.TestCase):
         with closing(sqlite3.connect(self.workspace.data_root / "core" / "tasks.sqlite")) as database:
             commands = [row[0] for row in database.execute("SELECT command_json FROM tasks")]
         self.assertEqual(len(commands), 1)
-        self.assertIn('"command_type":"git.execute"', commands[0])
+        self.assertIn('"command_type":"git.read"', commands[0])
 
     def test_project_workspace_read_only_run_does_not_create_persistent_broker_grant(self):
         class WorkspaceModelService(FakeService):
@@ -980,7 +997,7 @@ class WebApiTests(unittest.TestCase):
         subprocess.run(["git", "add", "README.md"], cwd=project, check=True)
         subprocess.run(["git", "commit", "-m", "initial"], cwd=project, check=True, capture_output=True)
         agents = CodingAgentService(self.workspace.data_root, executable_finder=lambda name: None)
-        client = self.track_core_client(TestClient(create_app(
+        client = self.track_core_client(authenticated_client(create_app(
             WorkspaceModelService(), self.workspace, coding_agents=agents,
         )))
         request = {
@@ -1016,6 +1033,7 @@ class WebApiTests(unittest.TestCase):
                     "baseline_fingerprint": baseline,
                     "actions": [
                         {"kind": "apply_patch", "patch": patch},
+                        {"kind": "verify", "checks": ["unit-tests"]},
                         {"kind": "commit", "message": "Model commit"},
                     ],
                 }))
@@ -1032,7 +1050,7 @@ class WebApiTests(unittest.TestCase):
             ["git", "rev-parse", "HEAD"], cwd=project, check=True, capture_output=True, text=True,
         ).stdout.strip()
         agents = CodingAgentService(self.workspace.data_root, executable_finder=lambda name: None)
-        client = self.track_core_client(TestClient(create_app(
+        client = self.track_core_client(authenticated_client(create_app(
             CommittingModelService(), self.workspace, coding_agents=agents,
         )))
 
@@ -1143,7 +1161,7 @@ class WebApiTests(unittest.TestCase):
                 content="capabilities: inspect\n" + ("Keep evidence grounded. " * 420),
             )],
         )])
-        client = self.track_core_client(TestClient(create_app(model_service, self.workspace)))
+        client = self.track_core_client(authenticated_client(create_app(model_service, self.workspace)))
         session = self.workspace.create_session()
         session.selected_skill_ids = ["large-agent-context:instructions"]
         self.workspace.save_manifest(session)
@@ -1190,7 +1208,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(missing_project.status_code, 400)
 
     def test_optimized_connector_catalog_and_install_plans_are_additive(self):
-        client = TestClient(create_app(self.service, self.workspace, optimized=True))
+        client = authenticated_client(create_app(self.service, self.workspace, optimized=True))
 
         self.assertEqual(type(client.app.state.model_runs.inference).__name__, "InferenceRouter")
 
@@ -1205,7 +1223,7 @@ class WebApiTests(unittest.TestCase):
         self.assertFalse(plan.json()["includes_driver"])
 
     def test_hardware_runtime_install_creates_reviewable_cli_proposal_without_drivers(self):
-        client = TestClient(create_app(self.service, self.workspace, optimized=True))
+        client = authenticated_client(create_app(self.service, self.workspace, optimized=True))
         session_id = client.post("/api/sessions").json()["id"]
 
         response = client.post(f"/api/sessions/{session_id}/hardware/openvino/install-proposal")
@@ -1217,7 +1235,7 @@ class WebApiTests(unittest.TestCase):
         self.assertNotIn("driver", proposal["command"].casefold())
 
     def test_provider_environment_statuses_are_exposed_independently(self):
-        client = TestClient(create_app(self.service, self.workspace, optimized=True))
+        client = authenticated_client(create_app(self.service, self.workspace, optimized=True))
 
         response = client.get("/api/inference/environments")
 
@@ -1248,7 +1266,7 @@ class WebApiTests(unittest.TestCase):
             async def list_models(self):
                 raise OllamaUnavailableError("Ollama is unavailable")
 
-        client = TestClient(create_app(BusyService(), self.workspace, hardware=FakeHardware()))
+        client = authenticated_client(create_app(BusyService(), self.workspace, hardware=FakeHardware()))
 
         response = client.post("/api/hardware/detect")
 
@@ -1299,7 +1317,16 @@ class WebApiTests(unittest.TestCase):
     def test_health_reports_ollama_readiness(self):
         self.assertEqual(
             self.client.get("/api/health").json(),
-                {"status": "ready", "ollama": True, "app_version": APP_VERSION},
+                {
+                    "status": "ready",
+                    "app_version": APP_VERSION,
+                    "revision": None,
+                    "health_nonce": None,
+                    "instance_id": None,
+                    "started_at": None,
+                    "manifest_digest": None,
+                    "ollama": True,
+                },
         )
         self.assertEqual(self.client.app.version, APP_VERSION)
         self.service.available = False
@@ -1323,7 +1350,7 @@ class WebApiTests(unittest.TestCase):
             async def list_models(self):
                 return []
 
-        client = TestClient(create_app(MinimalService(), self.workspace))
+        client = authenticated_client(create_app(MinimalService(), self.workspace))
 
         self.assertEqual(client.get("/").status_code, 200)
         response = client.post("/api/integrity-benchmarks", json={"suite": "quick", "model": "model"})
@@ -1333,7 +1360,7 @@ class WebApiTests(unittest.TestCase):
 
     def test_hardware_detection_probe_and_cpu_restore_are_exposed(self):
         hardware = FakeHardware()
-        client = TestClient(create_app(self.service, self.workspace, hardware=hardware))
+        client = authenticated_client(create_app(self.service, self.workspace, hardware=hardware))
 
         self.assertEqual(client.get("/api/hardware").json()["preferred_backend"], "cpu")
         self.assertEqual(client.post("/api/hardware/detect").json()[0]["id"], "cpu")
@@ -1344,7 +1371,7 @@ class WebApiTests(unittest.TestCase):
 
     def test_hardware_telemetry_combines_gpu_and_ollama_runtime_data(self):
         hardware = FakeHardware()
-        client = TestClient(create_app(self.service, self.workspace, hardware=hardware))
+        client = authenticated_client(create_app(self.service, self.workspace, hardware=hardware))
 
         payload = client.get("/api/hardware/telemetry").json()
 
@@ -1362,7 +1389,7 @@ class WebApiTests(unittest.TestCase):
             "evidence": "100% GPU",
             "restart_required": False,
         }
-        client = TestClient(create_app(self.service, self.workspace, hardware=hardware))
+        client = authenticated_client(create_app(self.service, self.workspace, hardware=hardware))
 
         response = client.post(
             "/api/hardware/probe",
@@ -1375,7 +1402,7 @@ class WebApiTests(unittest.TestCase):
 
     def test_hardware_benchmark_execution_history_validation_and_busy_conflict(self):
         hardware = FakeHardware()
-        client = TestClient(create_app(self.service, self.workspace, hardware=hardware))
+        client = authenticated_client(create_app(self.service, self.workspace, hardware=hardware))
 
         response = client.post(
             "/api/hardware/benchmarks",
@@ -1423,7 +1450,7 @@ class WebApiTests(unittest.TestCase):
 
         integrity = FakeIntegrityBenchmark()
         integrity.error = RuntimeError("An integrity benchmark is already running")
-        client = TestClient(create_app(self.service, self.workspace, integrity=integrity))
+        client = authenticated_client(create_app(self.service, self.workspace, integrity=integrity))
         busy = client.post(
             "/api/integrity-benchmarks",
             json={"suite": "quick", "model": "qwen2.5-coder:7b-instruct-q4_K_M"},
@@ -1436,7 +1463,7 @@ class WebApiTests(unittest.TestCase):
             async def list_models(self):
                 raise RuntimeError("Ollama offline")
 
-        client = TestClient(create_app(OfflineRosterService(), self.workspace))
+        client = authenticated_client(create_app(OfflineRosterService(), self.workspace))
         response = client.post(
             "/api/integrity-benchmarks",
             json={"suite": "quick", "model": "qwen2.5-coder:7b-instruct-q4_K_M"},
@@ -1471,7 +1498,7 @@ class WebApiTests(unittest.TestCase):
         self.assertFalse(imported.json()["retained_system_details"])
 
     def test_model_compatibility_and_explicit_remote_search_endpoints(self):
-        client = TestClient(create_app(self.service, self.workspace, optimized=True))
+        client = authenticated_client(create_app(self.service, self.workspace, optimized=True))
         compatibility = client.get("/api/hardware/model-compatibility")
         self.assertEqual(compatibility.status_code, 200)
         cpu = next(item for item in compatibility.json() if item["backend"] == "cpu")
@@ -1647,20 +1674,9 @@ class WebApiTests(unittest.TestCase):
 
     def test_chat_auto_selects_the_configured_installed_model(self):
         self.service.config["model"] = "qwen2.5-coder:7b-instruct-q4_K_M"
-        identity = self.client.app.state.identity
-        administrator = identity.bootstrap("development", "Administrator").user
-        credential = identity.issue_credential(
-            administrator.user_id,
-            "browser_session",
-            "test browser",
-            identity.browser_session_scopes(administrator.user_id),
-        )
-        self.client.cookies.set("json_codr_session", credential.token)
-        self.client.cookies.set("json_codr_csrf", "test-csrf")
 
         response = self.client.post(
             "/api/chat",
-            headers={"X-CSRF-Token": "test-csrf"},
             json={"model": "auto", "prompt": "Hello"},
         )
 
@@ -1734,7 +1750,7 @@ class WebApiTests(unittest.TestCase):
                 )
                 return ChatResult(model=model, status="success", summary="plan", content=content)
 
-        client = self.track_core_client(TestClient(create_app(PlannerService(), self.workspace)))
+        client = self.track_core_client(authenticated_client(create_app(PlannerService(), self.workspace)))
         response = client.post("/api/tasks", json={
             "schema_version": "1", "command_id": "agent-command", "task_id": "agent-task",
             "thread_id": "agent-thread", "project_id": "legacy", "command_type": "agent.run",
@@ -1768,7 +1784,7 @@ class WebApiTests(unittest.TestCase):
             )],
         ))
         self.client.close()
-        self.client = self.track_core_client(TestClient(create_app(self.service, self.workspace)))
+        self.client = self.track_core_client(authenticated_client(create_app(self.service, self.workspace)))
         session = self.workspace.create_session()
 
         response = self.client.post(

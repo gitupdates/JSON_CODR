@@ -5,13 +5,12 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from fastapi.testclient import TestClient
-
 from web_app.attachments import AttachmentService
 from web_app.app import create_app
 from web_app.conversation import ConversationService
 from web_app.models import ChatMessage, ObjectReference
 from web_app.workspace import WorkspaceService
+from test_support import authenticated_client
 
 
 class ConversationServiceTests(unittest.TestCase):
@@ -153,7 +152,7 @@ class ConversationServiceTests(unittest.TestCase):
             )],
         )
         self.workspace.append_message(self.session.id, message)
-        client = TestClient(create_app(FakeOllamaService(), self.workspace, self.attachments))
+        client = authenticated_client(create_app(FakeOllamaService(), self.workspace, self.attachments))
 
         history = client.get(f"/api/sessions/{self.session.id}/conversation")
         exported = client.get(
@@ -191,7 +190,7 @@ class ConversationServiceTests(unittest.TestCase):
             async def list_models(self):
                 return []
 
-        client = TestClient(create_app(FakeOllamaService(), self.workspace, self.attachments))
+        client = authenticated_client(create_app(FakeOllamaService(), self.workspace, self.attachments))
 
         response = client.get(f"/api/sessions/{self.session.id}/references/missing")
 
