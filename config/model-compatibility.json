@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "base_fallback_order": [
+    "qwen2.5-coder:3b",
+    "qwen2.5-coder:0.5b"
+  ],
+  "models": {
+    "rnj-1:8b": {
+      "alternates": [
+        "hf.co/unsloth/rnj-1-instruct-GGUF:UD-Q4_K_XL"
+      ],
+      "prefer_alternate": true,
+      "reason": "The official RNJ-1 Ollama artifact advertises incompatible sliding-window-attention metadata; use the reviewed Apache-2.0 Unsloth GGUF alternate."
+    }
+  }
+}
