@@ -7,6 +7,7 @@ from pathlib import Path
 
 from web_app.artifacts import ArtifactService
 from web_app.attachments import AttachmentService
+from web_app.core.project_registry import ProjectRegistry
 from web_app.models import ChatMessage, ObjectReference
 from web_app.workspace import WorkspaceService
 
@@ -18,11 +19,13 @@ class ConversationService:
         attachments: AttachmentService,
         project_root: Path,
         artifacts: ArtifactService | None = None,
+        projects: ProjectRegistry | None = None,
     ) -> None:
         self.workspace = workspace
         self.attachments = attachments
         self.project_root = Path(project_root).resolve()
         self.artifacts = artifacts or ArtifactService(workspace)
+        self.projects = projects
 
     def history(self, session_id: str) -> list[ChatMessage]:
         return list(self.workspace.get_session(session_id).messages)
@@ -93,8 +96,14 @@ class ConversationService:
             path = self.artifacts.artifact_path(session_id, reference.target)
             return path, mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         if reference.kind == "project_file":
-            candidate = (self.project_root / reference.target).resolve()
-            if candidate != self.project_root and self.project_root not in candidate.parents:
+            session = self.workspace.get_session(session_id)
+            root = self.project_root
+            if session.project_id is not None:
+                if self.projects is None:
+                    raise PermissionError("Project registry is unavailable for the active session")
+                root = self.projects.resolve(session.project_id)
+            candidate = (root / reference.target).resolve()
+            if candidate != root and root not in candidate.parents:
                 raise PermissionError("Project reference escapes the active project")
             if not candidate.is_file():
                 raise KeyError(reference.target)

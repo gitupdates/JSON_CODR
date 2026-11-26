@@ -19,7 +19,7 @@ from test_support import authenticated_client
 from web_app.app import create_app
 from web_app.app import configure_local_analysis_tools
 from cli import parse_response_content
-from web_app.models import ActionSuggestion, ChatResult, ConversionBundle, GeneratedFile, SkillPack, SkillRecord
+from web_app.models import ActionSuggestion, ChatMessage, ChatResult, ConversionBundle, GeneratedFile, SkillPack, SkillRecord
 from web_app.ollama_service import ModelOutputError, ModelTimeoutError, OllamaService, OllamaUnavailableError
 from web_app.workspace import WorkspaceService
 from web_app.skills import SkillLibraryService
@@ -182,6 +182,95 @@ class FakeIntegrityBenchmark:
 
 
 class WebApiTests(unittest.TestCase):
+    def test_project_session_api_binds_sessions_and_hides_foreign_snapshots(self):
+        project_root = Path(self.temporary_directory.name) / "history-project"
+        project_root.mkdir()
+        resolved = self.client.post("/api/projects/resolve", json={"root": str(project_root)})
+
+        self.assertEqual(resolved.status_code, 200)
+        project_id = resolved.json()["project_id"]
+        created = self.client.post("/api/sessions", json={"project_id": project_id})
+        self.assertEqual(created.status_code, 201)
+        session_id = created.json()["id"]
+        session = self.workspace.get_session(session_id)
+        self.assertEqual(session.project_id, project_id)
+        self.assertEqual(session.owner_user_id, self.client.app.state.identity.bootstrap_state().administrator_user_id)
+
+        self.workspace.append_message(session_id, ChatMessage(role="user", content="Preserve this implementation"))
+        saved = self.client.post(f"/api/projects/{project_id}/sessions", json={
+            "session_id": session_id,
+            "title": "Implementation review",
+            "change_type": "feature",
+            "keywords": ["history"],
+        })
+        self.assertEqual(saved.status_code, 200)
+        snapshot_id = saved.json()["snapshot"]["id"]
+        listing = self.client.get(f"/api/projects/{project_id}/sessions", params={"query": "history"})
+        detail = self.client.get(f"/api/projects/{project_id}/sessions/{snapshot_id}")
+        restored = self.client.post(f"/api/projects/{project_id}/sessions/{snapshot_id}/restore")
+
+        self.assertEqual([item["id"] for item in listing.json()["snapshots"]], [snapshot_id])
+        self.assertEqual(detail.status_code, 200)
+        self.assertIn("Objective: Preserve this implementation", detail.json()["history"])
+        self.assertEqual(restored.status_code, 201)
+        self.assertNotEqual(restored.json()["session_id"], session_id)
+
+        other_project = Path(self.temporary_directory.name) / "other-history-project"
+        other_project.mkdir()
+        other_id = self.client.post("/api/projects/resolve", json={"root": str(other_project)}).json()["project_id"]
+        before = {item.name for item in self.workspace.sessions_root.iterdir()}
+        wrong_project = self.client.post(f"/api/projects/{other_id}/sessions/{snapshot_id}/restore")
+        self.assertEqual(wrong_project.status_code, 404)
+        self.assertEqual({item.name for item in self.workspace.sessions_root.iterdir()}, before)
+
+        identity = self.client.app.state.identity
+        other_user = identity.create_user("history-other", "History Other", roles=("administrator",))
+        credential = identity.issue_credential(other_user.user_id, "cli", "history test", ("session.write",))
+        foreign = TestClient(self.client.app)
+        try:
+            foreign.headers["Authorization"] = f"Bearer {credential.token}"
+            before = {item.name for item in self.workspace.sessions_root.iterdir()}
+            self.assertEqual(foreign.get(f"/api/projects/{project_id}/sessions/{snapshot_id}").status_code, 404)
+            self.assertEqual(foreign.post(f"/api/projects/{project_id}/sessions/{snapshot_id}/restore").status_code, 404)
+            self.assertEqual({item.name for item in self.workspace.sessions_root.iterdir()}, before)
+        finally:
+            foreign.close()
+
+    def test_project_session_mutations_require_browser_csrf_but_allow_scoped_bearers(self):
+        project_root = Path(self.temporary_directory.name) / "csrf-history-project"
+        project_root.mkdir()
+        self.client.headers.pop("X-CSRF-Token")
+        rejected = self.client.post("/api/projects/resolve", json={"root": str(project_root)})
+
+        self.assertEqual(rejected.status_code, 403)
+
+        identity = self.client.app.state.identity
+        owner_id = identity.bootstrap_state().administrator_user_id
+        credential = identity.issue_credential(owner_id, "service", "history service", ("session.write",))
+        bearer = TestClient(self.client.app)
+        try:
+            bearer.headers["Authorization"] = f"Bearer {credential.token}"
+            accepted = bearer.post("/api/projects/resolve", json={"root": str(project_root)})
+            self.assertEqual(accepted.status_code, 200)
+        finally:
+            bearer.close()
+
+    def test_project_session_reads_require_identity_but_not_browser_csrf(self):
+        project_root = Path(self.temporary_directory.name) / "read-history-project"
+        project_root.mkdir()
+        resolved = self.client.post("/api/projects/resolve", json={"root": str(project_root)})
+        project_id = resolved.json()["project_id"]
+        self.client.headers.pop("X-CSRF-Token")
+
+        listing = self.client.get(f"/api/projects/{project_id}/sessions")
+
+        self.assertEqual(listing.status_code, 200)
+        unauthenticated = TestClient(self.client.app)
+        try:
+            self.assertEqual(unauthenticated.get(f"/api/projects/{project_id}/sessions").status_code, 401)
+        finally:
+            unauthenticated.close()
+
     def test_openai_compatible_models_and_chat_routes_use_live_service(self):
         models = self.client.get("/v1/models")
         self.assertEqual(models.status_code, 200)
@@ -1333,7 +1422,7 @@ class WebApiTests(unittest.TestCase):
 
         reopened = self.client.get(f"/api/sessions/{session_id}")
         self.assertEqual(reopened.status_code, 200)
-        self.assertEqual(reopened.json()["schema_version"], 2)
+        self.assertEqual(reopened.json()["schema_version"], 3)
 
         deleted = self.client.delete(f"/api/sessions/{session_id}")
         self.assertEqual(deleted.status_code, 204)

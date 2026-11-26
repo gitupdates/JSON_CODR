@@ -70,7 +70,7 @@ from web_app.core.identity import IdentityService
 from web_app.core.http_identity import MutationAuthorizer
 from web_app.core.context_service import ContextService
 from web_app.core.connection_recovery import ConnectionRecoveryService
-from web_app.core.memory import MemoryStore
+from web_app.core.memory import MemoryDraft, MemoryStore
 from web_app.core.autonomous_update import (
     AgentRuntimeModifier,
     AutonomousUpdateController,
@@ -87,6 +87,7 @@ from web_app.core.policy import PolicyService
 from web_app.core.project_adapter import ProjectAdapter
 from web_app.core.project_intelligence import ProjectReader
 from web_app.core.project_registry import ProjectRegistry
+from web_app.project_sessions import ProjectSessionService
 from web_app.core.service import CoreService
 from web_app.core.store import TaskStore
 from web_app.core.component_manager import ComponentManager
@@ -101,7 +102,7 @@ from web_app.core.command_runtime import CommandRuntime
 from web_app.core.verification_profiles import VerificationProfileStore
 from web_app.core.verifier_identity import VerifierIdentityService
 from web_app.dependencies import DependencyService
-from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, ConnectionPreviewRequest, ConnectionRecoveryRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GitHubAuthCancelRequest, GitHubAuthLoginRequest, GitHubBuildCheckRequest, GitHubBuildUpdateRequest, GitHubConfirmedWrite, GitHubIssueCommentRequest, GitHubIssueCreateRequest, GitHubIssueUpdateRequest, GitHubLocalBranchRequest, GitHubLocalCloneRequest, GitHubLocalCommitRequest, GitHubLocalPushRequest, GitHubLocalStageRequest, GitHubLocalSyncRequest, GitHubPullRequestCreateRequest, GitHubPullRequestMergeRequest, GitHubPullRequestUpdateRequest, GitHubReleaseCreateRequest, GitHubReleaseUpdateRequest, GitHubRemoteBranchCreateRequest, GitHubRepositoryCreateRequest, GitHubRepositoryDeleteRequest, GitHubRepositoryUpdateRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, OptimizedModelInstallRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
+from web_app.models import ActionApprovalRequest, ActionSuggestion, AttachmentUpdate, BrokerAdapterRunRequest, BrokerGrantRequest, BrokerTaskRequest, ChatMessage, ChatRequest, ChatResult, ClipboardTextRequest, CodingAgentGrantRequest, CodingAgentLaunchRequest, ConnectionPreviewRequest, ConnectionRecoveryRequest, DestructiveConfirmationRequest, DiscoveryInstallRequest, GitHubAuthCancelRequest, GitHubAuthLoginRequest, GitHubBuildCheckRequest, GitHubBuildUpdateRequest, GitHubConfirmedWrite, GitHubIssueCommentRequest, GitHubIssueCreateRequest, GitHubIssueUpdateRequest, GitHubLocalBranchRequest, GitHubLocalCloneRequest, GitHubLocalCommitRequest, GitHubLocalPushRequest, GitHubLocalStageRequest, GitHubLocalSyncRequest, GitHubPullRequestCreateRequest, GitHubPullRequestMergeRequest, GitHubReleaseCreateRequest, GitHubReleaseUpdateRequest, GitHubRemoteBranchCreateRequest, GitHubRepositoryCreateRequest, GitHubRepositoryDeleteRequest, GitHubRepositoryUpdateRequest, GithubSkillInstallRequest, GithubSkillPreviewRequest, GpuProfileSettings, HardwareBenchmarkRequest, HardwareProbeRequest, IntegrityBenchmarkRequest, KnownSkillScanRequest, ModelRunCreateRequest, OptimizedModelInstallRequest, ProjectSessionSaveRequest, ProjectWorkspaceRunRequest, SessionSkillRoutingUpdate, SettingsUpdate, SkillPack, SkillPackRenameRequest, SkillRecommendationRequest, SkillScanRequest, SkillSelectionRequest, SkillUpdateRequest, TerminalCreateRequest, WorkspaceTaskRequest, WorkspaceTaskResponse
 from web_app.model_run_store import ModelRunStore, RequestKeyConflict
 from web_app.model_runs import ModelRunService, canonical_model_prompt, capability_inference_prompt
 from web_app.ollama_service import (
@@ -124,6 +125,16 @@ class UpdateProposalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     profile_id: str = Field(min_length=1, max_length=128)
     prompt: str = Field(min_length=1, max_length=65_536)
+
+
+class ProjectResolveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    root: str = Field(min_length=1, max_length=4096)
+
+
+class SessionCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    project_id: str = Field(min_length=1, max_length=256)
 
 
 class UpdateReasonRequest(BaseModel):
@@ -498,12 +509,7 @@ def create_app(
     application.router.add_event_handler("shutdown", close_model_runs)
     dependency_service = DependencyService(attachments)
     artifact_service = ArtifactService(workspace)
-    conversation_service = ConversationService(
-        workspace,
-        attachments,
-        Path(__file__).resolve().parent.parent,
-        artifact_service,
-    )
+    conversation_service = None
     terminals = terminals or TerminalService(shim_root=component_root / "shims")
     close_terminals = getattr(terminals, "close_all", None)
     if close_terminals is not None:
@@ -530,6 +536,7 @@ def create_app(
     core_projects = None
     core_conformance = None
     core_artifacts = None
+    project_sessions = None
     core_verification_service = None
     core_capabilities = ()
     core_mcp_backends = []
@@ -797,6 +804,58 @@ def create_app(
             application.state.core_task_store = core_tasks
             application.state.core_policy = core_policy
         return core_runtime
+
+    def get_conversation_service(session_id: str) -> ConversationService:
+        nonlocal conversation_service
+        session = workspace.get_session(session_id)
+        projects = None
+        if session.project_id is not None:
+            get_core_runtime()
+            if core_projects is None:
+                raise RuntimeError("project registry is unavailable")
+            projects = core_projects
+        if conversation_service is None:
+            conversation_service = ConversationService(
+                workspace,
+                attachments,
+                Path(__file__).resolve().parent.parent,
+                artifact_service,
+                projects=projects,
+            )
+        elif projects is not None:
+            conversation_service.projects = projects
+        return conversation_service
+
+    def get_project_sessions() -> ProjectSessionService:
+        nonlocal project_sessions
+        get_core_runtime()
+        if core_projects is None:
+            raise RuntimeError("project registry is unavailable")
+        if project_sessions is None:
+            project_sessions = ProjectSessionService(workspace, core_projects)
+            application.state.project_sessions = project_sessions
+        return project_sessions
+
+    def project_session_principal(request: Request, *, mutation: bool):
+        principal = mutation_authorizer.principal(request, "session.write")
+        if mutation:
+            mutation_authorizer.csrf(request)
+        return principal
+
+    def project_session_project(project_id: str) -> None:
+        get_core_runtime()
+        if core_projects is None:
+            raise RuntimeError("project registry is unavailable")
+        try:
+            core_projects.resolve(project_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Project session not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    def require_snapshot_id(snapshot_id: str) -> None:
+        if not re.fullmatch(r"[0-9a-f]{32}", snapshot_id):
+            raise HTTPException(status_code=422, detail="Invalid snapshot ID")
 
     def get_core_artifacts() -> ArtifactStore:
         nonlocal core_artifacts
@@ -1643,9 +1702,104 @@ def create_app(
     async def list_skillsets():
         return skillsets.reconcile()
 
+    @application.post("/api/projects/resolve")
+    async def resolve_project(request: ProjectResolveRequest, http_request: Request):
+        project_session_principal(http_request, mutation=True)
+        get_core_runtime()
+        if core_projects is None:
+            raise RuntimeError("project registry is unavailable")
+        try:
+            project = core_projects.register(request.root)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return {"project_id": project.project_id, "root": project.root}
+
+    @application.post("/api/projects/{project_id}/sessions")
+    async def save_project_session(
+        project_id: str,
+        request: ProjectSessionSaveRequest,
+        http_request: Request,
+    ):
+        principal = project_session_principal(http_request, mutation=True)
+        project_session_project(project_id)
+        try:
+            snapshot = get_project_sessions().save(
+                request.session_id,
+                project_id,
+                principal.user_id,
+                request.title,
+                request.change_type,
+                request.keywords,
+            )
+        except (KeyError, PermissionError) as error:
+            raise HTTPException(status_code=404, detail="Project session not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        indexing = {"status": "skipped", "detail": "Collective memory is disabled"}
+        if settings.get().memory.enabled and core_memory is not None:
+            try:
+                core_memory.accept(MemoryDraft(
+                    user_id=principal.user_id,
+                    project_id=project_id,
+                    thread_id=f"project-session:{snapshot.id}",
+                    task_id=snapshot.source_session_id,
+                    kind="previous_session_history",
+                    content=snapshot.summary,
+                    source_refs=(f"previous-session:{snapshot.id}",),
+                    retain_details=False,
+                    idempotency_key=f"previous-session:{snapshot.id}",
+                ))
+                indexing = {"status": "indexed", "source_ref": f"previous-session:{snapshot.id}"}
+            except ValueError as error:
+                indexing = {"status": "skipped", "detail": str(error)}
+        return {"snapshot": snapshot, "indexing": indexing}
+
+    @application.get("/api/projects/{project_id}/sessions")
+    async def list_project_sessions(project_id: str, http_request: Request, query: str = ""):
+        principal = project_session_principal(http_request, mutation=False)
+        project_session_project(project_id)
+        try:
+            snapshots = get_project_sessions().list(project_id, principal.user_id, query)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return {"snapshots": snapshots}
+
+    @application.get("/api/projects/{project_id}/sessions/{snapshot_id}")
+    async def get_project_session(project_id: str, snapshot_id: str, http_request: Request):
+        principal = project_session_principal(http_request, mutation=False)
+        require_snapshot_id(snapshot_id)
+        project_session_project(project_id)
+        try:
+            service = get_project_sessions()
+            snapshot = service.get(snapshot_id, project_id, principal.user_id)
+            history = (service.snapshot_directory(snapshot_id, project_id) / "previous-session-history.md").read_text(
+                encoding="utf-8"
+            )
+        except (KeyError, PermissionError) as error:
+            raise HTTPException(status_code=404, detail="Project session not found") from error
+        except (OSError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return {"snapshot": snapshot, "history": history}
+
+    @application.post("/api/projects/{project_id}/sessions/{snapshot_id}/restore", status_code=201)
+    async def restore_project_session(project_id: str, snapshot_id: str, http_request: Request):
+        principal = project_session_principal(http_request, mutation=True)
+        require_snapshot_id(snapshot_id)
+        project_session_project(project_id)
+        try:
+            return get_project_sessions().restore(snapshot_id, project_id, principal.user_id)
+        except (KeyError, PermissionError) as error:
+            raise HTTPException(status_code=404, detail="Project session not found") from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
     @application.post("/api/sessions", status_code=201)
-    async def create_session():
-        return workspace.create_session()
+    async def create_session(http_request: Request, request: SessionCreateRequest | None = None):
+        principal = project_session_principal(http_request, mutation=True)
+        if request is None:
+            return workspace.create_session()
+        project_session_project(request.project_id)
+        return workspace.create_session(principal.user_id, request.project_id)
 
     @application.get("/api/sessions/{session_id}")
     async def get_session(session_id: str):
@@ -1659,7 +1813,7 @@ def create_app(
     @application.get("/api/sessions/{session_id}/conversation")
     async def get_conversation(session_id: str):
         try:
-            return conversation_service.history(session_id)
+            return get_conversation_service(session_id).history(session_id)
         except InvalidSessionId as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         except KeyError as error:
@@ -1668,7 +1822,7 @@ def create_app(
     @application.post("/api/sessions/{session_id}/conversation", status_code=201)
     async def append_conversation_message(session_id: str, message: ChatMessage):
         try:
-            return conversation_service.append(session_id, message)
+            return get_conversation_service(session_id).append(session_id, message)
         except InvalidSessionId as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         except KeyError as error:
@@ -1681,7 +1835,7 @@ def create_app(
         include_binaries: bool = False,
     ):
         try:
-            payload, media_type, filename = conversation_service.export_session(
+            payload, media_type, filename = get_conversation_service(session_id).export_session(
                 session_id,
                 format,
                 include_binaries=include_binaries,
@@ -1705,7 +1859,7 @@ def create_app(
         format: str = "markdown",
     ):
         try:
-            payload, media_type, filename = conversation_service.export_message(
+            payload, media_type, filename = get_conversation_service(session_id).export_message(
                 session_id,
                 message_id,
                 format,
@@ -1725,8 +1879,8 @@ def create_app(
     @application.get("/api/sessions/{session_id}/references/{reference_id}")
     async def download_conversation_reference(session_id: str, reference_id: str):
         try:
-            reference = conversation_service.find_reference(session_id, reference_id)
-            path, media_type = conversation_service.resolve_reference(session_id, reference)
+            reference = get_conversation_service(session_id).find_reference(session_id, reference_id)
+            path, media_type = get_conversation_service(session_id).resolve_reference(session_id, reference)
         except PermissionError as error:
             raise HTTPException(status_code=403, detail="Reference is outside the active scope") from error
         except InvalidSessionId as error:

@@ -8,6 +8,7 @@ from pathlib import Path
 from web_app.attachments import AttachmentService
 from web_app.app import create_app
 from web_app.conversation import ConversationService
+from web_app.core.project_registry import ProjectRegistry
 from web_app.models import ChatMessage, ObjectReference
 from web_app.workspace import WorkspaceService
 from test_support import authenticated_client
@@ -116,6 +117,32 @@ class ConversationServiceTests(unittest.TestCase):
                     target="../outside.txt",
                 ),
             )
+
+    def test_project_file_reference_uses_the_registered_session_project(self):
+        bound_project = self.project / "bound"
+        bound_project.mkdir()
+        project_file = bound_project / "src" / "bound.py"
+        project_file.parent.mkdir()
+        project_file.write_text("print('bound')", encoding="utf-8")
+        registry = ProjectRegistry(self.workspace.data_root / "projects.sqlite")
+        try:
+            record = registry.register(bound_project)
+            service = ConversationService(self.workspace, self.attachments, self.project, projects=registry)
+            session = self.workspace.create_session("owner-1", record.project_id)
+
+            resolved, _ = service.resolve_reference(
+                session.id,
+                ObjectReference(
+                    id="bound-file",
+                    kind="project_file",
+                    label="bound.py",
+                    target="src/bound.py",
+                ),
+            )
+
+            self.assertEqual(resolved, project_file)
+        finally:
+            registry.close()
 
     def test_missing_and_cross_session_objects_are_rejected(self):
         other = self.workspace.create_session()

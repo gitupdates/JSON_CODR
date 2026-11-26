@@ -2,6 +2,10 @@ import re
 import unittest
 from pathlib import Path
 
+from fastapi import FastAPI
+
+from web_app.core.mutation_inventory import inventory_mutation_routes
+
 
 class CoreArchitectureTests(unittest.TestCase):
     def test_orchestration_modules_do_not_execute_or_mutate_directly(self):
@@ -27,6 +31,32 @@ class CoreArchitectureTests(unittest.TestCase):
         for path in ("/api/chat", "/api/coding-agents", "/api/git-broker/adapter"):
             self.assertNotIn(path, source)
         self.assertIn("/api/tasks", source)
+
+    def test_project_session_mutations_are_inventory_controlled(self):
+        application = FastAPI()
+
+        @application.post("/api/projects/resolve")
+        async def resolve_project():
+            return {}
+
+        @application.post("/api/projects/{project_id}/sessions")
+        async def save_session(project_id: str):
+            return {"project_id": project_id}
+
+        @application.post("/api/projects/{project_id}/sessions/{snapshot_id}/restore")
+        async def restore_session(project_id: str, snapshot_id: str):
+            return {"project_id": project_id, "snapshot_id": snapshot_id}
+
+        records = inventory_mutation_routes(application)
+
+        self.assertEqual(
+            {(record.method, record.path, record.scope) for record in records},
+            {
+                ("POST", "/api/projects/resolve", "session.write"),
+                ("POST", "/api/projects/{project_id}/sessions", "session.write"),
+                ("POST", "/api/projects/{project_id}/sessions/{snapshot_id}/restore", "session.write"),
+            },
+        )
 
 
 if __name__ == "__main__":
