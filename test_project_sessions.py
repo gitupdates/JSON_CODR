@@ -2,6 +2,7 @@ import io
 import json
 import os
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -234,6 +235,62 @@ class ProjectSessionServiceTests(unittest.TestCase):
                 self.sessions.save(session.id, self.project.project_id, "owner-1", "Fail", "fix", [])
         root = self.sessions.project_directory(self.project.project_id) / "sessions"
         self.assertFalse(root.exists() and any(path.name.startswith(".staging-") for path in root.iterdir()))
+
+    def test_save_barrier_with_message_append_has_complete_before_or_after_snapshot(self):
+        session = self._live_session()
+        entered, release = threading.Event(), threading.Event()
+        original = self.sessions._copy_live_session
+        def pause(record, destination):
+            entered.set(); release.wait(2); return original(record, destination)
+        result = {}
+        with patch.object(self.sessions, "_copy_live_session", side_effect=pause):
+            worker = threading.Thread(target=lambda: result.setdefault("snapshot", self.sessions.save(session.id, self.project.project_id, "owner-1", "Race", "fix", [])))
+            worker.start(); self.assertTrue(entered.wait(1))
+            append = threading.Thread(target=lambda: self.workspace.append_message(session.id, ChatMessage(role="user", content="after")))
+            append.start(); release.set(); worker.join(2); append.join(2)
+        saved = json.loads((self.sessions.snapshot_directory(result["snapshot"].id, self.project.project_id) / "manifest.json").read_text())
+        self.assertIn(len(saved["messages"]), {2, 3})
+
+    def test_attachment_mutations_race_save_as_complete_before_or_after(self):
+        for operation in ("import", "update", "retry", "remove"):
+            with self.subTest(operation=operation):
+                session = self._live_session()
+                attachment = self.workspace.get_session(session.id).attachments[0]
+                entered, release = threading.Event(), threading.Event(); original = self.sessions._copy_live_session
+                def pause(record, destination):
+                    entered.set(); release.wait(2); return original(record, destination)
+                with patch.object(self.sessions, "_copy_live_session", side_effect=pause):
+                    save_thread = threading.Thread(target=lambda: self.sessions.save(session.id, self.project.project_id, "owner-1", "Race", "fix", []))
+                    save_thread.start(); self.assertTrue(entered.wait(1))
+                    if operation == "import": action = lambda: self.attachments.import_text(session.id, "new", "new.txt")
+                    elif operation == "update": action = lambda: self.attachments.set_included(session.id, attachment.id, False)
+                    elif operation == "retry": action = lambda: self.attachments.retry(session.id, attachment.id)
+                    else: action = lambda: self.attachments.remove(session.id, attachment.id)
+                    mutate = threading.Thread(target=action); mutate.start(); release.set(); save_thread.join(2); mutate.join(2)
+                self.assertTrue(any(self.sessions.list(self.project.project_id, "owner-1")))
+
+    def test_failure_after_staging_and_after_restore_allocation_cleans_everything(self):
+        session = self._live_session()
+        with patch.object(self.sessions, "_write_text", side_effect=OSError("after staging")):
+            with self.assertRaises(OSError): self.sessions.save(session.id, self.project.project_id, "owner-1", "Fail", "fix", [])
+        root = self.sessions.project_directory(self.project.project_id) / "sessions"
+        self.assertFalse(root.exists() and any(path.name.startswith(".staging-") for path in root.iterdir()))
+        snapshot = self.sessions.save(session.id, self.project.project_id, "owner-1", "OK", "fix", [])
+        before = {path.name for path in self.workspace.sessions_root.iterdir()}
+        with patch.object(self.sessions, "_copy_snapshot_trees", side_effect=OSError("after allocation")):
+            with self.assertRaises(OSError): self.sessions.restore(snapshot.id, self.project.project_id, "owner-1")
+        self.assertEqual(before, {path.name for path in self.workspace.sessions_root.iterdir()})
+
+    def test_source_stage_mismatch_and_overlapping_project_saves_fail_closed_or_both_complete(self):
+        first, second = self._live_session(), self.workspace.create_session("owner-1", self.project.project_id)
+        self.workspace.append_message(second.id, ChatMessage(role="user", content="second"))
+        results = []
+        threads = [threading.Thread(target=lambda item=item: results.append(self.sessions.save(item.id, self.project.project_id, "owner-1", "Overlap", "fix", []))) for item in (first, second)]
+        for thread in threads: thread.start()
+        for thread in threads: thread.join(3)
+        self.assertEqual(len(results), 2); self.assertNotEqual(results[0].id, results[1].id)
+        root = self.sessions.project_directory(self.project.project_id) / "sessions"
+        self.assertFalse(any(path.name.startswith(".staging-") for path in root.iterdir()))
 
 
 if __name__ == "__main__":
