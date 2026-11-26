@@ -307,21 +307,46 @@ class ProjectSessionService:
 
     def _copy_tree_safe(self, source: Path, destination: Path) -> None:
         self._check_chain(source)
+        self._check_chain(destination.parent)
         if self._is_reparse_point(source) or not source.is_dir():
             raise ValueError("Session tree is unsafe")
         destination.mkdir()
+        self._check_chain(destination)
         for child in source.iterdir():
             self._check_chain(source)
+            self._check_chain(destination)
             if self._is_reparse_point(child):
                 raise ValueError("Session tree contains a link or reparse point")
             target = destination / child.name
             if child.is_dir():
                 self._copy_tree_safe(child, target)
             elif child.is_file():
-                shutil.copy2(child, target)
+                self._copy_file_safe(child, target)
                 self._check_chain(child)
             else:
                 raise ValueError("Session tree contains an unsafe entry")
+        self._check_chain(source)
+        self._check_chain(destination)
+
+    def _copy_file_safe(self, source: Path, destination: Path) -> None:
+        self._check_chain(source.parent)
+        self._check_chain(destination.parent)
+        if self._is_reparse_point(source):
+            raise ValueError("Session file is unsafe")
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        source_fd = os.open(source, flags)
+        try:
+            details = os.fstat(source_fd)
+            if not stat.S_ISREG(details.st_mode):
+                raise ValueError("Session file is not regular")
+            with os.fdopen(source_fd, "rb", closefd=False) as reader, destination.open("xb") as writer:
+                shutil.copyfileobj(reader, writer)
+                writer.flush()
+            shutil.copystat(source, destination, follow_symlinks=False)
+        finally:
+            os.close(source_fd)
+        self._check_chain(source)
+        self._check_chain(destination)
 
     def _validate_snapshot_tree(self, directory: Path, expected: dict[str, object]) -> None:
         self._reject_reparse_tree(directory)
@@ -404,8 +429,11 @@ class ProjectSessionService:
                 descriptor = os.open(path, os.O_RDONLY)
                 try:
                     os.fsync(descriptor)
-                except OSError:
-                    pass
+                except OSError as error:
+                    # This Windows runtime reports EBADF for fsync on read-only handles;
+                    # genuine storage errors still abort the transaction.
+                    if error.errno != 9:
+                        raise
                 finally:
                     os.close(descriptor)
             elif path.is_dir():
@@ -489,7 +517,23 @@ class ProjectSessionService:
             attachments.append(f"Attachment: {attachment.display_name[:300]}")
             for warning in attachment.warnings:
                 warnings.append(f"Warning: {warning[:300]}")
-        groups = (metadata, objectives[:6], outcomes[:6], models[:12], references[:12], attachments[:12], warnings[:12])
+        def within(lines: list[str], budget: int) -> list[str]:
+            used = 0
+            output: list[str] = []
+            for line in lines:
+                available = budget - used
+                if available <= 1:
+                    break
+                item = line[:available - 1]
+                output.append(item)
+                used += len(item) + 1
+            return output
+
+        groups = (
+            within(metadata, 800), within(objectives[:6], 1_500), within(outcomes[:6], 1_800),
+            within(models[:12], 900), within(references[:12], 900), within(attachments[:12], 900),
+            within(warnings[:12], 900),
+        )
         return "\n".join(line for group in groups for line in group)[:8_000]
 
     @staticmethod

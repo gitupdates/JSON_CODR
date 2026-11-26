@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from web_app.attachments import AttachmentService
@@ -210,6 +211,29 @@ class ProjectSessionServiceTests(unittest.TestCase):
             restored = self.workspace.get_session(self.sessions.restore(snapshot.id, self.project.project_id, "owner-1").session_id)
             rejected = next(item for item in restored.attachments if item.extraction_state.value == "rejected")
             self.assertIsNone(rejected.digest)
+
+    def test_many_long_messages_preserve_each_present_summary_category(self):
+        session = self.workspace.create_session("owner-1", self.project.project_id)
+        for _ in range(10):
+            self.workspace.append_message(session.id, ChatMessage(role="user", content="objective " * 1_000))
+            self.workspace.append_message(session.id, ChatMessage(role="assistant", content="outcome " * 1_000, effective_model="model-tail", task_id="task-tail"))
+        self.workspace.append_message(session.id, ChatMessage(role="assistant", content="tail", references=[ObjectReference(id="tail-ref", kind="project_file", label="tail.py", target="tail.py")]))
+        attachment = self.attachments.import_text(session.id, "note", "tail.txt")
+        record = self.workspace.get_session(session.id)
+        record.attachments[0].warnings = ["tail-warning"]
+        self.workspace.save_manifest(record)
+        snapshot = self.sessions.save(session.id, self.project.project_id, "owner-1", "Long", "fix", [])
+        self.assertLessEqual(len(snapshot.summary), 8_000)
+        for marker in ("Outcome (completed):", "Model: model-tail", "Task: task-tail", "Reference: tail.py", "Attachment: tail.txt", "Warning: tail-warning"):
+            self.assertIn(marker, snapshot.summary)
+
+    def test_file_fsync_failure_prevents_promotion_and_cleans_same_parent_staging(self):
+        session = self._live_session()
+        with patch("web_app.project_sessions.os.fsync", side_effect=OSError("disk failure")):
+            with self.assertRaises(OSError):
+                self.sessions.save(session.id, self.project.project_id, "owner-1", "Fail", "fix", [])
+        root = self.sessions.project_directory(self.project.project_id) / "sessions"
+        self.assertFalse(root.exists() and any(path.name.startswith(".staging-") for path in root.iterdir()))
 
 
 if __name__ == "__main__":
