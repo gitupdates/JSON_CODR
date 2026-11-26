@@ -1166,6 +1166,11 @@ async function ensureSession() {
   return sessionId;
 }
 
+window.JSONCodrLiveSession = {
+  current: () => sessionId || null,
+  ensure: ensureSession,
+};
+
 function selectWorkspaceMode(mode) {
   activeWorkspaceMode = mode === "agent" ? "agent" : "shell";
   for (const tab of elements.workspaceTabs) {

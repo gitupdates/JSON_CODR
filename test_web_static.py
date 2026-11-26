@@ -86,6 +86,15 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn("const compatibilityStatus =", javascript)
         self.assertIn("model.fallback_reason", javascript)
 
+    def test_app_exposes_the_single_live_session_authority_for_model_runs(self):
+        javascript = self.client.get("/static/app.js").text
+        model_runs = self.client.get("/static/model_runs.js").text
+
+        self.assertIn("window.JSONCodrLiveSession", javascript)
+        self.assertIn("current: () => sessionId || null", javascript)
+        self.assertIn("ensure: ensureSession", javascript)
+        self.assertNotIn("json_codr_session", model_runs)
+
     def test_disclosure_controller_keeps_only_the_active_tree_item_open(self):
         script = r'''
 const { bindExclusiveDisclosures } = require("./web/disclosure_groups.js");

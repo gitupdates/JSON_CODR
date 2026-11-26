@@ -13,8 +13,6 @@
     }
   }
 
-  function sessionId() { return localStorage.getItem("json_codr_session"); }
-
   function setExports(runId) {
     for (const format of ["json", "markdown", "csv"]) {
       elements[`all-model-export-${format}`].href = `/api/model-runs/${encodeURIComponent(runId)}/export?format=${format}`;
@@ -99,24 +97,45 @@
 
   async function start(event) {
     event.preventDefault();
-    const currentSession = sessionId();
-    if (!currentSession) { elements["all-model-status"].textContent = "Create a session first."; return; }
     clearTimeout(pollTimer);
     elements["all-model-start"].disabled = true;
     elements["all-model-results"].innerHTML = '<p class="meta">Creating durable run…</p>';
-    const response = await fetch("/api/model-runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: currentSession, prompt: elements["all-model-prompt"].value, profile: elements["all-model-profile"].value, parallelism: Number(elements["all-model-parallelism"].value), request_key: crypto.randomUUID() }) });
-    if (!response.ok) { elements["all-model-status"].textContent = `Run failed (${response.status})`; elements["all-model-start"].disabled = false; return; }
-    const run = await response.json();
-    activeRunId = run.run_id;
-    localStorage.setItem(activeRunStorageKey, activeRunId);
-    setExports(activeRunId);
-    render(run);
+    try {
+      const currentSession = await window.JSONCodrLiveSession.ensure();
+      const response = await fetch("/api/model-runs", {
+        method: "POST",
+        headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ session_id: currentSession, prompt: elements["all-model-prompt"].value, profile: elements["all-model-profile"].value, parallelism: Number(elements["all-model-parallelism"].value), request_key: crypto.randomUUID() }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || `Run failed (${response.status})`);
+      activeRunId = payload.run_id;
+      localStorage.setItem(activeRunStorageKey, activeRunId);
+      setExports(activeRunId);
+      render(payload);
+    } catch (error) {
+      elements["all-model-status"].textContent = error.message;
+      elements["all-model-start"].disabled = false;
+      elements["all-model-cancel"].disabled = true;
+    }
   }
 
   async function cancel() {
     if (!activeRunId) return;
-    const response = await fetch(`/api/model-runs/${encodeURIComponent(activeRunId)}/cancel`, { method: "POST" });
-    if (response.ok) render(await response.json());
+    elements["all-model-cancel"].disabled = true;
+    try {
+      const response = await fetch(`/api/model-runs/${encodeURIComponent(activeRunId)}/cancel`, {
+        method: "POST",
+        headers: window.JSONCodrHttpIdentity.mutationHeaders(),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || `Cancel failed (${response.status})`);
+      render(payload);
+    } catch (error) {
+      elements["all-model-status"].textContent = error.message;
+      elements["all-model-start"].disabled = false;
+      elements["all-model-cancel"].disabled = false;
+    }
   }
 
   function filter() {

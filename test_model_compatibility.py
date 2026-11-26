@@ -170,6 +170,54 @@ class ModelCompatibilityLayerTests(unittest.TestCase):
         self.assertEqual(persisted["models"]["new-coder:latest"]["digest"], canonical)
         self.assertTrue(record["runnable"])
 
+    def test_legacy_bare_digest_state_matches_bare_and_prefixed_live_inventory(self):
+        bare = "a" * 64
+        canonical = f"sha256:{bare}"
+        self.state_path.write_text(json.dumps({
+            "schema_version": 1,
+            "models": {
+                "new-coder:latest": {
+                    "digest": bare,
+                    "status": "compatible",
+                    "profile": "base",
+                    "error": "",
+                    "updated_at": "2026-11-25T00:00:00+00:00",
+                },
+            },
+        }), encoding="utf-8")
+        from web_app.model_compatibility import ModelCompatibilityLayer
+
+        layer = ModelCompatibilityLayer.load(self.config_path, self.state_path)
+
+        self.assertTrue(layer.inventory(["new-coder:latest"], {
+            "new-coder:latest": {"name": "new-coder:latest", "digest": bare},
+        })[0]["runnable"])
+        prefixed = layer.inventory(["new-coder:latest"], {
+            "new-coder:latest": {"name": "new-coder:latest", "digest": canonical},
+        })[0]
+        self.assertEqual(prefixed["digest"], canonical)
+        self.assertTrue(prefixed["runnable"])
+
+    def test_digest_mismatch_remains_untested_and_matching_bare_quarantine_blocks_running(self):
+        bare = "b" * 64
+        self.layer.record_failure(
+            "new-coder:latest",
+            bare,
+            RuntimeError("GGML_ASSERT failed to load model"),
+        )
+
+        quarantined = self.layer.inventory(["new-coder:latest"], {
+            "new-coder:latest": {"name": "new-coder:latest", "digest": f"sha256:{bare}"},
+        })[0]
+        replacement = self.layer.inventory(["new-coder:latest"], {
+            "new-coder:latest": {"name": "new-coder:latest", "digest": "c" * 64},
+        })[0]
+
+        self.assertEqual(quarantined["compatibility_status"], "quarantined")
+        self.assertFalse(quarantined["runnable"])
+        self.assertEqual(replacement["compatibility_status"], "untested")
+        self.assertIsNone(replacement["runnable"])
+
     def test_invalid_live_digest_does_not_admit_stored_compatible_evidence(self):
         valid = "sha256:" + "a" * 64
         self.layer.record_success("new-coder:latest", valid, "base")

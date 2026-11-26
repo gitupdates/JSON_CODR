@@ -41,14 +41,15 @@ _STATE_STATUSES = frozenset({
     "transient_error",
     "capability_limited",
 })
-_OLLAMA_DIGEST = re.compile(r"sha256:[0-9a-f]{64}", re.IGNORECASE)
+_OLLAMA_DIGEST = re.compile(r"(?:sha256:)?([0-9a-f]{64})", re.IGNORECASE)
 
 
 def _canonical_digest(value: object) -> str:
     if not isinstance(value, str):
         return ""
     candidate = value.strip().casefold()
-    return candidate if _OLLAMA_DIGEST.fullmatch(candidate) else ""
+    match = _OLLAMA_DIGEST.fullmatch(candidate)
+    return f"sha256:{match.group(1)}" if match else ""
 
 
 def is_model_runnable(record: Mapping[str, object]) -> bool:
