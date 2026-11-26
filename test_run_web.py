@@ -3,6 +3,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -55,7 +56,8 @@ class RunWebTests(unittest.TestCase):
         self.assertEqual(environment["JSON_CODR_ARTIFACT_MANIFEST"], "fallback:" + "c" * 40)
         self.assertIn("JSON_CODR_INSTANCE_ID", environment)
         self.assertRegex(environment["JSON_CODR_INSTANCE_ID"], r"^active-[0-9a-f]{32}$")
-        self.assertRegex(environment["JSON_CODR_STARTED_AT"], r"^2026-11-2[45]T")
+        started_at = datetime.fromisoformat(environment["JSON_CODR_STARTED_AT"])
+        self.assertEqual(started_at.tzinfo, UTC)
         self.assertIn("JSON_CODR_SUPERVISOR_PID", environment)
         self.assertEqual(environment["JSON_CODR_SUPERVISOR_PID"], str(os.getpid()))
 
