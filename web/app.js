@@ -1150,7 +1150,13 @@ async function runTerminalCommand(command = null) {
 
 async function ensureSession() {
   if (!sessionId || !(await fetch(`/api/sessions/${sessionId}`)).ok) {
-    const session = await fetch("/api/sessions", { method: "POST" }).then((response) => response.json());
+    const response = await fetch("/api/sessions", {
+      method: "POST",
+      headers: window.JSONCodrHttpIdentity.mutationHeaders(),
+    });
+    const session = await response.json();
+    if (!response.ok) throw new Error(session.detail || `Unable to create session (${response.status})`);
+    if (!session || typeof session.id !== "string" || !session.id) throw new Error("Unable to create session");
     sessionId = session.id;
     localStorage.setItem("json_codr_session", sessionId);
   }

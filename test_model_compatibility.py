@@ -156,6 +156,55 @@ class ModelCompatibilityLayerTests(unittest.TestCase):
         self.assertEqual(classification, "incompatible")
         self.assertFalse(self.state_path.exists())
 
+    def test_only_bare_or_sha256_prefixed_64_hex_digests_are_accepted(self):
+        valid = "sha256:" + "a" * 64
+        malformed = (
+            "a" * 63,
+            "a" * 65,
+            "g" * 64,
+            "sha512:" + "a" * 64,
+            "sha256:sha256:" + "a" * 64,
+            "a" * 32 + " " + "a" * 32,
+            "junk" + "a" * 64,
+            "a" * 64 + "junk",
+        )
+        from web_app.model_compatibility import ModelCompatibilityLayer
+
+        for digest in malformed:
+            with self.subTest(digest=digest):
+                self.state_path.write_text(json.dumps({
+                    "schema_version": 1,
+                    "models": {"new-coder:latest": {
+                        "digest": digest,
+                        "status": "compatible",
+                        "profile": "base",
+                        "error": "",
+                        "updated_at": "2026-11-25T00:00:00+00:00",
+                    }},
+                }), encoding="utf-8")
+                state_layer = ModelCompatibilityLayer.load(self.config_path, self.state_path)
+                state_record = state_layer.inventory(["new-coder:latest"], {
+                    "new-coder:latest": {"name": "new-coder:latest", "digest": valid},
+                })[0]
+
+                self.assertEqual(state_record["compatibility_status"], "invalid_state")
+                self.assertFalse(state_record["runnable"])
+
+                self.state_path.unlink()
+                live_layer = ModelCompatibilityLayer.load(self.config_path, self.state_path)
+                live_layer.record_success("new-coder:latest", valid, "base")
+                live_record = live_layer.inventory(["new-coder:latest"], {
+                    "new-coder:latest": {"name": "new-coder:latest", "digest": digest},
+                })[0]
+
+                self.assertEqual(live_record["compatibility_status"], "invalid_digest")
+                self.assertFalse(live_record["runnable"])
+
+                self.state_path.unlink()
+                persistence_layer = ModelCompatibilityLayer.load(self.config_path, self.state_path)
+                persistence_layer.record_success("new-coder:latest", digest, "base")
+                self.assertFalse(self.state_path.exists())
+
     def test_ollama_digest_is_normalized_before_evidence_is_persisted(self):
         uppercase = "  SHA256:" + "A" * 64 + "  "
         canonical = "sha256:" + "a" * 64

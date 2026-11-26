@@ -76,15 +76,64 @@ class SidebarCollector(HTMLParser):
 
 
 class WebStaticTests(unittest.TestCase):
-    def test_model_picker_distinguishes_downloaded_verified_and_quarantined_models(self):
+    def test_model_picker_enables_downloaded_compatible_and_untested_models(self):
         javascript = self.client.get("/static/app.js").text
+        harness = r'''
+const vm = require("vm");
+const source = process.env.APP_SOURCE;
+const runnableStart = source.indexOf("function isModelRunnable(model)");
+const runnableEnd = source.indexOf("\nlet activeRequest", runnableStart);
+const start = source.indexOf("async function loadApplication()");
+const end = source.indexOf("\nfunction setPending", start);
+const loader = source.slice(runnableStart, runnableEnd) + source.slice(start, end);
+function select() { return { options: [], append(option) { this.options.push(option); } }; }
+function option() { return { disabled: false, cloneNode() { return {...this}; } }; }
+const elements = {
+  health: {className: "", lastElementChild: {textContent: ""}}, model: select(), workspaceModel: select(),
+  hardwareBenchmarkModel: select(), integrityBenchmarkModel: select(), modelCount: {textContent: ""},
+  submit: {disabled: true}, modelDetail: {textContent: ""},
+};
+const models = [
+  {name: "compatible", installed: true, runnable: true},
+  {name: "untested", installed: true, runnable: null},
+  {name: "quarantined", installed: true, runnable: false},
+  {name: "missing", installed: false, runnable: null},
+];
+const context = {
+  elements, models: [],
+  document: { createElement() { return option(); } },
+  fetch: async (url) => url === "/api/health"
+    ? {ok: true, json: async () => ({ollama: true})}
+    : {ok: true, json: async () => ({models})},
+  updateModelDetail() {}, renderGpuProfileControls() {},
+};
+vm.runInNewContext(loader, context);
+(async () => {
+  await context.loadApplication();
+  process.stdout.write(JSON.stringify({
+    submitDisabled: elements.submit.disabled,
+    pickerDisabled: elements.model.disabled,
+    options: elements.model.options.map(({value, disabled}) => ({value, disabled})),
+  }));
+})();
+'''
+        completed = subprocess.run(
+            ["node", "-e", harness],
+            env={"APP_SOURCE": javascript},
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        result = json.loads(completed.stdout)
 
-        self.assertIn("function isModelRunnable(model)", javascript)
-        self.assertIn('model.runnable !== false', javascript)
-        self.assertIn('" — incompatible"', javascript)
-        self.assertIn('downloaded · ${verifiedRunnable} verified runnable · ${models.length} catalogued', javascript)
-        self.assertIn("const compatibilityStatus =", javascript)
-        self.assertIn("model.fallback_reason", javascript)
+        self.assertFalse(result["submitDisabled"])
+        self.assertFalse(result["pickerDisabled"])
+        self.assertEqual(result["options"], [
+            {"value": "compatible", "disabled": False},
+            {"value": "untested", "disabled": False},
+            {"value": "quarantined", "disabled": True},
+            {"value": "missing", "disabled": True},
+        ])
 
     def test_app_exposes_the_single_live_session_authority_for_model_runs(self):
         javascript = self.client.get("/static/app.js").text
