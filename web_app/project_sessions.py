@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -15,6 +16,63 @@ from pathlib import Path
 from web_app.core.project_registry import ProjectRegistry
 from web_app.models import ProjectSessionRestoreResult, ProjectSessionSnapshot, SessionRecord
 from web_app.workspace import SESSION_ID_PATTERN, WorkspaceService
+
+
+if os.name == "nt":
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    class _ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("dwFileAttributes", wintypes.DWORD),
+            ("ftCreationTime", wintypes.FILETIME),
+            ("ftLastAccessTime", wintypes.FILETIME),
+            ("ftLastWriteTime", wintypes.FILETIME),
+            ("dwVolumeSerialNumber", wintypes.DWORD),
+            ("nFileSizeHigh", wintypes.DWORD),
+            ("nFileSizeLow", wintypes.DWORD),
+            ("nNumberOfLinks", wintypes.DWORD),
+            ("nFileIndexHigh", wintypes.DWORD),
+            ("nFileIndexLow", wintypes.DWORD),
+        ]
+
+    _KERNEL32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _CREATE_FILE = _KERNEL32.CreateFileW
+    _CREATE_FILE.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    )
+    _CREATE_FILE.restype = wintypes.HANDLE
+    _GET_FILE_INFORMATION = _KERNEL32.GetFileInformationByHandle
+    _GET_FILE_INFORMATION.argtypes = (
+        wintypes.HANDLE,
+        ctypes.POINTER(_ByHandleFileInformation),
+    )
+    _GET_FILE_INFORMATION.restype = wintypes.BOOL
+    _CLOSE_HANDLE = _KERNEL32.CloseHandle
+    _CLOSE_HANDLE.argtypes = (wintypes.HANDLE,)
+    _CLOSE_HANDLE.restype = wintypes.BOOL
+
+    _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+    _GENERIC_READ = 0x80000000
+    _GENERIC_WRITE = 0x40000000
+    _FILE_READ_ATTRIBUTES = 0x0080
+    _FILE_SHARE_READ = 0x00000001
+    _FILE_SHARE_WRITE = 0x00000002
+    _CREATE_NEW = 1
+    _OPEN_EXISTING = 3
+    _FILE_ATTRIBUTE_DIRECTORY = 0x00000010
+    _FILE_ATTRIBUTE_NORMAL = 0x00000080
+    _FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
+    _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+    _FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+    _FILE_FLAG_SEQUENTIAL_SCAN = 0x08000000
 
 
 SNAPSHOT_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
@@ -92,6 +150,169 @@ class ProjectSessionService:
                 if self._is_reparse_point(current):
                     raise ValueError("Snapshot path contains a link or reparse point")
 
+    if os.name == "nt":
+        @staticmethod
+        def _windows_handle(path: Path, access: int, disposition: int, flags: int):
+            handle = _CREATE_FILE(
+                str(path),
+                access,
+                _FILE_SHARE_READ | _FILE_SHARE_WRITE,
+                None,
+                disposition,
+                flags | _FILE_FLAG_OPEN_REPARSE_POINT,
+                None,
+            )
+            if handle == _INVALID_HANDLE_VALUE:
+                raise ctypes.WinError(ctypes.get_last_error())
+            return handle
+
+        @staticmethod
+        def _windows_information(handle):
+            information = _ByHandleFileInformation()
+            if not _GET_FILE_INFORMATION(handle, ctypes.byref(information)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            return information
+
+        @staticmethod
+        def _windows_close(handle) -> None:
+            if handle is not None and handle != _INVALID_HANDLE_VALUE:
+                _CLOSE_HANDLE(handle)
+
+        @contextmanager
+        def _windows_locked_chain(self, candidate: Path):
+            trusted = self.workspace.data_root.absolute()
+            absolute = candidate.absolute()
+            if absolute != trusted and trusted not in absolute.parents:
+                raise ValueError("Snapshot path escapes the data root")
+            paths = [trusted]
+            current = trusted
+            for part in absolute.relative_to(trusted).parts:
+                current = current / part
+                paths.append(current)
+            handles = []
+            try:
+                for path in paths:
+                    handle = self._windows_handle(
+                        path,
+                        _FILE_READ_ATTRIBUTES,
+                        _OPEN_EXISTING,
+                        _FILE_FLAG_BACKUP_SEMANTICS,
+                    )
+                    try:
+                        information = self._windows_information(handle)
+                    except Exception:
+                        self._windows_close(handle)
+                        raise
+                    if information.dwFileAttributes & _FILE_ATTRIBUTE_REPARSE_POINT:
+                        self._windows_close(handle)
+                        raise ValueError("Snapshot path contains a link or reparse point")
+                    if not information.dwFileAttributes & _FILE_ATTRIBUTE_DIRECTORY:
+                        self._windows_close(handle)
+                        raise ValueError("Snapshot path ancestor is not a directory")
+                    handles.append(handle)
+                yield
+            finally:
+                for handle in reversed(handles):
+                    self._windows_close(handle)
+
+    @contextmanager
+    def _locked_copy_directory(self, path: Path):
+        if os.name == "nt":
+            with self._windows_locked_chain(path):
+                yield
+            return
+        self._check_chain(path)
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        try:
+            details = os.fstat(descriptor)
+            if not stat.S_ISDIR(details.st_mode):
+                raise ValueError("Snapshot path ancestor is not a directory")
+            yield
+        finally:
+            os.close(descriptor)
+
+    @contextmanager
+    def _open_copy_source(self, source: Path):
+        if os.name == "nt":
+            with self._windows_locked_chain(source.parent):
+                handle = self._windows_handle(
+                    source,
+                    _GENERIC_READ | _FILE_READ_ATTRIBUTES,
+                    _OPEN_EXISTING,
+                    _FILE_FLAG_SEQUENTIAL_SCAN,
+                )
+                try:
+                    information = self._windows_information(handle)
+                    if information.dwFileAttributes & (
+                        _FILE_ATTRIBUTE_REPARSE_POINT | _FILE_ATTRIBUTE_DIRECTORY
+                    ):
+                        raise ValueError("Session file is not a non-reparse regular file")
+                    descriptor = msvcrt.open_osfhandle(
+                        handle, os.O_RDONLY | getattr(os, "O_BINARY", 0)
+                    )
+                    handle = None
+                    with os.fdopen(descriptor, "rb") as reader:
+                        yield reader
+                finally:
+                    self._windows_close(handle)
+            return
+        self._check_chain(source.parent)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(source, flags)
+        try:
+            details = os.fstat(descriptor)
+            if not stat.S_ISREG(details.st_mode):
+                raise ValueError("Session file is not regular")
+            with os.fdopen(descriptor, "rb", closefd=False) as reader:
+                yield reader
+        finally:
+            os.close(descriptor)
+
+    @contextmanager
+    def _open_copy_destination(self, destination: Path):
+        if os.name == "nt":
+            with self._windows_locked_chain(destination.parent):
+                handle = self._windows_handle(
+                    destination,
+                    _GENERIC_WRITE | _FILE_READ_ATTRIBUTES,
+                    _CREATE_NEW,
+                    _FILE_ATTRIBUTE_NORMAL,
+                )
+                try:
+                    information = self._windows_information(handle)
+                    if information.dwFileAttributes & (
+                        _FILE_ATTRIBUTE_REPARSE_POINT | _FILE_ATTRIBUTE_DIRECTORY
+                    ):
+                        raise ValueError("Snapshot destination is not a regular file")
+                    descriptor = msvcrt.open_osfhandle(
+                        handle, os.O_WRONLY | getattr(os, "O_BINARY", 0)
+                    )
+                    handle = None
+                    with os.fdopen(descriptor, "wb") as writer:
+                        yield writer
+                finally:
+                    self._windows_close(handle)
+            return
+        self._check_chain(destination.parent)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(destination, flags, 0o600)
+        try:
+            details = os.fstat(descriptor)
+            if not stat.S_ISREG(details.st_mode):
+                raise ValueError("Snapshot destination is not a regular file")
+            with os.fdopen(descriptor, "wb", closefd=False) as writer:
+                yield writer
+        finally:
+            os.close(descriptor)
+
+    @contextmanager
+    def _create_copy_directory(self, destination: Path):
+        with self._locked_copy_directory(destination.parent):
+            destination.mkdir()
+            with self._locked_copy_directory(destination):
+                yield
+
     def save(
         self,
         session_id: str,
@@ -135,23 +356,24 @@ class ProjectSessionService:
             sessions_root = final.parent
             sessions_root.mkdir(parents=True, exist_ok=True)
             self._check_chain(sessions_root)
-            self._sweep_staging(sessions_root)
-            staging = sessions_root / f".staging-{snapshot.id}"
-            try:
-                staging.mkdir()
-                digests = self._copy_live_session(session, staging)
-                self._write_json(staging / "snapshot.json", {
-                    "snapshot": snapshot.model_dump(mode="json"),
-                    "tree_digests": digests,
-                })
-                self._write_text(staging / "previous-session-history.md", self._history_markdown(snapshot))
-                self._validate_snapshot_tree(staging, digests)
-                self._fsync_tree(staging)
-                os.replace(staging, final)
-                self._fsync_directory(final.parent)
-            except Exception:
-                shutil.rmtree(staging, ignore_errors=True)
-                raise
+            with self._locked_copy_directory(sessions_root):
+                self._sweep_staging(sessions_root)
+                staging = sessions_root / f".staging-{snapshot.id}"
+                try:
+                    staging.mkdir()
+                    digests = self._copy_live_session(session, staging)
+                    self._write_json(staging / "snapshot.json", {
+                        "snapshot": snapshot.model_dump(mode="json"),
+                        "tree_digests": digests,
+                    })
+                    self._write_text(staging / "previous-session-history.md", self._history_markdown(snapshot))
+                    self._validate_snapshot_tree(staging, digests)
+                    self._fsync_tree(staging)
+                    os.replace(staging, final)
+                    self._fsync_directory(final.parent)
+                except Exception:
+                    self._remove_tree_no_follow(staging)
+                    raise
             return snapshot
 
     def list(self, project_id: str, owner_user_id: str, query: str = "") -> list[ProjectSessionSnapshot]:
@@ -194,7 +416,7 @@ class ProjectSessionService:
             raise ValueError("Snapshot digest manifest is invalid")
         self._validate_snapshot_tree(source, digests)
         source_manifest = source / "manifest.json"
-        restored_manifest = SessionRecord.model_validate(json.loads(source_manifest.read_text(encoding="utf-8")))
+        restored_manifest = SessionRecord.model_validate(json.loads(self._read_copy_text(source_manifest)))
         self._validate_attachment_sources(restored_manifest, source)
         restored = self.workspace.create_session(owner_user_id, project_id)
         try:
@@ -306,47 +528,25 @@ class ProjectSessionService:
         return self._tree_digests(destination)
 
     def _copy_tree_safe(self, source: Path, destination: Path) -> None:
-        self._check_chain(source)
-        self._check_chain(destination.parent)
-        if self._is_reparse_point(source) or not source.is_dir():
-            raise ValueError("Session tree is unsafe")
-        destination.mkdir()
-        self._check_chain(destination)
-        for child in source.iterdir():
-            self._check_chain(source)
-            self._check_chain(destination)
-            if self._is_reparse_point(child):
-                raise ValueError("Session tree contains a link or reparse point")
-            target = destination / child.name
-            if child.is_dir():
-                self._copy_tree_safe(child, target)
-            elif child.is_file():
-                self._copy_file_safe(child, target)
-                self._check_chain(child)
-            else:
-                raise ValueError("Session tree contains an unsafe entry")
-        self._check_chain(source)
-        self._check_chain(destination)
+        with self._locked_copy_directory(source):
+            if self._is_reparse_point(source) or not source.is_dir():
+                raise ValueError("Session tree is unsafe")
+            with self._create_copy_directory(destination):
+                for child in source.iterdir():
+                    if self._is_reparse_point(child):
+                        raise ValueError("Session tree contains a link or reparse point")
+                    target = destination / child.name
+                    if child.is_dir():
+                        self._copy_tree_safe(child, target)
+                    elif child.is_file():
+                        self._copy_file_safe(child, target)
+                    else:
+                        raise ValueError("Session tree contains an unsafe entry")
 
     def _copy_file_safe(self, source: Path, destination: Path) -> None:
-        self._check_chain(source.parent)
-        self._check_chain(destination.parent)
-        if self._is_reparse_point(source):
-            raise ValueError("Session file is unsafe")
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-        source_fd = os.open(source, flags)
-        try:
-            details = os.fstat(source_fd)
-            if not stat.S_ISREG(details.st_mode):
-                raise ValueError("Session file is not regular")
-            with os.fdopen(source_fd, "rb", closefd=False) as reader, destination.open("xb") as writer:
-                shutil.copyfileobj(reader, writer)
-                writer.flush()
-            shutil.copystat(source, destination, follow_symlinks=False)
-        finally:
-            os.close(source_fd)
-        self._check_chain(source)
-        self._check_chain(destination)
+        with self._open_copy_source(source) as reader, self._open_copy_destination(destination) as writer:
+            shutil.copyfileobj(reader, writer)
+            writer.flush()
 
     def _validate_snapshot_tree(self, directory: Path, expected: dict[str, object]) -> None:
         self._reject_reparse_tree(directory)
@@ -356,6 +556,7 @@ class ProjectSessionService:
             raise ValueError("Snapshot files failed digest validation")
 
     def _validate_restored_trees(self, directory: Path, expected: dict[str, object]) -> None:
+        self._reject_reparse_tree(directory)
         actual = {key: value for key, value in self._tree_digests(directory).items() if key != "manifest.json"}
         wanted = {str(key): str(value) for key, value in expected.items() if str(key) != "manifest.json"}
         if actual != wanted:
@@ -378,23 +579,25 @@ class ProjectSessionService:
                     output[path.relative_to(root).as_posix()] = self._digest(path)
         return output
 
-    @staticmethod
-    def _digest(path: Path) -> str:
+    def _digest(self, path: Path) -> str:
         digest = hashlib.sha256()
-        with path.open("rb") as source:
+        with self._open_copy_source(path) as source:
             for chunk in iter(lambda: source.read(1024 * 1024), b""):
                 digest.update(chunk)
         return "sha256:" + digest.hexdigest()
 
+    def _read_copy_text(self, path: Path) -> str:
+        with self._open_copy_source(path) as source:
+            return source.read().decode("utf-8")
+
     def _read_snapshot(self, directory: Path) -> ProjectSessionSnapshot:
         return ProjectSessionSnapshot.model_validate(self._snapshot_payload(directory)["snapshot"])
 
-    @staticmethod
-    def _snapshot_payload(directory: Path) -> dict[str, object]:
+    def _snapshot_payload(self, directory: Path) -> dict[str, object]:
         path = directory / "snapshot.json"
         if not path.is_file():
             raise ValueError("Snapshot metadata is missing")
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(self._read_copy_text(path))
         if not isinstance(payload, dict):
             raise ValueError("Snapshot metadata is invalid")
         return payload
@@ -414,12 +617,15 @@ class ProjectSessionService:
     def _fsync_directory(path: Path) -> None:
         try:
             descriptor = os.open(path, os.O_RDONLY)
-        except OSError:
-            return
+        except OSError as error:
+            if os.name == "nt" and error.errno in {errno.EACCES, errno.EPERM}:
+                return
+            raise
         try:
             os.fsync(descriptor)
-        except OSError:
-            pass
+        except OSError as error:
+            if not (os.name == "nt" and error.errno in {errno.EBADF, errno.EINVAL}):
+                raise
         finally:
             os.close(descriptor)
 
@@ -430,15 +636,35 @@ class ProjectSessionService:
                 try:
                     os.fsync(descriptor)
                 except OSError as error:
-                    # This Windows runtime reports EBADF for fsync on read-only handles;
-                    # genuine storage errors still abort the transaction.
-                    if error.errno != 9:
+                    # CPython's Windows CRT rejects fsync on the read-only descriptor
+                    # used for an already-written file. Only that exact platform case
+                    # is unsupported; every real durability error aborts promotion.
+                    if not (os.name == "nt" and error.errno == errno.EBADF):
                         raise
                 finally:
                     os.close(descriptor)
             elif path.is_dir():
                 self._fsync_directory(path)
         self._fsync_directory(root)
+
+    def _remove_tree_no_follow(self, path: Path) -> None:
+        if not path.exists() and not path.is_symlink():
+            return
+        try:
+            if self._is_reparse_point(path):
+                try:
+                    path.unlink()
+                except PermissionError:
+                    path.rmdir()
+                return
+            if path.is_dir():
+                for child in path.iterdir():
+                    self._remove_tree_no_follow(child)
+                path.rmdir()
+            else:
+                path.unlink()
+        except FileNotFoundError:
+            return
 
     def _sweep_staging(self, sessions_root: Path) -> None:
         for candidate in sessions_root.iterdir():

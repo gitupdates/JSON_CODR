@@ -1,15 +1,17 @@
+import errno
 import io
 import json
 import os
 import tempfile
 import threading
 import unittest
+from contextlib import contextmanager
 from unittest.mock import patch
 from pathlib import Path
 
 from web_app.attachments import AttachmentService
 from web_app.core.project_registry import ProjectRegistry
-from web_app.models import ChatMessage, ObjectReference, ProjectSessionSaveRequest, ReasoningEntry, ReasoningTrace
+from web_app.models import ChatMessage, ExtractionState, ObjectReference, ProjectSessionSaveRequest, ReasoningEntry, ReasoningTrace
 from web_app.project_sessions import ProjectSessionService
 from web_app.workspace import WorkspaceService
 
@@ -47,6 +49,35 @@ class ProjectSessionServiceTests(unittest.TestCase):
         artifacts.mkdir()
         (artifacts / "result.md").write_text("artifact", encoding="utf-8")
         return session
+
+    @staticmethod
+    def _run_worker(output, operation):
+        try:
+            output["result"] = operation()
+        except BaseException as error:
+            output["error"] = error
+
+    @staticmethod
+    def _attachment_state(directory):
+        manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+        files = {}
+        for tree_name in ("originals", "extracted"):
+            tree = directory / tree_name
+            if tree.is_dir():
+                files[tree_name] = {
+                    path.name: path.read_bytes()
+                    for path in sorted(tree.iterdir(), key=lambda item: item.name)
+                    if path.is_file()
+                }
+            else:
+                files[tree_name] = {}
+        return {"attachments": manifest["attachments"], "files": files}
+
+    def _assert_no_staging(self):
+        root = self.sessions.project_directory(self.project.project_id) / "sessions"
+        self.assertFalse(
+            root.exists() and any(path.name.startswith(".staging-") for path in root.iterdir())
+        )
 
     def test_save_creates_immutable_project_scoped_copy_with_bounded_safe_summary(self):
         session = self._live_session()
@@ -228,46 +259,251 @@ class ProjectSessionServiceTests(unittest.TestCase):
         for marker in ("Outcome (completed):", "Model: model-tail", "Task: task-tail", "Reference: tail.py", "Attachment: tail.txt", "Warning: tail-warning"):
             self.assertIn(marker, snapshot.summary)
 
-    def test_file_fsync_failure_prevents_promotion_and_cleans_same_parent_staging(self):
+    def test_copied_file_fsync_failure_prevents_promotion_and_cleans_same_parent_staging(self):
         session = self._live_session()
-        with patch("web_app.project_sessions.os.fsync", side_effect=OSError("disk failure")):
+        real_open = os.open
+        real_fsync = os.fsync
+        copied_file_descriptors = set()
+
+        def track_open(path, flags, *args, **kwargs):
+            descriptor = real_open(path, flags, *args, **kwargs)
+            candidate = Path(path)
+            if candidate.parent.name == "originals" and any(
+                part.startswith(".staging-") for part in candidate.parts
+            ):
+                copied_file_descriptors.add(descriptor)
+            return descriptor
+
+        def fail_copied_file(descriptor):
+            if descriptor in copied_file_descriptors:
+                raise OSError(errno.EIO, "copied file durability failure")
+            return real_fsync(descriptor)
+
+        with patch("web_app.project_sessions.os.open", side_effect=track_open), patch(
+            "web_app.project_sessions.os.fsync", side_effect=fail_copied_file
+        ):
             with self.assertRaises(OSError):
                 self.sessions.save(session.id, self.project.project_id, "owner-1", "Fail", "fix", [])
-        root = self.sessions.project_directory(self.project.project_id) / "sessions"
-        self.assertFalse(root.exists() and any(path.name.startswith(".staging-") for path in root.iterdir()))
+        self.assertTrue(copied_file_descriptors)
+        self.assertEqual([], self.sessions.list(self.project.project_id, "owner-1"))
+        self._assert_no_staging()
+
+    def test_post_copy_stage_mismatch_rejects_promotion_and_cleans_staging(self):
+        session = self._live_session()
+        original = self.sessions._copy_live_session
+
+        def corrupt_after_copy(record, destination):
+            digests = original(record, destination)
+            (destination / "artifacts" / "result.md").write_text("tampered", encoding="utf-8")
+            return digests
+
+        with patch.object(self.sessions, "_copy_live_session", side_effect=corrupt_after_copy):
+            with self.assertRaisesRegex(ValueError, "digest validation"):
+                self.sessions.save(session.id, self.project.project_id, "owner-1", "Mismatch", "fix", [])
+        self.assertEqual([], self.sessions.list(self.project.project_id, "owner-1"))
+        self._assert_no_staging()
+
+    def test_copy_boundary_rejects_transient_source_entry_swap_for_save_and_restore(self):
+        session = self._live_session()
+        live = self.workspace.get_session(session.id)
+        live_source = self.workspace.sessions_root / session.id / "originals" / live.attachments[0].storage_name
+        external = self.root / "external-source.txt"
+        external.write_bytes(live_source.read_bytes())
+
+        class SourceSwappingService(ProjectSessionService):
+            def __init__(swap_self, *args, swap_target, **kwargs):
+                super().__init__(*args, **kwargs)
+                swap_self.swap_target = swap_target
+                swap_self.swapped = False
+
+            @contextmanager
+            def _open_copy_source(swap_self, source):
+                if source == swap_self.swap_target and not swap_self.swapped:
+                    swap_self.swapped = True
+                    parked = source.with_name(source.name + ".parked")
+                    source.replace(parked)
+                    os.symlink(external, source)
+                    try:
+                        with super()._open_copy_source(source) as reader:
+                            yield reader
+                    finally:
+                        if source.is_symlink():
+                            source.unlink()
+                        if parked.exists():
+                            parked.replace(source)
+                    return
+                with super()._open_copy_source(source) as reader:
+                    yield reader
+
+        swapping_save = SourceSwappingService(
+            self.workspace, self.registry, swap_target=live_source
+        )
+        with self.assertRaises(ValueError):
+            swapping_save.save(session.id, self.project.project_id, "owner-1", "Swap", "fix", [])
+        self.assertTrue(swapping_save.swapped)
+        self.assertEqual(b"attachment text", external.read_bytes())
+        self.assertEqual([], self.sessions.list(self.project.project_id, "owner-1"))
+        self._assert_no_staging()
+
+        snapshot = self.sessions.save(
+            session.id, self.project.project_id, "owner-1", "Restore source", "fix", []
+        )
+        stored = json.loads(
+            (self.sessions.snapshot_directory(snapshot.id, self.project.project_id) / "manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        snapshot_source = (
+            self.sessions.snapshot_directory(snapshot.id, self.project.project_id)
+            / "originals"
+            / stored["attachments"][0]["storage_name"]
+        )
+        before_sessions = {path.name for path in self.workspace.sessions_root.iterdir()}
+        swapping_restore = SourceSwappingService(
+            self.workspace, self.registry, swap_target=snapshot_source
+        )
+        with self.assertRaises(ValueError):
+            swapping_restore.restore(snapshot.id, self.project.project_id, "owner-1")
+        self.assertTrue(swapping_restore.swapped)
+        self.assertEqual(before_sessions, {path.name for path in self.workspace.sessions_root.iterdir()})
+
+    def test_copy_boundary_rejects_transient_destination_root_swap_without_external_write(self):
+        session = self._live_session()
+        external = self.root / "external-destination"
+        external.mkdir()
+
+        class DestinationSwappingService(ProjectSessionService):
+            def __init__(swap_self, *args, restore_mode=False, **kwargs):
+                super().__init__(*args, **kwargs)
+                swap_self.restore_mode = restore_mode
+                swap_self.swapped = False
+
+            @contextmanager
+            def _create_copy_directory(swap_self, destination):
+                is_restore = self.workspace.sessions_root in destination.parents
+                if is_restore == swap_self.restore_mode and not swap_self.swapped:
+                    swap_self.swapped = True
+                    if is_restore:
+                        root = next(
+                            parent for parent in destination.parents
+                            if parent.parent == self.workspace.sessions_root
+                        )
+                    else:
+                        root = next(
+                            parent for parent in destination.parents
+                            if parent.name.startswith(".staging-")
+                        )
+                    parked = root.with_name(root.name + ".parked")
+                    root.replace(parked)
+                    os.symlink(external, root, target_is_directory=True)
+                    try:
+                        with super()._create_copy_directory(destination):
+                            yield
+                    finally:
+                        if root.is_symlink():
+                            root.unlink()
+                        if parked.exists():
+                            parked.replace(root)
+                    return
+                with super()._create_copy_directory(destination):
+                    yield
+
+        swapping_save = DestinationSwappingService(self.workspace, self.registry)
+        with self.assertRaises(ValueError):
+            swapping_save.save(session.id, self.project.project_id, "owner-1", "Swap", "fix", [])
+        self.assertTrue(swapping_save.swapped)
+        self.assertEqual([], list(external.iterdir()))
+        self.assertEqual([], self.sessions.list(self.project.project_id, "owner-1"))
+        self._assert_no_staging()
+
+        snapshot = self.sessions.save(
+            session.id, self.project.project_id, "owner-1", "Restore destination", "fix", []
+        )
+        before_sessions = {path.name for path in self.workspace.sessions_root.iterdir()}
+        swapping_restore = DestinationSwappingService(
+            self.workspace, self.registry, restore_mode=True
+        )
+        with self.assertRaises(ValueError):
+            swapping_restore.restore(snapshot.id, self.project.project_id, "owner-1")
+        self.assertTrue(swapping_restore.swapped)
+        self.assertEqual([], list(external.iterdir()))
+        self.assertEqual(before_sessions, {path.name for path in self.workspace.sessions_root.iterdir()})
 
     def test_save_barrier_with_message_append_has_complete_before_or_after_snapshot(self):
         session = self._live_session()
         entered, release = threading.Event(), threading.Event()
         original = self.sessions._copy_live_session
         def pause(record, destination):
-            entered.set(); release.wait(2); return original(record, destination)
-        result = {}
+            entered.set()
+            self.assertTrue(release.wait(3))
+            return original(record, destination)
+        save_result, append_result = {}, {}
         with patch.object(self.sessions, "_copy_live_session", side_effect=pause):
-            worker = threading.Thread(target=lambda: result.setdefault("snapshot", self.sessions.save(session.id, self.project.project_id, "owner-1", "Race", "fix", [])))
-            worker.start(); self.assertTrue(entered.wait(1))
-            append = threading.Thread(target=lambda: self.workspace.append_message(session.id, ChatMessage(role="user", content="after")))
-            append.start(); release.set(); worker.join(2); append.join(2)
-        saved = json.loads((self.sessions.snapshot_directory(result["snapshot"].id, self.project.project_id) / "manifest.json").read_text())
-        self.assertIn(len(saved["messages"]), {2, 3})
+            worker = threading.Thread(target=self._run_worker, args=(save_result, lambda: self.sessions.save(session.id, self.project.project_id, "owner-1", "Race", "fix", [])))
+            worker.start()
+            self.assertTrue(entered.wait(1))
+            append = threading.Thread(target=self._run_worker, args=(append_result, lambda: self.workspace.append_message(session.id, ChatMessage(role="user", content="after"))))
+            append.start()
+            self.assertTrue(append.is_alive())
+            release.set()
+            worker.join(3)
+            append.join(3)
+        self.assertFalse(worker.is_alive())
+        self.assertFalse(append.is_alive())
+        self.assertNotIn("error", save_result)
+        self.assertNotIn("error", append_result)
+        saved = json.loads((self.sessions.snapshot_directory(save_result["result"].id, self.project.project_id) / "manifest.json").read_text())
+        self.assertEqual(2, len(saved["messages"]))
+        self.assertEqual(3, len(self.workspace.get_session(session.id).messages))
 
     def test_attachment_mutations_race_save_as_complete_before_or_after(self):
         for operation in ("import", "update", "retry", "remove"):
             with self.subTest(operation=operation):
                 session = self._live_session()
                 attachment = self.workspace.get_session(session.id).attachments[0]
-                entered, release = threading.Event(), threading.Event(); original = self.sessions._copy_live_session
+                session_directory = self.workspace.sessions_root / session.id
+                if operation == "retry":
+                    record = self.workspace.get_session(session.id)
+                    retry_attachment = record.attachments[0]
+                    (session_directory / "extracted" / retry_attachment.extracted_name).unlink()
+                    retry_attachment.extracted_name = None
+                    retry_attachment.extraction_state = ExtractionState.rejected
+                    retry_attachment.included = False
+                    retry_attachment.warnings = ["retry required"]
+                    self.workspace.save_manifest(record)
+                before = self._attachment_state(session_directory)
+                entered, release = threading.Event(), threading.Event()
+                original = self.sessions._copy_live_session
                 def pause(record, destination):
-                    entered.set(); release.wait(2); return original(record, destination)
+                    entered.set()
+                    self.assertTrue(release.wait(3))
+                    return original(record, destination)
+                save_result, mutation_result = {}, {}
                 with patch.object(self.sessions, "_copy_live_session", side_effect=pause):
-                    save_thread = threading.Thread(target=lambda: self.sessions.save(session.id, self.project.project_id, "owner-1", "Race", "fix", []))
-                    save_thread.start(); self.assertTrue(entered.wait(1))
+                    save_thread = threading.Thread(target=self._run_worker, args=(save_result, lambda: self.sessions.save(session.id, self.project.project_id, "owner-1", "Race", "fix", [])))
+                    save_thread.start()
+                    self.assertTrue(entered.wait(1))
                     if operation == "import": action = lambda: self.attachments.import_text(session.id, "new", "new.txt")
                     elif operation == "update": action = lambda: self.attachments.set_included(session.id, attachment.id, False)
                     elif operation == "retry": action = lambda: self.attachments.retry(session.id, attachment.id)
                     else: action = lambda: self.attachments.remove(session.id, attachment.id)
-                    mutate = threading.Thread(target=action); mutate.start(); release.set(); save_thread.join(2); mutate.join(2)
-                self.assertTrue(any(self.sessions.list(self.project.project_id, "owner-1")))
+                    mutate = threading.Thread(target=self._run_worker, args=(mutation_result, action))
+                    mutate.start()
+                    self.assertTrue(mutate.is_alive())
+                    release.set()
+                    save_thread.join(3)
+                    mutate.join(3)
+                self.assertFalse(save_thread.is_alive())
+                self.assertFalse(mutate.is_alive())
+                self.assertNotIn("error", save_result)
+                self.assertNotIn("error", mutation_result)
+                after = self._attachment_state(session_directory)
+                if operation == "retry":
+                    self.assertNotEqual(before, after)
+                    self.assertEqual("ready", after["attachments"][0]["extraction_state"])
+                    self.assertTrue(after["files"]["extracted"])
+                snapshot_directory = self.sessions.snapshot_directory(save_result["result"].id, self.project.project_id)
+                self.assertIn(self._attachment_state(snapshot_directory), (before, after))
 
     def test_failure_after_staging_and_after_restore_allocation_cleans_everything(self):
         session = self._live_session()
@@ -281,14 +517,64 @@ class ProjectSessionServiceTests(unittest.TestCase):
             with self.assertRaises(OSError): self.sessions.restore(snapshot.id, self.project.project_id, "owner-1")
         self.assertEqual(before, {path.name for path in self.workspace.sessions_root.iterdir()})
 
-    def test_source_stage_mismatch_and_overlapping_project_saves_fail_closed_or_both_complete(self):
-        first, second = self._live_session(), self.workspace.create_session("owner-1", self.project.project_id)
+    def test_forced_overlapping_project_saves_block_and_preserve_each_complete_source(self):
+        first = self._live_session()
+        second = self.workspace.create_session("owner-1", self.project.project_id)
         self.workspace.append_message(second.id, ChatMessage(role="user", content="second"))
-        results = []
-        threads = [threading.Thread(target=lambda item=item: results.append(self.sessions.save(item.id, self.project.project_id, "owner-1", "Overlap", "fix", []))) for item in (first, second)]
-        for thread in threads: thread.start()
-        for thread in threads: thread.join(3)
-        self.assertEqual(len(results), 2); self.assertNotEqual(results[0].id, results[1].id)
+        self.attachments.import_text(second.id, "second attachment", "second.txt")
+        second_artifacts = self.workspace.sessions_root / second.id / "artifacts"
+        second_artifacts.mkdir()
+        (second_artifacts / "second.md").write_text("second artifact", encoding="utf-8")
+        expected_attachments = {
+            first.id: self._attachment_state(self.workspace.sessions_root / first.id),
+            second.id: self._attachment_state(self.workspace.sessions_root / second.id),
+        }
+        first_entered, release_first, second_entered = threading.Event(), threading.Event(), threading.Event()
+        original = self.sessions._copy_live_session
+
+        def pause_first(record, destination):
+            if record.id == first.id:
+                first_entered.set()
+                self.assertTrue(release_first.wait(3))
+            else:
+                second_entered.set()
+            return original(record, destination)
+
+        results = {first.id: {}, second.id: {}}
+        workers = {
+            current.id: threading.Thread(
+                target=self._run_worker,
+                args=(results[current.id], lambda current=current: self.sessions.save(current.id, self.project.project_id, "owner-1", current.id, "fix", [])),
+            )
+            for current in (first, second)
+        }
+        with patch.object(self.sessions, "_copy_live_session", side_effect=pause_first):
+            workers[first.id].start()
+            self.assertTrue(first_entered.wait(1))
+            workers[second.id].start()
+            self.assertFalse(second_entered.wait(0.25))
+            self.assertTrue(workers[second.id].is_alive())
+            release_first.set()
+            for worker in workers.values():
+                worker.join(3)
+        for worker in workers.values():
+            self.assertFalse(worker.is_alive())
+        for output in results.values():
+            self.assertNotIn("error", output)
+        self.assertTrue(second_entered.is_set())
+        snapshots = {session_id: output["result"] for session_id, output in results.items()}
+        self.assertNotEqual(snapshots[first.id].id, snapshots[second.id].id)
+        first_manifest = json.loads((self.sessions.snapshot_directory(snapshots[first.id].id, self.project.project_id) / "manifest.json").read_text(encoding="utf-8"))
+        second_directory = self.sessions.snapshot_directory(snapshots[second.id].id, self.project.project_id)
+        second_manifest = json.loads((second_directory / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(["Implement parser.py and verify the model output.", "Parser implementation completed."], [message["content"] for message in first_manifest["messages"]])
+        self.assertEqual(["notes.txt"], [item["display_name"] for item in first_manifest["attachments"]])
+        self.assertEqual(["second"], [message["content"] for message in second_manifest["messages"]])
+        self.assertEqual(["second.txt"], [item["display_name"] for item in second_manifest["attachments"]])
+        self.assertEqual(expected_attachments[first.id], self._attachment_state(self.sessions.snapshot_directory(snapshots[first.id].id, self.project.project_id)))
+        self.assertEqual(expected_attachments[second.id], self._attachment_state(second_directory))
+        self.assertEqual("artifact", (self.sessions.snapshot_directory(snapshots[first.id].id, self.project.project_id) / "artifacts" / "result.md").read_text(encoding="utf-8"))
+        self.assertEqual("second artifact", (second_directory / "artifacts" / "second.md").read_text(encoding="utf-8"))
         root = self.sessions.project_directory(self.project.project_id) / "sessions"
         self.assertFalse(any(path.name.startswith(".staging-") for path in root.iterdir()))
 
