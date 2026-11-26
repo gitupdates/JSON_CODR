@@ -243,23 +243,37 @@ class OllamaService:
         if not candidates:
             raise OllamaUnavailableError("Model is not installed")
         failures: list[tuple[str, BaseException]] = []
+        transient_delays = (0.5, 1.0, 2.0, 4.0)
         for candidate in candidates:
-            try:
-                result = await self._chat_candidate(
-                    candidate,
-                    prompt,
-                    images=images,
-                    allow_repair=allow_repair,
-                )
-            except (OllamaUnavailableError, ModelOutputError) as error:
-                failures.append((candidate, error))
+            candidate_error: BaseException | None = None
+            result: ChatResult | None = None
+            for attempt in range(len(transient_delays) + 1):
+                try:
+                    result = await self._chat_candidate(
+                        candidate,
+                        prompt,
+                        images=images,
+                        allow_repair=allow_repair,
+                    )
+                    break
+                except (OllamaUnavailableError, ModelOutputError) as error:
+                    classification = self.compatibility.classify_failure(error) if self.compatibility else "unknown"
+                    if classification == "transient" and attempt < len(transient_delays):
+                        await asyncio.sleep(transient_delays[attempt])
+                        continue
+                    candidate_error = error
+                    break
+            if candidate_error is not None:
+                failures.append((candidate, candidate_error))
                 if self.compatibility is not None:
                     self.compatibility.record_failure(
                         candidate,
                         self.compatibility.digest(live.get(candidate)),
-                        error,
+                        candidate_error,
                     )
                 continue
+            if result is None:
+                raise OllamaUnavailableError("Model request failed without a result")
             if self.compatibility is not None:
                 profile = (
                     "base"
@@ -440,59 +454,69 @@ class OllamaService:
         if not candidates:
             raise OllamaUnavailableError("Model is not installed")
         failures: list[tuple[str, BaseException]] = []
+        transient_delays = (0.5, 1.0, 2.0, 4.0)
         for candidate in candidates:
-            emitted_usable_output = False
-            try:
-                stream = self._stream_chat_candidate(
-                    candidate,
-                    prompt,
-                    images=images,
-                    public_reasoning=public_reasoning,
-                )
-                async with aclosing(stream):
-                    async for event in stream:
-                        if event.get("type") in {"content", "reasoning"} and event.get("text"):
-                            emitted_usable_output = True
-                        if event.get("type") == "completed":
-                            result = event.get("result")
-                            if result is not None:
-                                result.requested_model = requested
-                                result.effective_model = candidate
-                                if candidate != requested:
-                                    if failures:
-                                        failed_model, failure = failures[-1]
-                                        reason = str(failure)
-                                        event_type = "model_fallback"
-                                    else:
-                                        failed_model = requested
-                                        reason = str(self.compatibility.model_rules.get(requested, {}).get("reason", "")) if self.compatibility else ""
-                                        event_type = "model_alternate"
-                                    result.fallback_reason = reason or None
-                                    result.provider_events.insert(0, {
-                                        "type": event_type,
-                                        "requested_model": requested,
-                                        "failed_model": failed_model,
-                                        "effective_model": candidate,
-                                        "reason": reason,
-                                    })
-                                if self.compatibility is not None:
-                                    profile = "reasoning" if public_reasoning else "base"
-                                    self.compatibility.record_success(
-                                        candidate,
-                                        self.compatibility.digest(live.get(candidate)),
-                                        profile,
-                                    )
-                        yield event
-                return
-            except (OllamaUnavailableError, ModelOutputError) as error:
-                if emitted_usable_output:
-                    raise
-                failures.append((candidate, error))
+            candidate_error: BaseException | None = None
+            for attempt in range(len(transient_delays) + 1):
+                emitted_usable_output = False
+                try:
+                    stream = self._stream_chat_candidate(
+                        candidate,
+                        prompt,
+                        images=images,
+                        public_reasoning=public_reasoning,
+                    )
+                    async with aclosing(stream):
+                        async for event in stream:
+                            if event.get("type") in {"content", "reasoning"} and event.get("text"):
+                                emitted_usable_output = True
+                            if event.get("type") == "completed":
+                                result = event.get("result")
+                                if result is not None:
+                                    result.requested_model = requested
+                                    result.effective_model = candidate
+                                    if candidate != requested:
+                                        if failures:
+                                            failed_model, failure = failures[-1]
+                                            reason = str(failure)
+                                            event_type = "model_fallback"
+                                        else:
+                                            failed_model = requested
+                                            reason = str(self.compatibility.model_rules.get(requested, {}).get("reason", "")) if self.compatibility else ""
+                                            event_type = "model_alternate"
+                                        result.fallback_reason = reason or None
+                                        result.provider_events.insert(0, {
+                                            "type": event_type,
+                                            "requested_model": requested,
+                                            "failed_model": failed_model,
+                                            "effective_model": candidate,
+                                            "reason": reason,
+                                        })
+                                    if self.compatibility is not None:
+                                        profile = "reasoning" if public_reasoning else "base"
+                                        self.compatibility.record_success(
+                                            candidate,
+                                            self.compatibility.digest(live.get(candidate)),
+                                            profile,
+                                        )
+                            yield event
+                    return
+                except (OllamaUnavailableError, ModelOutputError) as error:
+                    if emitted_usable_output:
+                        raise
+                    classification = self.compatibility.classify_failure(error) if self.compatibility else "unknown"
+                    if classification == "transient" and attempt < len(transient_delays):
+                        await asyncio.sleep(transient_delays[attempt])
+                        continue
+                    candidate_error = error
+                    break
+            if candidate_error is not None:
+                failures.append((candidate, candidate_error))
                 if self.compatibility is not None:
                     self.compatibility.record_failure(
                         candidate,
                         self.compatibility.digest(live.get(candidate)),
-                        error,
+                        candidate_error,
                     )
                 if candidate != candidates[-1]:
                     yield {

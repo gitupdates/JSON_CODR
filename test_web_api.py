@@ -8,7 +8,7 @@ import io
 import os
 import zipfile
 import subprocess
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from contextlib import closing
 from pathlib import Path
 
@@ -2041,6 +2041,38 @@ class OllamaCompatibilityIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.provider_events[0]["type"], "compatibility_base_mode")
         refreshed = await service.list_models()
         self.assertTrue(next(item for item in refreshed if item["name"] == "new-coder:latest")["runnable"])
+
+    async def test_transient_cold_runner_reset_retries_same_model_before_fallback(self):
+        class ColdRunnerClient:
+            def __init__(self):
+                self.calls = []
+
+            async def list(self):
+                return {"models": [
+                    {"name": "new-coder:latest", "digest": "sha256:" + "c" * 64, "details": {}},
+                    {"name": "base-coder:1b", "digest": "sha256:" + "d" * 64, "details": {}},
+                ]}
+
+            async def chat(self, **request):
+                self.calls.append(request["model"])
+                if len(self.calls) == 1:
+                    raise RuntimeError("connection was forcibly closed by the remote host")
+                return {"message": {"content": json.dumps({
+                    "status": "success", "summary": "Recovered", "content": "same model answer"
+                })}}
+
+        client = ColdRunnerClient()
+        service = OllamaService(client=client)
+        service.set_compatibility_layer(self.compatibility)
+
+        with patch("web_app.ollama_service.asyncio.sleep", new_callable=AsyncMock) as sleep:
+            result = await service.chat("new-coder:latest", "hello")
+
+        self.assertEqual(client.calls, ["new-coder:latest", "new-coder:latest"])
+        sleep.assert_awaited_once_with(0.5)
+        self.assertEqual(result.requested_model, "new-coder:latest")
+        self.assertEqual(result.effective_model, "new-coder:latest")
+        self.assertEqual(result.content, "same model answer")
 
     async def test_loader_failure_quarantines_requested_digest_and_uses_reviewed_baseline(self):
         class FallbackClient:

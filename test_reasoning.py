@@ -189,6 +189,64 @@ class OllamaPublicReasoningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1]["result"].requested_model, "broken:8b")
         self.assertEqual(events[-1]["result"].effective_model, "base:1b")
 
+    async def test_stream_compatibility_retries_transient_reset_on_same_model(self):
+        from unittest.mock import AsyncMock, patch
+        from web_app.model_compatibility import ModelCompatibilityLayer
+
+        class ErrorStream:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise ollama.ResponseError("connection was forcibly closed by the remote host", 500)
+
+        class ContentStream:
+            def __init__(self):
+                self.sent = False
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self.sent:
+                    raise StopAsyncIteration
+                self.sent = True
+                return {"message": {"content": "Recovered on same model."}}
+
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+
+            async def list(self):
+                return {"models": [
+                    {"model": "cold:8b", "digest": "sha256:" + "e" * 64},
+                    {"model": "base:1b", "digest": "sha256:" + "f" * 64},
+                ]}
+
+            async def chat(self, **request):
+                self.calls.append(request["model"])
+                return ErrorStream() if len(self.calls) == 1 else ContentStream()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            policy = root / "policy.json"
+            policy.write_text(json.dumps({
+                "schema_version": 1,
+                "base_fallback_order": ["base:1b"],
+                "models": {},
+            }), encoding="utf-8")
+            compatibility = ModelCompatibilityLayer.load(policy, root / "state.json")
+            client = FakeClient()
+            service = OllamaService(client=client)
+            service.set_compatibility_layer(compatibility)
+
+            with patch("web_app.ollama_service.asyncio.sleep", new_callable=AsyncMock) as sleep:
+                events = [event async for event in service.stream_chat("cold:8b", "Review")]
+
+        self.assertEqual(client.calls, ["cold:8b", "cold:8b"])
+        sleep.assert_awaited_once_with(0.5)
+        self.assertEqual(events[-1]["result"].effective_model, "cold:8b")
+
 
 if __name__ == "__main__":
     unittest.main()
