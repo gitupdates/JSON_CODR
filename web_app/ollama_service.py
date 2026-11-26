@@ -74,6 +74,19 @@ class OllamaService:
         payload = response.model_dump() if hasattr(response, "model_dump") else response
         return {item.get("model") or item.get("name"): item for item in payload.get("models", [])}
 
+    async def _stable_compatibility_digest(self, model: str, live: Dict[str, dict]) -> str:
+        if self.compatibility is None:
+            return ""
+        before = self.compatibility.digest(live.get(model))
+        if not before:
+            return ""
+        try:
+            refreshed = await self._live_models()
+        except OllamaUnavailableError:
+            return ""
+        after = self.compatibility.digest(refreshed.get(model))
+        return before if before == after else ""
+
     async def list_models(self) -> List[dict]:
         live = await self._live_models()
         if self.compatibility is not None:
@@ -205,7 +218,8 @@ class OllamaService:
         else:
             fallback = str(self.config.get("tool_fallback_model", "")).strip()
             fallback_installed = False
-            if fallback in verified_models:
+            fallback_effective: str | None = None
+            if fallback and fallback in verified_models:
                 try:
                     fallback_effective = await self._compatible_tool_model(fallback)
                     if fallback_effective not in verified_models:
@@ -300,11 +314,13 @@ class OllamaService:
             if candidate_error is not None:
                 failures.append((candidate, candidate_error))
                 if self.compatibility is not None:
-                    self.compatibility.record_failure(
-                        candidate,
-                        self.compatibility.digest(live.get(candidate)),
-                        candidate_error,
-                    )
+                    evidence_digest = await self._stable_compatibility_digest(candidate, live)
+                    if evidence_digest:
+                        self.compatibility.record_failure(
+                            candidate,
+                            evidence_digest,
+                            candidate_error,
+                        )
                 continue
             if result is None:
                 raise OllamaUnavailableError("Model request failed without a result")
@@ -314,14 +330,18 @@ class OllamaService:
                     if any(event.get("type") == "compatibility_base_mode" for event in result.provider_events)
                     else "structured"
                 )
-                self.compatibility.record_success(
-                    candidate,
-                    self.compatibility.digest(live.get(candidate)),
-                    profile,
-                )
+                evidence_digest = await self._stable_compatibility_digest(candidate, live)
+                if evidence_digest:
+                    self.compatibility.record_success(candidate, evidence_digest, profile)
+                else:
+                    result.provider_events.append({
+                        "type": "compatibility_evidence_skipped",
+                        "model": candidate,
+                        "reason": "model_digest_changed_or_unavailable",
+                    })
             result.requested_model = requested
             result.effective_model = candidate
-            if candidate != requested:
+            if failures or candidate != requested:
                 if failures:
                     failed_model, failure = failures[-1]
                     reason = str(failure)
@@ -509,7 +529,7 @@ class OllamaService:
                                 if result is not None:
                                     result.requested_model = requested
                                     result.effective_model = candidate
-                                    if candidate != requested:
+                                    if failures or candidate != requested:
                                         if failures:
                                             failed_model, failure = failures[-1]
                                             reason = str(failure)
@@ -532,11 +552,19 @@ class OllamaService:
                                             for item in result.provider_events
                                         )
                                         profile = "reasoning" if public_reasoning and not degraded else "base"
-                                        self.compatibility.record_success(
-                                            candidate,
-                                            self.compatibility.digest(live.get(candidate)),
-                                            profile,
+                                        evidence_digest = await self._stable_compatibility_digest(
+                                            candidate, live
                                         )
+                                        if evidence_digest:
+                                            self.compatibility.record_success(
+                                                candidate, evidence_digest, profile
+                                            )
+                                        else:
+                                            result.provider_events.append({
+                                                "type": "compatibility_evidence_skipped",
+                                                "model": candidate,
+                                                "reason": "model_digest_changed_or_unavailable",
+                                            })
                             yield event
                     return
                 except (OllamaUnavailableError, ModelOutputError) as error:
@@ -551,11 +579,13 @@ class OllamaService:
             if candidate_error is not None:
                 failures.append((candidate, candidate_error))
                 if self.compatibility is not None:
-                    self.compatibility.record_failure(
-                        candidate,
-                        self.compatibility.digest(live.get(candidate)),
-                        candidate_error,
-                    )
+                    evidence_digest = await self._stable_compatibility_digest(candidate, live)
+                    if evidence_digest:
+                        self.compatibility.record_failure(
+                            candidate,
+                            evidence_digest,
+                            candidate_error,
+                        )
                 if candidate != candidates[-1]:
                     yield {
                         "type": "warning",
@@ -594,6 +624,7 @@ class OllamaService:
         reasoning_entries: list[ReasoningEntry] = []
         warnings: list[str] = []
         reasoning_degraded = False
+        degradation_reason = ""
         try:
             attempts = [request]
             if request.get("think") is True:
@@ -630,6 +661,7 @@ class OllamaService:
                         )
                         warnings.append(warning)
                         reasoning_degraded = True
+                        degradation_reason = "provider_does_not_support_thinking"
                         yield {"type": "warning", "text": warning}
                         continue
                     raise
@@ -637,6 +669,41 @@ class OllamaService:
                 event = self._stream_delta(delta, reasoning_entries, content_parts, warnings)
                 if event:
                     yield event
+            if not content_parts and public_reasoning and reasoning_entries:
+                warning = (
+                    "The model did not produce final answer content after reasoning; "
+                    "retried once in final-answer mode."
+                )
+                warnings.append(warning)
+                reasoning_degraded = True
+                degradation_reason = "provider_reasoning_incomplete"
+                yield {"type": "warning", "text": warning}
+                fallback_request = {
+                    "model": resolved,
+                    "messages": [{"role": "user", "content": prompt, "images": images or None}],
+                    "stream": True,
+                    "think": False,
+                }
+                fallback_normalizer = ReasoningNormalizer()
+                fallback_stream = await self._chat_with_optimization(resolved, fallback_request)
+                async with asyncio.timeout(self.timeout_seconds):
+                    async for chunk in fallback_stream:
+                        message = chunk.message if hasattr(chunk, "message") else chunk.get("message", {})
+                        content = getattr(message, "content", None) if not isinstance(message, dict) else message.get("content")
+                        reasoning = getattr(message, "thinking", None) if not isinstance(message, dict) else message.get("thinking")
+                        for delta in fallback_normalizer.feed({
+                            "content": content or "",
+                            "reasoning": reasoning or "",
+                        }):
+                            event = self._stream_delta(
+                                delta, reasoning_entries, content_parts, warnings
+                            )
+                            if event:
+                                yield event
+                for delta in fallback_normalizer.finish():
+                    event = self._stream_delta(delta, reasoning_entries, content_parts, warnings)
+                    if event:
+                        yield event
         except TimeoutError as error:
             raise ModelTimeoutError("Model request timed out") from error
         except (ModelTimeoutError, ModelOutputError, OllamaUnavailableError, ValueError):
@@ -654,7 +721,7 @@ class OllamaService:
                 "type": "reasoning_degraded",
                 "requested_profile": "reasoning",
                 "effective_profile": "base",
-                "reason": "provider_does_not_support_thinking",
+                "reason": degradation_reason,
             })
         yield {
             "type": "completed",

@@ -88,6 +88,33 @@ class CanonicalFakeOllama(FakeOllama):
         )
 
 
+class NestedFallbackOllama(FakeOllama):
+    def __init__(self, logical_model, effective_model):
+        super().__init__([logical_model])
+        self.logical_model = logical_model
+        self.effective_model = effective_model
+
+    def _result(self):
+        return ChatResult(
+            model=self.effective_model,
+            requested_model=self.logical_model,
+            effective_model=self.effective_model,
+            fallback_reason="reviewed compatible alternate",
+            status="ok",
+            summary="nested fallback",
+            content="done",
+            provider_events=[{"type": "model_alternate"}],
+        )
+
+    async def chat(self, model, prompt, images=None, allow_repair=True):
+        self.calls.append(model)
+        return self._result()
+
+    async def stream_chat(self, model, prompt, images=None, public_reasoning=False):
+        self.calls.append((model, public_reasoning))
+        yield {"type": "completed", "result": self._result()}
+
+
 class InferenceRouterTests(unittest.IsolatedAsyncioTestCase):
     async def test_verified_optimized_inventory_exposes_runnable_state(self):
         catalog = OptimizedModelCatalog()
@@ -216,6 +243,36 @@ class InferenceRouterTests(unittest.IsolatedAsyncioTestCase):
             "effective_model": model.ollama_fallback,
         })
 
+    async def test_nested_ollama_substitution_preserves_actual_effective_identity(self):
+        catalog = OptimizedModelCatalog()
+        model = catalog.list()[1]
+        alternate = "compatible-alternate:latest"
+
+        chat_ollama = NestedFallbackOllama(model.ollama_fallback, alternate)
+        chat_router = InferenceRouter(
+            chat_ollama,
+            catalog,
+            FakeRegistry(FakeProvider(RuntimeError("provider failed"))),
+            {model.id},
+        )
+        chat_result = await chat_router.chat(model.id, "hello")
+
+        stream_ollama = NestedFallbackOllama(model.ollama_fallback, alternate)
+        stream_router = InferenceRouter(
+            stream_ollama,
+            catalog,
+            FakeRegistry(FailingStreamingProvider([], RuntimeError("provider failed"))),
+            {model.id},
+        )
+        stream_events = [event async for event in stream_router.stream_chat(model.id, "hello")]
+        stream_result = stream_events[-1]["result"]
+
+        for result in (chat_result, stream_result):
+            self.assertEqual(result.requested_model, model.id)
+            self.assertEqual(result.effective_model, alternate)
+            self.assertEqual(result.provider_events[0]["effective_model"], alternate)
+            self.assertEqual(result.provider_events[1]["type"], "model_alternate")
+
     async def test_provider_failure_quarantines_pair_and_uses_mapped_then_cpu_fallback(self):
         catalog = OptimizedModelCatalog()
         model = catalog.list()[1]
@@ -226,6 +283,9 @@ class InferenceRouterTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(ollama.calls, [model.ollama_fallback])
         self.assertIn("Fallback", result.summary)
+        self.assertEqual(result.requested_model, model.id)
+        self.assertEqual(result.effective_model, model.ollama_fallback)
+        self.assertEqual(result.fallback_reason, "NPU crashed")
         self.assertEqual(result.provider_events[0]["type"], "provider_fallback")
         self.assertEqual(result.provider_events[0]["effective_model"], model.ollama_fallback)
         self.assertIn(model.id, router.quarantined)

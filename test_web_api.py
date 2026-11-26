@@ -2079,6 +2079,66 @@ class OllamaCompatibilityIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.effective_model, "new-coder:latest")
         self.assertEqual(result.content, "same model answer")
 
+    async def test_digest_drift_during_inference_does_not_persist_compatibility_evidence(self):
+        class DriftingClient:
+            def __init__(self):
+                self.list_calls = 0
+
+            async def list(self):
+                self.list_calls += 1
+                digest_character = "a" if self.list_calls == 1 else "b"
+                return {"models": [{
+                    "name": "new-coder:latest",
+                    "digest": "sha256:" + digest_character * 64,
+                }]}
+
+            async def chat(self, **_request):
+                return {"message": {"content": json.dumps({
+                    "status": "success",
+                    "summary": "Completed",
+                    "content": "answer",
+                })}}
+
+        client = DriftingClient()
+        service = OllamaService(client=client)
+        service.set_compatibility_layer(self.compatibility)
+
+        result = await service.chat("new-coder:latest", "hello")
+
+        self.assertEqual(client.list_calls, 2)
+        self.assertFalse(self.compatibility.state_path.exists())
+        self.assertTrue(any(
+            event.get("type") == "compatibility_evidence_skipped"
+            and event.get("reason") == "model_digest_changed_or_unavailable"
+            for event in result.provider_events
+        ))
+
+    async def test_digest_drift_during_failure_does_not_quarantine_stale_artifact(self):
+        class DriftingFailureClient:
+            def __init__(self):
+                self.list_calls = 0
+
+            async def list(self):
+                self.list_calls += 1
+                digest_character = "c" if self.list_calls == 1 else "d"
+                return {"models": [{
+                    "name": "new-coder:latest",
+                    "digest": "sha256:" + digest_character * 64,
+                }]}
+
+            async def chat(self, **_request):
+                raise RuntimeError("GGML_ASSERT failed to load model")
+
+        client = DriftingFailureClient()
+        service = OllamaService(client=client)
+        service.set_compatibility_layer(self.compatibility)
+
+        with self.assertRaises(OllamaUnavailableError):
+            await service.chat("new-coder:latest", "hello")
+
+        self.assertEqual(client.list_calls, 2)
+        self.assertFalse(self.compatibility.state_path.exists())
+
     async def test_loader_failure_quarantines_requested_digest_and_uses_reviewed_baseline(self):
         class FallbackClient:
             def __init__(self):
@@ -2118,6 +2178,41 @@ class OllamaCompatibilityIntegrationTests(unittest.IsolatedAsyncioTestCase):
         rnj = next(item for item in models if item["name"] == "rnj-1:8b")
         self.assertFalse(rnj["runnable"])
         self.assertEqual(rnj["compatibility_status"], "quarantined")
+
+    async def test_failed_preferred_alternate_is_preserved_when_requested_model_recovers(self):
+        class AlternateFailureClient:
+            def __init__(self):
+                self.calls = []
+
+            async def list(self):
+                return {"models": [
+                    {"name": "rnj-1:8b", "digest": "sha256:" + "1" * 64},
+                    {"name": "compatible-rnj:8b", "digest": "sha256:" + "2" * 64},
+                ]}
+
+            async def chat(self, **request):
+                self.calls.append(request["model"])
+                if request["model"] == "compatible-rnj:8b":
+                    raise RuntimeError("GGML_ASSERT failed to load model")
+                return {"message": {"content": json.dumps({
+                    "status": "success",
+                    "summary": "Recovered",
+                    "content": "requested artifact answer",
+                })}}
+
+        client = AlternateFailureClient()
+        service = OllamaService(client=client)
+        service.set_compatibility_layer(self.compatibility)
+
+        result = await service.chat("rnj-1:8b", "hello")
+
+        self.assertEqual(client.calls, ["compatible-rnj:8b", "rnj-1:8b"])
+        self.assertEqual(result.requested_model, "rnj-1:8b")
+        self.assertEqual(result.effective_model, "rnj-1:8b")
+        self.assertEqual(result.provider_events[0]["type"], "model_fallback")
+        self.assertEqual(result.provider_events[0]["failed_model"], "compatible-rnj:8b")
+        self.assertEqual(result.provider_events[0]["effective_model"], "rnj-1:8b")
+        self.assertIn("GGML_ASSERT", result.fallback_reason)
 
     async def test_missing_exact_model_is_not_silently_replaced_by_baseline(self):
         class MissingClient:
@@ -2164,6 +2259,21 @@ class OllamaCompatibilityIntegrationTests(unittest.IsolatedAsyncioTestCase):
             base_digest,
             RuntimeError("GGML_ASSERT failed to load model"),
         )
+
+        route = await service.tool_compatibility("unverified:1b")
+
+        self.assertEqual(route["route"], "unavailable")
+        self.assertIsNone(route["effective_tool_model"])
+        self.assertFalse(route["available"])
+
+    async def test_empty_tool_fallback_configuration_is_never_routable(self):
+        class ToolClient:
+            async def show(self, _model):
+                return {"capabilities": ["tools"]}
+
+        service = OllamaService(client=ToolClient())
+        service.config["verified_tool_models"] = [""]
+        service.config["tool_fallback_model"] = ""
 
         route = await service.tool_compatibility("unverified:1b")
 

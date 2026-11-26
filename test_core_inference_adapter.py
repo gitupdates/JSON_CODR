@@ -72,6 +72,50 @@ class ExactModelCompatibilityBackend(StreamingBackend):
 
 
 class InferenceAdapterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_native_automatic_tag_routing_fails_closed_on_invalid_compatibility_state(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from web_app.core.model_tags import ModelTag, ModelTagRegistry
+        from web_app.core.native_ollama import NativeOllamaTransport
+        from web_app.model_compatibility import ModelCompatibilityLayer
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            policy = root / "policy.json"
+            policy.write_text(json.dumps({
+                "schema_version": 1,
+                "base_fallback_order": [],
+                "models": {},
+            }), encoding="utf-8")
+            state = root / "state.json"
+            state.write_text('{"models": ["malformed"]}', encoding="utf-8")
+            compatibility = ModelCompatibilityLayer.load(policy, state)
+
+            class NativeTransport(NativeOllamaTransport):
+                async def _json_request(self, _path):
+                    return {"models": [{
+                        "name": "qwen3:4b",
+                        "digest": "sha256:" + "a" * 64,
+                    }]}
+
+            backend = NativeTransport(
+                "http://127.0.0.1:11434",
+                compatibility=compatibility,
+            )
+            records = await backend.list_models()
+            adapter = InferenceAdapter(
+                backend,
+                model_registry=ModelTagRegistry(
+                    {"coding": ModelTag(("qwen3:4b",), ())},
+                    ("qwen3:4b",),
+                ),
+            )
+
+            self.assertFalse(records[0]["runnable"])
+            with self.assertRaisesRegex(ValueError, "no installed model"):
+                await adapter._resolve_model("coding")
+
     async def test_session_context_is_injected_and_reported_in_result(self):
         backend = RecordingBackend()
 

@@ -79,12 +79,16 @@ class InferenceRouter:
                 raise
             result = await self.ollama.chat(fallback, prompt, images=images, allow_repair=allow_repair)
             result.summary = f"Fallback to {fallback} after {model.provider.value} failure: {result.summary}"
+            actual_effective = result.effective_model or result.model
+            result.requested_model = model_id
+            result.effective_model = actual_effective
+            result.fallback_reason = str(error)
             result.provider_events.insert(0, {
                 "type": "provider_fallback",
                 "requested_model": model_id,
                 "failed_provider": model.provider.value,
                 "error": f"{type(error).__name__}: {error}",
-                "effective_model": fallback,
+                "effective_model": actual_effective,
             })
             return result
 
@@ -137,14 +141,15 @@ class InferenceRouter:
                     result = event.get("result")
                     if result is not None:
                         result.summary = f"Fallback to {fallback} after {model.provider.value} failure: {result.summary}"
+                        actual_effective = result.effective_model or result.model
                         result.requested_model = model_id
-                        result.effective_model = fallback
+                        result.effective_model = actual_effective
                         result.fallback_reason = str(error)
                         result.provider_events.insert(0, {
                             "type": "provider_fallback",
                             "requested_model": model_id,
                             "failed_provider": model.provider.value,
                             "error": f"{type(error).__name__}: {error}",
-                            "effective_model": fallback,
+                            "effective_model": actual_effective,
                         })
                 yield event

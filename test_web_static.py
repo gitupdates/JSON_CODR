@@ -83,6 +83,8 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('model.runnable !== false', javascript)
         self.assertIn('" — incompatible"', javascript)
         self.assertIn('downloaded · ${verifiedRunnable} verified runnable · ${models.length} catalogued', javascript)
+        self.assertIn("const compatibilityStatus =", javascript)
+        self.assertIn("model.fallback_reason", javascript)
 
     def test_disclosure_controller_keeps_only_the_active_tree_item_open(self):
         script = r'''

@@ -165,6 +165,67 @@ class OllamaPublicReasoningTests(unittest.IsolatedAsyncioTestCase):
             "base",
         )
 
+    async def test_stream_retries_base_mode_when_reasoning_has_no_final_content(self):
+        class ReasoningOnlyStream:
+            def __init__(self):
+                self.sent = False
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self.sent:
+                    raise StopAsyncIteration
+                self.sent = True
+                return {"message": {"thinking": "Reasoning exhausted the response."}}
+
+        class ContentStream:
+            def __init__(self):
+                self.sent = False
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self.sent:
+                    raise StopAsyncIteration
+                self.sent = True
+                return {"message": {"content": "Recovered final answer."}}
+
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+
+            async def list(self):
+                return {"models": [{"model": "qwen3:4b"}]}
+
+            async def chat(self, **request):
+                self.calls.append(request)
+                return ReasoningOnlyStream() if request.get("think") else ContentStream()
+
+        client = FakeClient()
+        service = OllamaService(client=client)
+
+        events = [event async for event in service.stream_chat(
+            "qwen3:4b", "Review", public_reasoning=True
+        )]
+
+        self.assertEqual([call.get("think") for call in client.calls], [True, False])
+        self.assertEqual(
+            client.calls[1]["messages"],
+            [{"role": "user", "content": "Review", "images": None}],
+        )
+        self.assertEqual(events[-1]["result"].content, "Recovered final answer.")
+        self.assertTrue(any(
+            event.get("type") == "reasoning_degraded"
+            and event.get("effective_profile") == "base"
+            for event in events[-1]["result"].provider_events
+        ))
+        self.assertTrue(any(
+            "final-answer mode" in warning
+            for warning in events[-1]["result"].reasoning.warnings
+        ))
+
     async def test_stream_compatibility_falls_back_before_any_output(self):
         from web_app.model_compatibility import ModelCompatibilityLayer
 

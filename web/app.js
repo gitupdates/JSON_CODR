@@ -2606,7 +2606,12 @@ function updateModelDetail() {
   const size = model.size ? `${(model.size / 1e9).toFixed(1)} GB` : "size unavailable";
   const context = model.context_length ? `${model.context_length.toLocaleString()} ctx` : "context unavailable";
   const capabilities = model.capabilities.length ? model.capabilities.join(" · ") : "completion";
-  const compatibility = model.runnable === true ? "verified runnable" : "compatibility untested";
+  const compatibilityStatus = String(model.compatibility_status || "").replaceAll("_", " ");
+  const compatibility = model.runnable === true
+    ? "verified runnable"
+    : model.runnable === false
+      ? `${compatibilityStatus || "not runnable"}${model.fallback_reason ? `: ${model.fallback_reason}` : ""}`
+      : compatibilityStatus || "compatibility untested";
   const effective = model.effective_model && model.effective_model !== model.name
     ? ` · effective ${model.effective_model}` : "";
   elements.modelDetail.textContent = `${model.quantization || "quantization unknown"} · ${size} · ${context} · ${capabilities} · ${compatibility}${effective}`;

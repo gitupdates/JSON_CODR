@@ -369,7 +369,7 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
         }]
         with (
             patch("web_app.core.native_ollama.urlopen", side_effect=fake_urlopen),
-            patch.object(transport, "list_models", new=AsyncMock(return_value=live_models)),
+            patch.object(transport, "_live_models", new=AsyncMock(return_value=live_models)),
         ):
             events = [event async for event in transport.stream_chat(
                 "qwen2.5-coder:0.5b", "Reply", public_reasoning=True,
@@ -939,7 +939,7 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
                     super().__init__("http://localhost:11434", compatibility=layer)
                     self.calls = []
 
-                async def list_models(self):
+                async def _live_models(self):
                     return [
                         {"name": "broken:8b", "digest": "sha256:" + "5" * 64},
                         {"name": "base-coder:1b", "digest": "sha256:" + "6" * 64},
@@ -965,6 +965,60 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(fallback["requested_model"], "broken:8b")
             self.assertEqual(fallback["effective_model"], "base-coder:1b")
 
+    async def test_failed_preferred_alternate_remains_in_native_completion_evidence(self):
+        from pathlib import Path
+        import tempfile
+        from web_app.core.native_ollama import NativeOllamaTransport
+        from web_app.model_compatibility import ModelCompatibilityLayer
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            policy = root / "policy.json"
+            policy.write_text(json.dumps({
+                "schema_version": 1,
+                "base_fallback_order": [],
+                "models": {
+                    "rnj-1:8b": {
+                        "alternates": ["compatible-rnj:8b"],
+                        "prefer_alternate": True,
+                        "reason": "Use reviewed compatible artifact.",
+                    },
+                },
+            }), encoding="utf-8")
+            layer = ModelCompatibilityLayer.load(policy, root / "state.json")
+
+            class AlternateFailureTransport(NativeOllamaTransport):
+                def __init__(self):
+                    super().__init__("http://localhost:11434", compatibility=layer)
+                    self.calls = []
+
+                async def _live_models(self):
+                    return [
+                        {"name": "rnj-1:8b", "digest": "sha256:" + "1" * 64},
+                        {"name": "compatible-rnj:8b", "digest": "sha256:" + "2" * 64},
+                    ]
+
+                async def _stream_request(self, _path, payload):
+                    self.calls.append(payload["model"])
+                    if payload["model"] == "compatible-rnj:8b":
+                        yield json.dumps({"error": "GGML_ASSERT failed to load model"}).encode()
+                    else:
+                        yield json.dumps({
+                            "message": {"content": "requested artifact answer"},
+                            "done": True,
+                        }).encode()
+
+            transport = AlternateFailureTransport()
+            events = [event async for event in transport.stream_chat("rnj-1:8b", "hello")]
+            result = events[-1]["result"]
+
+            self.assertEqual(transport.calls, ["compatible-rnj:8b", "rnj-1:8b"])
+            self.assertEqual(result.requested_model, "rnj-1:8b")
+            self.assertEqual(result.effective_model, "rnj-1:8b")
+            self.assertEqual(result.provider_events[0]["type"], "model_fallback")
+            self.assertEqual(result.provider_events[0]["failed_model"], "compatible-rnj:8b")
+            self.assertIn("GGML_ASSERT", result.fallback_reason)
+
     async def test_compatibility_never_substitutes_after_partial_stream_output(self):
         from pathlib import Path
         import tempfile
@@ -987,7 +1041,7 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
                     super().__init__("http://localhost:11434", compatibility=layer)
                     self.calls = []
 
-                async def list_models(self):
+                async def _live_models(self):
                     return [
                         {"name": "partial:8b", "digest": "sha256:" + "7" * 64},
                         {"name": "base-coder:1b", "digest": "sha256:" + "8" * 64},
@@ -1007,6 +1061,96 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(transport.calls, ["partial:8b"])
             self.assertEqual([event["type"] for event in events], ["content"])
             self.assertTrue(events[0]["text"])
+
+    async def test_compatibility_digest_drift_during_stream_does_not_persist_evidence(self):
+        from pathlib import Path
+        import tempfile
+        from web_app.core.native_ollama import NativeOllamaTransport
+        from web_app.model_compatibility import ModelCompatibilityLayer
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            policy = root / "policy.json"
+            policy.write_text(json.dumps({
+                "schema_version": 1,
+                "base_fallback_order": [],
+                "models": {},
+            }), encoding="utf-8")
+            layer = ModelCompatibilityLayer.load(policy, root / "state.json")
+
+            class DriftingTransport(NativeOllamaTransport):
+                def __init__(self):
+                    super().__init__("http://localhost:11434", compatibility=layer)
+                    self.list_calls = 0
+
+                async def _live_models(self):
+                    self.list_calls += 1
+                    digest_character = "a" if self.list_calls == 1 else "b"
+                    return [{
+                        "name": "new-coder:latest",
+                        "digest": "sha256:" + digest_character * 64,
+                    }]
+
+                async def _stream_request(self, _path, _payload):
+                    yield json.dumps({
+                        "message": {"content": "answer"},
+                        "done": True,
+                    }).encode()
+
+            transport = DriftingTransport()
+            events = [
+                event async for event in transport.stream_chat("new-coder:latest", "hello")
+            ]
+
+            self.assertEqual(transport.list_calls, 2)
+            self.assertFalse(layer.state_path.exists())
+            self.assertTrue(any(
+                event.get("type") == "compatibility_evidence_skipped"
+                and event.get("reason") == "model_digest_changed_or_unavailable"
+                for event in events[-1]["result"].provider_events
+            ))
+
+    async def test_compatibility_digest_drift_during_stream_failure_does_not_quarantine(self):
+        from pathlib import Path
+        import tempfile
+        from web_app.core.native_ollama import NativeOllamaTransport
+        from web_app.model_compatibility import ModelCompatibilityLayer
+        from web_app.ollama_service import OllamaUnavailableError
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            policy = root / "policy.json"
+            policy.write_text(json.dumps({
+                "schema_version": 1,
+                "base_fallback_order": [],
+                "models": {},
+            }), encoding="utf-8")
+            layer = ModelCompatibilityLayer.load(policy, root / "state.json")
+
+            class DriftingFailureTransport(NativeOllamaTransport):
+                def __init__(self):
+                    super().__init__("http://localhost:11434", compatibility=layer)
+                    self.list_calls = 0
+
+                async def _live_models(self):
+                    self.list_calls += 1
+                    digest_character = "c" if self.list_calls == 1 else "d"
+                    return [{
+                        "name": "broken:latest",
+                        "digest": "sha256:" + digest_character * 64,
+                    }]
+
+                async def _stream_request(self, _path, _payload):
+                    yield json.dumps({
+                        "error": "llama-server process has terminated",
+                    }).encode()
+
+            transport = DriftingFailureTransport()
+            with self.assertRaises(OllamaUnavailableError):
+                _ = [event async for event in transport.stream_chat("broken:latest", "hello")]
+
+            self.assertEqual(transport.list_calls, 2)
+            self.assertFalse(layer.state_path.exists())
 
 if __name__ == "__main__":
     unittest.main()

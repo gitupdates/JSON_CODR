@@ -47,17 +47,41 @@ class NativeOllamaTransport:
         except OllamaUnavailableError:
             return {"ollama": False}
 
-    async def list_models(self) -> list[dict]:
+    async def _live_models(self) -> list[dict]:
         payload = await self._json_request("/api/tags")
         models = payload.get("models", [])
         if not isinstance(models, list):
             raise ModelOutputError("Ollama returned a malformed model list")
         return [item for item in models if isinstance(item, dict)]
 
+    async def list_models(self) -> list[dict]:
+        models = await self._live_models()
+        if self.compatibility is not None:
+            return self.compatibility.inventory((), models)
+        return models
+
+    async def _stable_compatibility_digest(self, model: str, live: dict[str, dict]) -> str:
+        if self.compatibility is None:
+            return ""
+        before = self.compatibility.digest(live.get(model))
+        if not before:
+            return ""
+        try:
+            refreshed_records = await self._live_models()
+        except (OllamaUnavailableError, ModelOutputError):
+            return ""
+        refreshed = {
+            str(item.get("model") or item.get("name")): item
+            for item in refreshed_records
+            if isinstance(item, dict) and (item.get("model") or item.get("name"))
+        }
+        after = self.compatibility.digest(refreshed.get(model))
+        return before if before == after else ""
+
     async def _verify_reviewed_model_digest(self, model: str) -> str | None:
         if self.model_policy is None or self.model_policy.reviewed_model(model) is None:
             return None
-        return self.model_policy.require_installed_digest(model, await self.list_models())
+        return self.model_policy.require_installed_digest(model, await self._live_models())
 
     async def json_chat(self, model: str, prompt: str, schema: dict) -> str:
         await self._verify_reviewed_model_digest(model)
@@ -136,7 +160,7 @@ class NativeOllamaTransport:
                 async for event in stream:
                     yield event
             return
-        live_records = await self.list_models()
+        live_records = await self._live_models()
         live = {
             str(item.get("model") or item.get("name")): item
             for item in live_records
@@ -165,7 +189,7 @@ class NativeOllamaTransport:
                             if result is not None:
                                 result.requested_model = model
                                 result.effective_model = candidate
-                                if candidate != model:
+                                if failures or candidate != model:
                                     if failures:
                                         failed_model, failure = failures[-1]
                                         reason = str(failure)
@@ -187,22 +211,32 @@ class NativeOllamaTransport:
                                     for item in result.provider_events
                                 )
                                 profile = "reasoning" if public_reasoning and not degraded else "base"
-                                self.compatibility.record_success(
-                                    candidate,
-                                    self.compatibility.digest(live.get(candidate)),
-                                    profile,
+                                evidence_digest = await self._stable_compatibility_digest(
+                                    candidate, live
                                 )
+                                if evidence_digest:
+                                    self.compatibility.record_success(
+                                        candidate, evidence_digest, profile
+                                    )
+                                else:
+                                    result.provider_events.append({
+                                        "type": "compatibility_evidence_skipped",
+                                        "model": candidate,
+                                        "reason": "model_digest_changed_or_unavailable",
+                                    })
                         yield event
                 return
             except (OllamaUnavailableError, ModelOutputError) as error:
                 if emitted_usable_output:
                     raise
                 failures.append((candidate, error))
-                self.compatibility.record_failure(
-                    candidate,
-                    self.compatibility.digest(live.get(candidate)),
-                    error,
-                )
+                evidence_digest = await self._stable_compatibility_digest(candidate, live)
+                if evidence_digest:
+                    self.compatibility.record_failure(
+                        candidate,
+                        evidence_digest,
+                        error,
+                    )
                 if candidate != candidates[-1]:
                     yield {
                         "type": "warning",
