@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import aclosing
 from typing import Any, Callable, Dict, List, Optional
 
 import ollama
@@ -6,6 +7,7 @@ from pydantic import ValidationError
 
 from cli import StructuredCLIResponse, load_config, parse_response_content
 from web_app.models import ChatResult, ConversionBundle, GpuProfileSettings, ReasoningEntry, ReasoningTrace
+from web_app.model_compatibility import ModelCompatibilityLayer
 from web_app.reasoning import ReasoningNormalizer
 
 
@@ -34,9 +36,13 @@ class OllamaService:
         self.client = client or ollama.AsyncClient(host=self.config["host"])
         self.timeout_seconds = timeout_seconds
         self.optimization_provider = optimization_provider or (lambda model: GpuProfileSettings())
+        self.compatibility: ModelCompatibilityLayer | None = None
 
     def set_optimization_provider(self, provider: Callable[[str], GpuProfileSettings]) -> None:
         self.optimization_provider = provider
+
+    def set_compatibility_layer(self, compatibility: ModelCompatibilityLayer) -> None:
+        self.compatibility = compatibility
 
     async def _chat_with_optimization(self, model: str, request: dict):
         options = self.optimization_provider(model).ollama_options()
@@ -73,6 +79,8 @@ class OllamaService:
 
     async def list_models(self) -> List[dict]:
         live = await self._live_models()
+        if self.compatibility is not None:
+            return self.compatibility.inventory(self.config["jury_models"], live)
         result = []
         for name in self.config["jury_models"]:
             item = live.get(name)
@@ -213,9 +221,11 @@ class OllamaService:
         if requested in configured:
             return requested
         matches = [name for name in configured if requested.lower() in name.lower()]
-        if len(matches) != 1:
-            raise ValueError("Unknown or ambiguous model")
-        return matches[0]
+        if len(matches) == 1:
+            return matches[0]
+        if ":" in requested and not any(character.isspace() for character in requested):
+            return requested
+        raise ValueError("Unknown or ambiguous model")
 
     async def chat(
         self,
@@ -224,10 +234,74 @@ class OllamaService:
         images: Optional[List[Any]] = None,
         allow_repair: bool = True,
     ) -> ChatResult:
-        resolved = self._resolve(model)
+        requested = self._resolve(model)
         live = await self._live_models()
-        if resolved not in live:
+        if self.compatibility is not None:
+            candidates = self.compatibility.candidates(requested, live)
+        else:
+            candidates = (requested,) if requested in live else ()
+        if not candidates:
             raise OllamaUnavailableError("Model is not installed")
+        failures: list[tuple[str, BaseException]] = []
+        for candidate in candidates:
+            try:
+                result = await self._chat_candidate(
+                    candidate,
+                    prompt,
+                    images=images,
+                    allow_repair=allow_repair,
+                )
+            except (OllamaUnavailableError, ModelOutputError) as error:
+                failures.append((candidate, error))
+                if self.compatibility is not None:
+                    self.compatibility.record_failure(
+                        candidate,
+                        self.compatibility.digest(live.get(candidate)),
+                        error,
+                    )
+                continue
+            if self.compatibility is not None:
+                profile = (
+                    "base"
+                    if any(event.get("type") == "compatibility_base_mode" for event in result.provider_events)
+                    else "structured"
+                )
+                self.compatibility.record_success(
+                    candidate,
+                    self.compatibility.digest(live.get(candidate)),
+                    profile,
+                )
+            result.requested_model = requested
+            result.effective_model = candidate
+            if candidate != requested:
+                if failures:
+                    failed_model, failure = failures[-1]
+                    reason = str(failure)
+                    event_type = "model_fallback"
+                else:
+                    failed_model = requested
+                    reason = str(self.compatibility.model_rules.get(requested, {}).get("reason", "")) if self.compatibility else ""
+                    event_type = "model_alternate"
+                result.fallback_reason = reason or None
+                result.provider_events.insert(0, {
+                    "type": event_type,
+                    "requested_model": requested,
+                    "failed_model": failed_model,
+                    "effective_model": candidate,
+                    "reason": reason,
+                })
+            return result
+        if failures:
+            raise failures[-1][1]
+        raise OllamaUnavailableError("No compatible local model is available")
+
+    async def _chat_candidate(
+        self,
+        resolved: str,
+        prompt: str,
+        images: Optional[List[Any]] = None,
+        allow_repair: bool = True,
+    ) -> ChatResult:
         request = {
             "model": resolved,
             "messages": [{"role": "user", "content": prompt, "images": images or None}],
@@ -238,7 +312,37 @@ class OllamaService:
         except asyncio.TimeoutError as error:
             raise ModelTimeoutError("Model request timed out") from error
         except Exception as error:
-            raise OllamaUnavailableError("Ollama request failed") from error
+            classification = self.compatibility.classify_failure(error) if self.compatibility else "unknown"
+            if classification in {"incompatible", "transient"}:
+                raise OllamaUnavailableError(f"Ollama request failed: {error}") from error
+            base_request = {
+                "model": resolved,
+                "messages": request["messages"],
+                "think": False,
+            }
+            try:
+                response = await self._chat_with_optimization(resolved, base_request)
+            except asyncio.TimeoutError as base_error:
+                raise ModelTimeoutError("Model request timed out") from base_error
+            except Exception as base_error:
+                raise OllamaUnavailableError(f"Ollama request failed: {base_error}") from base_error
+            raw = response.message.content if hasattr(response, "message") else response["message"]["content"]
+            plain = str(raw).strip()
+            if not plain:
+                raise ModelOutputError("Model returned no answer content")
+            summary = next((line.strip() for line in plain.splitlines() if line.strip()), "Model response")[:240]
+            return ChatResult(
+                model=resolved,
+                status="success",
+                summary=summary,
+                content=plain,
+                error="compatibility_base_mode",
+                provider_events=[{
+                    "type": "compatibility_base_mode",
+                    "initial_error": f"{type(error).__name__}: {error}",
+                    "effective_model": resolved,
+                }],
+            )
         try:
             raw = response.message.content if hasattr(response, "message") else response["message"]["content"]
             parsed = parse_response_content(raw)
@@ -327,10 +431,85 @@ class OllamaService:
         images: Optional[List[Any]] = None,
         public_reasoning: bool = False,
     ):
-        resolved = self._resolve(model)
+        requested = self._resolve(model)
         live = await self._live_models()
-        if resolved not in live:
+        if self.compatibility is not None:
+            candidates = self.compatibility.candidates(requested, live)
+        else:
+            candidates = (requested,) if requested in live else ()
+        if not candidates:
             raise OllamaUnavailableError("Model is not installed")
+        failures: list[tuple[str, BaseException]] = []
+        for candidate in candidates:
+            emitted_usable_output = False
+            try:
+                stream = self._stream_chat_candidate(
+                    candidate,
+                    prompt,
+                    images=images,
+                    public_reasoning=public_reasoning,
+                )
+                async with aclosing(stream):
+                    async for event in stream:
+                        if event.get("type") in {"content", "reasoning"} and event.get("text"):
+                            emitted_usable_output = True
+                        if event.get("type") == "completed":
+                            result = event.get("result")
+                            if result is not None:
+                                result.requested_model = requested
+                                result.effective_model = candidate
+                                if candidate != requested:
+                                    if failures:
+                                        failed_model, failure = failures[-1]
+                                        reason = str(failure)
+                                        event_type = "model_fallback"
+                                    else:
+                                        failed_model = requested
+                                        reason = str(self.compatibility.model_rules.get(requested, {}).get("reason", "")) if self.compatibility else ""
+                                        event_type = "model_alternate"
+                                    result.fallback_reason = reason or None
+                                    result.provider_events.insert(0, {
+                                        "type": event_type,
+                                        "requested_model": requested,
+                                        "failed_model": failed_model,
+                                        "effective_model": candidate,
+                                        "reason": reason,
+                                    })
+                                if self.compatibility is not None:
+                                    profile = "reasoning" if public_reasoning else "base"
+                                    self.compatibility.record_success(
+                                        candidate,
+                                        self.compatibility.digest(live.get(candidate)),
+                                        profile,
+                                    )
+                        yield event
+                return
+            except (OllamaUnavailableError, ModelOutputError) as error:
+                if emitted_usable_output:
+                    raise
+                failures.append((candidate, error))
+                if self.compatibility is not None:
+                    self.compatibility.record_failure(
+                        candidate,
+                        self.compatibility.digest(live.get(candidate)),
+                        error,
+                    )
+                if candidate != candidates[-1]:
+                    yield {
+                        "type": "warning",
+                        "text": f"{candidate} is incompatible; retrying with a reviewed local fallback.",
+                    }
+        if failures:
+            raise failures[-1][1]
+        raise OllamaUnavailableError("No compatible local model is available")
+
+    async def _stream_chat_candidate(
+        self,
+        resolved: str,
+        prompt: str,
+        images: Optional[List[Any]] = None,
+        public_reasoning: bool = False,
+    ):
         messages = []
         if public_reasoning:
             messages.append({
@@ -386,7 +565,7 @@ class OllamaService:
         except (ModelTimeoutError, ModelOutputError, OllamaUnavailableError, ValueError):
             raise
         except Exception as error:
-            raise OllamaUnavailableError("Ollama request failed") from error
+            raise OllamaUnavailableError(f"Ollama request failed: {error}") from error
         content = "".join(content_parts).strip()
         if not content:
             raise ModelOutputError("Model returned no answer content")

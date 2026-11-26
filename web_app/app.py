@@ -110,6 +110,7 @@ from web_app.ollama_service import (
     OllamaService,
     OllamaUnavailableError,
 )
+from web_app.model_compatibility import ModelCompatibilityLayer
 from web_app.workspace import InvalidSessionId, WorkspaceService, default_data_root
 from web_app.terminal import TerminalService
 from web_app.skills import DuplicateSkillPack, GithubSkillService, SkillConverterService, SkillDiscoveryService, SkillLibraryService
@@ -240,6 +241,14 @@ def create_app(
 ) -> FastAPI:
     application = FastAPI(title="JSON_CODR", version=APP_VERSION)
     workspace = workspace or WorkspaceService(default_data_root())
+    compatibility = ModelCompatibilityLayer.load(
+        Path(__file__).resolve().parent.parent / "config" / "model-compatibility.json",
+        workspace.data_root / "models" / "compatibility-state.json",
+    )
+    set_compatibility = getattr(service, "set_compatibility_layer", None)
+    if callable(set_compatibility):
+        set_compatibility(compatibility)
+    application.state.model_compatibility = compatibility
     identity = IdentityService(workspace.data_root)
     application.state.identity = identity
 
@@ -582,7 +591,11 @@ def create_app(
             )
             native_config = load_config()
             inference_backend = (
-                NativeOllamaTransport(str(native_config["host"]), model_policy=model_policy)
+                NativeOllamaTransport(
+                    str(native_config["host"]),
+                    model_policy=model_policy,
+                    compatibility=compatibility,
+                )
                 if isinstance(service, OllamaService)
                 else (inference_router or service)
             )

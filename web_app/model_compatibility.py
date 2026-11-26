@@ -183,8 +183,11 @@ class ModelCompatibilityLayer:
         live: Mapping[str, Mapping[str, object]] | Sequence[Mapping[str, object]],
     ) -> tuple[str, ...]:
         available = self._live_by_name(live)
+        specific_available = [name for name in self._specific_names(requested) if name in available]
+        if not specific_available:
+            return ()
         ordered: list[str] = []
-        for name in (*self._specific_names(requested), *self.base_fallback_order):
+        for name in (*specific_available, *self.base_fallback_order):
             item = available.get(name)
             if item is None or name in ordered or self._blocked(name, item):
                 continue

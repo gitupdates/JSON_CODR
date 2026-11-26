@@ -143,6 +143,9 @@ class DestructiveConfirmationRequest(ActionApprovalRequest):
 
 class ChatResult(BaseModel):
     model: str
+    requested_model: Optional[str] = None
+    effective_model: Optional[str] = None
+    fallback_reason: Optional[str] = None
     status: str
     summary: str
     content: str

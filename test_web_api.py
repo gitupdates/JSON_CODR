@@ -1961,5 +1961,122 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 502)
 
 
+class OllamaCompatibilityIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        root = Path(self.temporary.name)
+        policy = root / "model-compatibility.json"
+        policy.write_text(json.dumps({
+            "schema_version": 1,
+            "base_fallback_order": ["base-coder:1b"],
+            "models": {
+                "rnj-1:8b": {
+                    "alternates": ["compatible-rnj:8b"],
+                    "prefer_alternate": True,
+                    "reason": "Use reviewed compatible artifact.",
+                },
+            },
+        }), encoding="utf-8")
+        from web_app.model_compatibility import ModelCompatibilityLayer
+        self.compatibility = ModelCompatibilityLayer.load(policy, root / "state.json")
+
+    async def test_unconfigured_exact_model_is_discovered_and_base_mode_recovers_response(self):
+        class CompatibilityClient:
+            def __init__(self):
+                self.requests = []
+
+            async def list(self):
+                return {"models": [
+                    {"name": "new-coder:latest", "digest": "sha256:" + "1" * 64, "details": {}},
+                    {"name": "base-coder:1b", "digest": "sha256:" + "2" * 64, "details": {}},
+                ]}
+
+            async def chat(self, **request):
+                self.requests.append(request)
+                if "format" in request:
+                    raise RuntimeError("model does not support format")
+                return {"message": {"content": "plain compatible answer"}}
+
+        client = CompatibilityClient()
+        service = OllamaService(client=client)
+        service.set_compatibility_layer(self.compatibility)
+
+        models = await service.list_models()
+        result = await service.chat("new-coder:latest", "hello")
+
+        discovered = next(item for item in models if item["name"] == "new-coder:latest")
+        self.assertFalse(discovered["configured"])
+        self.assertEqual(["format" in item for item in client.requests], [True, False])
+        self.assertEqual(result.model, "new-coder:latest")
+        self.assertEqual(result.content, "plain compatible answer")
+        self.assertEqual(result.provider_events[0]["type"], "compatibility_base_mode")
+        refreshed = await service.list_models()
+        self.assertTrue(next(item for item in refreshed if item["name"] == "new-coder:latest")["runnable"])
+
+    async def test_loader_failure_quarantines_requested_digest_and_uses_reviewed_baseline(self):
+        class FallbackClient:
+            def __init__(self):
+                self.calls = []
+
+            async def list(self):
+                return {"models": [
+                    {"name": "rnj-1:8b", "digest": "sha256:" + "3" * 64, "details": {}},
+                    {"name": "base-coder:1b", "digest": "sha256:" + "4" * 64, "details": {}},
+                ]}
+
+            async def chat(self, **request):
+                self.calls.append(request["model"])
+                if request["model"] == "rnj-1:8b":
+                    raise RuntimeError("GGML_ASSERT(hparams.is_swa_any()) failed")
+                return {"message": {"content": json.dumps({
+                    "status": "success", "summary": "Recovered", "content": "baseline answer"
+                })}}
+
+        client = FallbackClient()
+        service = OllamaService(client=client)
+        service.set_compatibility_layer(self.compatibility)
+
+        result = await service.chat("rnj-1:8b", "hello")
+
+        self.assertEqual(client.calls, ["rnj-1:8b", "base-coder:1b"])
+        self.assertEqual(result.model, "base-coder:1b")
+        self.assertEqual(result.requested_model, "rnj-1:8b")
+        self.assertEqual(result.effective_model, "base-coder:1b")
+        self.assertIn("GGML_ASSERT", result.fallback_reason)
+        self.assertEqual(result.content, "baseline answer")
+        fallback = result.provider_events[0]
+        self.assertEqual(fallback["type"], "model_fallback")
+        self.assertEqual(fallback["requested_model"], "rnj-1:8b")
+        self.assertEqual(fallback["effective_model"], "base-coder:1b")
+        models = await service.list_models()
+        rnj = next(item for item in models if item["name"] == "rnj-1:8b")
+        self.assertFalse(rnj["runnable"])
+        self.assertEqual(rnj["compatibility_status"], "quarantined")
+
+    async def test_missing_exact_model_is_not_silently_replaced_by_baseline(self):
+        class MissingClient:
+            def __init__(self):
+                self.chat_calls = 0
+
+            async def list(self):
+                return {"models": [
+                    {"name": "base-coder:1b", "digest": "sha256:" + "9" * 64, "details": {}},
+                ]}
+
+            async def chat(self, **_request):
+                self.chat_calls += 1
+                raise AssertionError("missing requested models must not invoke a fallback")
+
+        client = MissingClient()
+        service = OllamaService(client=client)
+        service.set_compatibility_layer(self.compatibility)
+
+        with self.assertRaisesRegex(OllamaUnavailableError, "Model is not installed"):
+            await service.chat("missing-model:8b", "hello")
+
+        self.assertEqual(client.chat_calls, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

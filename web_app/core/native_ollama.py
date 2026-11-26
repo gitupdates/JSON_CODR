@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from web_app.models import ChatResult, ReasoningEntry, ReasoningTrace
+from web_app.model_compatibility import ModelCompatibilityLayer
 from web_app.core.model_policy import ModelPolicy
 from web_app.inference.protocol import InferenceEvent, InferenceFinishReason, InferenceRequest
 from web_app.ollama_service import ModelOutputError, ModelTimeoutError, OllamaUnavailableError
@@ -27,6 +28,7 @@ class NativeOllamaTransport:
         timeout_seconds: int = 180,
         *,
         model_policy: ModelPolicy | None = None,
+        compatibility: ModelCompatibilityLayer | None = None,
     ) -> None:
         parsed = urlparse(endpoint)
         if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
@@ -36,6 +38,7 @@ class NativeOllamaTransport:
         self.endpoint = endpoint.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.model_policy = model_policy
+        self.compatibility = compatibility
 
     async def health(self) -> dict[str, bool]:
         try:
@@ -114,6 +117,98 @@ class NativeOllamaTransport:
             return False
 
     async def stream_chat(
+        self,
+        model: str,
+        prompt: str,
+        images: list[Path] | tuple[Path, ...] = (),
+        public_reasoning: bool = False,
+        model_options: dict[str, int | float] | None = None,
+    ):
+        if self.compatibility is None:
+            stream = self._stream_chat_single(
+                model,
+                prompt,
+                images=images,
+                public_reasoning=public_reasoning,
+                model_options=model_options,
+            )
+            async with aclosing(stream):
+                async for event in stream:
+                    yield event
+            return
+        live_records = await self.list_models()
+        live = {
+            str(item.get("model") or item.get("name")): item
+            for item in live_records
+            if isinstance(item, dict) and (item.get("model") or item.get("name"))
+        }
+        candidates = self.compatibility.candidates(model, live)
+        if not candidates:
+            raise OllamaUnavailableError("Model is not installed")
+        failures: list[tuple[str, BaseException]] = []
+        for candidate in candidates:
+            emitted_usable_output = False
+            try:
+                stream = self._stream_chat_single(
+                    candidate,
+                    prompt,
+                    images=images,
+                    public_reasoning=public_reasoning,
+                    model_options=model_options,
+                )
+                async with aclosing(stream):
+                    async for event in stream:
+                        if event.get("type") in {"content", "reasoning"} and event.get("text"):
+                            emitted_usable_output = True
+                        if event.get("type") == "completed":
+                            result = event.get("result")
+                            if result is not None:
+                                result.requested_model = model
+                                result.effective_model = candidate
+                                if candidate != model:
+                                    if failures:
+                                        failed_model, failure = failures[-1]
+                                        reason = str(failure)
+                                        event_type = "model_fallback"
+                                    else:
+                                        failed_model = model
+                                        reason = str(self.compatibility.model_rules.get(model, {}).get("reason", ""))
+                                        event_type = "model_alternate"
+                                    result.fallback_reason = reason or None
+                                    result.provider_events.insert(0, {
+                                        "type": event_type,
+                                        "requested_model": model,
+                                        "failed_model": failed_model,
+                                        "effective_model": candidate,
+                                        "reason": reason,
+                                    })
+                                profile = "reasoning" if public_reasoning else "base"
+                                self.compatibility.record_success(
+                                    candidate,
+                                    self.compatibility.digest(live.get(candidate)),
+                                    profile,
+                                )
+                        yield event
+                return
+            except (OllamaUnavailableError, ModelOutputError) as error:
+                if emitted_usable_output:
+                    raise
+                failures.append((candidate, error))
+                self.compatibility.record_failure(
+                    candidate,
+                    self.compatibility.digest(live.get(candidate)),
+                    error,
+                )
+                if candidate != candidates[-1]:
+                    yield {
+                        "type": "warning",
+                        "text": f"{candidate} is incompatible; retrying with a reviewed local fallback.",
+                    }
+        if failures:
+            raise failures[-1][1]
+        raise OllamaUnavailableError("No compatible local model is available")
+
+    async def _stream_chat_single(
         self,
         model: str,
         prompt: str,

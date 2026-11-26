@@ -880,5 +880,95 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, '{"done":false}')
         self.assertEqual(calls, 2)
 
+    async def test_compatibility_falls_back_before_output_and_reports_effective_model(self):
+        from pathlib import Path
+        import tempfile
+        from web_app.core.native_ollama import NativeOllamaTransport
+        from web_app.model_compatibility import ModelCompatibilityLayer
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            policy = root / "policy.json"
+            policy.write_text(json.dumps({
+                "schema_version": 1,
+                "base_fallback_order": ["base-coder:1b"],
+                "models": {},
+            }), encoding="utf-8")
+            layer = ModelCompatibilityLayer.load(policy, root / "state.json")
+
+            class CompatibleTransport(NativeOllamaTransport):
+                def __init__(self):
+                    super().__init__("http://localhost:11434", compatibility=layer)
+                    self.calls = []
+
+                async def list_models(self):
+                    return [
+                        {"name": "broken:8b", "digest": "sha256:" + "5" * 64},
+                        {"name": "base-coder:1b", "digest": "sha256:" + "6" * 64},
+                    ]
+
+                async def _stream_request(self, _path, payload):
+                    self.calls.append(payload["model"])
+                    if payload["model"] == "broken:8b":
+                        yield json.dumps({"error": "llama-server process has terminated"}).encode()
+                    else:
+                        yield json.dumps({"message": {"content": "fallback answer"}, "done": False}).encode()
+                        yield json.dumps({"message": {"content": ""}, "done": True}).encode()
+
+            transport = CompatibleTransport()
+            events = [event async for event in transport.stream_chat("broken:8b", "hello")]
+
+            self.assertEqual(transport.calls, ["broken:8b", "base-coder:1b"])
+            self.assertEqual(events[0]["type"], "warning")
+            self.assertEqual(events[-1]["result"].model, "base-coder:1b")
+            self.assertEqual(events[-1]["result"].requested_model, "broken:8b")
+            self.assertEqual(events[-1]["result"].effective_model, "base-coder:1b")
+            fallback = events[-1]["result"].provider_events[0]
+            self.assertEqual(fallback["requested_model"], "broken:8b")
+            self.assertEqual(fallback["effective_model"], "base-coder:1b")
+
+    async def test_compatibility_never_substitutes_after_partial_stream_output(self):
+        from pathlib import Path
+        import tempfile
+        from web_app.core.native_ollama import NativeOllamaTransport
+        from web_app.model_compatibility import ModelCompatibilityLayer
+        from web_app.ollama_service import OllamaUnavailableError
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            policy = root / "policy.json"
+            policy.write_text(json.dumps({
+                "schema_version": 1,
+                "base_fallback_order": ["base-coder:1b"],
+                "models": {},
+            }), encoding="utf-8")
+            layer = ModelCompatibilityLayer.load(policy, root / "state.json")
+
+            class PartialTransport(NativeOllamaTransport):
+                def __init__(self):
+                    super().__init__("http://localhost:11434", compatibility=layer)
+                    self.calls = []
+
+                async def list_models(self):
+                    return [
+                        {"name": "partial:8b", "digest": "sha256:" + "7" * 64},
+                        {"name": "base-coder:1b", "digest": "sha256:" + "8" * 64},
+                    ]
+
+                async def _stream_request(self, _path, payload):
+                    self.calls.append(payload["model"])
+                    yield json.dumps({"message": {"content": "partial"}, "done": False}).encode()
+                    yield json.dumps({"error": "llama-server process has terminated"}).encode()
+
+            transport = PartialTransport()
+            events = []
+            with self.assertRaises(OllamaUnavailableError):
+                async for event in transport.stream_chat("partial:8b", "hello"):
+                    events.append(event)
+
+            self.assertEqual(transport.calls, ["partial:8b"])
+            self.assertEqual([event["type"] for event in events], ["content"])
+            self.assertTrue(events[0]["text"])
+
 if __name__ == "__main__":
     unittest.main()

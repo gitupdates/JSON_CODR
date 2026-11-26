@@ -1,4 +1,7 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 import ollama
 
@@ -128,6 +131,63 @@ class OllamaPublicReasoningTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([call.get("think") for call in client.calls], [True, None])
         self.assertEqual(events[-1]["result"].content, "Fallback answer.")
+
+    async def test_stream_compatibility_falls_back_before_any_output(self):
+        from web_app.model_compatibility import ModelCompatibilityLayer
+
+        class ErrorStream:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise ollama.ResponseError("GGML_ASSERT failed to load model", 500)
+
+        class ContentStream:
+            def __init__(self):
+                self.sent = False
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self.sent:
+                    raise StopAsyncIteration
+                self.sent = True
+                return {"message": {"content": "Fallback answer."}}
+
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+
+            async def list(self):
+                return {"models": [
+                    {"model": "broken:8b", "digest": "sha256:" + "a" * 64},
+                    {"model": "base:1b", "digest": "sha256:" + "b" * 64},
+                ]}
+
+            async def chat(self, **request):
+                self.calls.append(request["model"])
+                return ErrorStream() if request["model"] == "broken:8b" else ContentStream()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            policy = root / "policy.json"
+            policy.write_text(json.dumps({
+                "schema_version": 1,
+                "base_fallback_order": ["base:1b"],
+                "models": {},
+            }), encoding="utf-8")
+            compatibility = ModelCompatibilityLayer.load(policy, root / "state.json")
+            client = FakeClient()
+            service = OllamaService(client=client)
+            service.set_compatibility_layer(compatibility)
+
+            events = [event async for event in service.stream_chat("broken:8b", "Review")]
+
+        self.assertEqual(client.calls, ["broken:8b", "base:1b"])
+        self.assertEqual(events[0]["type"], "warning")
+        self.assertEqual(events[-1]["result"].requested_model, "broken:8b")
+        self.assertEqual(events[-1]["result"].effective_model, "base:1b")
 
 
 if __name__ == "__main__":
