@@ -1,3 +1,31 @@
+if (!window.JSONCodrHttpIdentity) {
+  window.JSONCodrHttpIdentity = (() => {
+    let primedToken = "";
+    const readCookie = (name) => {
+      const prefix = `${name}=`;
+      const item = document.cookie.split(";").map((value) => value.trim()).find((value) => value.startsWith(prefix));
+      return item ? decodeURIComponent(item.slice(prefix.length)) : "";
+    };
+    const csrfToken = () => readCookie("__Host-json_codr_csrf") || readCookie("json_codr_csrf");
+    const mutationHeaders = (headers = {}) => {
+      const token = primedToken || csrfToken();
+      return token ? { ...headers, "X-CSRF-Token": token } : { ...headers };
+    };
+    const websocketCsrfProtocol = () => {
+      const token = primedToken || csrfToken();
+      return token ? `json-codr-csrf.${token}` : "";
+    };
+    const prime = async () => {
+      const response = await fetch("/api/identity/bootstrap", { credentials: "same-origin" });
+      if (!response.ok) throw new Error("Unable to initialize request security");
+      const payload = await response.json();
+      primedToken = typeof payload.csrf_token === "string" ? payload.csrf_token : "";
+      return payload;
+    };
+    return { mutationHeaders, websocketCsrfProtocol, prime };
+  })();
+}
+
 const elements = {
   form: document.querySelector("#chat-form"),
   health: document.querySelector("#health-status"),
@@ -754,6 +782,7 @@ function selectSettingsSection(section, { focus = false } = {}) {
       ?.focus({ preventScroll: true });
   }
   if (section === "diagnostics") loadRuntimeDiagnostics();
+  if (section === "access") loadIdentityAccess().catch((error) => { elements.identityStatus.textContent = error.message; });
   if (section === "updates") {
     loadUpdateAdministration().catch((error) => { elements.updateStatus.textContent = error.message; });
   }
@@ -1150,7 +1179,10 @@ async function runTerminalCommand(command = null) {
 
 async function ensureSession() {
   if (!sessionId || !(await fetch(`/api/sessions/${sessionId}`)).ok) {
-    const session = await fetch("/api/sessions", { method: "POST" }).then((response) => response.json());
+    const session = await fetch("/api/sessions", {
+      method: "POST",
+      headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
+    }).then((response) => response.json());
     sessionId = session.id;
     localStorage.setItem("json_codr_session", sessionId);
   }
@@ -2935,6 +2967,10 @@ function identityCsrfToken() {
 
 async function loadIdentityAccess() {
   const bootstrap = await fetch("/api/identity/bootstrap").then((response) => response.json());
+  if (bootstrap.administrator_username &&
+      (!elements.identityUsername.value || elements.identityUsername.value === "Administrator")) {
+    elements.identityUsername.value = bootstrap.administrator_username;
+  }
   elements.identityDevelopmentWarning.hidden = !bootstrap.development_bypass?.enabled;
   const accountResponse = await fetch("/api/identity/account");
   const signedIn = accountResponse.ok;
@@ -3114,7 +3150,6 @@ async function loadUpdateAdministration() {
 for (const button of elements.settingsSectionButtons) {
   button.addEventListener("click", () => {
     selectSettingsSection(button.dataset.settingsSection, { focus: true });
-    if (button.dataset.settingsSection === "access") loadIdentityAccess().catch((error) => { elements.identityStatus.textContent = error.message; });
   });
 }
 
@@ -3524,10 +3559,14 @@ initializeXterm();
 elements.workspaceProjectRoot.value = localStorage.getItem("json_codr_workspace_project_root") || ".";
 window.addEventListener("beforeunload", persistTerminalSessions);
 restoreTerminalSessions().catch(() => localStorage.removeItem(TERMINAL_SESSIONS_KEY));
-loadApplication().then(() => queueSettingsLoad()).then(() => loadComponents()).catch((error) => showError(error.message));
-loadHardwareStatus().catch((error) => showError(error.message));
-loadAttachments().catch((error) => showError(error.message));
-loadSkillsets().catch((error) => showError(error.message));
+window.JSONCodrHttpIdentity.prime()
+  .then(async () => {
+    await loadApplication();
+    await queueSettingsLoad();
+    await loadComponents();
+    await Promise.all([loadHardwareStatus(), loadAttachments(), loadSkillsets()]);
+  })
+  .catch((error) => showError(error.message));
 
 let pendingComponentPlan = null;
 async function loadComponents() {

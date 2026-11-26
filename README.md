@@ -1,6 +1,6 @@
 # JSON_CODR
 
-JSON_CODR V1.4.4 is a localhost-only, unified project agent for local Ollama and hardware-optimized models.
+JSON_CODR V1.4.5 is a localhost-only, unified project agent for local Ollama and hardware-optimized models.
 
 ## Unified project workflow
 

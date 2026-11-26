@@ -56,6 +56,14 @@ class ModelCompatibilityLayerTests(unittest.TestCase):
             ("new-coder:latest", "qwen2.5-coder:3b", "qwen2.5-coder:0.5b"),
         )
 
+    def test_auto_selects_first_available_reviewed_model(self):
+        live = self.live("qwen2.5-coder:0.5b")
+
+        self.assertEqual(
+            self.layer.candidates("auto", live),
+            ("qwen2.5-coder:0.5b",),
+        )
+
     def test_quarantined_fallback_is_skipped_but_other_reviewed_fallback_remains(self):
         live = self.live("new-coder:latest", "qwen2.5-coder:3b", "qwen2.5-coder:0.5b")
         digest = live["qwen2.5-coder:3b"]["digest"]
@@ -168,6 +176,20 @@ class ModelCompatibilityLayerTests(unittest.TestCase):
             {"new-coder:latest": {"name": "new-coder:latest", "digest": canonical}},
         )[0]
         self.assertEqual(persisted["models"]["new-coder:latest"]["digest"], canonical)
+        self.assertTrue(record["runnable"])
+
+    def test_ollama_bare_digest_is_normalized_from_live_inventory(self):
+        bare = "a" * 64
+        canonical = "sha256:" + bare
+
+        self.layer.record_success("new-coder:latest", canonical, "base")
+
+        record = self.layer.inventory(
+            ["new-coder:latest"],
+            {"new-coder:latest": {"name": "new-coder:latest", "digest": bare}},
+        )[0]
+
+        self.assertEqual(record["digest"], canonical)
         self.assertTrue(record["runnable"])
 
     def test_invalid_live_digest_does_not_admit_stored_compatible_evidence(self):

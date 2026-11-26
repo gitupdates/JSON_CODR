@@ -279,7 +279,7 @@ assert.strictEqual(root.dataset.theme, "dark");
         bootstrap = '/static/ui_bootstrap.js?v=1.2.0'
         stylesheet = '/static/app.css?v=1.4.4'
         controller = '/static/ui_customization.js?v=1.3.2'
-        application = '/static/app.js?v=1.4.4'
+        application = '/static/app.js?v=1.4.9'
         self.assertIn(catalog, html)
         self.assertIn(bootstrap, html)
         self.assertIn(controller, html)

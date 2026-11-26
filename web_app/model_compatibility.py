@@ -41,14 +41,16 @@ _STATE_STATUSES = frozenset({
     "transient_error",
     "capability_limited",
 })
-_OLLAMA_DIGEST = re.compile(r"sha256:[0-9a-f]{64}", re.IGNORECASE)
+_OLLAMA_DIGEST = re.compile(r"(?:sha256:)?[0-9a-f]{64}", re.IGNORECASE)
 
 
 def _canonical_digest(value: object) -> str:
     if not isinstance(value, str):
         return ""
     candidate = value.strip().casefold()
-    return candidate if _OLLAMA_DIGEST.fullmatch(candidate) else ""
+    if not _OLLAMA_DIGEST.fullmatch(candidate):
+        return ""
+    return candidate if candidate.startswith("sha256:") else f"sha256:{candidate}"
 
 
 def is_model_runnable(record: Mapping[str, object]) -> bool:
@@ -219,6 +221,19 @@ class ModelCompatibilityLayer:
         available = self._live_by_name(live)
         if not self._state_valid:
             return (requested,) if requested in available else ()
+        if requested in {"", "auto"}:
+            ordered: list[str] = []
+            for name in (*self.base_fallback_order, *available):
+                item = available.get(name)
+                if (
+                    item is None
+                    or name in ordered
+                    or not self.digest(item)
+                    or self._blocked(name, item)
+                ):
+                    continue
+                ordered.append(name)
+            return tuple(ordered)
         specific_available = [name for name in self._specific_names(requested) if name in available]
         routable_specific = [
             name

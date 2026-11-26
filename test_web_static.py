@@ -85,6 +85,8 @@ class WebStaticTests(unittest.TestCase):
         self.assertIn('downloaded · ${verifiedRunnable} verified runnable · ${models.length} catalogued', javascript)
         self.assertIn("const compatibilityStatus =", javascript)
         self.assertIn("model.fallback_reason", javascript)
+        self.assertIn("window.JSONCodrHttpIdentity.prime()", javascript)
+        self.assertIn('headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" })', javascript)
 
     def test_disclosure_controller_keeps_only_the_active_tree_item_open(self):
         script = r'''
@@ -525,7 +527,7 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
     def test_chat_assets_use_current_patch_revision(self):
         html = self.client.get("/").text
         self.assertIn('/static/conversation_view.js?v=1.4.4', html)
-        self.assertIn('/static/app.js?v=1.4.4', html)
+        self.assertIn('/static/app.js?v=1.4.9', html)
 
     def test_runtime_observability_is_progressive_not_a_new_destination(self):
         html = self.client.get("/").text
@@ -549,8 +551,8 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
         self.assertNotIn("content-length", response.headers)
-        self.assertIn("V1.4.4", response.text)
-        self.assertIn('/static/app.js?v=1.4.4', response.text)
+        self.assertIn("V1.4.5", response.text)
+        self.assertIn('/static/app.js?v=1.4.9', response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -1074,7 +1076,7 @@ listeners.change().then(() => process.stdout.write(JSON.stringify({requests, pre
         self.assertIn("themeRevisionAtStart === themeSaveRevision", javascript)
         self.assertIn("skillsRevisionAtStart === skillsChangeRevision", javascript)
         self.assertIn("navigationRevisionAtStart === navigationChangeRevision", javascript)
-        self.assertIn("loadApplication().then(() => queueSettingsLoad())", javascript)
+        self.assertIn("await loadApplication()", javascript)
         self.assertIn('id="ui-mode" class="setting-select" aria-describedby="ui-mode-help"', html)
         self.assertIn('id="setting-skills-open" type="checkbox" disabled', html)
 
