@@ -524,8 +524,8 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
 
     def test_chat_assets_use_current_patch_revision(self):
         html = self.client.get("/").text
-        self.assertIn('/static/conversation_view.js?v=1.4.3', html)
-        self.assertIn('/static/app.js?v=1.4.3', html)
+        self.assertIn('/static/conversation_view.js?v=1.4.4', html)
+        self.assertIn('/static/app.js?v=1.4.4', html)
 
     def test_runtime_observability_is_progressive_not_a_new_destination(self):
         html = self.client.get("/").text
@@ -548,7 +548,9 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("V1.4.3", response.text)
+        self.assertNotIn("content-length", response.headers)
+        self.assertIn("V1.4.4", response.text)
+        self.assertIn('/static/app.js?v=1.4.4', response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(

@@ -907,7 +907,13 @@ def create_app(
 
     @application.get("/", include_in_schema=False)
     async def index():
-        return FileResponse(web_root / "index.html")
+        # Keep the shell chunked so local security filters can inject their own
+        # content without truncating the final deferred application scripts.
+        return StreamingResponse(
+            iter(((web_root / "index.html").read_bytes(),)),
+            media_type="text/html",
+            headers={"Cache-Control": "no-cache"},
+        )
 
     @application.get("/api/health")
     async def health(http_request: Request):
