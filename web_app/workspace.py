@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import shutil
 import stat
 import threading
 import uuid
@@ -35,6 +34,7 @@ class WorkspaceService:
         self.sessions_root.mkdir(parents=True, exist_ok=True)
         self._locks_guard = threading.RLock()
         self._session_locks: dict[str, threading.RLock] = {}
+        self._session_root_identities: dict[str, tuple[int, int]] = {}
 
     @contextmanager
     def session_lock(self, session_id: str):
@@ -79,7 +79,10 @@ class WorkspaceService:
             project_id=project_id,
         )
         with self.session_lock(record.id):
-            self._session_directory(record.id).mkdir()
+            directory = self._session_directory(record.id)
+            directory.mkdir()
+            details = directory.lstat()
+            self._session_root_identities[record.id] = (details.st_dev, details.st_ino)
             self.save_manifest(record)
         return record
     def get_session(self, session_id: str) -> SessionRecord:
@@ -103,10 +106,47 @@ class WorkspaceService:
             return record
     def delete_session(self, session_id: str) -> None:
         with self.session_lock(session_id):
-            directory = self._session_directory(session_id)
-            if not directory.is_dir():
+            self._validate_id(session_id)
+            directory = self.sessions_root / session_id
+            identity = self._session_root_identities.get(session_id)
+            removed = False
+            if directory.exists() or directory.is_symlink():
+                if self._is_reparse_point(directory):
+                    self._remove_tree_no_follow(directory)
+                    removed = True
+                elif identity is None or self._directory_identity(directory) == identity:
+                    self._remove_tree_no_follow(directory)
+                    removed = True
+            if identity is not None:
+                for candidate in list(self.sessions_root.iterdir()):
+                    if candidate.exists() and not self._is_reparse_point(candidate):
+                        if self._directory_identity(candidate) == identity:
+                            self._remove_tree_no_follow(candidate)
+                            removed = True
+            self._session_root_identities.pop(session_id, None)
+            if not removed:
                 raise KeyError(session_id)
-            shutil.rmtree(directory)
+
+    @staticmethod
+    def _directory_identity(path: Path) -> tuple[int, int]:
+        details = path.lstat()
+        return details.st_dev, details.st_ino
+
+    def _remove_tree_no_follow(self, path: Path) -> None:
+        if not path.exists() and not path.is_symlink():
+            return
+        if self._is_reparse_point(path):
+            try:
+                path.unlink()
+            except PermissionError:
+                path.rmdir()
+            return
+        if path.is_dir():
+            for child in path.iterdir():
+                self._remove_tree_no_follow(child)
+            path.rmdir()
+            return
+        path.unlink()
     def save_manifest(self, record: SessionRecord) -> None:
         with self.session_lock(record.id):
             directory = self._session_directory(record.id)

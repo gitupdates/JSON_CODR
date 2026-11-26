@@ -261,32 +261,126 @@ class ProjectSessionServiceTests(unittest.TestCase):
 
     def test_copied_file_fsync_failure_prevents_promotion_and_cleans_same_parent_staging(self):
         session = self._live_session()
-        real_open = os.open
         real_fsync = os.fsync
-        copied_file_descriptors = set()
+        real_destination = self.sessions._open_copy_destination
+        active_writable_descriptors = set()
+        observed_writable_descriptors = set()
 
-        def track_open(path, flags, *args, **kwargs):
-            descriptor = real_open(path, flags, *args, **kwargs)
-            candidate = Path(path)
-            if candidate.parent.name == "originals" and any(
-                part.startswith(".staging-") for part in candidate.parts
-            ):
-                copied_file_descriptors.add(descriptor)
-            return descriptor
+        @contextmanager
+        def track_writable_destination(destination):
+            with real_destination(destination) as writer:
+                descriptor = writer.fileno()
+                if destination.parent.name == "originals" and any(
+                    part.startswith(".staging-") for part in destination.parts
+                ):
+                    active_writable_descriptors.add(descriptor)
+                    observed_writable_descriptors.add(descriptor)
+                try:
+                    yield writer
+                finally:
+                    active_writable_descriptors.discard(descriptor)
 
         def fail_copied_file(descriptor):
-            if descriptor in copied_file_descriptors:
+            if descriptor in active_writable_descriptors:
                 raise OSError(errno.EIO, "copied file durability failure")
             return real_fsync(descriptor)
 
-        with patch("web_app.project_sessions.os.open", side_effect=track_open), patch(
+        with patch.object(
+            self.sessions, "_open_copy_destination", side_effect=track_writable_destination
+        ), patch(
             "web_app.project_sessions.os.fsync", side_effect=fail_copied_file
         ):
             with self.assertRaises(OSError):
                 self.sessions.save(session.id, self.project.project_id, "owner-1", "Fail", "fix", [])
-        self.assertTrue(copied_file_descriptors)
+        self.assertTrue(observed_writable_descriptors)
         self.assertEqual([], self.sessions.list(self.project.project_id, "owner-1"))
         self._assert_no_staging()
+
+    @unittest.skipUnless(os.name == "nt", "Windows transaction-root handle semantics")
+    def test_save_pins_staging_root_before_sanitized_manifest_write(self):
+        session = self._live_session()
+        external = self.root / "external-after-handle"
+        external.mkdir()
+
+        class SwapAtCopyEntry(ProjectSessionService):
+            swapped = False
+
+            def _copy_live_session(swap_self, record, destination):
+                swap_self.swapped = True
+                parked = destination.with_name(destination.name + ".parked")
+                destination.replace(parked)
+                os.symlink(external, destination, target_is_directory=True)
+                return super()._copy_live_session(record, destination)
+
+        service = SwapAtCopyEntry(self.workspace, self.registry)
+        sessions_root = service.project_directory(self.project.project_id) / "sessions"
+        try:
+            with self.assertRaises(OSError):
+                service.save(session.id, self.project.project_id, "owner-1", "Pinned", "fix", [])
+            self.assertTrue(service.swapped)
+            self.assertEqual([], list(external.iterdir()))
+            self.assertFalse(sessions_root.exists() and any(sessions_root.iterdir()))
+        finally:
+            if sessions_root.exists():
+                for entry in list(sessions_root.iterdir()):
+                    self.sessions._remove_tree_no_follow(entry)
+
+    @unittest.skipUnless(os.name == "nt", "Windows transaction-root handle semantics")
+    def test_save_pins_staging_root_during_snapshot_and_history_metadata_writes(self):
+        session = self._live_session()
+        external = self.root / "external-metadata"
+        external.mkdir()
+        real_write = ProjectSessionService._write_text
+        attacked = []
+
+        def swap_during_metadata(path, text):
+            if path.name == "snapshot.json" and not attacked:
+                attacked.append(path.parent)
+                parked = path.parent.with_name(path.parent.name + ".parked")
+                path.parent.replace(parked)
+                os.symlink(external, path.parent, target_is_directory=True)
+            return real_write(path, text)
+
+        sessions_root = self.sessions.project_directory(self.project.project_id) / "sessions"
+        try:
+            with patch.object(ProjectSessionService, "_write_text", side_effect=swap_during_metadata):
+                with self.assertRaises(OSError):
+                    self.sessions.save(session.id, self.project.project_id, "owner-1", "Metadata", "fix", [])
+            self.assertTrue(attacked)
+            self.assertEqual([], list(external.iterdir()))
+            self.assertFalse(sessions_root.exists() and any(sessions_root.iterdir()))
+        finally:
+            if sessions_root.exists():
+                for entry in list(sessions_root.iterdir()):
+                    self.sessions._remove_tree_no_follow(entry)
+
+    @unittest.skipUnless(os.name == "nt", "Windows transaction-root handle semantics")
+    def test_save_keeps_pinned_staging_identity_between_validation_and_promotion(self):
+        session = self._live_session()
+        external = self.root / "external-before-promotion"
+        external.mkdir()
+        real_fsync_tree = self.sessions._fsync_tree
+        attacked = []
+
+        def swap_after_validation(staging):
+            real_fsync_tree(staging)
+            attacked.append(staging)
+            parked = staging.with_name(staging.name + ".parked")
+            staging.replace(parked)
+            os.symlink(external, staging, target_is_directory=True)
+
+        sessions_root = self.sessions.project_directory(self.project.project_id) / "sessions"
+        try:
+            with patch.object(self.sessions, "_fsync_tree", side_effect=swap_after_validation):
+                with self.assertRaises(OSError):
+                    self.sessions.save(session.id, self.project.project_id, "owner-1", "Promote", "fix", [])
+            self.assertTrue(attacked)
+            self.assertEqual([], list(external.iterdir()))
+            self.assertFalse(sessions_root.exists() and any(sessions_root.iterdir()))
+        finally:
+            if sessions_root.exists():
+                for entry in list(sessions_root.iterdir()):
+                    self.sessions._remove_tree_no_follow(entry)
 
     def test_post_copy_stage_mismatch_rejects_promotion_and_cleans_staging(self):
         session = self._live_session()
@@ -409,7 +503,7 @@ class ProjectSessionServiceTests(unittest.TestCase):
                     yield
 
         swapping_save = DestinationSwappingService(self.workspace, self.registry)
-        with self.assertRaises(ValueError):
+        with self.assertRaises((OSError, ValueError)):
             swapping_save.save(session.id, self.project.project_id, "owner-1", "Swap", "fix", [])
         self.assertTrue(swapping_save.swapped)
         self.assertEqual([], list(external.iterdir()))
@@ -423,11 +517,107 @@ class ProjectSessionServiceTests(unittest.TestCase):
         swapping_restore = DestinationSwappingService(
             self.workspace, self.registry, restore_mode=True
         )
-        with self.assertRaises(ValueError):
+        with self.assertRaises((OSError, ValueError)):
             swapping_restore.restore(snapshot.id, self.project.project_id, "owner-1")
         self.assertTrue(swapping_restore.swapped)
         self.assertEqual([], list(external.iterdir()))
         self.assertEqual(before_sessions, {path.name for path in self.workspace.sessions_root.iterdir()})
+
+    @unittest.skipUnless(os.name == "nt", "Windows transaction-root handle semantics")
+    def test_restore_pins_target_root_through_validation_and_final_manifest_commit(self):
+        session = self._live_session()
+        snapshot = self.sessions.save(
+            session.id, self.project.project_id, "owner-1", "Restore pin", "fix", []
+        )
+        external = self.root / "external-restore-target"
+        external.mkdir()
+        sentinel = external / "sentinel.txt"
+        sentinel.write_text("untouched", encoding="utf-8")
+
+        for phase in ("validation", "manifest"):
+            with self.subTest(phase=phase):
+                before = {path.name for path in self.workspace.sessions_root.iterdir()}
+                attacked = []
+                real_validate = self.sessions._validate_restored_trees
+                real_save_manifest = self.workspace.save_manifest
+
+                def swap_target(target):
+                    attacked.append(target)
+                    parked = target.with_name(target.name + ".parked")
+                    target.replace(parked)
+                    os.symlink(external, target, target_is_directory=True)
+
+                def attack_after_validation(directory, expected):
+                    real_validate(directory, expected)
+                    swap_target(directory)
+
+                def attack_at_manifest(record):
+                    if record.restored_from_snapshot_id:
+                        swap_target(self.workspace.sessions_root / record.id)
+                    return real_save_manifest(record)
+
+                validate_patch = (
+                    patch.object(self.sessions, "_validate_restored_trees", side_effect=attack_after_validation)
+                    if phase == "validation"
+                    else patch.object(self.sessions, "_validate_restored_trees", wraps=real_validate)
+                )
+                manifest_patch = (
+                    patch.object(self.workspace, "save_manifest", side_effect=attack_at_manifest)
+                    if phase == "manifest"
+                    else patch.object(self.workspace, "save_manifest", wraps=real_save_manifest)
+                )
+                try:
+                    with validate_patch, manifest_patch:
+                        with self.assertRaises(OSError):
+                            self.sessions.restore(snapshot.id, self.project.project_id, "owner-1")
+                    self.assertTrue(attacked)
+                    self.assertEqual("untouched", sentinel.read_text(encoding="utf-8"))
+                    self.assertEqual(before, {path.name for path in self.workspace.sessions_root.iterdir()})
+                finally:
+                    for entry in list(self.workspace.sessions_root.iterdir()):
+                        if entry.name not in before:
+                            self.sessions._remove_tree_no_follow(entry)
+
+    def test_restore_rollback_removes_persistently_swapped_allocated_root_without_following_it(self):
+        session = self._live_session()
+        snapshot = self.sessions.save(
+            session.id, self.project.project_id, "owner-1", "Rollback", "fix", []
+        )
+        external = self.root / "external-persistent-restore"
+        external.mkdir()
+        sentinel = external / "sentinel.txt"
+        sentinel.write_text("external data", encoding="utf-8")
+        before = {path.name for path in self.workspace.sessions_root.iterdir()}
+        real_save_manifest = self.workspace.save_manifest
+        real_delete_session = self.workspace.delete_session
+        swapped = []
+
+        def fail_final_manifest(record):
+            if record.restored_from_snapshot_id:
+                raise OSError("final restored manifest commit failed")
+            return real_save_manifest(record)
+
+        def leave_swapped_root_for_rollback(session_id):
+            target = self.workspace.sessions_root / session_id
+            parked = target.with_name(target.name + ".parked")
+            target.replace(parked)
+            os.symlink(external, target, target_is_directory=True)
+            swapped.append((target, parked))
+            return real_delete_session(session_id)
+
+        try:
+            with patch.object(self.workspace, "save_manifest", side_effect=fail_final_manifest), patch.object(
+                self.workspace, "delete_session", side_effect=leave_swapped_root_for_rollback
+            ):
+                with self.assertRaisesRegex(OSError, "final restored manifest commit failed"):
+                    self.sessions.restore(snapshot.id, self.project.project_id, "owner-1")
+            self.assertTrue(swapped)
+            self.assertEqual("external data", sentinel.read_text(encoding="utf-8"))
+            self.assertEqual(before, {path.name for path in self.workspace.sessions_root.iterdir()})
+        finally:
+            for entry in list(self.workspace.sessions_root.iterdir()):
+                if entry.name not in before:
+                    self.sessions._remove_tree_no_follow(entry)
 
     def test_save_barrier_with_message_append_has_complete_before_or_after_snapshot(self):
         session = self._live_session()

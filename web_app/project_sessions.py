@@ -58,8 +58,25 @@ if os.name == "nt":
     _CLOSE_HANDLE = _KERNEL32.CloseHandle
     _CLOSE_HANDLE.argtypes = (wintypes.HANDLE,)
     _CLOSE_HANDLE.restype = wintypes.BOOL
+    _SET_FILE_INFORMATION = _KERNEL32.SetFileInformationByHandle
+    _SET_FILE_INFORMATION.argtypes = (
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    )
+    _SET_FILE_INFORMATION.restype = wintypes.BOOL
+
+    class _FileRenameInformation(ctypes.Structure):
+        _fields_ = [
+            ("Flags", wintypes.DWORD),
+            ("RootDirectory", wintypes.HANDLE),
+            ("FileNameLength", wintypes.DWORD),
+            ("FileName", wintypes.WCHAR * 1),
+        ]
 
     _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+    _DELETE = 0x00010000
     _GENERIC_READ = 0x80000000
     _GENERIC_WRITE = 0x40000000
     _FILE_READ_ATTRIBUTES = 0x0080
@@ -73,6 +90,7 @@ if os.name == "nt":
     _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
     _FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
     _FILE_FLAG_SEQUENTIAL_SCAN = 0x08000000
+    _FILE_RENAME_INFO_CLASS = 3
 
 
 SNAPSHOT_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
@@ -92,6 +110,7 @@ class ProjectSessionService:
         self.root.mkdir(parents=True, exist_ok=True)
         self._project_locks_guard = threading.RLock()
         self._project_locks: dict[str, threading.RLock] = {}
+        self._windows_transaction_roots = threading.local()
 
     @contextmanager
     def _project_lock(self, project_id: str):
@@ -184,9 +203,15 @@ class ProjectSessionService:
             absolute = candidate.absolute()
             if absolute != trusted and trusted not in absolute.parents:
                 raise ValueError("Snapshot path escapes the data root")
-            paths = [trusted]
-            current = trusted
-            for part in absolute.relative_to(trusted).parts:
+            pinned = None
+            for root in getattr(self._windows_transaction_roots, "paths", ()):
+                if (absolute == root or root in absolute.parents) and (
+                    pinned is None or len(root.parts) > len(pinned.parts)
+                ):
+                    pinned = root
+            paths = [] if pinned is not None else [trusted]
+            current = pinned if pinned is not None else trusted
+            for part in absolute.relative_to(current).parts:
                 current = current / part
                 paths.append(current)
             handles = []
@@ -194,7 +219,7 @@ class ProjectSessionService:
                 for path in paths:
                     handle = self._windows_handle(
                         path,
-                        _FILE_READ_ATTRIBUTES,
+                        _GENERIC_READ | _FILE_READ_ATTRIBUTES,
                         _OPEN_EXISTING,
                         _FILE_FLAG_BACKUP_SEMANTICS,
                     )
@@ -214,6 +239,53 @@ class ProjectSessionService:
             finally:
                 for handle in reversed(handles):
                     self._windows_close(handle)
+
+        @contextmanager
+        def _windows_pinned_transaction_directory(self, path: Path):
+            absolute = path.absolute()
+            with self._windows_locked_chain(path.parent):
+                handle = self._windows_handle(
+                    path,
+                    _FILE_READ_ATTRIBUTES | _DELETE,
+                    _OPEN_EXISTING,
+                    _FILE_FLAG_BACKUP_SEMANTICS,
+                )
+                try:
+                    information = self._windows_information(handle)
+                    if information.dwFileAttributes & _FILE_ATTRIBUTE_REPARSE_POINT:
+                        raise ValueError("Snapshot path contains a link or reparse point")
+                    if not information.dwFileAttributes & _FILE_ATTRIBUTE_DIRECTORY:
+                        raise ValueError("Snapshot transaction root is not a directory")
+                    roots = getattr(self._windows_transaction_roots, "paths", None)
+                    if roots is None:
+                        roots = []
+                        self._windows_transaction_roots.paths = roots
+                    roots.append(absolute)
+                    try:
+                        yield handle
+                    finally:
+                        roots.pop()
+                finally:
+                    self._windows_close(handle)
+
+        @staticmethod
+        def _windows_promote_directory(handle, destination: Path) -> None:
+            encoded = str(destination.absolute()).encode("utf-16-le")
+            size = _FileRenameInformation.FileName.offset + len(encoded) + ctypes.sizeof(wintypes.WCHAR)
+            buffer = ctypes.create_string_buffer(size)
+            information = ctypes.cast(buffer, ctypes.POINTER(_FileRenameInformation))
+            information.contents.Flags = 0
+            information.contents.RootDirectory = None
+            information.contents.FileNameLength = len(encoded)
+            ctypes.memmove(
+                ctypes.addressof(buffer) + _FileRenameInformation.FileName.offset,
+                encoded,
+                len(encoded),
+            )
+            if not _SET_FILE_INFORMATION(
+                handle, _FILE_RENAME_INFO_CLASS, buffer, size
+            ):
+                raise ctypes.WinError(ctypes.get_last_error())
 
     @contextmanager
     def _locked_copy_directory(self, path: Path):
@@ -313,6 +385,21 @@ class ProjectSessionService:
             with self._locked_copy_directory(destination):
                 yield
 
+    @contextmanager
+    def _pinned_staging_directory(self, staging: Path):
+        if os.name == "nt":
+            with self._windows_pinned_transaction_directory(staging) as handle:
+                yield handle
+            return
+        with self._locked_copy_directory(staging):
+            yield None
+
+    def _promote_staging(self, staging: Path, final: Path, handle) -> None:
+        if os.name == "nt":
+            self._windows_promote_directory(handle, final)
+            return
+        os.replace(staging, final)
+
     def save(
         self,
         session_id: str,
@@ -361,16 +448,17 @@ class ProjectSessionService:
                 staging = sessions_root / f".staging-{snapshot.id}"
                 try:
                     staging.mkdir()
-                    digests = self._copy_live_session(session, staging)
-                    self._write_json(staging / "snapshot.json", {
-                        "snapshot": snapshot.model_dump(mode="json"),
-                        "tree_digests": digests,
-                    })
-                    self._write_text(staging / "previous-session-history.md", self._history_markdown(snapshot))
-                    self._validate_snapshot_tree(staging, digests)
-                    self._fsync_tree(staging)
-                    os.replace(staging, final)
-                    self._fsync_directory(final.parent)
+                    with self._pinned_staging_directory(staging) as staging_handle:
+                        digests = self._copy_live_session(session, staging)
+                        self._write_json(staging / "snapshot.json", {
+                            "snapshot": snapshot.model_dump(mode="json"),
+                            "tree_digests": digests,
+                        })
+                        self._write_text(staging / "previous-session-history.md", self._history_markdown(snapshot))
+                        self._validate_snapshot_tree(staging, digests)
+                        self._fsync_tree(staging)
+                        self._promote_staging(staging, final, staging_handle)
+                        self._fsync_directory(final.parent)
                 except Exception:
                     self._remove_tree_no_follow(staging)
                     raise
@@ -422,15 +510,16 @@ class ProjectSessionService:
         try:
             with self.workspace.session_lock(restored.id):
                 target = self.workspace.sessions_root / restored.id
-                self._copy_snapshot_trees(source, target)
-                self._validate_restored_trees(target, digests)
-                restored_manifest.id = restored.id
-                restored_manifest.created_at = restored.created_at
-                restored_manifest.updated_at = datetime.now(timezone.utc)
-                restored_manifest.owner_user_id = owner_user_id
-                restored_manifest.project_id = project_id
-                restored_manifest.restored_from_snapshot_id = snapshot.id
-                self.workspace.save_manifest(restored_manifest)
+                with self._locked_copy_directory(target):
+                    self._copy_snapshot_trees(source, target)
+                    self._validate_restored_trees(target, digests)
+                    restored_manifest.id = restored.id
+                    restored_manifest.created_at = restored.created_at
+                    restored_manifest.updated_at = datetime.now(timezone.utc)
+                    restored_manifest.owner_user_id = owner_user_id
+                    restored_manifest.project_id = project_id
+                    restored_manifest.restored_from_snapshot_id = snapshot.id
+                    self.workspace.save_manifest(restored_manifest)
             return ProjectSessionRestoreResult(
                 session_id=restored.id,
                 snapshot_id=snapshot.id,
@@ -547,6 +636,7 @@ class ProjectSessionService:
         with self._open_copy_source(source) as reader, self._open_copy_destination(destination) as writer:
             shutil.copyfileobj(reader, writer)
             writer.flush()
+            os.fsync(writer.fileno())
 
     def _validate_snapshot_tree(self, directory: Path, expected: dict[str, object]) -> None:
         self._reject_reparse_tree(directory)
