@@ -86,35 +86,53 @@ const runnableEnd = source.indexOf("\nlet activeRequest", runnableStart);
 const start = source.indexOf("async function loadApplication()");
 const end = source.indexOf("\nfunction setPending", start);
 const loader = source.slice(runnableStart, runnableEnd) + source.slice(start, end);
-function select() { return { options: [], append(option) { this.options.push(option); } }; }
+function select() {
+  return {
+    options: [], value: "",
+    append(option) { this.options.push(option); },
+    choose(value) {
+      const option = this.options.find((item) => item.value === value);
+      if (!option || option.disabled) return false;
+      this.value = value;
+      return true;
+    },
+  };
+}
 function option() { return { disabled: false, cloneNode() { return {...this}; } }; }
-const elements = {
-  health: {className: "", lastElementChild: {textContent: ""}}, model: select(), workspaceModel: select(),
-  hardwareBenchmarkModel: select(), integrityBenchmarkModel: select(), modelCount: {textContent: ""},
-  submit: {disabled: true}, modelDetail: {textContent: ""},
-};
-const models = [
-  {name: "compatible", installed: true, runnable: true},
-  {name: "untested", installed: true, runnable: null},
-  {name: "quarantined", installed: true, runnable: false},
-  {name: "missing", installed: false, runnable: null},
-];
-const context = {
-  elements, models: [],
-  document: { createElement() { return option(); } },
-  fetch: async (url) => url === "/api/health"
-    ? {ok: true, json: async () => ({ollama: true})}
-    : {ok: true, json: async () => ({models})},
-  updateModelDetail() {}, renderGpuProfileControls() {},
-};
-vm.runInNewContext(loader, context);
-(async () => {
+async function runScenario(models, selected) {
+  const elements = {
+    health: {className: "", lastElementChild: {textContent: ""}}, model: select(), workspaceModel: select(),
+    hardwareBenchmarkModel: select(), integrityBenchmarkModel: select(), modelCount: {textContent: ""},
+    submit: {disabled: true}, modelDetail: {textContent: ""},
+  };
+  const context = {
+    elements, models: [],
+    document: { createElement() { return option(); } },
+    fetch: async (url) => url === "/api/health"
+      ? {ok: true, json: async () => ({ollama: true})}
+      : {ok: true, json: async () => ({models})},
+    updateModelDetail() {}, renderGpuProfileControls() {},
+  };
+  vm.runInNewContext(loader, context);
   await context.loadApplication();
-  process.stdout.write(JSON.stringify({
+  return {
     submitDisabled: elements.submit.disabled,
     pickerDisabled: elements.model.disabled,
+    selected: elements.model.choose(selected) ? elements.model.value : null,
     options: elements.model.options.map(({value, disabled}) => ({value, disabled})),
-  }));
+  };
+}
+(async () => {
+  const mixed = await runScenario([
+    {name: "compatible", installed: true, runnable: true},
+    {name: "untested", installed: true, runnable: null},
+    {name: "quarantined", installed: true, runnable: false},
+    {name: "missing", installed: false, runnable: null},
+  ], "compatible");
+  const untestedOnly = await runScenario([
+    {name: "untested", installed: true, runnable: null},
+  ], "untested");
+  process.stdout.write(JSON.stringify({mixed, untestedOnly}));
 })();
 '''
         completed = subprocess.run(
@@ -126,13 +144,20 @@ vm.runInNewContext(loader, context);
         )
         result = json.loads(completed.stdout)
 
-        self.assertFalse(result["submitDisabled"])
-        self.assertFalse(result["pickerDisabled"])
-        self.assertEqual(result["options"], [
+        self.assertFalse(result["mixed"]["submitDisabled"])
+        self.assertFalse(result["mixed"]["pickerDisabled"])
+        self.assertEqual(result["mixed"]["selected"], "compatible")
+        self.assertEqual(result["mixed"]["options"], [
             {"value": "compatible", "disabled": False},
             {"value": "untested", "disabled": False},
             {"value": "quarantined", "disabled": True},
             {"value": "missing", "disabled": True},
+        ])
+        self.assertFalse(result["untestedOnly"]["submitDisabled"])
+        self.assertFalse(result["untestedOnly"]["pickerDisabled"])
+        self.assertEqual(result["untestedOnly"]["selected"], "untested")
+        self.assertEqual(result["untestedOnly"]["options"], [
+            {"value": "untested", "disabled": False},
         ])
 
     def test_app_exposes_the_single_live_session_authority_for_model_runs(self):
