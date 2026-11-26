@@ -277,9 +277,9 @@ assert.strictEqual(root.dataset.theme, "dark");
         html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
         catalog = '/static/ui_catalog.js?v=1.2.0'
         bootstrap = '/static/ui_bootstrap.js?v=1.2.0'
-        stylesheet = '/static/app.css?v=1.4.2'
+        stylesheet = '/static/app.css?v=1.4.3'
         controller = '/static/ui_customization.js?v=1.3.2'
-        application = '/static/app.js?v=1.4.2'
+        application = '/static/app.js?v=1.4.3'
         self.assertIn(catalog, html)
         self.assertIn(bootstrap, html)
         self.assertIn(controller, html)
@@ -337,7 +337,7 @@ console.log(JSON.stringify({presets: Object.keys(catalog.PRESETS), components: c
         self.assertIn("SHA-256", notice)
         self.assertFalse(any("ibm-plex" in name.lower() for name in actual))
         html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
-        app_css = '/static/app.css?v=1.4.2'
+        app_css = '/static/app.css?v=1.4.3'
         fonts_css = '/static/fonts/fonts.css?v=1.2.0'
         gamma_css = '/static/gamma.css?v=1.3.2'
         self.assertLess(html.index(app_css), html.index(fonts_css))
