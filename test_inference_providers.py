@@ -17,12 +17,33 @@ class FakeSidecar:
 
 
 class ProviderAdapterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_probe_requires_the_expected_non_empty_response(self):
+        model = OptimizedModelCatalog().list()[0]
+
+        class ProbeSidecar:
+            def __init__(self, content):
+                self.content = content
+
+            async def request(self, operation, payload, timeout=120):
+                return {"model": payload["model_id"], "status": "success", "summary": "probe", "content": self.content}
+
+        blank = await ProviderRegistry({ProviderKind.openvino: ProbeSidecar("  ")}).get(
+            ProviderKind.openvino
+        ).probe(model)
+        expected = await ProviderRegistry({ProviderKind.openvino: ProbeSidecar(" OK\n")}).get(
+            ProviderKind.openvino
+        ).probe(model)
+
+        self.assertFalse(blank.success)
+        self.assertIn("expected", blank.error)
+        self.assertTrue(expected.success)
+
     async def test_provider_device_selection_and_structured_chat(self):
         catalog = OptimizedModelCatalog()
         clients = {provider: FakeSidecar() for provider in ProviderKind if provider is not ProviderKind.ollama}
         registry = ProviderRegistry(clients)
 
-        openvino = catalog.get("openvino/OpenVINO/Qwen2.5-Coder-1.5B-Instruct-fp16-ov")
+        openvino = catalog.get("openvino/OpenVINO/Qwen2.5-Coder-1.5B-Instruct-int4-ov")
         result = await registry.get(ProviderKind.openvino).chat(openvino, "hello")
         self.assertEqual(result.status, "ok")
         self.assertEqual(clients[ProviderKind.openvino].calls[-1][1]["device"], "NPU")

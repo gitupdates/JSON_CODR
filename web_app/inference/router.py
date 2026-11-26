@@ -10,7 +10,7 @@ class InferenceRouter:
         self.ollama = ollama
         self.catalog = catalog
         self.registry = registry
-        self.verified_models = verified_models or set()
+        self.verified_models = verified_models if verified_models is not None else set()
         self.quarantined: dict[str, str] = {}
 
     async def list_models(self) -> list[dict]:

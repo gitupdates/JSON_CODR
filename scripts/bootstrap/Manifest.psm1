@@ -13,6 +13,12 @@ function Import-JsonCodrBootstrapManifest {
       if ([string]::IsNullOrWhiteSpace([string]$component.$name)) { throw "Bootstrap manifest component is missing $name." }
     }
     if ($component.package -notmatch '^[A-Za-z0-9.-]+$') { throw "Bootstrap manifest package is invalid: $($component.package)" }
+    if ($component.PSObject.Properties.Name -contains 'condition' -and $component.condition -ne 'intel_npu') {
+      throw "Bootstrap manifest condition is invalid: $($component.condition)"
+    }
+    if ($component.PSObject.Properties.Name -contains 'version_selector' -and [string]$component.version_selector -notmatch '^-[0-9]+\.[0-9]+$') {
+      throw "Bootstrap manifest version selector is invalid: $($component.version_selector)"
+    }
   }
   return $manifest
 }
@@ -44,4 +50,24 @@ function Import-JsonCodrModelManifest {
   return $manifest
 }
 
-Export-ModuleMember -Function Import-JsonCodrBootstrapManifest,Import-JsonCodrModelManifest
+function Import-JsonCodrAcceleratorManifest {
+  [CmdletBinding()]
+  param([Parameter(Mandatory=$true)][string]$Root)
+  $path = Join-Path $Root 'config\bootstrap-accelerators.json'
+  try { $manifest = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json } catch { throw "Bootstrap accelerator manifest is invalid: $path" }
+  if($manifest.schema_version -ne '1' -or @($manifest.providers).Count -lt 1){ throw 'Bootstrap accelerator manifest has an unsupported schema.' }
+  foreach($provider in @($manifest.providers)){
+    if($provider.condition -ne 'intel_npu' -or $provider.provider -ne 'openvino' -or $provider.device -ne 'NPU' -or [bool]$provider.installs_driver){
+      throw 'Bootstrap accelerator manifest contains an unsupported provider policy.'
+    }
+    if([string]$provider.model.revision -notmatch '^[0-9a-f]{40}$' -or [int64]$provider.model.maximum_download_bytes -le 0 -or @($provider.model.artifacts).Count -lt 1){
+      throw 'Bootstrap accelerator model policy is incomplete.'
+    }
+    foreach($artifact in @($provider.model.artifacts)){
+      if([string]$artifact.sha256 -notmatch '^[0-9a-f]{64}$' -or [int64]$artifact.size -le 0){ throw 'Bootstrap accelerator artifact policy is incomplete.' }
+    }
+  }
+  return $manifest
+}
+
+Export-ModuleMember -Function Import-JsonCodrBootstrapManifest,Import-JsonCodrModelManifest,Import-JsonCodrAcceleratorManifest

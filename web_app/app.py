@@ -429,15 +429,22 @@ def create_app(
         for provider in (ProviderKind.openvino, ProviderKind.ryzen_ai, ProviderKind.winml, ProviderKind.directml)
         if environment_manager.plan(provider).python.is_file()
     }
+    verified_optimized_models = environment_manager.verified_models(catalog)
     inference_router = InferenceRouter(
-        service, catalog, ProviderRegistry(clients, workspace.data_root / "optimized-models"), set()
+        service,
+        catalog,
+        ProviderRegistry(clients, workspace.data_root / "optimized-models"),
+        verified_optimized_models,
     ) if optimized else None
     hardware = hardware or HardwareBackendManager(
         workspace.data_root,
         accelerator_detector=AcceleratorDetector(
             runtime_available=lambda provider: environment_manager.status(ProviderKind(provider))["status"] == "ready",
             provider_devices=lambda provider: environment_manager.provider_devices(ProviderKind(provider)),
-            model_ready=lambda provider: environment_manager.model_ready(ProviderKind(provider)),
+            model_ready=lambda provider: any(
+                model.provider is ProviderKind(provider) and model.id in verified_optimized_models
+                for model in catalog.list()
+            ),
         ) if optimized else None,
     )
     localperf_packages = LocalPerfPackageService(LocalPerfStorage(workspace.data_root))
@@ -1380,6 +1387,19 @@ def create_app(
         try:
             path = await asyncio.to_thread(environment_manager.install_model, model)
             probe = await inference_router.probe(model.id) if inference_router else None
+            if probe and probe.success:
+                try:
+                    await asyncio.to_thread(
+                        environment_manager.mark_verified,
+                        model,
+                        {"device": model.device, "probe": "interactive install probe succeeded"},
+                    )
+                except (OSError, RuntimeError, ValueError):
+                    inference_router.verified_models.discard(model.id)
+                    inference_router.quarantined[model.id] = (
+                        "Durable verification receipt could not be written"
+                    )
+                    raise
         except (OSError, RuntimeError, ValueError) as error:
             raise HTTPException(status_code=500, detail=str(error)) from error
         return {

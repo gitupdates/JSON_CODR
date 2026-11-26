@@ -16,7 +16,7 @@ class InferenceContractTests(unittest.TestCase):
         catalog = OptimizedModelCatalog()
         models = {model.id: model for model in catalog.list()}
 
-        openvino = models["openvino/OpenVINO/Qwen2.5-Coder-1.5B-Instruct-fp16-ov"]
+        openvino = models["openvino/OpenVINO/Qwen2.5-Coder-1.5B-Instruct-int4-ov"]
         self.assertEqual(openvino.provider, ProviderKind.openvino)
         self.assertEqual(openvino.device, "NPU")
         self.assertEqual(openvino.format, "openvino_ir")
@@ -24,6 +24,9 @@ class InferenceContractTests(unittest.TestCase):
         self.assertTrue(openvino.source_url.startswith("https://huggingface.co/"))
         self.assertTrue(openvino.revision)
         self.assertTrue(openvino.requirements)
+        self.assertLessEqual(openvino.maximum_download_bytes, 1_100_000_000)
+        self.assertGreaterEqual(len(openvino.artifacts), 4)
+        self.assertTrue(all(len(artifact.sha256) == 64 for artifact in openvino.artifacts))
         self.assertEqual(openvino.ollama_fallback, "qwen2.5-coder:1.5b")
 
         amd = models["ryzen_ai/amd/Qwen2.5-Coder-0.5B-Instruct_rai_1.8.0_m1.0_npu"]

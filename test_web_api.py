@@ -26,6 +26,7 @@ from web_app.skills import SkillLibraryService
 from web_app.version import APP_VERSION
 from web_app.coding_agents import CodingAgentService
 from web_app.git_broker import GitBrokerService
+from web_app.inference.contracts import ProbeResult, ProviderKind
 
 
 class FakeService:
@@ -1536,7 +1537,7 @@ class WebApiTests(unittest.TestCase):
         self.assertLessEqual(len(search.json()), 5)
 
     def test_approved_optimized_model_install_requires_confirmation_and_registers_local_path(self):
-        model_id = "openvino/OpenVINO/Qwen2.5-Coder-1.5B-Instruct-fp16-ov"
+        model_id = "openvino/OpenVINO/Qwen2.5-Coder-1.5B-Instruct-int4-ov"
         target = self.workspace.data_root / "models" / "qwen-openvino"
         target.mkdir(parents=True)
 
@@ -1558,6 +1559,38 @@ class WebApiTests(unittest.TestCase):
         self.assertTrue(installed.json()["installed"])
         self.assertEqual(installed.json()["path"], str(target))
         self.assertEqual(installed.json()["provider"], "openvino")
+
+    def test_optimized_model_receipt_failure_revokes_in_memory_trust(self):
+        model_id = "openvino/OpenVINO/Qwen2.5-Coder-1.5B-Instruct-int4-ov"
+        target = self.workspace.data_root / "models" / "qwen-openvino"
+        target.mkdir(parents=True)
+        client = authenticated_client(create_app(self.service, self.workspace, optimized=True))
+        router = client.app.state.model_runs.inference
+
+        async def successful_probe(requested_model_id):
+            router.verified_models.add(requested_model_id)
+            return ProbeResult(
+                model_id=requested_model_id,
+                provider=ProviderKind.openvino,
+                success=True,
+            )
+
+        with (
+            patch("web_app.inference.environments.EnvironmentManager.install_model", return_value=target),
+            patch.object(router, "probe", side_effect=successful_probe),
+            patch(
+                "web_app.inference.environments.EnvironmentManager.mark_verified",
+                side_effect=OSError("receipt write failed"),
+            ),
+        ):
+            response = client.post(
+                "/api/inference/models/install",
+                json={"model_id": model_id, "confirmed": True},
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertNotIn(model_id, router.verified_models)
+        self.assertIn(model_id, router.quarantined)
 
     def test_models_keep_missing_configured_entries_disabled(self):
         response = self.client.get("/api/models")

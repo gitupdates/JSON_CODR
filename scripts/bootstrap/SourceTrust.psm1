@@ -84,6 +84,8 @@ function Get-JsonCodrBootstrapManifestDigest {
     'config/runtime.json',
     'config/bootstrap-prerequisites.json',
     'config/bootstrap-models.json',
+    'config/bootstrap-accelerators.json',
+    'requirements-openvino-lock.txt',
     'requirements-lock.txt'
   )
   $lines = foreach ($relativePath in $manifestPaths) {

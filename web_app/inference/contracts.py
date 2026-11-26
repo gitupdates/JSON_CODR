@@ -30,6 +30,7 @@ __all__ = [
     "ToolDefinition",
     "ProviderKind",
     "ProviderState",
+    "OptimizedArtifactRecord",
     "OptimizedModelRecord",
     "ProbeResult",
     "InferenceProvider",
@@ -56,6 +57,12 @@ class ProviderState(BaseModel):
     reason: str | None = None
 
 
+class OptimizedArtifactRecord(BaseModel, frozen=True):
+    path: str
+    size: int = Field(gt=0)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class OptimizedModelRecord(BaseModel, frozen=True):
     id: str
     provider: ProviderKind
@@ -68,6 +75,8 @@ class OptimizedModelRecord(BaseModel, frozen=True):
     requirements: tuple[str, ...]
     ollama_fallback: str | None = None
     context_length: int | None = None
+    maximum_download_bytes: int | None = Field(default=None, gt=0)
+    artifacts: tuple[OptimizedArtifactRecord, ...] = ()
 
 
 class ProbeResult(BaseModel):

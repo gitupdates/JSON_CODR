@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from web_app.inference.catalog import OptimizedModelCatalog
 from web_app.inference.contracts import ProviderKind
 from web_app.inference.environments import EnvironmentManager, find_compatible_python
 from web_app.inference.sidecar import SidecarClient, SidecarError
@@ -13,6 +14,16 @@ from web_app.inference.sidecar_main import handle_request
 
 
 class EnvironmentManagerTests(unittest.TestCase):
+    def test_manager_construction_is_lazy_when_optional_python_is_absent(self):
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "web_app.inference.environments.find_compatible_python",
+            side_effect=RuntimeError("missing"),
+        ) as resolver:
+            manager = EnvironmentManager(Path(directory))
+
+            self.assertEqual(manager.plan(ProviderKind.openvino).provider, ProviderKind.openvino)
+            resolver.assert_not_called()
+
     def test_configured_compatible_python_supports_a_newer_host_runtime(self):
         configured = Path("C:/configured/python.exe")
 
@@ -33,6 +44,8 @@ class EnvironmentManagerTests(unittest.TestCase):
             install_command = manager.install_command(ProviderKind.openvino)
             self.assertIn("-m venv", install_command)
             self.assertTrue(install_command.startswith('$providerPython = "'))
+            self.assertIn("--require-hashes", install_command)
+            self.assertIn("requirements-openvino-lock.txt", install_command)
 
     def test_provider_environment_uses_explicit_compatible_python_and_available_directml_pin(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -45,7 +58,7 @@ class EnvironmentManagerTests(unittest.TestCase):
             self.assertIn("if (-not $rebuildProviderEnvironment)", command)
             self.assertIn("sys.version_info[:2] not in ((3, 11), (3, 12))", command)
             self.assertIn(f'if ($rebuildProviderEnvironment) {{ & "{compatible_python}" -m venv --clear', command)
-            self.assertIn("-m pip --disable-pip-version-check install", command)
+            self.assertIn("-m pip --disable-pip-version-check --no-input install", command)
             self.assertIn("onnxruntime-genai-directml==0.12.2", command)
 
     def test_base_requirements_do_not_include_optional_runtimes(self):
@@ -82,6 +95,105 @@ class EnvironmentManagerTests(unittest.TestCase):
 
             self.assertEqual(status["status"], "incomplete")
             self.assertFalse(status["compatible"])
+
+    def test_verified_model_receipt_requires_exact_artifact_hashes_and_probe(self):
+        import hashlib
+        import json
+
+        model = OptimizedModelCatalog().list()[0]
+        with tempfile.TemporaryDirectory() as directory:
+            manager = EnvironmentManager(Path(directory), base_python=Path("C:/Python312/python.exe"))
+            target = manager.model_path(model)
+            target.mkdir(parents=True)
+            artifacts = []
+            artifact_type = type(model.artifacts[0])
+            for artifact in model.artifacts:
+                payload = artifact.path.encode("utf-8")
+                path = target / artifact.path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(payload)
+                artifacts.append(artifact_type(
+                    path=artifact.path,
+                    size=len(payload),
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                ))
+            local_model = model.model_copy(update={
+                "maximum_download_bytes": 1_000_000,
+                "artifacts": tuple(artifacts),
+            })
+            receipt = manager.verification_receipt_path(local_model)
+            receipt.write_text(
+                json.dumps(manager.verification_payload(local_model, probe_verified=False)),
+                encoding="utf-8",
+            )
+
+            self.assertTrue(manager.verify_model(local_model, require_probe=False))
+            self.assertFalse(manager.verify_model(local_model, require_probe=True))
+            self.assertFalse(manager.model_ready(ProviderKind.openvino, (local_model,)))
+            manager.mark_verified(local_model, {"device": "NPU", "probe": "OK"})
+            self.assertTrue(manager.verify_model(local_model, require_probe=True))
+            self.assertTrue(manager.model_ready(ProviderKind.openvino, (local_model,)))
+
+            (target / artifacts[0].path).write_bytes(b"tampered")
+            self.assertFalse(manager.verify_model(local_model, require_probe=True))
+            self.assertFalse(manager.model_ready(ProviderKind.openvino, (local_model,)))
+
+    def test_atomic_model_promotion_cleans_displaced_cache_and_restores_on_failure(self):
+        import hashlib
+
+        model = OptimizedModelCatalog().list()[0]
+        artifact_type = type(model.artifacts[0])
+        payload = b"verified model"
+        local_model = model.model_copy(update={
+            "maximum_download_bytes": 1_000_000,
+            "artifacts": (artifact_type(
+                path="openvino_model.bin",
+                size=len(payload),
+                sha256=hashlib.sha256(payload).hexdigest(),
+            ),),
+        })
+
+        def download(command, **kwargs):
+            staging = Path(command[-1])
+            staging.mkdir(parents=True)
+            (staging / "openvino_model.bin").write_bytes(payload)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory() as directory:
+            manager = EnvironmentManager(Path(directory), base_python=Path("C:/Python312/python.exe"))
+            manager.status = lambda provider: {"status": "ready"}
+            target = manager.model_path(local_model)
+            target.mkdir(parents=True)
+            (target / "old.txt").write_text("old", encoding="utf-8")
+
+            with patch("web_app.inference.environments.subprocess.run", side_effect=download):
+                installed = manager.install_model(local_model)
+
+            self.assertEqual(installed, target)
+            self.assertEqual((target / "openvino_model.bin").read_bytes(), payload)
+            self.assertFalse(list(target.parent.glob(".*.incomplete")))
+
+        with tempfile.TemporaryDirectory() as directory:
+            manager = EnvironmentManager(Path(directory), base_python=Path("C:/Python312/python.exe"))
+            manager.status = lambda provider: {"status": "ready"}
+            target = manager.model_path(local_model)
+            target.mkdir(parents=True)
+            original = target / "old.txt"
+            original.write_text("restore me", encoding="utf-8")
+            real_replace = os.replace
+
+            def fail_promotion(source, destination):
+                if Path(source).name.endswith(".staging") and Path(destination) == target:
+                    raise OSError("promotion failed")
+                return real_replace(source, destination)
+
+            with patch("web_app.inference.environments.subprocess.run", side_effect=download), patch(
+                "web_app.inference.environments.os.replace", side_effect=fail_promotion,
+            ), self.assertRaisesRegex(OSError, "promotion failed"):
+                manager.install_model(local_model)
+
+            self.assertEqual(original.read_text(encoding="utf-8"), "restore me")
+            self.assertFalse(list(target.parent.glob(".*.incomplete")))
 
 
 class SidecarClientTests(unittest.IsolatedAsyncioTestCase):

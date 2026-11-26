@@ -68,7 +68,7 @@ From a clean, trusted Windows 11 x64 checkout, the supported setup path is:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\bootstrap.ps1
 ```
 
-The bootstrap validates the checked-out commit and trusted `origin` remote before it changes the machine. It uses only allowlisted WinGet packages for Git, GitHub CLI, Python, and Ollama; creates an isolated JSON_CODR runtime under `%LOCALAPPDATA%\JSON_CODR`; asks before downloading the reviewed Ollama model; and securely prompts for a permanent, full Administrator password. That initial account and its browser/CLI credentials are visibly **non-production, non-expiring, and revocable**. Passwords and tokens are never put in command lines, receipts, or reports.
+The bootstrap validates the checked-out commit and trusted `origin` remote before it changes the machine. It uses only allowlisted WinGet packages for Git, GitHub CLI, Python, and Ollama; creates an isolated JSON_CODR runtime under `%LOCALAPPDATA%\JSON_CODR`; asks before downloading the reviewed Ollama model; and securely prompts for a permanent, full Administrator password. On a machine with a healthy Intel NPU, it also installs the isolated Python 3.12/OpenVINO GenAI provider, downloads the pinned INT4 coding model into the machine-local cache, verifies its size and artifact checksums, and enables it only after OpenVINO exposes `NPU` and a bounded generation probe succeeds. It never installs or changes an NPU driver, and an optional NPU failure leaves Ollama/CPU available. That initial account and its browser/CLI credentials are visibly **non-production, non-expiring, and revocable**. Passwords and tokens are never put in command lines, receipts, or reports.
 
 Useful modes:
 

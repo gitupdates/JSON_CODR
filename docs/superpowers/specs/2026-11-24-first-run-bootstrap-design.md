@@ -20,7 +20,7 @@ The primary operator is a person who has cloned or downloaded JSON_CODR but shou
 ## Non-goals
 
 - Supporting Linux or macOS in this first release.
-- Installing GPU/NPU-specific optional providers during the base bootstrap.
+- Installing GPU/NPU-specific optional providers on machines where the matching healthy hardware is not detected.
 - Automatically granting GitHub repository write access or publishing changes.
 - Automatically installing arbitrary models, packages, skills, or plugins from user-provided locations.
 - Replacing the existing application launcher or security policy with installer-only authority.
@@ -176,6 +176,8 @@ Bootstrap verifies:
 - launch through the exact interpreter recorded in the receipt.
 
 Optional Python 3.11/3.12 provider environments are not mandatory for the base local path. Their absence is reported as an optional capability limitation rather than making first run fail, unless the selected configuration explicitly requires one.
+
+The reviewed Intel NPU exception is conditional and additive. A healthy Intel NPU enables an allowlisted Python 3.12/OpenVINO environment and a pinned INT4 coding-model acquisition. The provider must enumerate `NPU`, the downloaded snapshot must satisfy release-owned byte and SHA-256 evidence, and bounded NPU generation must pass before the model is marked verified. Bootstrap never installs a hardware driver, and every failure preserves Ollama/CPU readiness.
 
 Application code is materialized as an immutable build bound to the verified Git commit/tree rather than executed from a mutable checkout. The stable launcher points to that build only after environment and application proofs pass. Development-source mode may run a mutable tree but cannot issue verified readiness evidence.
 

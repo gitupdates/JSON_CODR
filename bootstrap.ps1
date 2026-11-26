@@ -13,9 +13,9 @@ $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 function Write-BootstrapProgress([string]$Message) { if(-not $Json){ [Console]::Error.WriteLine($Message) } }
-function New-BootstrapResult([string]$Status,[int]$ExitCode,[string]$Detail,[object]$Source,[object]$Plan,[object]$Model,[object]$GitHub) {
+function New-BootstrapResult([string]$Status,[int]$ExitCode,[string]$Detail,[object]$Source,[object]$Plan,[object]$Model,[object]$GitHub,[object]$Accelerator=$null) {
   [pscustomobject][ordered]@{
-    schema_version='1'; status=$Status; exit_code=$ExitCode; detail=$Detail; source=$Source; prerequisites=$Plan; ollama=$Model; github=$GitHub;
+    schema_version='1'; status=$Status; exit_code=$ExitCode; detail=$Detail; source=$Source; prerequisites=$Plan; ollama=$Model; github=$GitHub; accelerator=$Accelerator;
     resume_command=('powershell -NoProfile -ExecutionPolicy Bypass -File "{0}" -Repair' -f (Join-Path $Root 'bootstrap.ps1'))
   }
 }
@@ -28,7 +28,7 @@ try {
   if([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or -not [Environment]::Is64BitOperatingSystem -or [Environment]::OSVersion.Version.Build -lt 22000){
     Complete-Bootstrap (New-BootstrapResult 'BLOCKED' 20 'JSON_CODR bootstrap supports Windows 11 x64 only.' $null $null $null $null)
   }
-  $modules = 'Manifest.psm1','Planner.psm1','Install.psm1','Materialize.psm1','Lifecycle.psm1','Identity.psm1','Proof.psm1','GitHub.psm1','SourceTrust.psm1','WorkspaceState.psm1'
+  $modules = 'Manifest.psm1','Accelerator.psm1','Planner.psm1','Install.psm1','Materialize.psm1','Lifecycle.psm1','Identity.psm1','Proof.psm1','GitHub.psm1','SourceTrust.psm1','WorkspaceState.psm1'
   foreach($module in $modules){ Import-Module (Join-Path $Root (Join-Path 'scripts\bootstrap' $module)) -Force }
   $runtimePath = Join-Path $Root 'config\runtime.json'
   $runtime = Get-Content -LiteralPath $runtimePath -Raw | ConvertFrom-Json
@@ -46,14 +46,17 @@ try {
     Complete-Bootstrap (New-BootstrapResult 'BLOCKED' 21 ("Trusted source validation failed: {0}. Use -DevelopmentSource only for explicitly unverified local development." -f $source.reason) $source $null $null $null)
   }
   $manifest = Import-JsonCodrBootstrapManifest -Root $Root
-  $plan = Get-JsonCodrBootstrapPlan -Manifest $manifest -Root $Root
+  $null = Import-JsonCodrAcceleratorManifest -Root $Root
+  $intelNpu = Get-JsonCodrIntelNpuHardware
+  $plan = Get-JsonCodrBootstrapPlan -Manifest $manifest -Root $Root -Conditions @{ intel_npu = [bool]$intelNpu.detected }
   $model = Test-JsonCodrOllamaModel -Root $Root
   $github = Test-JsonCodrGitHubReadiness -Root $Root -NoGitHub:$NoGitHub
   if($Check){
     $detail = 'Read-only diagnostics completed; no installation, configuration, model, credential, process, or GitHub changes were made.'
     $status = if($model.state -eq 'blocked' -or $github.state -eq 'blocked'){'BLOCKED'}elseif($model.state -ne 'ready' -or ($github.state -ne 'ready' -and -not $NoGitHub)){'ACTION REQUIRED'}else{if($NoGitHub){'READY (LOCAL ONLY)'}else{'READY'}}
     $code = if($status -like 'READY*'){0}elseif($status -eq 'ACTION REQUIRED'){10}else{30}
-    Complete-Bootstrap (New-BootstrapResult $status $code $detail $source $plan $model $github)
+    $accelerator = [pscustomobject]@{ state=if($intelNpu.detected){'candidate'}else{'skipped'}; provider='openvino'; detail=$intelNpu.detail; hardware=@($intelNpu.devices); drivers_modified=$false }
+    Complete-Bootstrap (New-BootstrapResult $status $code $detail $source $plan $model $github $accelerator)
   }
   Write-BootstrapProgress 'Installing only missing allowlisted prerequisites through WinGet.'
   Invoke-JsonCodrInstallPlan -Plan $plan -Repair:$Repair
@@ -61,12 +64,14 @@ try {
   if($NoStart){ Complete-Bootstrap (New-BootstrapResult 'ACTION REQUIRED' 10 'Static prerequisites and isolated runtime are ready. Start/prove the local service with bootstrap without -NoStart.' $source $plan $model $github) }
   $model = Test-JsonCodrOllamaModel -Root $Root -AllowPull -Interactive:([Environment]::UserInteractive)
   if($model.state -ne 'ready'){ Complete-Bootstrap (New-BootstrapResult 'ACTION REQUIRED' 10 $model.detail $source $plan $model $github) }
+  Write-BootstrapProgress 'Conditionally provisioning the pinned Intel NPU runtime and model when a healthy Intel NPU is present.'
+  $accelerator = Initialize-JsonCodrIntelNpu -Root $Root -DataRoot $dataRoot -Python $environment.python -Hardware $intelNpu
   $running = Start-JsonCodrSafely -Runtime $runtime -Environment $environment
   if(-not $running.reused){ Initialize-JsonCodrAdministrator -Runtime $runtime -Environment $environment -DataRoot $dataRoot }
   $github = Test-JsonCodrGitHubReadiness -Root $Root -NoGitHub:$NoGitHub -Interactive:([Environment]::UserInteractive)
   if($github.state -ne 'ready' -and -not $NoGitHub){ Complete-Bootstrap (New-BootstrapResult 'ACTION REQUIRED' 10 $github.detail $source $plan $model $github) }
   $status = if($NoGitHub){'READY (LOCAL ONLY)'}else{'READY'}
-  Complete-Bootstrap (New-BootstrapResult $status 0 'Local loopback service, permanent revocable development Administrator, Ollama, and selected GitHub readiness were proven.' $source $plan $model $github)
+  Complete-Bootstrap (New-BootstrapResult $status 0 'Local loopback service, permanent revocable development Administrator, Ollama, selected GitHub readiness, and any eligible Intel NPU path were proven.' $source $plan $model $github $accelerator)
 } catch {
   Complete-Bootstrap (New-BootstrapResult 'BLOCKED' 30 $_.Exception.Message $null $null $null $null)
 }

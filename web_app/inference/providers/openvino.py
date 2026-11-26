@@ -28,6 +28,14 @@ class OpenVINOProvider:
     async def probe(self, model: OptimizedModelRecord) -> ProbeResult:
         try:
             response = await self.chat(model, "Reply with exactly OK", max_new_tokens=8)
+            if response.content.strip().casefold() != "ok":
+                return ProbeResult(
+                    model_id=model.id,
+                    provider=self.kind,
+                    success=False,
+                    response=response,
+                    error="Bounded provider probe did not return the expected non-empty OK response",
+                )
             return ProbeResult(model_id=model.id, provider=self.kind, success=True, response=response)
         except Exception as error:
             return ProbeResult(model_id=model.id, provider=self.kind, success=False, error=str(error))

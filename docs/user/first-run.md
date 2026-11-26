@@ -10,6 +10,8 @@ It is designed to be safe to rerun. Normal mode accepts only a clean commit reac
 
 The only prerequisite installers are the reviewed WinGet package IDs declared in `config/bootstrap-prerequisites.json`. Bootstrap does not download or execute remote scripts, change host security settings, install global Python packages, or remove existing prerequisites. Python packages go into a runtime beneath `%LOCALAPPDATA%\JSON_CODR\runtime`.
 
+If Windows reports a healthy Intel NPU, bootstrap conditionally provisions the release-owned OpenVINO path declared in `config/bootstrap-accelerators.json`. It installs the allowlisted Python 3.12 provider prerequisite, creates an isolated provider environment, requires OpenVINO to enumerate `NPU`, downloads the exact pinned `OpenVINO/Qwen2.5-Coder-1.5B-Instruct-int4-ov` revision, checks the byte bound and reviewed artifact SHA-256 values, and runs a bounded generation probe before persisting verification. No NPU driver is installed or modified. A missing or incompatible NPU is recorded as skipped/unavailable and cannot prevent the base Ollama/CPU path from starting.
+
 The first interactive run may ask for three things: confirmation to pull the reviewed Ollama model, a permanent full Administrator password, and GitHub CLI sign-in. The Administrator, browser sessions, and CLI credentials use the initial **non-production, non-expiring, revocable** policy. Secrets stay in the owning stores and are not included in a receipt, report, or command line.
 
 ## Safe modes
@@ -28,7 +30,7 @@ The first interactive run may ask for three things: confirmation to pull the rev
 .\bootstrap.ps1 -NoStart
 ```
 
-`-NoStart` reports `ACTION REQUIRED`, never `READY`. `-NoGitHub` is the only path that can report `READY (LOCAL ONLY)`. Without it, GitHub must be authenticated through the official `gh` flow, then verified with read-only account and remote checks. Bootstrap does not choose among multiple identities/remotes silently and never pushes, mutates a remote, or creates a repository.
+`-NoStart` reports `ACTION REQUIRED`, never `READY`. `-Check` reports an Intel NPU only as a read-only candidate and does not install its runtime or model. `-NoGitHub` is the only path that can report `READY (LOCAL ONLY)`. Without it, GitHub must be authenticated through the official `gh` flow, then verified with read-only account and remote checks. Bootstrap does not choose among multiple identities/remotes silently and never pushes, mutates a remote, or creates a repository.
 
 ## Operations and repair
 

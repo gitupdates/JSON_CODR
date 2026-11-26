@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import shutil
 import subprocess
 import sys
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,11 +14,13 @@ from web_app.inference.contracts import ProviderKind
 
 
 PACKAGES = {
-    ProviderKind.openvino: ("openvino-genai==2025.4", "openvino-tokenizers==2025.4", "huggingface-hub==0.36.0", "pydantic>=2,<3"),
+    ProviderKind.openvino: ("openvino-genai==2025.4", "openvino-tokenizers==2025.4", "huggingface-hub==0.36.0", "pydantic==2.14.3"),
     ProviderKind.ryzen_ai: ("onnxruntime-genai==0.19.0", "huggingface-hub==0.36.0", "pydantic>=2,<3"),
     ProviderKind.winml: ("onnxruntime-genai==0.19.0", "huggingface-hub==0.36.0", "pydantic>=2,<3"),
     ProviderKind.directml: ("onnxruntime-genai-directml==0.12.2", "huggingface-hub==0.36.0", "pydantic>=2,<3"),
 }
+
+OPENVINO_LOCK = Path(__file__).resolve().parents[2] / "requirements-openvino-lock.txt"
 
 
 def find_compatible_python() -> Path:
@@ -62,9 +66,16 @@ class EnvironmentPlan:
 
 
 class EnvironmentManager:
+    RECEIPT_NAME = ".json_codr_verified.json"
+
     def __init__(self, data_root: Path, base_python: Path | None = None) -> None:
         self.root = Path(data_root).resolve() / "inference-providers"
-        self.base_python = Path(base_python) if base_python else find_compatible_python()
+        self.base_python = Path(base_python) if base_python else None
+
+    def _base_python(self) -> Path:
+        if self.base_python is None:
+            self.base_python = find_compatible_python()
+        return self.base_python
 
     def plan(self, provider: ProviderKind) -> EnvironmentPlan:
         if provider not in PACKAGES:
@@ -75,16 +86,21 @@ class EnvironmentManager:
 
     def install_command(self, provider: ProviderKind) -> str:
         plan = self.plan(provider)
-        packages = " ".join(plan.packages)
+        install_target = (
+            f'--require-hashes -r "{OPENVINO_LOCK}"'
+            if provider is ProviderKind.openvino
+            else " ".join(plan.packages)
+        )
         return "; ".join((
             f'$providerPython = "{plan.python}"',
+            f'$approvedProviderPackages = "{" ".join(plan.packages)}"',
             "$rebuildProviderEnvironment = -not (Test-Path -LiteralPath $providerPython)",
             "if (-not $rebuildProviderEnvironment) { "
             "& $providerPython -c 'import sys; raise SystemExit(sys.version_info[:2] not in ((3, 11), (3, 12)))'; "
             "$rebuildProviderEnvironment = $LASTEXITCODE -ne 0 }",
-            f'if ($rebuildProviderEnvironment) {{ & "{self.base_python}" -m venv --clear "{plan.root}"; '
+            f'if ($rebuildProviderEnvironment) {{ & "{self._base_python()}" -m venv --clear "{plan.root}"; '
             "if ($LASTEXITCODE -ne 0) { throw 'Provider environment creation failed' } }",
-            f"& $providerPython -m pip --disable-pip-version-check install {packages}",
+            f"& $providerPython -m pip --disable-pip-version-check --no-input install {install_target}",
         ))
 
     @staticmethod
@@ -134,9 +150,15 @@ class EnvironmentManager:
         except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
             return []
 
-    def model_ready(self, provider: ProviderKind) -> bool:
-        root = self.root.parent / "optimized-models" / provider.value
-        return root.is_dir() and any(item.is_dir() for item in root.iterdir())
+    def model_ready(self, provider: ProviderKind, models=None) -> bool:
+        if models is None:
+            from web_app.inference.catalog import OptimizedModelCatalog
+
+            models = OptimizedModelCatalog().list()
+        return any(
+            model.provider is provider and self.verify_model(model, require_probe=True)
+            for model in models
+        )
 
     def status(self, provider: ProviderKind) -> dict:
         plan = self.plan(provider)
@@ -171,6 +193,94 @@ class EnvironmentManager:
     def model_path(self, model) -> Path:
         return self.root.parent / "optimized-models" / model.provider.value / model.repository.replace("/", "--")
 
+    def verification_receipt_path(self, model) -> Path:
+        return self.model_path(model) / self.RECEIPT_NAME
+
+    @staticmethod
+    def verification_payload(model, probe_verified: bool, evidence: dict | None = None) -> dict:
+        return {
+            "schema_version": "1",
+            "model_id": model.id,
+            "repository": model.repository,
+            "revision": model.revision,
+            "provider": model.provider.value,
+            "device": model.device,
+            "artifacts": [artifact.model_dump(mode="json") for artifact in model.artifacts],
+            "probe_verified": bool(probe_verified),
+            "evidence": evidence or {},
+        }
+
+    @staticmethod
+    def _is_reparse(path: Path) -> bool:
+        try:
+            return bool(getattr(path.lstat(), "st_file_attributes", 0) & 0x400)
+        except OSError:
+            return True
+
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest()
+
+    def _validate_model_files(self, root: Path, model) -> bool:
+        try:
+            root = root.resolve(strict=True)
+            total = 0
+            for item in root.rglob("*"):
+                if item.is_symlink() or self._is_reparse(item):
+                    return False
+                if item.is_file():
+                    total += item.stat().st_size
+            if model.maximum_download_bytes is not None and total > model.maximum_download_bytes:
+                return False
+            if not model.artifacts:
+                return False
+            for artifact in model.artifacts:
+                path = root / artifact.path
+                if not path.is_file() or path.is_symlink() or self._is_reparse(path):
+                    return False
+                if path.stat().st_size != artifact.size or self._sha256(path) != artifact.sha256:
+                    return False
+            return True
+        except (OSError, ValueError):
+            return False
+
+    def verify_model(self, model, require_probe: bool = True) -> bool:
+        target = self.model_path(model)
+        receipt_path = self.verification_receipt_path(model)
+        try:
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        expected = self.verification_payload(
+            model,
+            probe_verified=bool(receipt.get("probe_verified")),
+            evidence=receipt.get("evidence") if isinstance(receipt.get("evidence"), dict) else {},
+        )
+        for key in ("schema_version", "model_id", "repository", "revision", "provider", "device", "artifacts"):
+            if receipt.get(key) != expected[key]:
+                return False
+        if require_probe and receipt.get("probe_verified") is not True:
+            return False
+        return self._validate_model_files(target, model)
+
+    def mark_verified(self, model, evidence: dict) -> None:
+        if not self.verify_model(model, require_probe=False):
+            raise RuntimeError("Optimized model artifacts are not verified")
+        receipt = self.verification_receipt_path(model)
+        temporary = receipt.with_suffix(receipt.suffix + ".tmp")
+        temporary.write_text(
+            json.dumps(self.verification_payload(model, probe_verified=True, evidence=evidence), sort_keys=True),
+            encoding="utf-8",
+        )
+        os.replace(temporary, receipt)
+
+    def verified_models(self, catalog) -> set[str]:
+        return {model.id for model in catalog.list() if self.verify_model(model, require_probe=True)}
+
     def model_install_command(self, model) -> str:
         plan = self.plan(model.provider)
         target = self.model_path(model)
@@ -179,32 +289,74 @@ class EnvironmentManager:
             f'"{model.repository}" --revision "{model.revision}" --local-dir "{target}"'
         )
 
-    def install_model(self, model, timeout: int = 7200) -> Path:
-        plan = self.plan(model.provider)
+    def install_environment(self, provider: ProviderKind, timeout: int = 1800) -> EnvironmentPlan:
+        plan = self.plan(provider)
         flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         if not plan.python.is_file():
             result = subprocess.run(
-                [str(self.base_python), "-m", "venv", "--clear", str(plan.root)],
+                [str(self._base_python()), "-m", "venv", "--clear", str(plan.root)],
                 capture_output=True, text=True, timeout=300, creationflags=flags,
             )
             if result.returncode != 0:
                 raise RuntimeError(result.stderr.strip() or "Provider environment creation failed")
+        install_arguments = (
+            ["--require-hashes", "-r", str(OPENVINO_LOCK)]
+            if provider is ProviderKind.openvino
+            else list(plan.packages)
+        )
         result = subprocess.run(
-            [str(plan.python), "-m", "pip", "--disable-pip-version-check", "install", *plan.packages],
-            capture_output=True, text=True, timeout=1800, creationflags=flags,
+            [str(plan.python), "-m", "pip", "--disable-pip-version-check", "--no-input", "install", *install_arguments],
+            capture_output=True, text=True, timeout=timeout, creationflags=flags,
         )
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or "Provider runtime installation failed")
+        return plan
+
+    def install_model(self, model, timeout: int = 7200) -> Path:
+        if self.verify_model(model, require_probe=False):
+            return self.model_path(model)
+        plan = self.plan(model.provider)
+        if self.status(model.provider)["status"] != "ready":
+            plan = self.install_environment(model.provider)
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         target = self.model_path(model)
         target.parent.mkdir(parents=True, exist_ok=True)
+        staging = target.parent / f".{target.name}.{uuid.uuid4().hex}.staging"
         code = (
             "import sys; from huggingface_hub import snapshot_download; "
             "snapshot_download(repo_id=sys.argv[1], revision=sys.argv[2], local_dir=sys.argv[3])"
         )
-        result = subprocess.run(
-            [str(plan.python), "-c", code, model.repository, model.revision, str(target)],
-            capture_output=True, text=True, timeout=timeout, creationflags=flags,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or "Optimized model download failed")
-        return target
+        try:
+            result = subprocess.run(
+                [str(plan.python), "-c", code, model.repository, model.revision, str(staging)],
+                capture_output=True, text=True, timeout=timeout, creationflags=flags,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.strip() or "Optimized model download failed")
+            if not self._validate_model_files(staging, model):
+                raise RuntimeError("Optimized model failed size, path, or checksum verification")
+            (staging / self.RECEIPT_NAME).write_text(
+                json.dumps(self.verification_payload(model, probe_verified=False), sort_keys=True),
+                encoding="utf-8",
+            )
+            displaced = None
+            if target.exists():
+                displaced = target.parent / f".{target.name}.{uuid.uuid4().hex}.incomplete"
+                os.replace(target, displaced)
+            try:
+                os.replace(staging, target)
+            except Exception:
+                if displaced is not None and displaced.exists() and not target.exists():
+                    os.replace(displaced, target)
+                raise
+            if displaced is not None and displaced.exists():
+                if displaced.is_symlink():
+                    displaced.unlink()
+                elif self._is_reparse(displaced):
+                    os.rmdir(displaced)
+                else:
+                    shutil.rmtree(displaced)
+            return target
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
