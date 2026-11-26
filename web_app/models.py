@@ -401,6 +401,7 @@ class ProjectSessionSnapshot(BaseModel):
 
 
 class ProjectSessionSaveRequest(BaseModel):
+    session_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     title: str = Field(min_length=1, max_length=500)
     change_type: str = Field(min_length=1, max_length=100)
     keywords: List[str] = Field(default_factory=list, max_length=64)

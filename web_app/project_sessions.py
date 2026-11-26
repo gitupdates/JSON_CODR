@@ -17,6 +17,9 @@ from web_app.workspace import SESSION_ID_PATTERN, WorkspaceService
 
 SNAPSHOT_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 _ALLOWED_TREES = ("originals", "extracted", "artifacts")
+_STAGING_PATTERN = re.compile(r"^\.staging-[0-9a-f]{32}$")
+_STORAGE_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_EXTRACTED_PATTERN = re.compile(r"^[0-9a-f]{32}\.txt$")
 
 
 class ProjectSessionService:
@@ -56,16 +59,27 @@ class ProjectSessionService:
     def project_directory(self, project_id: str) -> Path:
         self.projects.resolve(project_id)
         directory = self.root / self._project_key(project_id)
-        if directory.exists() and self._is_reparse_point(directory):
-            raise ValueError("Project snapshot directory cannot be a reparse point")
+        self._check_chain(directory)
         return directory
 
     def snapshot_directory(self, snapshot_id: str, project_id: str) -> Path:
         self._validate_snapshot_id(snapshot_id)
         directory = self.project_directory(project_id) / "sessions" / snapshot_id
-        if directory.exists() and self._is_reparse_point(directory):
-            raise ValueError("Snapshot directory cannot be a reparse point")
+        self._check_chain(directory)
         return directory
+
+    def _check_chain(self, candidate: Path) -> None:
+        trusted = self.workspace.data_root.resolve()
+        absolute = candidate.absolute()
+        if absolute != trusted and trusted not in absolute.parents:
+            raise ValueError("Snapshot path escapes the data root")
+        current = trusted
+        relative = absolute.relative_to(trusted)
+        for part in relative.parts:
+            current = current / part
+            if current.exists() or current.is_symlink():
+                if self._is_reparse_point(current):
+                    raise ValueError("Snapshot path contains a link or reparse point")
 
     def save(
         self,
@@ -97,9 +111,9 @@ class ProjectSessionService:
             final = self.snapshot_directory(snapshot.id, project_id)
             sessions_root = final.parent
             sessions_root.mkdir(parents=True, exist_ok=True)
-            self._reject_reparse_tree(sessions_root)
+            self._check_chain(sessions_root)
+            self._sweep_staging(sessions_root)
             staging = sessions_root / f".staging-{snapshot.id}"
-            shutil.rmtree(staging, ignore_errors=True)
             try:
                 staging.mkdir()
                 digests = self._copy_live_session(session, staging)
@@ -109,7 +123,7 @@ class ProjectSessionService:
                 })
                 self._write_text(staging / "previous-session-history.md", self._history_markdown(snapshot))
                 self._validate_snapshot_tree(staging, digests)
-                self._fsync_directory(staging)
+                self._fsync_tree(staging)
                 os.replace(staging, final)
                 self._fsync_directory(final.parent)
             except Exception:
@@ -124,7 +138,7 @@ class ProjectSessionService:
         records: list[ProjectSessionSnapshot] = []
         needle = query.strip().casefold()
         for candidate in sorted(directory.iterdir(), key=lambda path: path.name):
-            if candidate.name.startswith(".") or not candidate.is_dir():
+            if candidate.name.startswith(".") or self._is_reparse_point(candidate) or not candidate.is_dir():
                 continue
             try:
                 record = self._read_snapshot(candidate)
@@ -141,12 +155,10 @@ class ProjectSessionService:
         self.projects.resolve(project_id)
         path = self.snapshot_directory(snapshot_id, project_id)
         if not path.is_dir():
-            if self._find_snapshot(snapshot_id) is not None:
-                raise PermissionError("Snapshot belongs to a different project")
             raise KeyError(snapshot_id)
         record = self._read_snapshot(path)
         if record.project_id != project_id or record.owner_user_id != owner_user_id:
-            raise PermissionError("Snapshot is not available to this owner or project")
+            raise KeyError(snapshot_id)
         return record
 
     def restore(self, snapshot_id: str, project_id: str, owner_user_id: str) -> ProjectSessionRestoreResult:
@@ -165,6 +177,7 @@ class ProjectSessionService:
             with self.workspace.session_lock(restored.id):
                 target = self.workspace.sessions_root / restored.id
                 self._copy_snapshot_trees(source, target)
+                self._validate_restored_trees(target, digests)
                 restored_manifest.id = restored.id
                 restored_manifest.created_at = restored.created_at
                 restored_manifest.updated_at = datetime.now(timezone.utc)
@@ -193,16 +206,51 @@ class ProjectSessionService:
         if not manifest.is_file():
             raise ValueError("Live session manifest is incomplete")
         self._validate_attachment_sources(session, source)
-        return self._copy_allowed(source, destination)
+        sanitized = self._sanitized_session(session)
+        self._write_json(destination / "manifest.json", sanitized.model_dump(mode="json"))
+        self._copy_allowed(source, destination)
+        return self._tree_digests(destination)
+
+    @staticmethod
+    def _sanitized_session(session: SessionRecord) -> SessionRecord:
+        clean = session.model_copy(deep=True)
+        clean.messages = []
+        for message in session.messages:
+            if message.status in {"pending", "streaming"}:
+                continue
+            safe = message.model_copy(deep=True)
+            safe.task_id = None
+            safe.reasoning = (
+                safe.reasoning.model_copy(update={"entries": [entry for entry in safe.reasoning.entries if entry.provenance == "public_rationale"]})
+                if safe.reasoning else None
+            )
+            if safe.reasoning is not None and not safe.reasoning.entries:
+                safe.reasoning = None
+            clean.messages.append(safe)
+        return clean
 
     def _validate_attachment_sources(self, session: SessionRecord, source: Path) -> None:
         for attachment in session.attachments:
-            if attachment.storage_name and not (source / "originals" / attachment.storage_name).is_file():
+            content_bearing = attachment.digest is not None or attachment.size > 0
+            if content_bearing and (not attachment.storage_name or not _STORAGE_PATTERN.fullmatch(attachment.storage_name)):
+                raise ValueError("Live session attachment storage name is invalid")
+            if attachment.storage_name and not _STORAGE_PATTERN.fullmatch(attachment.storage_name):
+                raise ValueError("Live session attachment storage name is invalid")
+            if attachment.storage_name and not self._safe_regular(source / "originals", attachment.storage_name):
                 raise ValueError("Live session attachment original is missing")
-            if attachment.extracted_name and attachment.extraction_state.value == "ready" and not (
-                source / "extracted" / attachment.extracted_name
-            ).is_file():
+            if attachment.extraction_state.value == "ready" and (
+                not attachment.extracted_name or not _EXTRACTED_PATTERN.fullmatch(attachment.extracted_name)
+                or not self._safe_regular(source / "extracted", attachment.extracted_name)
+            ):
                 raise ValueError("Live session attachment extraction is missing")
+
+    def _safe_regular(self, parent: Path, name: str) -> bool:
+        if Path(name).name != name or "/" in name or "\\" in name or name in {"", ".", ".."}:
+            return False
+        self._check_chain(parent)
+        path = parent / name
+        self._check_chain(path)
+        return path.is_file() and not self._is_reparse_point(path)
 
     def _copy_snapshot_trees(self, source: Path, destination: Path) -> None:
         self._reject_reparse_tree(source)
@@ -214,12 +262,6 @@ class ProjectSessionService:
                 shutil.copytree(tree, destination / name, copy_function=shutil.copy2)
 
     def _copy_allowed(self, source: Path, destination: Path) -> dict[str, str]:
-        files = ["manifest.json"]
-        for name in files:
-            item = source / name
-            if not item.is_file() or self._is_reparse_point(item):
-                raise ValueError("Session manifest is unsafe or missing")
-            shutil.copy2(item, destination / name)
         for name in _ALLOWED_TREES:
             tree = source / name
             if not tree.exists():
@@ -235,6 +277,12 @@ class ProjectSessionService:
         wanted = {str(key): str(value) for key, value in expected.items()}
         if actual != wanted:
             raise ValueError("Snapshot files failed digest validation")
+
+    def _validate_restored_trees(self, directory: Path, expected: dict[str, object]) -> None:
+        actual = {key: value for key, value in self._tree_digests(directory).items() if key != "manifest.json"}
+        wanted = {str(key): str(value) for key, value in expected.items() if str(key) != "manifest.json"}
+        if actual != wanted:
+            raise ValueError("Restored files failed digest validation")
 
     def _tree_digests(self, root: Path) -> dict[str, str]:
         output: dict[str, str] = {}
@@ -274,15 +322,6 @@ class ProjectSessionService:
             raise ValueError("Snapshot metadata is invalid")
         return payload
 
-    def _find_snapshot(self, snapshot_id: str) -> Path | None:
-        self._validate_snapshot_id(snapshot_id)
-        if not self.root.exists():
-            return None
-        for candidate in self.root.glob(f"*/sessions/{snapshot_id}"):
-            if candidate.is_dir():
-                return candidate
-        return None
-
     @staticmethod
     def _write_json(path: Path, payload: object) -> None:
         ProjectSessionService._write_text(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
@@ -307,6 +346,29 @@ class ProjectSessionService:
         finally:
             os.close(descriptor)
 
+    def _fsync_tree(self, root: Path) -> None:
+        for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+            if path.is_file():
+                descriptor = os.open(path, os.O_RDONLY)
+                try:
+                    os.fsync(descriptor)
+                except OSError:
+                    pass
+                finally:
+                    os.close(descriptor)
+            elif path.is_dir():
+                self._fsync_directory(path)
+        self._fsync_directory(root)
+
+    def _sweep_staging(self, sessions_root: Path) -> None:
+        for candidate in sessions_root.iterdir():
+            if not _STAGING_PATTERN.fullmatch(candidate.name):
+                continue
+            if self._is_reparse_point(candidate) or not candidate.is_dir():
+                raise ValueError("Snapshot staging entry is unsafe")
+            self._reject_reparse_tree(candidate)
+            shutil.rmtree(candidate)
+
     @staticmethod
     def _slug(value: str) -> str:
         return re.sub(r"[^a-z0-9._/-]+", "-", value.casefold()).strip("-./")[:120]
@@ -326,7 +388,9 @@ class ProjectSessionService:
         }
         values = set(required)
         for value in supplied:
-            normalized = self._slug(str(value))
+            raw = str(value).strip()
+            namespace, separator, detail = raw.partition(":")
+            normalized = (f"{namespace.casefold()}:{self._slug(detail)}" if separator and namespace.casefold() in {"component", "file", "model", "task", "reference"} else self._slug(raw))
             if normalized:
                 values.add(normalized)
         for attachment in session.attachments:
@@ -344,6 +408,9 @@ class ProjectSessionService:
                     values.add(f"reference:{self._slug(reference.id)}")
                 if reference.kind == "project_file" and self._slug(reference.label):
                     values.add(f"file:{self._slug(reference.label)}")
+                    parts = self._slug(reference.label).split("/")
+                    if len(parts) > 1:
+                        values.add(f"component:{parts[-2]}")
         optional = sorted(values - required)
         return sorted(required) + optional[:max(0, 128 - len(required))]
 
@@ -351,9 +418,9 @@ class ProjectSessionService:
         lines = [f"Title: {title.strip()}", f"Change type: {change_type.strip()}", f"Created: {session.created_at.isoformat()}"]
         for message in session.messages:
             if message.role == "user":
-                lines.append(f"Objective: {message.content}")
+                lines.append(f"Objective: {message.content[:1200]}")
             elif message.role == "assistant":
-                lines.append(f"Outcome ({message.status}): {message.content}")
+                lines.append(f"Outcome ({message.status}): {message.content[:1200]}")
             if message.effective_model or message.requested_model:
                 lines.append(f"Model: {message.effective_model or message.requested_model}")
             if message.task_id:

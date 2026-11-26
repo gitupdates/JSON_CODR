@@ -1,5 +1,6 @@
 import io
 import tempfile
+import threading
 import unittest
 import zipfile
 from pathlib import Path
@@ -69,6 +70,33 @@ class AttachmentServiceTests(unittest.TestCase):
         with self.workspace.session_lock(self.session.id):
             self.service.set_included(self.session.id, attachment.id, False)
 
+        self.assertFalse(self.workspace.get_session(self.session.id).attachments[0].included)
+
+    def test_attachment_update_waits_for_a_lock_held_by_another_thread(self):
+        attachment = self.service.import_text(self.session.id, "pasted content")
+        entered = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+
+        def hold_lock():
+            with self.workspace.session_lock(self.session.id):
+                entered.set()
+                release.wait(2)
+
+        def update():
+            self.service.set_included(self.session.id, attachment.id, False)
+            finished.set()
+
+        holder = threading.Thread(target=hold_lock)
+        worker = threading.Thread(target=update)
+        holder.start()
+        self.assertTrue(entered.wait(1))
+        worker.start()
+        self.assertFalse(finished.wait(0.15))
+        release.set()
+        holder.join(2)
+        worker.join(2)
+        self.assertTrue(finished.is_set())
         self.assertFalse(self.workspace.get_session(self.session.id).attachments[0].included)
 
     def test_http_upload_paste_preview_include_and_delete(self):
