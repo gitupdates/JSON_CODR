@@ -110,7 +110,7 @@ from web_app.ollama_service import (
     OllamaService,
     OllamaUnavailableError,
 )
-from web_app.model_compatibility import ModelCompatibilityLayer
+from web_app.model_compatibility import ModelCompatibilityLayer, is_model_runnable
 from web_app.workspace import InvalidSessionId, WorkspaceService, default_data_root
 from web_app.terminal import TerminalService
 from web_app.skills import DuplicateSkillPack, GithubSkillService, SkillConverterService, SkillDiscoveryService, SkillLibraryService
@@ -1153,7 +1153,7 @@ def create_app(
     async def vscode_language_models():
         try:
             models = await service.list_models()
-            installed = [model for model in models if model.get("installed") is True]
+            installed = [model for model in models if is_model_runnable(model)]
             if hasattr(service, "model_metadata"):
                 metadata = await asyncio.gather(*(
                     service.model_metadata(str(model["name"])) for model in installed
@@ -1447,7 +1447,7 @@ def create_app(
 
     async def model_compatibility(detected: list[dict]) -> list[dict]:
         installed, running = await asyncio.gather(service.list_models(), service.running_models())
-        installed_names = [item["name"] for item in installed if item.get("installed")]
+        installed_names = [item["name"] for item in installed if is_model_runnable(item)]
         tool_routes = {
             name: route
             for name, route in zip(
@@ -1565,7 +1565,7 @@ def create_app(
         if not integrity_generation_available:
             raise HTTPException(status_code=409, detail="Integrity benchmarks are unavailable for this model service")
         try:
-            installed = {item["name"] for item in await service.list_models() if item.get("installed")}
+            installed = {item["name"] for item in await service.list_models() if is_model_runnable(item)}
         except Exception as error:
             raise HTTPException(status_code=503, detail="Unable to query installed models") from error
         if request.model not in installed:
@@ -2626,7 +2626,7 @@ def create_app(
             session = workspace.get_session(request.session_id)
             installed = [
                 item for item in await (inference_router.list_models() if inference_router else service.list_models())
-                if item.get("installed")
+                if is_model_runnable(item)
             ]
             installed_names = [item["name"] for item in installed]
             if request.model_selection == "multi-model":
@@ -2648,9 +2648,9 @@ def create_app(
             requested_model = request.model_selection
             selected_model = installed_names[0] if requested_model == "auto" else requested_model
             if selected_model not in installed_names:
-                raise HTTPException(status_code=409, detail="Requested model is not installed")
+                raise HTTPException(status_code=409, detail="Requested model is not runnable")
             if requested_model == "auto":
-                warnings.append(f"Auto selected {selected_model} from the installed model roster")
+                warnings.append(f"Auto selected {selected_model} from the runnable model roster")
             compatibility = await service.tool_compatibility(selected_model)
             if compatibility["available"]:
                 effective_model = compatibility["effective_tool_model"] or selected_model
@@ -3095,7 +3095,7 @@ def create_app(
             "data": [
                 {"id": item["name"], "object": "model", "owned_by": "json-codr"}
                 for item in models
-                if item.get("installed", True)
+                if is_model_runnable(item)
             ],
         }
 
@@ -3149,7 +3149,7 @@ def create_app(
                     for item in await (
                         inference_router.list_models() if inference_router else service.list_models()
                     )
-                    if item.get("installed", True) and isinstance(item.get("name"), str)
+                    if is_model_runnable(item) and isinstance(item.get("name"), str)
                 ]
                 if not installed_models:
                     raise OllamaUnavailableError("No installed local model is available")

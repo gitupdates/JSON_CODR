@@ -132,6 +132,22 @@ class ModelRunServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([call[0] for call in self.inference.calls], ["model-b", "model-a"])
         self.assertLessEqual(self.inference.maximum, 2)
 
+    async def test_roster_excludes_quarantined_download_but_keeps_untested_model(self):
+        async def compatibility_models():
+            return [
+                {"name": "quarantined", "installed": True, "runnable": False},
+                {"name": "untested", "installed": True, "runnable": None},
+                {"name": "verified", "installed": True, "runnable": True},
+                {"name": "missing", "installed": False, "runnable": False},
+            ]
+
+        self.inference.list_models = compatibility_models
+
+        run = await self.create()
+
+        self.assertEqual(run.roster, ["untested", "verified"])
+        self.assertEqual(run.unavailable_models, ["quarantined", "missing"])
+
     async def test_single_model_record_uses_the_same_format_consistency_contract(self):
         run = self.service.record_single(
             session_id="a" * 32,

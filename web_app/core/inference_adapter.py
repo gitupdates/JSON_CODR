@@ -6,6 +6,7 @@ from typing import Any
 
 from web_app.core.adapters import AdapterEvent, CapabilityCall, CapabilityExecutionError, ExecutionContext
 from web_app.core.model_tags import ModelTagRegistry
+from web_app.model_compatibility import is_model_runnable
 from web_app.ollama_service import ModelOutputError, ModelTimeoutError, OllamaUnavailableError
 
 
@@ -90,7 +91,11 @@ class InferenceAdapter:
         installed = {
             str(item.get("name") or item.get("model"))
             for item in models
-            if isinstance(item, Mapping) and (item.get("name") or item.get("model"))
+            if (
+                isinstance(item, Mapping)
+                and (item.get("name") or item.get("model"))
+                and is_model_runnable(item)
+            )
         }
         route = self._model_registry.resolve(requested_model, installed)
         return route.effective_model, route.options

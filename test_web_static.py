@@ -76,6 +76,14 @@ class SidebarCollector(HTMLParser):
 
 
 class WebStaticTests(unittest.TestCase):
+    def test_model_picker_distinguishes_downloaded_verified_and_quarantined_models(self):
+        javascript = self.client.get("/static/app.js").text
+
+        self.assertIn("function isModelRunnable(model)", javascript)
+        self.assertIn('model.runnable !== false', javascript)
+        self.assertIn('" — incompatible"', javascript)
+        self.assertIn('downloaded · ${verifiedRunnable} verified runnable · ${models.length} catalogued', javascript)
+
     def test_disclosure_controller_keeps_only_the_active_tree_item_open(self):
         script = r'''
 const { bindExclusiveDisclosures } = require("./web/disclosure_groups.js");

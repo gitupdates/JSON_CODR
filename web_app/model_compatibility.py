@@ -34,6 +34,16 @@ _TRANSIENT_MARKERS = (
 _FAILED_STATUSES = frozenset({"quarantined", "failed"})
 
 
+def is_model_runnable(record: Mapping[str, object]) -> bool:
+    """Return whether a model record may enter routing.
+
+    Missing `runnable` means the downloaded artifact is untested and may be
+    tried manually; an explicit false is persistent incompatibility evidence.
+    """
+
+    return bool(record.get("installed", True)) and record.get("runnable") is not False
+
+
 class ModelCompatibilityConfigError(ValueError):
     pass
 

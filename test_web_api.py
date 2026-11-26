@@ -317,6 +317,34 @@ class WebApiTests(unittest.TestCase):
         self.assertTrue(provider["models"])
         self.assertTrue(all(model["id"] and model["name"] for model in provider["models"]))
 
+    def test_external_model_exports_exclude_quarantined_and_keep_untested_models(self):
+        class CompatibilityRosterService(FakeService):
+            async def list_models(self):
+                return [
+                    {"name": "ready:1b", "installed": True, "runnable": True},
+                    {"name": "untested:1b", "installed": True, "runnable": None},
+                    {"name": "quarantined:1b", "installed": True, "runnable": False},
+                ]
+
+            async def model_metadata(self, model):
+                return {"context_length": 2048, "tool_calling": False, "vision": False}
+
+        client = self.track_core_client(authenticated_client(create_app(
+            CompatibilityRosterService(), self.workspace, optimized=False,
+        )))
+
+        openai = client.get("/v1/models")
+        vscode = client.get("/api/integrations/vscode/language-models")
+
+        self.assertEqual(
+            [item["id"] for item in openai.json()["data"]],
+            ["ready:1b", "untested:1b"],
+        )
+        self.assertEqual(
+            [item["id"] for item in vscode.json()[0]["models"]],
+            ["ready:1b", "untested:1b"],
+        )
+
     def test_github_routes_keep_authentication_server_side_and_require_write_confirmation(self):
         class FakeGitHubCLI:
             def __init__(self):

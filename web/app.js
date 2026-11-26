@@ -250,6 +250,9 @@ const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 const narrowNavigationQuery = window.matchMedia("(max-width: 700px)");
 
 let models = [];
+function isModelRunnable(model) {
+  return Boolean(model.installed) && model.runnable !== false;
+}
 let activeRequest = null;
 let sessionId = localStorage.getItem("json_codr_session");
 let terminalId = null;
@@ -1330,7 +1333,7 @@ function renderGpuProfileControls() {
   const defaultOption = document.createElement("option");
   defaultOption.value = "__default__"; defaultOption.textContent = "All models · default";
   elements.hardwareProfileModel.append(defaultOption);
-  for (const model of models.filter((item) => item.installed)) {
+  for (const model of models.filter(isModelRunnable)) {
     const option = document.createElement("option"); option.value = model.name; option.textContent = model.name;
     elements.hardwareProfileModel.append(option);
   }
@@ -2603,7 +2606,10 @@ function updateModelDetail() {
   const size = model.size ? `${(model.size / 1e9).toFixed(1)} GB` : "size unavailable";
   const context = model.context_length ? `${model.context_length.toLocaleString()} ctx` : "context unavailable";
   const capabilities = model.capabilities.length ? model.capabilities.join(" · ") : "completion";
-  elements.modelDetail.textContent = `${model.quantization || "quantization unknown"} · ${size} · ${context} · ${capabilities}`;
+  const compatibility = model.runnable === true ? "verified runnable" : "compatibility untested";
+  const effective = model.effective_model && model.effective_model !== model.name
+    ? ` · effective ${model.effective_model}` : "";
+  elements.modelDetail.textContent = `${model.quantization || "quantization unknown"} · ${size} · ${context} · ${capabilities} · ${compatibility}${effective}`;
 }
 
 async function loadApplication() {
@@ -2620,19 +2626,24 @@ async function loadApplication() {
     for (const model of models) {
       const option = document.createElement("option");
       option.value = model.name;
-      option.textContent = `${model.name}${model.installed ? "" : " — not installed"}`;
-      option.disabled = !model.installed;
+      const availabilityLabel = !model.installed
+        ? " — not installed"
+        : model.runnable === false ? " — incompatible" : model.runnable === true ? " — verified" : " — compatibility untested";
+      option.textContent = `${model.name}${availabilityLabel}`;
+      option.disabled = !isModelRunnable(model);
       elements.model.append(option);
-      if (model.installed) {
+      if (isModelRunnable(model)) {
         elements.workspaceModel.append(option.cloneNode(true));
         elements.hardwareBenchmarkModel.append(option.cloneNode(true));
         elements.integrityBenchmarkModel.append(option.cloneNode(true));
       }
     }
-    const installed = models.filter((model) => model.installed).length;
-    elements.modelCount.textContent = `${installed} of ${models.length} installed`;
-    elements.model.disabled = installed === 0;
-    elements.submit.disabled = installed === 0;
+    const downloaded = models.filter((model) => model.installed).length;
+    const verifiedRunnable = models.filter((model) => model.runnable === true).length;
+    const available = models.filter(isModelRunnable).length;
+    elements.modelCount.textContent = `${downloaded} downloaded · ${verifiedRunnable} verified runnable · ${models.length} catalogued`;
+    elements.model.disabled = available === 0;
+    elements.submit.disabled = available === 0;
     updateModelDetail();
     renderGpuProfileControls();
   } catch (error) {
@@ -3518,11 +3529,13 @@ async function loadComponents() {
   const container = document.querySelector("#component-list");
   if (!container) return;
   const installedComponents = await coreClient.listComponents("");
-  const unavailableModels = models.filter((model) => !model.installed).map((model) => ({
+  const unavailableModels = models.filter((model) => !isModelRunnable(model)).map((model) => ({
     component_id: model.name,
     name: model.name,
     available: false,
-    reason: "Model is configured but not installed in Ollama.",
+    reason: model.installed
+      ? model.fallback_reason || "Model is downloaded but incompatible with the current Ollama runtime."
+      : "Model is configured but not installed in Ollama.",
     statusSource: "Ollama model roster",
     destination: "hardware",
   }));

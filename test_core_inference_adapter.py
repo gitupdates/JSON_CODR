@@ -37,6 +37,22 @@ class ResolvingStreamingBackend(StreamingBackend):
         return [{"name": "qwen3:4b"}]
 
 
+class CompatibilityResolvingBackend(StreamingBackend):
+    def __init__(self):
+        self.selected = None
+
+    async def list_models(self):
+        return [
+            {"name": "broken:8b", "installed": True, "runnable": False},
+            {"name": "new:8b", "installed": True, "runnable": None},
+        ]
+
+    async def stream_chat(self, model, prompt, images, public_reasoning=False):
+        self.selected = model
+        async for event in super().stream_chat(model, prompt, images, public_reasoning):
+            yield event
+
+
 class InferenceAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_session_context_is_injected_and_reported_in_result(self):
         backend = RecordingBackend()
@@ -136,6 +152,28 @@ class InferenceAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed["requested_model_id"], "coding")
         self.assertEqual(completed["effective_model_id"], "qwen3:4b")
         self.assertTrue(completed["fallback_used"])
+
+    async def test_model_tag_resolution_excludes_quarantined_but_keeps_untested_model(self):
+        from web_app.core.model_tags import ModelTag, ModelTagRegistry
+
+        backend = CompatibilityResolvingBackend()
+        registry = ModelTagRegistry(
+            {"coding": ModelTag(("broken:8b", "new:8b"), ())},
+            ("broken:8b", "new:8b"),
+        )
+        adapter = InferenceAdapter(backend, model_registry=registry)
+        call = CapabilityCall(
+            capability_id="inference.generate",
+            operation="generate",
+            project_root=".",
+            arguments={"model": "coding", "prompt": "Explain"},
+        )
+        context = ExecutionContext(task_id="task-1", project_id="project-1", principal="user")
+
+        events = [event async for event in adapter.execute(call, context)]
+
+        self.assertEqual(backend.selected, "new:8b")
+        self.assertEqual(events[-1].payload["effective_model_id"], "new:8b")
 
 
 if __name__ == "__main__":

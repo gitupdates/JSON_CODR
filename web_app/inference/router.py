@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from web_app.inference.catalog import OptimizedModelCatalog
 from web_app.inference.protocol import InferenceRequest
+from web_app.model_compatibility import is_model_runnable
 
 
 class InferenceRouter:
@@ -15,9 +16,15 @@ class InferenceRouter:
     async def list_models(self) -> list[dict]:
         result = await self.ollama.list_models()
         for model in self.catalog.list():
+            runnable = model.id in self.verified_models and model.id not in self.quarantined
+            status = "quarantined" if model.id in self.quarantined else "verified" if runnable else "not_installed"
             result.append({
                 "name": model.id,
-                "installed": model.id in self.verified_models and model.id not in self.quarantined,
+                "installed": runnable,
+                "runnable": runnable,
+                "compatibility_status": status,
+                "effective_model": model.id if runnable else None,
+                "fallback_reason": self.quarantined.get(model.id),
                 "provider": model.provider.value,
                 "device": model.device,
                 "optimized": True,
@@ -65,7 +72,7 @@ class InferenceRouter:
             return await self.registry.get(model.provider).chat(model, prompt, images=images)
         except Exception as error:
             self.quarantined[model_id] = str(error)
-            installed = [item["name"] for item in await self.ollama.list_models() if item.get("installed")]
+            installed = [item["name"] for item in await self.ollama.list_models() if is_model_runnable(item)]
             fallback = model.ollama_fallback if model.ollama_fallback in installed else (installed[0] if installed else None)
             if not fallback:
                 raise
@@ -110,7 +117,7 @@ class InferenceRouter:
             yield {"type": "completed", "result": result}
         except Exception as error:
             self.quarantined[model_id] = str(error)
-            installed = [item["name"] for item in await self.ollama.list_models() if item.get("installed")]
+            installed = [item["name"] for item in await self.ollama.list_models() if is_model_runnable(item)]
             fallback = model.ollama_fallback if model.ollama_fallback in installed else (installed[0] if installed else None)
             if not fallback:
                 raise

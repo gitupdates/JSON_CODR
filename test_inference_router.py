@@ -76,6 +76,28 @@ class CanonicalFakeOllama(FakeOllama):
 
 
 class InferenceRouterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_verified_optimized_inventory_exposes_runnable_state(self):
+        catalog = OptimizedModelCatalog()
+        model = catalog.list()[0]
+        router = InferenceRouter(
+            FakeOllama(), catalog, FakeRegistry(FakeProvider()), {model.id},
+        )
+
+        records = await router.list_models()
+        optimized = next(item for item in records if item["name"] == model.id)
+
+        self.assertTrue(optimized["installed"])
+        self.assertTrue(optimized["runnable"])
+        self.assertEqual(optimized["compatibility_status"], "verified")
+
+        router.quarantined[model.id] = "provider probe failed"
+        quarantined = next(
+            item for item in await router.list_models() if item["name"] == model.id
+        )
+        self.assertFalse(quarantined["runnable"])
+        self.assertEqual(quarantined["compatibility_status"], "quarantined")
+        self.assertEqual(quarantined["fallback_reason"], "provider probe failed")
+
     async def test_generate_forwards_the_ordered_canonical_request(self):
         from web_app.inference.protocol import ContentPart, InferenceMessage, InferenceRequest
 

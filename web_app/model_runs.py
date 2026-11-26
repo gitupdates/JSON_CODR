@@ -13,6 +13,7 @@ from typing import Any
 from .model_run_normalizer import capture_original_output, normalize_model_result
 from .model_run_store import ModelRunStore
 from .model_jury import JuryValidationError, build_consensus, validate_juror_result
+from .model_compatibility import is_model_runnable
 from .models import CanonicalModelResult, CanonicalModelRun, ModelInputManifest, ModelRunCreateRequest, ModelTiming
 
 
@@ -137,8 +138,8 @@ class ModelRunService:
 
     async def create(self, request: ModelRunCreateRequest) -> CanonicalModelRun:
         models = await self.inference.list_models()
-        roster = [item["name"] for item in models if item.get("installed")]
-        unavailable = [item["name"] for item in models if not item.get("installed")]
+        roster = [item["name"] for item in models if is_model_runnable(item)]
+        unavailable = [item["name"] for item in models if not is_model_runnable(item)]
         run = self.store.create(request, roster, request.request_key)
         if run.unavailable_models != unavailable:
             run = self.store.update_run(run.model_copy(update={"unavailable_models": unavailable}))
