@@ -194,6 +194,23 @@ class ProjectSessionServiceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ProjectSessionSaveRequest(session_id="bad", title="Title", change_type="fix")
 
+    def test_rejected_over_limit_and_session_limit_attachments_save_and_restore_as_metadata(self):
+        session = self.workspace.create_session("owner-1", self.project.project_id)
+        limited = AttachmentService(self.workspace, max_file_bytes=2, max_session_bytes=3)
+        with self.assertRaises(Exception):
+            limited.import_text(session.id, "toolong", "large.txt")
+        other = self.workspace.create_session("owner-1", self.project.project_id)
+        session_limited = AttachmentService(self.workspace, max_file_bytes=3, max_session_bytes=3)
+        session_limited.import_text(other.id, "abc", "one.txt")
+        with self.assertRaises(Exception):
+            session_limited.import_text(other.id, "de", "two.txt")
+
+        for current in (session, other):
+            snapshot = self.sessions.save(current.id, self.project.project_id, "owner-1", "Limits", "fix", [])
+            restored = self.workspace.get_session(self.sessions.restore(snapshot.id, self.project.project_id, "owner-1").session_id)
+            rejected = next(item for item in restored.attachments if item.extraction_state.value == "rejected")
+            self.assertIsNone(rejected.digest)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,7 +6,9 @@ import os
 import re
 import shutil
 import stat
+import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,6 +32,15 @@ class ProjectSessionService:
         self.projects = projects
         self.root = self.workspace.data_root / "project-sessions"
         self.root.mkdir(parents=True, exist_ok=True)
+        self._project_locks_guard = threading.RLock()
+        self._project_locks: dict[str, threading.RLock] = {}
+
+    @contextmanager
+    def _project_lock(self, project_id: str):
+        with self._project_locks_guard:
+            lock = self._project_locks.setdefault(project_id, threading.RLock())
+        with lock:
+            yield
 
     @staticmethod
     def _project_key(project_id: str) -> str:
@@ -90,6 +101,18 @@ class ProjectSessionService:
         change_type: str,
         keywords: list[str],
     ) -> ProjectSessionSnapshot:
+        with self._project_lock(project_id):
+            return self._save_locked(session_id, project_id, owner_user_id, title, change_type, keywords)
+
+    def _save_locked(
+        self,
+        session_id: str,
+        project_id: str,
+        owner_user_id: str,
+        title: str,
+        change_type: str,
+        keywords: list[str],
+    ) -> ProjectSessionSnapshot:
         self.projects.resolve(project_id)
         with self.workspace.session_lock(session_id):
             session = self.workspace.get_session(session_id)
@@ -133,6 +156,7 @@ class ProjectSessionService:
 
     def list(self, project_id: str, owner_user_id: str, query: str = "") -> list[ProjectSessionSnapshot]:
         directory = self.project_directory(project_id) / "sessions"
+        self._check_chain(directory)
         if not directory.exists():
             return []
         records: list[ProjectSessionSnapshot] = []
@@ -207,9 +231,17 @@ class ProjectSessionService:
             raise ValueError("Live session manifest is incomplete")
         self._validate_attachment_sources(session, source)
         sanitized = self._sanitized_session(session)
+        expected = self._tree_digests(source)
+        payload = json.dumps(sanitized.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n"
+        expected["manifest.json"] = "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
         self._write_json(destination / "manifest.json", sanitized.model_dump(mode="json"))
         self._copy_allowed(source, destination)
-        return self._tree_digests(destination)
+        actual = self._tree_digests(destination)
+        if actual != expected:
+            raise ValueError("Snapshot staging files differ from the locked source")
+        self._check_chain(source)
+        self._check_chain(destination)
+        return expected
 
     @staticmethod
     def _sanitized_session(session: SessionRecord) -> SessionRecord:
@@ -231,11 +263,13 @@ class ProjectSessionService:
 
     def _validate_attachment_sources(self, session: SessionRecord, source: Path) -> None:
         for attachment in session.attachments:
-            content_bearing = attachment.digest is not None or attachment.size > 0
+            content_bearing = attachment.digest is not None
             if content_bearing and (not attachment.storage_name or not _STORAGE_PATTERN.fullmatch(attachment.storage_name)):
                 raise ValueError("Live session attachment storage name is invalid")
             if attachment.storage_name and not _STORAGE_PATTERN.fullmatch(attachment.storage_name):
                 raise ValueError("Live session attachment storage name is invalid")
+            if attachment.storage_name and attachment.storage_name != attachment.digest:
+                raise ValueError("Live session attachment storage does not match its digest")
             if attachment.storage_name and not self._safe_regular(source / "originals", attachment.storage_name):
                 raise ValueError("Live session attachment original is missing")
             if attachment.extraction_state.value == "ready" and (
@@ -259,7 +293,7 @@ class ProjectSessionService:
             if tree.exists():
                 if not tree.is_dir():
                     raise ValueError("Snapshot tree is invalid")
-                shutil.copytree(tree, destination / name, copy_function=shutil.copy2)
+                self._copy_tree_safe(tree, destination / name)
 
     def _copy_allowed(self, source: Path, destination: Path) -> dict[str, str]:
         for name in _ALLOWED_TREES:
@@ -268,8 +302,26 @@ class ProjectSessionService:
                 continue
             if not tree.is_dir() or self._is_reparse_point(tree):
                 raise ValueError("Session tree is unsafe")
-            shutil.copytree(tree, destination / name, copy_function=shutil.copy2)
+            self._copy_tree_safe(tree, destination / name)
         return self._tree_digests(destination)
+
+    def _copy_tree_safe(self, source: Path, destination: Path) -> None:
+        self._check_chain(source)
+        if self._is_reparse_point(source) or not source.is_dir():
+            raise ValueError("Session tree is unsafe")
+        destination.mkdir()
+        for child in source.iterdir():
+            self._check_chain(source)
+            if self._is_reparse_point(child):
+                raise ValueError("Session tree contains a link or reparse point")
+            target = destination / child.name
+            if child.is_dir():
+                self._copy_tree_safe(child, target)
+            elif child.is_file():
+                shutil.copy2(child, target)
+                self._check_chain(child)
+            else:
+                raise ValueError("Session tree contains an unsafe entry")
 
     def _validate_snapshot_tree(self, directory: Path, expected: dict[str, object]) -> None:
         self._reject_reparse_tree(directory)
@@ -415,23 +467,30 @@ class ProjectSessionService:
         return sorted(required) + optional[:max(0, 128 - len(required))]
 
     def _summary(self, session: SessionRecord, title: str, change_type: str) -> str:
-        lines = [f"Title: {title.strip()}", f"Change type: {change_type.strip()}", f"Created: {session.created_at.isoformat()}"]
+        metadata = [f"Title: {title.strip()}", f"Change type: {change_type.strip()}", f"Created: {session.created_at.isoformat()}"]
+        objectives: list[str] = []
+        outcomes: list[str] = []
+        models: list[str] = []
+        references: list[str] = []
+        attachments: list[str] = []
+        warnings: list[str] = []
         for message in session.messages:
             if message.role == "user":
-                lines.append(f"Objective: {message.content[:1200]}")
+                objectives.append(f"Objective: {message.content[:400]}")
             elif message.role == "assistant":
-                lines.append(f"Outcome ({message.status}): {message.content[:1200]}")
+                outcomes.append(f"Outcome ({message.status}): {message.content[:500]}")
             if message.effective_model or message.requested_model:
-                lines.append(f"Model: {message.effective_model or message.requested_model}")
+                models.append(f"Model: {message.effective_model or message.requested_model}")
             if message.task_id:
-                lines.append(f"Task: {message.task_id}")
+                models.append(f"Task: {message.task_id}")
             for reference in message.references:
-                lines.append(f"Reference: {reference.label}")
+                references.append(f"Reference: {reference.label[:300]}")
         for attachment in session.attachments:
-            lines.append(f"Attachment: {attachment.display_name}")
+            attachments.append(f"Attachment: {attachment.display_name[:300]}")
             for warning in attachment.warnings:
-                lines.append(f"Warning: {warning}")
-        return "\n".join(lines)[:8_000]
+                warnings.append(f"Warning: {warning[:300]}")
+        groups = (metadata, objectives[:6], outcomes[:6], models[:12], references[:12], attachments[:12], warnings[:12])
+        return "\n".join(line for group in groups for line in group)[:8_000]
 
     @staticmethod
     def _history_markdown(snapshot: ProjectSessionSnapshot) -> str:
