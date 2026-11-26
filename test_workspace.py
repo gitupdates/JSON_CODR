@@ -23,9 +23,18 @@ class WorkspaceServiceTests(unittest.TestCase):
 
         restored = WorkspaceService(self.data_root).get_session(session.id)
 
-        self.assertEqual(restored.schema_version, 2)
+        self.assertEqual(restored.schema_version, 3)
         self.assertEqual(restored.messages[0].content, "hello")
         self.assertRegex(restored.id, r"^[0-9a-f]{32}$")
+
+    def test_session_retains_optional_owner_and_project_identity(self):
+        service = WorkspaceService(self.data_root)
+
+        session = service.create_session("owner-1", "project:abc")
+
+        restored = WorkspaceService(self.data_root).get_session(session.id)
+        self.assertEqual(restored.owner_user_id, "owner-1")
+        self.assertEqual(restored.project_id, "project:abc")
 
     def test_delete_session_removes_its_workspace(self):
         service = WorkspaceService(self.data_root)
@@ -80,7 +89,7 @@ class WorkspaceServiceTests(unittest.TestCase):
 
         migrated = service.get_session(record.id)
 
-        self.assertEqual(migrated.schema_version, 2)
+        self.assertEqual(migrated.schema_version, 3)
         self.assertTrue(migrated.auto_attach_skills)
         self.assertEqual(migrated.excluded_skill_ids, ["pack:skill"])
 

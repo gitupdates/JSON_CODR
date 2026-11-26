@@ -3,7 +3,9 @@ import os
 import re
 import shutil
 import stat
+import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -31,6 +33,16 @@ class WorkspaceService:
         self.data_root = Path(data_root).resolve()
         self.sessions_root = self.data_root / "sessions"
         self.sessions_root.mkdir(parents=True, exist_ok=True)
+        self._locks_guard = threading.RLock()
+        self._session_locks: dict[str, threading.RLock] = {}
+
+    @contextmanager
+    def session_lock(self, session_id: str):
+        self._validate_id(session_id)
+        with self._locks_guard:
+            lock = self._session_locks.setdefault(session_id, threading.RLock())
+        with lock:
+            yield
 
     def _validate_id(self, session_id: str) -> None:
         if not SESSION_ID_PATTERN.fullmatch(session_id):
@@ -53,50 +65,61 @@ class WorkspaceService:
             getattr(details, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
         )
 
-    def create_session(self) -> SessionRecord:
+    def create_session(
+        self,
+        owner_user_id: str | None = None,
+        project_id: str | None = None,
+    ) -> SessionRecord:
         now = datetime.now(timezone.utc)
-        record = SessionRecord(id=uuid.uuid4().hex, created_at=now, updated_at=now)
-        self._session_directory(record.id).mkdir()
-        self.save_manifest(record)
-        return record
-
-    def get_session(self, session_id: str) -> SessionRecord:
-        manifest = self._session_directory(session_id) / "manifest.json"
-        if not manifest.is_file():
-            raise KeyError(session_id)
-        with manifest.open("r", encoding="utf-8") as source:
-            raw = json.load(source)
-        record = SessionRecord.model_validate(raw)
-        record.schema_version = 2
-        if record.model_dump(mode="json") != raw:
+        record = SessionRecord(
+            id=uuid.uuid4().hex,
+            created_at=now,
+            updated_at=now,
+            owner_user_id=owner_user_id,
+            project_id=project_id,
+        )
+        with self.session_lock(record.id):
+            self._session_directory(record.id).mkdir()
             self.save_manifest(record)
         return record
-
+    def get_session(self, session_id: str) -> SessionRecord:
+        with self.session_lock(session_id):
+            manifest = self._session_directory(session_id) / "manifest.json"
+            if not manifest.is_file():
+                raise KeyError(session_id)
+            with manifest.open("r", encoding="utf-8") as source:
+                raw = json.load(source)
+            record = SessionRecord.model_validate(raw)
+            record.schema_version = 3
+            if record.model_dump(mode="json") != raw:
+                self.save_manifest(record)
+            return record
     def append_message(self, session_id: str, message: ChatMessage) -> SessionRecord:
-        record = self.get_session(session_id)
-        record.messages.append(message)
-        record.updated_at = datetime.now(timezone.utc)
-        self.save_manifest(record)
-        return record
-
+        with self.session_lock(session_id):
+            record = self.get_session(session_id)
+            record.messages.append(message)
+            record.updated_at = datetime.now(timezone.utc)
+            self.save_manifest(record)
+            return record
     def delete_session(self, session_id: str) -> None:
-        directory = self._session_directory(session_id)
-        if not directory.is_dir():
-            raise KeyError(session_id)
-        shutil.rmtree(directory)
-
+        with self.session_lock(session_id):
+            directory = self._session_directory(session_id)
+            if not directory.is_dir():
+                raise KeyError(session_id)
+            shutil.rmtree(directory)
     def save_manifest(self, record: SessionRecord) -> None:
-        directory = self._session_directory(record.id)
-        if not directory.is_dir():
-            raise KeyError(record.id)
-        temporary = directory / "manifest.json.tmp"
-        manifest = directory / "manifest.json"
-        payload = record.model_dump(mode="json")
-        with temporary.open("w", encoding="utf-8", newline="\n") as destination:
-            json.dump(payload, destination, ensure_ascii=False, indent=2)
-            destination.flush()
-            os.fsync(destination.fileno())
-        os.replace(temporary, manifest)
+        with self.session_lock(record.id):
+            directory = self._session_directory(record.id)
+            if not directory.is_dir():
+                raise KeyError(record.id)
+            temporary = directory / "manifest.json.tmp"
+            manifest = directory / "manifest.json"
+            payload = record.model_dump(mode="json")
+            with temporary.open("w", encoding="utf-8", newline="\n") as destination:
+                json.dump(payload, destination, ensure_ascii=False, indent=2)
+                destination.flush()
+                os.fsync(destination.fileno())
+            os.replace(temporary, manifest)
 
     def clear_skill_pack(self, pack_id: str) -> None:
         prefix = f"{pack_id}:"

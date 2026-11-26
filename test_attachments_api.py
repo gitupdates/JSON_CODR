@@ -63,6 +63,14 @@ class AttachmentServiceTests(unittest.TestCase):
         self.service.remove(self.session.id, attachment.id)
         self.assertEqual(self.workspace.get_session(self.session.id).attachments, [])
 
+    def test_attachment_mutation_uses_the_workspace_session_lock(self):
+        attachment = self.service.import_text(self.session.id, "pasted content")
+
+        with self.workspace.session_lock(self.session.id):
+            self.service.set_included(self.session.id, attachment.id, False)
+
+        self.assertFalse(self.workspace.get_session(self.session.id).attachments[0].included)
+
     def test_http_upload_paste_preview_include_and_delete(self):
         app = create_app(FakeOllamaService(), self.workspace, self.service)
         client = authenticated_client(app)

@@ -1,0 +1,125 @@
+import io
+import os
+import tempfile
+import unittest
+from pathlib import Path
+
+from web_app.attachments import AttachmentService
+from web_app.core.project_registry import ProjectRegistry
+from web_app.models import ChatMessage, ObjectReference, ReasoningEntry, ReasoningTrace
+from web_app.project_sessions import ProjectSessionService
+from web_app.workspace import WorkspaceService
+
+
+class ProjectSessionServiceTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary_directory.name)
+        self.project_root = self.root / "registered-project"
+        self.project_root.mkdir()
+        self.registry = ProjectRegistry(self.root / "projects.sqlite")
+        self.project = self.registry.register(self.project_root)
+        self.workspace = WorkspaceService(self.root / "data")
+        self.attachments = AttachmentService(self.workspace)
+        self.sessions = ProjectSessionService(self.workspace, self.registry)
+
+    def tearDown(self):
+        self.registry.close()
+        self.temporary_directory.cleanup()
+
+    def _live_session(self):
+        session = self.workspace.create_session("owner-1", self.project.project_id)
+        self.workspace.append_message(session.id, ChatMessage(
+            role="user", content="Implement parser.py and verify the model output.",
+            references=[ObjectReference(id="ref-1", kind="project_file", label="parser.py", target="parser.py")],
+        ))
+        self.workspace.append_message(session.id, ChatMessage(
+            role="assistant", content="Parser implementation completed.", effective_model="local:model",
+            reasoning=ReasoningTrace(entries=[ReasoningEntry(
+                sequence=0, kind="analysis", text="private chain must never be summarized", provenance="native_provider",
+            )]),
+        ))
+        self.attachments.import_stream(session.id, "notes.txt", io.BytesIO(b"attachment text"))
+        artifacts = self.workspace.sessions_root / session.id / "artifacts"
+        artifacts.mkdir()
+        (artifacts / "result.md").write_text("artifact", encoding="utf-8")
+        return session
+
+    def test_save_creates_immutable_project_scoped_copy_with_bounded_safe_summary(self):
+        session = self._live_session()
+
+        snapshot = self.sessions.save(session.id, self.project.project_id, "owner-1", "Parser fix", "fix", ["Urgent", "parser"])
+        snapshot_dir = self.sessions.snapshot_directory(snapshot.id, self.project.project_id)
+        manifest = self.workspace.get_session(session.id)
+
+        self.assertEqual(snapshot.project_id, self.project.project_id)
+        self.assertEqual(snapshot.owner_user_id, "owner-1")
+        self.assertEqual(snapshot.source_session_id, session.id)
+        self.assertTrue((snapshot_dir / "manifest.json").is_file())
+        self.assertTrue((snapshot_dir / "originals").is_dir())
+        self.assertTrue((snapshot_dir / "extracted").is_dir())
+        self.assertTrue((snapshot_dir / "artifacts" / "result.md").is_file())
+        self.assertIn("parser.py", snapshot.summary)
+        self.assertNotIn("private chain", snapshot.summary)
+        self.assertLessEqual(len(snapshot.summary), 8_000)
+        self.assertIn("snapshot:" + snapshot.id, snapshot.keywords)
+        self.assertIn("project:" + self.project.project_id, snapshot.keywords)
+        self.assertIn("file:parser.py", snapshot.keywords)
+        self.assertEqual(manifest.messages[0].content, "Implement parser.py and verify the model output.")
+
+    def test_repeated_saves_are_distinct_and_restore_creates_owner_bound_new_session(self):
+        session = self._live_session()
+        first = self.sessions.save(session.id, self.project.project_id, "owner-1", "Parser fix", "fix", [])
+        second = self.sessions.save(session.id, self.project.project_id, "owner-1", "Parser fix", "fix", [])
+
+        restored = self.sessions.restore(first.id, self.project.project_id, "owner-1")
+        live = self.workspace.get_session(restored.session_id)
+
+        self.assertNotEqual(first.id, second.id)
+        self.assertNotEqual(restored.session_id, session.id)
+        self.assertEqual(live.owner_user_id, "owner-1")
+        self.assertEqual(live.project_id, self.project.project_id)
+        self.assertEqual([m.content for m in live.messages], [m.content for m in self.workspace.get_session(session.id).messages])
+        self.assertEqual(len(live.attachments), 1)
+        self.assertEqual((self.workspace.sessions_root / restored.session_id / "artifacts" / "result.md").read_text(encoding="utf-8"), "artifact")
+
+    def test_owner_and_project_boundaries_deny_snapshot_access(self):
+        session = self._live_session()
+        snapshot = self.sessions.save(session.id, self.project.project_id, "owner-1", "Parser fix", "fix", [])
+        other_root = self.root / "other-project"
+        other_root.mkdir()
+        other = self.registry.register(other_root)
+
+        with self.assertRaises(PermissionError):
+            self.sessions.get(snapshot.id, self.project.project_id, "owner-2")
+        with self.assertRaises(PermissionError):
+            self.sessions.restore(snapshot.id, other.project_id, "owner-1")
+        with self.assertRaises(PermissionError):
+            self.sessions.save(session.id, self.project.project_id, "owner-2", "Parser fix", "fix", [])
+
+    def test_unsafe_or_partial_allowed_source_rejects_save_and_cleans_staging(self):
+        session = self._live_session()
+        attachment = self.workspace.get_session(session.id).attachments[0]
+        (self.workspace.sessions_root / session.id / "originals" / attachment.storage_name).unlink()
+
+        with self.assertRaises(ValueError):
+            self.sessions.save(session.id, self.project.project_id, "owner-1", "Parser fix", "fix", [])
+
+        staging = self.sessions.project_directory(self.project.project_id) / ".staging"
+        self.assertFalse(staging.exists() and any(staging.iterdir()))
+
+    def test_restore_rolls_back_new_live_session_when_snapshot_copy_fails(self):
+        session = self._live_session()
+        snapshot = self.sessions.save(session.id, self.project.project_id, "owner-1", "Parser fix", "fix", [])
+        source = self.sessions.snapshot_directory(snapshot.id, self.project.project_id) / "originals"
+        for path in source.iterdir():
+            path.unlink()
+
+        before = {path.name for path in self.workspace.sessions_root.iterdir()}
+        with self.assertRaises(ValueError):
+            self.sessions.restore(snapshot.id, self.project.project_id, "owner-1")
+        self.assertEqual({path.name for path in self.workspace.sessions_root.iterdir()}, before)
+
+
+if __name__ == "__main__":
+    unittest.main()

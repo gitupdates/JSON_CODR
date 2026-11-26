@@ -57,6 +57,17 @@ class AttachmentService:
         *,
         relative_path: str | None = None,
     ) -> AttachmentRecord:
+        with self.workspace.session_lock(session_id):
+            return self._import_stream(session_id, display_name, stream, relative_path=relative_path)
+
+    def _import_stream(
+        self,
+        session_id: str,
+        display_name: str,
+        stream: BinaryIO,
+        *,
+        relative_path: str | None = None,
+    ) -> AttachmentRecord:
         session = self.workspace.get_session(session_id)
         attachment_id = uuid.uuid4().hex
         safe_name = (
@@ -159,11 +170,12 @@ class AttachmentService:
         return self.import_stream(session_id, display_name, BytesIO(text.encode("utf-8")))
 
     def set_included(self, session_id: str, attachment_id: str, included: bool) -> AttachmentRecord:
-        session = self.workspace.get_session(session_id)
-        record = self._find(session.attachments, attachment_id)
-        record.included = included
-        self.workspace.save_manifest(session)
-        return record
+        with self.workspace.session_lock(session_id):
+            session = self.workspace.get_session(session_id)
+            record = self._find(session.attachments, attachment_id)
+            record.included = included
+            self.workspace.save_manifest(session)
+            return record
 
     def preview(self, session_id: str, attachment_id: str) -> dict[str, str]:
         session = self.workspace.get_session(session_id)
@@ -184,19 +196,20 @@ class AttachmentService:
         return path, record
 
     def retry(self, session_id: str, attachment_id: str) -> AttachmentRecord:
-        session = self.workspace.get_session(session_id)
-        record = self._find(session.attachments, attachment_id)
-        path, _ = self.original_path(session_id, attachment_id)
-        result = self.extraction.extract(path, record.detected_type or "text/plain")
-        extracted = self.workspace.sessions_root / session_id / "extracted"
-        extracted.mkdir(exist_ok=True)
-        record.extracted_name = record.extracted_name or f"{record.id}.txt"
-        (extracted / record.extracted_name).write_text(result.text, encoding="utf-8")
-        record.extraction_state = ExtractionState.ready
-        record.warnings = result.warnings
-        record.included = True
-        self.workspace.save_manifest(session)
-        return record
+        with self.workspace.session_lock(session_id):
+            session = self.workspace.get_session(session_id)
+            record = self._find(session.attachments, attachment_id)
+            path, _ = self.original_path(session_id, attachment_id)
+            result = self.extraction.extract(path, record.detected_type or "text/plain")
+            extracted = self.workspace.sessions_root / session_id / "extracted"
+            extracted.mkdir(exist_ok=True)
+            record.extracted_name = record.extracted_name or f"{record.id}.txt"
+            (extracted / record.extracted_name).write_text(result.text, encoding="utf-8")
+            record.extraction_state = ExtractionState.ready
+            record.warnings = result.warnings
+            record.included = True
+            self.workspace.save_manifest(session)
+            return record
 
     def export_zip(self, session_id: str) -> bytes:
         session = self.workspace.get_session(session_id)
@@ -220,15 +233,16 @@ class AttachmentService:
         return output.getvalue()
 
     def remove(self, session_id: str, attachment_id: str) -> None:
-        session = self.workspace.get_session(session_id)
-        record = self._find(session.attachments, attachment_id)
-        session.attachments.remove(record)
-        session_directory = self.workspace.sessions_root / session_id
-        if record.extracted_name:
-            (session_directory / "extracted" / record.extracted_name).unlink(missing_ok=True)
-        if record.storage_name and not any(item.storage_name == record.storage_name for item in session.attachments):
-            (session_directory / "originals" / record.storage_name).unlink(missing_ok=True)
-        self.workspace.save_manifest(session)
+        with self.workspace.session_lock(session_id):
+            session = self.workspace.get_session(session_id)
+            record = self._find(session.attachments, attachment_id)
+            session.attachments.remove(record)
+            session_directory = self.workspace.sessions_root / session_id
+            if record.extracted_name:
+                (session_directory / "extracted" / record.extracted_name).unlink(missing_ok=True)
+            if record.storage_name and not any(item.storage_name == record.storage_name for item in session.attachments):
+                (session_directory / "originals" / record.storage_name).unlink(missing_ok=True)
+            self.workspace.save_manifest(session)
 
     @staticmethod
     def _find(records: list[AttachmentRecord], attachment_id: str) -> AttachmentRecord:

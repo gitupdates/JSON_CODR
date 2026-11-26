@@ -368,10 +368,13 @@ class AttachmentRecord(BaseModel):
 
 
 class SessionRecord(BaseModel):
-    schema_version: int = 2
+    schema_version: int = 3
     id: str
     created_at: datetime
     updated_at: datetime
+    owner_user_id: Optional[str] = Field(default=None, max_length=256)
+    project_id: Optional[str] = Field(default=None, max_length=256)
+    restored_from_snapshot_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{32}$")
     messages: List[ChatMessage] = Field(default_factory=list)
     attachments: List[AttachmentRecord] = Field(default_factory=list)
     selected_skill_ids: List[str] = Field(default_factory=list)
@@ -382,6 +385,32 @@ class SessionRecord(BaseModel):
     @classmethod
     def deduplicate_exclusions(cls, value: List[str]) -> List[str]:
         return list(dict.fromkeys(value))
+
+
+class ProjectSessionSnapshot(BaseModel):
+    schema_version: int = 1
+    id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    source_session_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    project_id: str = Field(min_length=1, max_length=256)
+    owner_user_id: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1, max_length=500)
+    change_type: str = Field(min_length=1, max_length=100)
+    keywords: List[str] = Field(default_factory=list, max_length=128)
+    summary: str = Field(max_length=8_000)
+    created_at: datetime
+
+
+class ProjectSessionSaveRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=500)
+    change_type: str = Field(min_length=1, max_length=100)
+    keywords: List[str] = Field(default_factory=list, max_length=64)
+
+
+class ProjectSessionRestoreResult(BaseModel):
+    session_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    snapshot_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    project_id: str = Field(min_length=1, max_length=256)
+    owner_user_id: str = Field(min_length=1, max_length=256)
 
 
 class ClipboardTextRequest(BaseModel):
