@@ -182,7 +182,11 @@ class NativeOllamaTransport:
                                         "effective_model": candidate,
                                         "reason": reason,
                                     })
-                                profile = "reasoning" if public_reasoning else "base"
+                                degraded = any(
+                                    item.get("type") == "reasoning_degraded"
+                                    for item in result.provider_events
+                                )
+                                profile = "reasoning" if public_reasoning and not degraded else "base"
                                 self.compatibility.record_success(
                                     candidate,
                                     self.compatibility.digest(live.get(candidate)),
@@ -202,7 +206,10 @@ class NativeOllamaTransport:
                 if candidate != candidates[-1]:
                     yield {
                         "type": "warning",
-                        "text": f"{candidate} is incompatible; retrying with a reviewed local fallback.",
+                        "text": (
+                            f"{candidate} could not complete the request; "
+                            "retrying with a reviewed local fallback."
+                        ),
                     }
         if failures:
             raise failures[-1][1]
@@ -249,6 +256,7 @@ class NativeOllamaTransport:
         content_parts: list[str] = []
         reasoning_entries: list[ReasoningEntry] = []
         warnings: list[str] = []
+        reasoning_degraded = False
         try:
             async with aclosing(self._stream_response(
                 request, reasoning_entries, content_parts, warnings,
@@ -269,6 +277,7 @@ class NativeOllamaTransport:
                 "retried once with thinking disabled."
             )
             warnings.append(warning)
+            reasoning_degraded = True
             yield {"type": "warning", "text": warning}
             compatibility_request = {
                 **request,
@@ -286,6 +295,7 @@ class NativeOllamaTransport:
                 "retried once in final-answer mode."
             )
             warnings.append(warning)
+            reasoning_degraded = True
             yield {"type": "warning", "text": warning}
             fallback_request = {
                 **request,
@@ -302,9 +312,24 @@ class NativeOllamaTransport:
             raise ModelOutputError("Model returned no answer content")
         summary = next((line.strip() for line in content.splitlines() if line.strip()), "Model response")[:240]
         reasoning = ReasoningTrace(entries=reasoning_entries, warnings=warnings) if reasoning_entries or warnings else None
+        provider_events = []
+        if reasoning_degraded:
+            provider_events.append({
+                "type": "reasoning_degraded",
+                "requested_profile": "reasoning",
+                "effective_profile": "base",
+                "reason": "provider_reasoning_unavailable_or_incomplete",
+            })
         yield {
             "type": "completed",
-            "result": ChatResult(model=model, status="success", summary=summary, content=content, reasoning=reasoning),
+            "result": ChatResult(
+                model=model,
+                status="success",
+                summary=summary,
+                content=content,
+                reasoning=reasoning,
+                provider_events=provider_events,
+            ),
         }
 
     async def _stream_response(

@@ -1,9 +1,10 @@
 import unittest
 import warnings
 
-from web_app.core.adapters import CapabilityCall, ExecutionContext
+from web_app.core.adapters import CapabilityCall, CapabilityExecutionError, ExecutionContext
 from web_app.core.inference_adapter import InferenceAdapter
 from web_app.models import ChatResult
+from web_app.ollama_service import OllamaUnavailableError
 
 
 class RecordingBackend:
@@ -49,6 +50,23 @@ class CompatibilityResolvingBackend(StreamingBackend):
 
     async def stream_chat(self, model, prompt, images, public_reasoning=False):
         self.selected = model
+        async for event in super().stream_chat(model, prompt, images, public_reasoning):
+            yield event
+
+
+class ExactModelCompatibilityBackend(StreamingBackend):
+    def __init__(self, available_models, *, rejected_models=()):
+        self.available_models = available_models
+        self.rejected_models = set(rejected_models)
+        self.selected = None
+
+    async def list_models(self):
+        return [{"name": name, "installed": True, "runnable": True} for name in self.available_models]
+
+    async def stream_chat(self, model, prompt, images, public_reasoning=False):
+        self.selected = model
+        if model in self.rejected_models:
+            raise OllamaUnavailableError(f"compatibility policy rejected exact model {model}")
         async for event in super().stream_chat(model, prompt, images, public_reasoning):
             yield event
 
@@ -174,6 +192,45 @@ class InferenceAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(backend.selected, "new:8b")
         self.assertEqual(events[-1].payload["effective_model_id"], "new:8b")
+
+    async def test_missing_explicit_model_reaches_compatibility_policy_without_generic_fallback(self):
+        from web_app.core.model_tags import ModelTagRegistry
+
+        backend = ExactModelCompatibilityBackend(
+            ["qwen3:4b"],
+            rejected_models={"missing:8b"},
+        )
+        adapter = InferenceAdapter(backend, model_registry=ModelTagRegistry({}, ("qwen3:4b",)))
+        call = CapabilityCall(
+            capability_id="inference.generate",
+            operation="generate",
+            project_root=".",
+            arguments={"model": "missing:8b", "prompt": "Explain"},
+        )
+        context = ExecutionContext(task_id="task-1", project_id="project-1", principal="user")
+
+        with self.assertRaisesRegex(CapabilityExecutionError, "compatibility policy rejected exact model missing:8b"):
+            _ = [event async for event in adapter.execute(call, context)]
+
+        self.assertEqual(backend.selected, "missing:8b")
+
+    async def test_explicit_rnj_model_reaches_compatibility_policy_when_only_alternate_is_installed(self):
+        from web_app.core.model_tags import ModelTagRegistry
+
+        backend = ExactModelCompatibilityBackend(["rnj-1:8b-q4"])
+        adapter = InferenceAdapter(backend, model_registry=ModelTagRegistry({}, ("qwen3:4b",)))
+        call = CapabilityCall(
+            capability_id="inference.generate",
+            operation="generate",
+            project_root=".",
+            arguments={"model": "rnj-1:8b", "prompt": "Explain"},
+        )
+        context = ExecutionContext(task_id="task-1", project_id="project-1", principal="user")
+
+        events = [event async for event in adapter.execute(call, context)]
+
+        self.assertEqual(backend.selected, "rnj-1:8b")
+        self.assertEqual(events[-1].payload["requested_model_id"], "rnj-1:8b")
 
 
 if __name__ == "__main__":

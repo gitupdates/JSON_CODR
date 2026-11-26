@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from cli import StructuredCLIResponse, load_config, parse_response_content
 from web_app.models import ChatResult, ConversionBundle, GpuProfileSettings, ReasoningEntry, ReasoningTrace
-from web_app.model_compatibility import ModelCompatibilityLayer
+from web_app.model_compatibility import ModelCompatibilityLayer, is_model_runnable
 from web_app.reasoning import ReasoningNormalizer
 
 
@@ -57,9 +57,6 @@ class OllamaService:
                     return await asyncio.wait_for(self.client.chat(**request), timeout=self.timeout_seconds)
                 except Exception:
                     pass
-            if request.get("think") is True:
-                request.pop("think", None)
-                return await asyncio.wait_for(self.client.chat(**request), timeout=self.timeout_seconds)
             raise initial_error
 
     async def health(self) -> Dict[str, bool]:
@@ -128,10 +125,13 @@ class OllamaService:
 
     async def model_metadata(self, model: str) -> dict[str, object]:
         resolved = self._resolve(model)
+        effective = await self._compatible_tool_model(resolved)
+        if effective is None:
+            return {"context_length": None, "tool_calling": False, "vision": False}
         try:
-            response = await asyncio.wait_for(self.client.show(resolved), timeout=5)
+            response = await asyncio.wait_for(self.client.show(effective), timeout=5)
         except Exception as error:
-            raise OllamaUnavailableError(f"Unable to inspect model metadata for {resolved}") from error
+            raise OllamaUnavailableError(f"Unable to inspect model metadata for {effective}") from error
         payload = response.model_dump() if hasattr(response, "model_dump") else response
         capabilities = set(payload.get("capabilities", []))
         model_info = payload.get("model_info", {})
@@ -143,26 +143,51 @@ class OllamaService:
         verified_models = verified if isinstance(verified, list) else []
         return {
             "context_length": max(context_lengths) if context_lengths else None,
-            "tool_calling": resolved in verified_models and "tools" in capabilities,
+            "tool_calling": (
+                resolved in verified_models
+                and effective in verified_models
+                and "tools" in capabilities
+            ),
             "vision": "vision" in capabilities,
         }
 
     async def supports_tools(self, model: str) -> bool:
         resolved = self._resolve(model)
+        effective = await self._compatible_tool_model(resolved)
+        if effective is None:
+            return False
         try:
-            response = await asyncio.wait_for(self.client.show(resolved), timeout=5)
+            response = await asyncio.wait_for(self.client.show(effective), timeout=5)
         except Exception:
             return False
         payload = response.model_dump() if hasattr(response, "model_dump") else response
         verified = self.config.get("verified_tool_models")
         if isinstance(verified, list):
-            return resolved in verified and "tools" in payload.get("capabilities", [])
+            return (
+                resolved in verified
+                and effective in verified
+                and "tools" in payload.get("capabilities", [])
+            )
         return "tools" in payload.get("capabilities", [])
+
+    async def _compatible_tool_model(self, model: str) -> str | None:
+        if self.compatibility is None:
+            return model
+        live = await self._live_models()
+        records = self.compatibility.inventory([model], live)
+        record = next((item for item in records if item.get("name") == model), None)
+        if record is None or not is_model_runnable(record):
+            return None
+        effective = record.get("effective_model")
+        return str(effective) if isinstance(effective, str) and effective else None
 
     async def tool_compatibility(self, model: str) -> dict:
         resolved = self._resolve(model)
+        resolved_effective = await self._compatible_tool_model(resolved)
         try:
-            response = await asyncio.wait_for(self.client.show(resolved), timeout=5)
+            if resolved_effective is None:
+                raise OllamaUnavailableError("Model is not compatible")
+            response = await asyncio.wait_for(self.client.show(resolved_effective), timeout=5)
             payload = response.model_dump() if hasattr(response, "model_dump") else response
             advertised = "tools" in payload.get("capabilities", [])
         except Exception:
@@ -170,25 +195,34 @@ class OllamaService:
 
         verified = self.config.get("verified_tool_models")
         verified_models = verified if isinstance(verified, list) else []
-        if resolved in verified_models and advertised:
+        if (
+            resolved in verified_models
+            and resolved_effective in verified_models
+            and advertised
+        ):
             route = "broker_verified"
-            effective_model = resolved
+            effective_model = resolved_effective
         else:
             fallback = str(self.config.get("tool_fallback_model", "")).strip()
             fallback_installed = False
             if fallback in verified_models:
                 try:
-                    fallback_response = await asyncio.wait_for(self.client.show(fallback), timeout=5)
+                    fallback_effective = await self._compatible_tool_model(fallback)
+                    if fallback_effective not in verified_models:
+                        raise OllamaUnavailableError("Tool fallback is not compatible")
+                    fallback_response = await asyncio.wait_for(self.client.show(fallback_effective), timeout=5)
                     fallback_payload = fallback_response.model_dump() if hasattr(fallback_response, "model_dump") else fallback_response
                     fallback_installed = "tools" in fallback_payload.get("capabilities", [])
                 except Exception:
                     fallback_installed = False
-            effective_model = fallback if fallback_installed else None
+            effective_model = fallback_effective if fallback_installed else None
             route = "delegated_verified" if effective_model else "unavailable"
         return {
             "requested_model": resolved,
             "advertised_tools": advertised,
-            "native_tools_verified": resolved in verified_models,
+            "native_tools_verified": (
+                resolved in verified_models and resolved_effective in verified_models
+            ),
             "route": route,
             "effective_tool_model": effective_model,
             "available": effective_model is not None,
@@ -220,11 +254,11 @@ class OllamaService:
         configured = self.config["jury_models"]
         if requested in configured:
             return requested
+        if ":" in requested and not any(character.isspace() for character in requested):
+            return requested
         matches = [name for name in configured if requested.lower() in name.lower()]
         if len(matches) == 1:
             return matches[0]
-        if ":" in requested and not any(character.isspace() for character in requested):
-            return requested
         raise ValueError("Unknown or ambiguous model")
 
     async def chat(
@@ -493,7 +527,11 @@ class OllamaService:
                                             "reason": reason,
                                         })
                                     if self.compatibility is not None:
-                                        profile = "reasoning" if public_reasoning else "base"
+                                        degraded = any(
+                                            item.get("type") == "reasoning_degraded"
+                                            for item in result.provider_events
+                                        )
+                                        profile = "reasoning" if public_reasoning and not degraded else "base"
                                         self.compatibility.record_success(
                                             candidate,
                                             self.compatibility.digest(live.get(candidate)),
@@ -521,7 +559,10 @@ class OllamaService:
                 if candidate != candidates[-1]:
                     yield {
                         "type": "warning",
-                        "text": f"{candidate} is incompatible; retrying with a reviewed local fallback.",
+                        "text": (
+                            f"{candidate} could not complete the request; "
+                            "retrying with a reviewed local fallback."
+                        ),
                     }
         if failures:
             raise failures[-1][1]
@@ -552,10 +593,15 @@ class OllamaService:
         content_parts: list[str] = []
         reasoning_entries: list[ReasoningEntry] = []
         warnings: list[str] = []
+        reasoning_degraded = False
         try:
             attempts = [request]
             if request.get("think") is True:
-                attempts.append({key: value for key, value in request.items() if key != "think"})
+                attempts.append({
+                    **request,
+                    "messages": [{"role": "user", "content": prompt, "images": images or None}],
+                    "think": False,
+                })
             for attempt in attempts:
                 received_chunk = False
                 try:
@@ -578,6 +624,13 @@ class OllamaService:
                         and "does not support thinking" in str(error).casefold()
                     )
                     if unsupported_thinking:
+                        warning = (
+                            "The model does not support provider reasoning; "
+                            "retried once with thinking disabled."
+                        )
+                        warnings.append(warning)
+                        reasoning_degraded = True
+                        yield {"type": "warning", "text": warning}
                         continue
                     raise
             for delta in normalizer.finish():
@@ -595,9 +648,24 @@ class OllamaService:
             raise ModelOutputError("Model returned no answer content")
         summary = next((line.strip() for line in content.splitlines() if line.strip()), "Model response")[:240]
         trace = ReasoningTrace(entries=reasoning_entries, warnings=warnings) if reasoning_entries or warnings else None
+        provider_events = []
+        if reasoning_degraded:
+            provider_events.append({
+                "type": "reasoning_degraded",
+                "requested_profile": "reasoning",
+                "effective_profile": "base",
+                "reason": "provider_does_not_support_thinking",
+            })
         yield {
             "type": "completed",
-            "result": ChatResult(model=resolved, status="success", summary=summary, content=content, reasoning=trace),
+            "result": ChatResult(
+                model=resolved,
+                status="success",
+                summary=summary,
+                content=content,
+                reasoning=trace,
+                provider_events=provider_events,
+            ),
         }
 
     @staticmethod

@@ -54,6 +54,30 @@ class ModelTagRegistryTests(unittest.TestCase):
             self.assertEqual(route.effective_model, "granite-code:8b-instruct")
             self.assertFalse(route.fallback_used)
 
+    def test_missing_explicit_model_is_left_for_compatibility_policy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            registry = self._registry(Path(directory), {
+                "schema_version": 1,
+                "fallback_order": ["qwen3:4b"],
+                "tags": {},
+            })
+
+            route = registry.resolve("missing:8b", {"qwen3:4b"})
+
+            self.assertEqual(route.effective_model, "missing:8b")
+            self.assertFalse(route.fallback_used)
+
+    def test_malformed_colon_model_is_not_treated_as_an_exact_reference(self):
+        with tempfile.TemporaryDirectory() as directory:
+            registry = self._registry(Path(directory), {
+                "schema_version": 1,
+                "fallback_order": ["qwen3:4b"],
+                "tags": {},
+            })
+
+            with self.assertRaisesRegex(ValueError, "no installed model"):
+                registry.resolve("missing: 8b", {"qwen3:4b"})
+
     def test_prompt_compilation_orders_project_instructions_then_skills_then_task(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

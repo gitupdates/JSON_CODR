@@ -88,6 +88,119 @@ class ModelCompatibilityLayerTests(unittest.TestCase):
         self.assertIsNone(refreshed["runnable"])
         self.assertEqual(refreshed["compatibility_status"], "untested")
 
+    def test_malformed_state_blocks_automatic_admission_but_allows_exact_manual_reprobe(self):
+        self.state_path.write_text('{"models": ["not-a-mapping"]}', encoding="utf-8")
+        from web_app.model_compatibility import ModelCompatibilityLayer, is_model_runnable
+
+        layer = ModelCompatibilityLayer.load(self.config_path, self.state_path)
+        live = self.live("new-coder:latest", "qwen2.5-coder:3b")
+
+        record = layer.inventory(["new-coder:latest"], live)[0]
+
+        self.assertTrue(record["installed"])
+        self.assertEqual(record["compatibility_status"], "invalid_state")
+        self.assertFalse(record["runnable"])
+        self.assertFalse(is_model_runnable(record))
+        self.assertEqual(layer.candidates("new-coder:latest", live), ("new-coder:latest",))
+
+        layer.record_success("new-coder:latest", live["new-coder:latest"]["digest"], "base")
+
+        refreshed = layer.inventory(["new-coder:latest"], live)[0]
+        self.assertTrue(refreshed["runnable"])
+        self.assertEqual(
+            layer.candidates("new-coder:latest", live),
+            ("new-coder:latest", "qwen2.5-coder:3b"),
+        )
+
+    def test_unreadable_state_blocks_automatic_admission_without_hiding_installation(self):
+        self.state_path.mkdir()
+        from web_app.model_compatibility import ModelCompatibilityLayer
+
+        layer = ModelCompatibilityLayer.load(self.config_path, self.state_path)
+
+        record = layer.inventory(["new-coder:latest"], self.live("new-coder:latest"))[0]
+
+        self.assertTrue(record["installed"])
+        self.assertFalse(record["runnable"])
+        self.assertEqual(record["compatibility_status"], "invalid_state")
+
+    def test_state_with_arbitrary_digest_fails_closed(self):
+        self.state_path.write_text(json.dumps({
+            "schema_version": 1,
+            "models": {
+                "new-coder:latest": {
+                    "digest": "not-a-content-digest",
+                    "status": "compatible",
+                    "profile": "base",
+                    "error": "",
+                    "updated_at": "2026-11-25T00:00:00+00:00",
+                },
+            },
+        }), encoding="utf-8")
+        from web_app.model_compatibility import ModelCompatibilityLayer
+
+        layer = ModelCompatibilityLayer.load(self.config_path, self.state_path)
+        record = layer.inventory(["new-coder:latest"], self.live("new-coder:latest"))[0]
+
+        self.assertEqual(record["compatibility_status"], "invalid_state")
+        self.assertFalse(record["runnable"])
+
+    def test_missing_or_arbitrary_digest_evidence_is_not_persisted(self):
+        self.layer.record_success("missing:latest", "", "base")
+        classification = self.layer.record_failure(
+            "arbitrary:latest",
+            "digest-1",
+            RuntimeError("GGML_ASSERT failed to load model"),
+        )
+
+        self.assertEqual(classification, "incompatible")
+        self.assertFalse(self.state_path.exists())
+
+    def test_ollama_digest_is_normalized_before_evidence_is_persisted(self):
+        uppercase = "  SHA256:" + "A" * 64 + "  "
+        canonical = "sha256:" + "a" * 64
+
+        self.layer.record_success("new-coder:latest", uppercase, "base")
+
+        persisted = json.loads(self.state_path.read_text(encoding="utf-8"))
+        record = self.layer.inventory(
+            ["new-coder:latest"],
+            {"new-coder:latest": {"name": "new-coder:latest", "digest": canonical}},
+        )[0]
+        self.assertEqual(persisted["models"]["new-coder:latest"]["digest"], canonical)
+        self.assertTrue(record["runnable"])
+
+    def test_invalid_live_digest_does_not_admit_stored_compatible_evidence(self):
+        valid = "sha256:" + "a" * 64
+        self.layer.record_success("new-coder:latest", valid, "base")
+
+        record = self.layer.inventory(
+            ["new-coder:latest"],
+            {"new-coder:latest": {"name": "new-coder:latest", "digest": "unknown"}},
+        )[0]
+
+        self.assertTrue(record["installed"])
+        self.assertEqual(record["compatibility_status"], "invalid_digest")
+        self.assertFalse(record["runnable"])
+
+    def test_invalid_digest_is_never_used_as_an_automatic_fallback(self):
+        requested_digest = "sha256:" + "a" * 64
+        live = {
+            "new-coder:latest": {
+                "name": "new-coder:latest",
+                "digest": requested_digest,
+            },
+            "qwen2.5-coder:3b": {
+                "name": "qwen2.5-coder:3b",
+                "digest": "untrusted",
+            },
+        }
+
+        self.assertEqual(
+            self.layer.candidates("new-coder:latest", live),
+            ("new-coder:latest",),
+        )
+
     def test_malformed_state_is_not_trusted_and_next_write_replaces_it_atomically(self):
         self.state_path.write_text('{"models": ["not-a-mapping"]}', encoding="utf-8")
         from web_app.model_compatibility import ModelCompatibilityLayer
@@ -139,6 +252,44 @@ class ModelCompatibilityLayerTests(unittest.TestCase):
             self.layer.classify_failure(RuntimeError("connection was forcibly closed")),
             "transient",
         )
+
+    def test_unknown_output_failure_is_retained_as_nonblocking_evidence(self):
+        live = self.live("new-coder:latest")
+        digest = live["new-coder:latest"]["digest"]
+
+        classification = self.layer.record_failure(
+            "new-coder:latest",
+            digest,
+            RuntimeError("model returned malformed JSON output"),
+        )
+
+        record = self.layer.inventory(["new-coder:latest"], live)[0]
+        self.assertEqual(classification, "unknown")
+        self.assertEqual(record["compatibility_status"], "unknown_error")
+        self.assertIsNone(record["runnable"])
+        self.assertEqual(self.layer.candidates("new-coder:latest", live), ("new-coder:latest",))
+
+    def test_legacy_failed_evidence_is_nonblocking(self):
+        digest = "sha256:" + "a" * 64
+        self.state_path.write_text(json.dumps({
+            "schema_version": 1,
+            "models": {
+                "new-coder:latest": {
+                    "digest": digest,
+                    "status": "failed",
+                    "profile": "",
+                    "error": "RuntimeError: malformed output",
+                    "updated_at": "2026-11-25T00:00:00+00:00",
+                },
+            },
+        }), encoding="utf-8")
+        from web_app.model_compatibility import ModelCompatibilityLayer
+
+        layer = ModelCompatibilityLayer.load(self.config_path, self.state_path)
+        live = {"new-coder:latest": {"name": "new-coder:latest", "digest": digest}}
+
+        self.assertEqual(layer.candidates("new-coder:latest", live), ("new-coder:latest",))
+        self.assertIsNone(layer.inventory(["new-coder:latest"], live)[0]["runnable"])
 
 
 if __name__ == "__main__":

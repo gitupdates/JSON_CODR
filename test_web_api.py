@@ -2009,6 +2009,11 @@ class OllamaCompatibilityIntegrationTests(unittest.IsolatedAsyncioTestCase):
         from web_app.model_compatibility import ModelCompatibilityLayer
         self.compatibility = ModelCompatibilityLayer.load(policy, root / "state.json")
 
+    async def test_explicit_colon_qualified_model_is_never_fuzzy_remapped(self):
+        service = OllamaService(client=object())
+
+        self.assertEqual(service._resolve("coder:0.5b"), "coder:0.5b")
+
     async def test_unconfigured_exact_model_is_discovered_and_base_mode_recovers_response(self):
         class CompatibilityClient:
             def __init__(self):
@@ -2136,6 +2141,35 @@ class OllamaCompatibilityIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await service.chat("missing-model:8b", "hello")
 
         self.assertEqual(client.chat_calls, 0)
+
+    async def test_quarantined_verified_tool_fallback_is_not_routable(self):
+        base_digest = "sha256:" + "7" * 64
+
+        class ToolClient:
+            async def list(self):
+                return {"models": [
+                    {"name": "unverified:1b", "digest": "sha256:" + "6" * 64},
+                    {"name": "base-coder:1b", "digest": base_digest},
+                ]}
+
+            async def show(self, _model):
+                return {"capabilities": ["tools"]}
+
+        service = OllamaService(client=ToolClient())
+        service.config["verified_tool_models"] = ["base-coder:1b"]
+        service.config["tool_fallback_model"] = "base-coder:1b"
+        service.set_compatibility_layer(self.compatibility)
+        self.compatibility.record_failure(
+            "base-coder:1b",
+            base_digest,
+            RuntimeError("GGML_ASSERT failed to load model"),
+        )
+
+        route = await service.tool_compatibility("unverified:1b")
+
+        self.assertEqual(route["route"], "unavailable")
+        self.assertIsNone(route["effective_tool_model"])
+        self.assertFalse(route["available"])
 
 
 if __name__ == "__main__":

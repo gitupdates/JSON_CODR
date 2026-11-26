@@ -42,6 +42,19 @@ class FakeProvider:
         return ChatResult(model=model.id, status="ok", summary="accelerated", content="done")
 
 
+class FailingStreamingProvider(FakeProvider):
+    def __init__(self, events, error):
+        super().__init__()
+        self.events = events
+        self.error = error
+
+    async def stream_chat(self, model, prompt, images=None, public_reasoning=False):
+        self.calls.append(model.id)
+        for event in self.events:
+            yield event
+        raise self.error
+
+
 class FakeRegistry:
     def __init__(self, provider):
         self.provider = provider
@@ -94,6 +107,7 @@ class InferenceRouterTests(unittest.IsolatedAsyncioTestCase):
         quarantined = next(
             item for item in await router.list_models() if item["name"] == model.id
         )
+        self.assertTrue(quarantined["installed"])
         self.assertFalse(quarantined["runnable"])
         self.assertEqual(quarantined["compatibility_status"], "quarantined")
         self.assertEqual(quarantined["fallback_reason"], "provider probe failed")
@@ -158,6 +172,49 @@ class InferenceRouterTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.model, model.id)
         self.assertEqual(provider.calls, [model.id])
+
+    async def test_stream_failure_after_usable_provider_output_never_starts_ollama(self):
+        catalog = OptimizedModelCatalog()
+        model = catalog.list()[1]
+
+        for event_type in ("content", "reasoning"):
+            with self.subTest(event_type=event_type):
+                ollama = FakeOllama([model.ollama_fallback])
+                provider_event = {"type": event_type, "text": "partial provider output"}
+                provider = FailingStreamingProvider(
+                    [provider_event], RuntimeError("provider stream failed")
+                )
+                router = InferenceRouter(ollama, catalog, FakeRegistry(provider), {model.id})
+                events = []
+
+                with self.assertRaisesRegex(RuntimeError, "provider stream failed"):
+                    async for event in router.stream_chat(model.id, "hello"):
+                        events.append(event)
+
+                self.assertEqual(events, [provider_event])
+                self.assertEqual(ollama.calls, [])
+
+    async def test_stream_failure_before_output_falls_back_with_model_evidence(self):
+        catalog = OptimizedModelCatalog()
+        model = catalog.list()[1]
+        ollama = FakeOllama([model.ollama_fallback])
+        provider = FailingStreamingProvider([], RuntimeError("provider stream failed"))
+        router = InferenceRouter(ollama, catalog, FakeRegistry(provider), {model.id})
+
+        events = [event async for event in router.stream_chat(model.id, "hello")]
+
+        self.assertEqual(ollama.calls, [(model.ollama_fallback, False)])
+        result = events[-1]["result"]
+        self.assertEqual(result.requested_model, model.id)
+        self.assertEqual(result.effective_model, model.ollama_fallback)
+        self.assertEqual(result.fallback_reason, "provider stream failed")
+        self.assertEqual(result.provider_events[0], {
+            "type": "provider_fallback",
+            "requested_model": model.id,
+            "failed_provider": model.provider.value,
+            "error": "RuntimeError: provider stream failed",
+            "effective_model": model.ollama_fallback,
+        })
 
     async def test_provider_failure_quarantines_pair_and_uses_mapped_then_cpu_fallback(self):
         catalog = OptimizedModelCatalog()

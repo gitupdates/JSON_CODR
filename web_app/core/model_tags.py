@@ -80,14 +80,19 @@ class ModelTagRegistry:
 
     def resolve(self, tag: str, installed_models: Collection[str]) -> ModelTagRoute:
         installed = frozenset(installed_models)
-        if tag in installed:
+        tag_config = self.tags.get(tag)
+        if tag_config is not None:
+            candidates = tuple(dict.fromkeys((*tag_config.models, *self.fallback_order)))
+        elif tag in installed:
             return ModelTagRoute(tag, tag, False, ())
-        candidates = self.tags[tag].models if tag in self.tags else (tag, *self.fallback_order)
+        elif ":" in tag and not any(character.isspace() for character in tag):
+            return ModelTagRoute(tag, tag, False, (tag,))
+        else:
+            raise ValueError(f"no installed model can satisfy {tag}")
         unavailable = tuple(model for model in candidates if model not in installed)
         effective = next((model for model in candidates if model in installed), None)
         if effective is None:
             raise ValueError(f"no installed model can satisfy {tag}")
-        tag_config = self.tags.get(tag)
         options = {}
         if tag_config and tag_config.num_ctx is not None:
             options["num_ctx"] = tag_config.num_ctx

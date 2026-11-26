@@ -320,9 +320,17 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
             "final-answer mode" in warning
             for warning in events[-1]["result"].reasoning.warnings
         ))
+        self.assertTrue(any(
+            event.get("type") == "reasoning_degraded"
+            and event.get("effective_profile") == "base"
+            for event in events[-1]["result"].provider_events
+        ))
 
     async def test_stream_chat_retries_with_thinking_disabled_for_incompatible_model(self):
         from web_app.core.native_ollama import NativeOllamaTransport
+        from web_app.model_compatibility import ModelCompatibilityLayer
+        from pathlib import Path
+        import tempfile
 
         payloads = []
         responses = [
@@ -341,8 +349,28 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
             payloads.append(json.loads(request.data))
             return responses.pop(0)
 
-        transport = NativeOllamaTransport("http://localhost:11434")
-        with patch("web_app.core.native_ollama.urlopen", side_effect=fake_urlopen):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        policy = root / "policy.json"
+        policy.write_text(json.dumps({
+            "schema_version": 1,
+            "base_fallback_order": [],
+            "models": {},
+        }), encoding="utf-8")
+        compatibility = ModelCompatibilityLayer.load(policy, root / "state.json")
+        transport = NativeOllamaTransport(
+            "http://localhost:11434",
+            compatibility=compatibility,
+        )
+        live_models = [{
+            "name": "qwen2.5-coder:0.5b",
+            "digest": "sha256:" + "9" * 64,
+        }]
+        with (
+            patch("web_app.core.native_ollama.urlopen", side_effect=fake_urlopen),
+            patch.object(transport, "list_models", new=AsyncMock(return_value=live_models)),
+        ):
             events = [event async for event in transport.stream_chat(
                 "qwen2.5-coder:0.5b", "Reply", public_reasoning=True,
             )]
@@ -354,6 +382,16 @@ class NativeOllamaTransportTests(unittest.IsolatedAsyncioTestCase):
             "thinking disabled" in warning
             for warning in events[-1]["result"].reasoning.warnings
         ))
+        self.assertTrue(any(
+            event.get("type") == "reasoning_degraded"
+            and event.get("effective_profile") == "base"
+            for event in events[-1]["result"].provider_events
+        ))
+        state = json.loads((root / "state.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            state["models"]["qwen2.5-coder:0.5b"]["profile"],
+            "base",
+        )
 
     async def test_stream_chat_retries_without_thinking_when_runner_resets_after_reasoning(self):
         from web_app.core.native_ollama import NativeOllamaTransport

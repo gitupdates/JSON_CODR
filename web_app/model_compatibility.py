@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -31,7 +32,23 @@ _TRANSIENT_MARKERS = (
     "timed out",
     "timeout",
 )
-_FAILED_STATUSES = frozenset({"quarantined", "failed"})
+_BLOCKING_STATUSES = frozenset({"quarantined"})
+_STATE_STATUSES = frozenset({
+    "compatible",
+    "quarantined",
+    "failed",
+    "unknown_error",
+    "transient_error",
+    "capability_limited",
+})
+_OLLAMA_DIGEST = re.compile(r"sha256:[0-9a-f]{64}", re.IGNORECASE)
+
+
+def _canonical_digest(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    candidate = value.strip().casefold()
+    return candidate if _OLLAMA_DIGEST.fullmatch(candidate) else ""
 
 
 def is_model_runnable(record: Mapping[str, object]) -> bool:
@@ -62,11 +79,13 @@ class ModelCompatibilityLayer:
         model_rules: dict[str, dict[str, object]],
         state_path: Path,
         state: dict[str, dict[str, str]],
+        state_valid: bool,
     ) -> None:
         self.base_fallback_order = base_fallback_order
         self.model_rules = model_rules
         self.state_path = state_path
         self._state = state
+        self._state_valid = state_valid
 
     @classmethod
     def load(cls, config_path: Path, state_path: Path) -> "ModelCompatibilityLayer":
@@ -94,11 +113,13 @@ class ModelCompatibilityLayer:
                 "prefer_alternate": prefer_alternate,
                 "reason": reason.strip()[:1000],
             }
+        state, state_valid = cls._read_state(Path(state_path))
         return cls(
             base_fallback_order=base_fallback_order,
             model_rules=model_rules,
             state_path=Path(state_path),
-            state=cls._read_state(Path(state_path)),
+            state=state,
+            state_valid=state_valid,
         )
 
     @staticmethod
@@ -115,33 +136,35 @@ class ModelCompatibilityLayer:
         return tuple(result)
 
     @staticmethod
-    def _read_state(path: Path) -> dict[str, dict[str, str]]:
+    def _read_state(path: Path) -> tuple[dict[str, dict[str, str]], bool]:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (FileNotFoundError, OSError, json.JSONDecodeError):
-            return {}
+        except FileNotFoundError:
+            return {}, True
+        except (OSError, json.JSONDecodeError):
+            return {}, False
         if not isinstance(payload, dict) or payload.get("schema_version") != 1:
-            return {}
+            return {}, False
         models = payload.get("models")
         if not isinstance(models, dict):
-            return {}
+            return {}, False
         result: dict[str, dict[str, str]] = {}
         for name, record in models.items():
             if not isinstance(name, str) or not isinstance(record, dict):
-                return {}
-            digest = record.get("digest")
+                return {}, False
+            digest = _canonical_digest(record.get("digest"))
             status = record.get("status")
             profile = record.get("profile")
             error = record.get("error", "")
             updated_at = record.get("updated_at", "")
             if (
-                not isinstance(digest, str)
-                or status not in {"compatible", "quarantined", "failed", "transient_error", "capability_limited"}
+                not digest
+                or status not in _STATE_STATUSES
                 or not isinstance(profile, str)
                 or not isinstance(error, str)
                 or not isinstance(updated_at, str)
             ):
-                return {}
+                return {}, False
             result[name] = {
                 "digest": digest,
                 "status": status,
@@ -149,7 +172,7 @@ class ModelCompatibilityLayer:
                 "error": error[:1000],
                 "updated_at": updated_at,
             }
-        return result
+        return result, True
 
     @staticmethod
     def _live_by_name(live: Mapping[str, Mapping[str, object]] | Sequence[Mapping[str, object]]) -> dict[str, dict]:
@@ -167,8 +190,7 @@ class ModelCompatibilityLayer:
     def digest(item: Mapping[str, object] | None) -> str:
         if not item:
             return ""
-        digest = item.get("digest")
-        return str(digest) if isinstance(digest, str) else ""
+        return _canonical_digest(item.get("digest"))
 
     def _specific_names(self, requested: str) -> tuple[str, ...]:
         rule = self.model_rules.get(requested, {})
@@ -178,6 +200,8 @@ class ModelCompatibilityLayer:
         return (requested, *alternates)
 
     def _matching_state(self, model: str, digest: str) -> dict[str, str] | None:
+        if not self._state_valid or not digest:
+            return None
         record = self._state.get(model)
         if record is None or record.get("digest", "") != digest:
             return None
@@ -185,7 +209,7 @@ class ModelCompatibilityLayer:
 
     def _blocked(self, model: str, item: Mapping[str, object]) -> bool:
         state = self._matching_state(model, self.digest(item))
-        return state is not None and state.get("status") in _FAILED_STATUSES
+        return state is not None and state.get("status") in _BLOCKING_STATUSES
 
     def candidates(
         self,
@@ -193,13 +217,25 @@ class ModelCompatibilityLayer:
         live: Mapping[str, Mapping[str, object]] | Sequence[Mapping[str, object]],
     ) -> tuple[str, ...]:
         available = self._live_by_name(live)
+        if not self._state_valid:
+            return (requested,) if requested in available else ()
         specific_available = [name for name in self._specific_names(requested) if name in available]
-        if not specific_available:
+        routable_specific = [
+            name
+            for name in specific_available
+            if name == requested or bool(self.digest(available[name]))
+        ]
+        if not routable_specific:
             return ()
         ordered: list[str] = []
-        for name in (*specific_available, *self.base_fallback_order):
+        for name in (*routable_specific, *self.base_fallback_order):
             item = available.get(name)
-            if item is None or name in ordered or self._blocked(name, item):
+            if (
+                item is None
+                or name in ordered
+                or (name != requested and not self.digest(item))
+                or self._blocked(name, item)
+            ):
                 continue
             ordered.append(name)
         return tuple(ordered)
@@ -216,14 +252,16 @@ class ModelCompatibilityLayer:
         return "unknown"
 
     def record_success(self, model: str, digest: str, profile: str) -> None:
-        self._state[model] = {
-            "digest": digest,
+        canonical_digest = _canonical_digest(digest)
+        if not canonical_digest:
+            return
+        self._record(model, {
+            "digest": canonical_digest,
             "status": "compatible",
             "profile": str(profile)[:64],
             "error": "",
             "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        self._persist()
+        })
 
     def record_failure(self, model: str, digest: str, error: BaseException | str) -> str:
         classification = self.classify_failure(error)
@@ -231,22 +269,31 @@ class ModelCompatibilityLayer:
             "incompatible": "quarantined",
             "capability": "capability_limited",
             "transient": "transient_error",
-            "unknown": "failed",
+            "unknown": "unknown_error",
         }[classification]
-        self._state[model] = {
-            "digest": digest,
+        canonical_digest = _canonical_digest(digest)
+        if not canonical_digest:
+            return classification
+        self._record(model, {
+            "digest": canonical_digest,
             "status": status,
             "profile": "",
             "error": f"{type(error).__name__}: {error}"[:1000],
             "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        self._persist()
+        })
         return classification
 
-    def _persist(self) -> None:
+    def _record(self, model: str, record: dict[str, str]) -> None:
+        state = dict(self._state) if self._state_valid else {}
+        state[model] = record
+        self._persist(state)
+        self._state = state
+        self._state_valid = True
+
+    def _persist(self, state: Mapping[str, Mapping[str, str]]) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.state_path.with_suffix(".tmp")
-        payload = {"schema_version": 1, "models": self._state}
+        payload = {"schema_version": 1, "models": state}
         temporary.write_text(
             json.dumps(payload, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -276,11 +323,18 @@ class ModelCompatibilityLayer:
             digest = self.digest(item)
             state = self._matching_state(str(effective), digest) if effective else None
             installed = bool(specific)
-            status = state.get("status") if state else ("untested" if installed else "not_installed")
+            if not installed:
+                status = "not_installed"
+            elif not self._state_valid:
+                status = "invalid_state"
+            elif not digest:
+                status = "invalid_digest"
+            else:
+                status = state.get("status") if state else "untested"
             runnable: bool | None
             if status == "compatible":
                 runnable = True
-            elif status in _FAILED_STATUSES or not installed:
+            elif status in _BLOCKING_STATUSES or status in {"invalid_state", "invalid_digest"} or not installed:
                 runnable = False
             else:
                 runnable = None

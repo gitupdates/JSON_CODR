@@ -16,11 +16,12 @@ class InferenceRouter:
     async def list_models(self) -> list[dict]:
         result = await self.ollama.list_models()
         for model in self.catalog.list():
-            runnable = model.id in self.verified_models and model.id not in self.quarantined
+            installed = model.id in self.verified_models
+            runnable = installed and model.id not in self.quarantined
             status = "quarantined" if model.id in self.quarantined else "verified" if runnable else "not_installed"
             result.append({
                 "name": model.id,
-                "installed": runnable,
+                "installed": installed,
                 "runnable": runnable,
                 "compatibility_status": status,
                 "effective_model": model.id if runnable else None,
@@ -102,6 +103,7 @@ class InferenceRouter:
         if model_id not in self.verified_models or model_id in self.quarantined:
             raise ValueError("Optimized model is not verified")
         provider = self.registry.get(model.provider)
+        emitted_usable_output = False
         try:
             stream_chat = getattr(provider, "stream_chat", None)
             if callable(stream_chat):
@@ -111,12 +113,16 @@ class InferenceRouter:
                     images=images,
                     public_reasoning=public_reasoning,
                 ):
+                    if event.get("type") in {"content", "reasoning"} and event.get("text"):
+                        emitted_usable_output = True
                     yield event
                 return
             result = await provider.chat(model, prompt, images=images)
             yield {"type": "completed", "result": result}
         except Exception as error:
             self.quarantined[model_id] = str(error)
+            if emitted_usable_output:
+                raise
             installed = [item["name"] for item in await self.ollama.list_models() if is_model_runnable(item)]
             fallback = model.ollama_fallback if model.ollama_fallback in installed else (installed[0] if installed else None)
             if not fallback:
@@ -131,4 +137,14 @@ class InferenceRouter:
                     result = event.get("result")
                     if result is not None:
                         result.summary = f"Fallback to {fallback} after {model.provider.value} failure: {result.summary}"
+                        result.requested_model = model_id
+                        result.effective_model = fallback
+                        result.fallback_reason = str(error)
+                        result.provider_events.insert(0, {
+                            "type": "provider_fallback",
+                            "requested_model": model_id,
+                            "failed_provider": model.provider.value,
+                            "error": f"{type(error).__name__}: {error}",
+                            "effective_model": fallback,
+                        })
                 yield event

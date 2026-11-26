@@ -116,7 +116,10 @@ class OllamaPublicReasoningTests(unittest.IsolatedAsyncioTestCase):
                 self.calls = []
 
             async def list(self):
-                return {"models": [{"model": "qwen2.5-coder:0.5b"}]}
+                return {"models": [{
+                    "model": "qwen2.5-coder:0.5b",
+                    "digest": "sha256:" + "8" * 64,
+                }]}
 
             async def chat(self, **request):
                 self.calls.append(request)
@@ -124,13 +127,43 @@ class OllamaPublicReasoningTests(unittest.IsolatedAsyncioTestCase):
 
         client = FakeClient()
         service = OllamaService(client=client)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        policy = root / "policy.json"
+        policy.write_text(json.dumps({
+            "schema_version": 1,
+            "base_fallback_order": [],
+            "models": {},
+        }), encoding="utf-8")
+        from web_app.model_compatibility import ModelCompatibilityLayer
+        service.set_compatibility_layer(
+            ModelCompatibilityLayer.load(policy, root / "state.json")
+        )
 
         events = [event async for event in service.stream_chat(
             "qwen2.5-coder:0.5b", "Review", public_reasoning=True
         )]
 
-        self.assertEqual([call.get("think") for call in client.calls], [True, None])
-        self.assertEqual(events[-1]["result"].content, "Fallback answer.")
+        self.assertEqual([call.get("think") for call in client.calls], [True, False])
+        self.assertEqual(
+            client.calls[1]["messages"],
+            [{"role": "user", "content": "Review", "images": None}],
+        )
+        self.assertTrue(any(event.get("type") == "warning" for event in events))
+        result = events[-1]["result"]
+        self.assertEqual(result.content, "Fallback answer.")
+        self.assertTrue(any(
+            event.get("type") == "reasoning_degraded"
+            and event.get("requested_profile") == "reasoning"
+            and event.get("effective_profile") == "base"
+            for event in result.provider_events
+        ))
+        state = json.loads((root / "state.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            state["models"]["qwen2.5-coder:0.5b"]["profile"],
+            "base",
+        )
 
     async def test_stream_compatibility_falls_back_before_any_output(self):
         from web_app.model_compatibility import ModelCompatibilityLayer
