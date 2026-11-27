@@ -2048,7 +2048,8 @@ function renderIntegrityBenchmark(benchmark) {
     caption.className = "meta";
     caption.textContent = label;
     const score = document.createElement("strong");
-    score.textContent = `${Number(value).toFixed(1)}%`;
+    score.textContent = benchmark.comparable === false || value === null || value === undefined
+      ? "Not scored" : `${Number(value).toFixed(1)}%`;
     card.append(caption, score);
     elements.integrityBenchmarkScores.append(card);
   }
@@ -2069,12 +2070,18 @@ function renderIntegrityBenchmark(benchmark) {
     const details = document.createElement("details");
     details.className = "dependency-row";
     const summary = document.createElement("summary");
-    summary.textContent = `${scenario.passed ? "PASS" : "REVIEW"} · ${scenario.name} · ${Number(scenario.score).toFixed(1)}%`;
+    const scenarioState = scenario.status === "infrastructure_error"
+      ? "INFRASTRUCTURE ERROR" : scenario.passed ? "PASS" : "FAIL";
+    const scenarioScore = scenario.score === null || scenario.score === undefined
+      ? "Not scored" : `${Number(scenario.score).toFixed(1)}%`;
+    summary.textContent = `${scenarioState} · ${scenario.name} · ${scenarioScore}`;
     details.append(summary);
     for (const evidence of (Array.isArray(scenario.evidence) ? scenario.evidence : []).filter((item) => item && typeof item === "object")) {
       const line = document.createElement("p");
       line.className = "meta integrity-evidence";
-      line.textContent = `Run ${evidence.repetition} · ${evidence.passed ? "pass" : "fail"} · ${evidence.evaluation_reason || "unclassified"} · ${evidence.error || evidence.output || "No output"}${evidence.truncated ? ` · truncated from ${evidence.output_length} characters` : ""}`;
+      const evidenceState = evidence.status === "infrastructure_error"
+        ? "infrastructure error" : evidence.passed ? "pass" : "fail";
+      line.textContent = `Run ${evidence.repetition} · ${evidenceState} · ${evidence.evaluation_reason || "unclassified"} · ${evidence.error || evidence.output || "No output"}${evidence.truncated ? ` · truncated from ${evidence.output_length} characters` : ""}`;
       details.append(line);
     }
     elements.integrityBenchmarkResults.append(details);
@@ -2096,7 +2103,9 @@ async function loadIntegrityBenchmarkHistory() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "secondary";
-    button.textContent = `${benchmark.suite} · ${benchmark.model} · ${Number(benchmark.scores.overall).toFixed(1)}% · ${new Date(benchmark.created_at).toLocaleString()}`;
+    const overall = benchmark.comparable === false || benchmark.scores.overall === null
+      ? "Not scored" : `${Number(benchmark.scores.overall).toFixed(1)}%`;
+    button.textContent = `${benchmark.suite} · ${benchmark.model} · ${overall} · ${new Date(benchmark.created_at).toLocaleString()}`;
     button.addEventListener("click", () => renderIntegrityBenchmark(benchmark));
     elements.integrityBenchmarkHistory.append(button);
   }
@@ -2124,7 +2133,9 @@ async function runIntegrityBenchmark() {
     const metricStatus = logPerplexity?.status === "measured" && logPerplexity?.comparable
       ? ` · ${Number(logPerplexity.base_log_perplexity).toFixed(4)} base log-perplexity`
       : " · base log-perplexity unavailable";
-    elements.integrityBenchmarkStatus.textContent = `Evaluation complete · ${Number(benchmark.scores.overall).toFixed(1)}% overall${metricStatus}`;
+    elements.integrityBenchmarkStatus.textContent = benchmark.comparable === false
+      ? "Evaluation incomplete · infrastructure error · Not scored"
+      : `Evaluation complete · ${Number(benchmark.scores.overall).toFixed(1)}% overall${metricStatus}`;
   } finally {
     elements.integrityBenchmarkRun.disabled = false;
   }

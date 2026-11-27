@@ -1122,6 +1122,55 @@ listeners.change().then(() => process.stdout.write(JSON.stringify({requests, pre
         ):
             self.assertIn(f"elements.{identifier}.addEventListener", javascript)
 
+    def test_integrity_benchmark_renderer_distinguishes_infrastructure_from_quality_failures(self):
+        javascript = self.client.get("/static/app.js").text
+        harness = r'''
+const vm = require("vm");
+const source = process.env.APP_SOURCE;
+const start = source.indexOf("function renderIntegrityBenchmark(benchmark)");
+const end = source.indexOf("\nasync function loadIntegrityBenchmarkHistory", start);
+class Node {
+  constructor() { this.children = []; this._text = ""; this.innerHTML = ""; }
+  set textContent(value) { this._text = String(value); }
+  get textContent() { return [this._text, ...this.children.map((child) => child.textContent)].join(" ").trim(); }
+  append(...children) { this.children.push(...children); }
+  replaceChildren() { this.children = []; this._text = ""; this.innerHTML = ""; }
+}
+const elements = {integrityBenchmarkScores: new Node(), integrityBenchmarkResults: new Node()};
+const context = {elements, document: {createElement() { return new Node(); }}};
+vm.runInNewContext(source.slice(start, end), context);
+const common = {suite_version: "Integrity-Comprehension-v3", schema_version: "1.2", created_at: "2026-01-01T00:00:00Z"};
+context.renderIntegrityBenchmark({...common, status: "incomplete", comparable: false,
+  scores: {integrity: null, comprehension: null, overall: null},
+  scenarios: [{name: "Runtime probe", status: "infrastructure_error", passed: null, score: null,
+    evidence: [{repetition: 1, status: "infrastructure_error", passed: null,
+      evaluation_reason: "infrastructure_error", error: "Ollama unavailable", output: ""}]}]});
+const infrastructure = `${elements.integrityBenchmarkScores.textContent} ${elements.integrityBenchmarkResults.textContent}`;
+context.renderIntegrityBenchmark({...common, status: "completed_with_failures", comparable: true,
+  scores: {integrity: 0, comprehension: 100, overall: 50},
+  scenarios: [{name: "Strict result", status: "fail", passed: false, score: 0,
+    evidence: [{repetition: 1, status: "fail", passed: false,
+      evaluation_reason: "conclusion_mismatch", error: null, output: '{"actual":false}'}]}]});
+const quality = `${elements.integrityBenchmarkScores.textContent} ${elements.integrityBenchmarkResults.textContent}`;
+process.stdout.write(JSON.stringify({infrastructure, quality}));
+'''
+        completed = subprocess.run(
+            ["node", "-e", harness],
+            env={"APP_SOURCE": javascript},
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        rendered = json.loads(completed.stdout)
+
+        self.assertIn("Not scored", rendered["infrastructure"])
+        self.assertIn("INFRASTRUCTURE ERROR", rendered["infrastructure"])
+        self.assertIn("infrastructure error", rendered["infrastructure"])
+        self.assertNotIn("0.0%", rendered["infrastructure"])
+        self.assertIn("FAIL", rendered["quality"])
+        self.assertIn("0.0%", rendered["quality"])
+        self.assertIn("conclusion_mismatch", rendered["quality"])
+
     def test_gpu_telemetry_and_per_model_profile_controls_are_present(self):
         html = self.client.get("/").text
         javascript = self.client.get("/static/app.js").text

@@ -2157,6 +2157,18 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(client.get("/api/integrity-benchmarks").json(), [])
 
+    def test_integrity_benchmark_preflights_runtime_health_before_scoring(self):
+        self.service.available = False
+
+        response = self.client.post(
+            "/api/integrity-benchmarks",
+            json={"suite": "quick", "model": "qwen2.5-coder:7b-instruct-q4_K_M"},
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("runtime", response.json()["detail"].lower())
+        self.assertEqual(self.client.get("/api/integrity-benchmarks").json(), [])
+
     def test_localperf_package_export_preview_and_import_are_private_by_default(self):
         from web_app.localperf.aggregate import aggregate_run
         from web_app.localperf.models import SampleRecord

@@ -1766,6 +1766,12 @@ def create_app(
         if not integrity_generation_available:
             raise HTTPException(status_code=409, detail="Integrity benchmarks are unavailable for this model service")
         try:
+            runtime_health = await service.health()
+        except Exception as error:
+            raise HTTPException(status_code=503, detail="Model runtime preflight failed") from error
+        if not isinstance(runtime_health, dict) or runtime_health.get("ollama") is not True:
+            raise HTTPException(status_code=503, detail="Model runtime is unavailable")
+        try:
             installed = {item["name"] for item in await service.list_models() if is_model_runnable(item)}
         except Exception as error:
             raise HTTPException(status_code=503, detail="Unable to query installed models") from error

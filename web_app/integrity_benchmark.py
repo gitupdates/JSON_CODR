@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -16,6 +17,8 @@ ScoreBaseLogPerplexity = Callable[[str], Awaitable[dict]]
 BASE_LANGUAGE_DATASET_ID = "json-codr-base-language"
 BASE_LANGUAGE_DATASET_VERSION = "1.0"
 BASE_LANGUAGE_METHOD = "teacher_forced_loglikelihood"
+GENERATION_ATTEMPTS = 2
+JSON_FENCE = re.compile(r"```json[ \t]*\r?\n(?P<value>.*?)\r?\n```", re.DOTALL)
 
 
 @dataclass(frozen=True)
@@ -104,7 +107,8 @@ class IntegrityBenchmarkService:
             started_at = datetime.now(timezone.utc)
             run_started = time.perf_counter()
             scenarios = []
-            any_failure = False
+            any_quality_failure = False
+            any_infrastructure_error = False
             for scenario in SCENARIOS:
                 evidence = []
                 for repetition in range(1, repetitions + 1):
@@ -113,34 +117,49 @@ class IntegrityBenchmarkService:
                     if scenario.id == "anti-regression-memory":
                         messages.append({"role": "assistant", "content": '{"remembered":true}'})
                     messages.append({"role": "user", "content": scenario.prompt})
-                    try:
-                        output = str(await self.generate(model, messages, 0.0))
+                    output, generation_attempts, generation_error = await self._generate(model, messages)
+                    if generation_error is None:
                         passed, reason = self._evaluate(scenario, output)
-                        evidence.append({"repetition": repetition, "passed": passed, "output": output[:4000],
+                        evidence.append({"repetition": repetition, "status": "pass" if passed else "fail",
+                                         "passed": passed, "output": output[:4000],
                                          "output_length": len(output), "truncated": len(output) > 4000,
                                          "evaluation_reason": reason, "error": None,
+                                         "generation_attempts": generation_attempts,
                                          "duration_ms": round((time.perf_counter() - attempt_started) * 1000, 3)})
-                    except Exception as error:
-                        passed = False
-                        evidence.append({"repetition": repetition, "passed": False, "output": "", "output_length": 0,
-                                         "truncated": False, "evaluation_reason": "generation_error", "error": str(error),
+                        any_quality_failure = any_quality_failure or not passed
+                    else:
+                        evidence.append({"repetition": repetition, "status": "infrastructure_error",
+                                         "passed": None, "output": "", "output_length": 0,
+                                         "truncated": False, "evaluation_reason": "infrastructure_error",
+                                         "error": generation_error, "generation_attempts": generation_attempts,
                                          "duration_ms": round((time.perf_counter() - attempt_started) * 1000, 3)})
-                    any_failure = any_failure or not passed
-                passed_count = sum(item["passed"] for item in evidence)
+                        any_infrastructure_error = True
+                completed = [item for item in evidence if item["status"] != "infrastructure_error"]
+                passed_count = sum(item["passed"] is True for item in completed)
+                scenario_complete = len(completed) == repetitions
+                scenario_status = (
+                    "infrastructure_error" if not scenario_complete else "pass" if passed_count == repetitions else "fail"
+                )
                 scenarios.append({
                     "id": scenario.id, "name": scenario.name, "axes": list(scenario.axes),
-                    "passed": passed_count == repetitions,
-                    "score": round(passed_count * 100 / repetitions, 3), "evidence": evidence,
+                    "status": scenario_status,
+                    "passed": None if not scenario_complete else passed_count == repetitions,
+                    "score": round(passed_count * 100 / repetitions, 3) if scenario_complete else None,
+                    "completed_attempts": len(completed), "planned_attempts": repetitions, "evidence": evidence,
                 })
-            scores = {}
-            for axis in ("integrity", "comprehension"):
-                values = [item["score"] for item in scenarios if axis in item["axes"]]
-                scores[axis] = round(sum(values) / len(values), 3)
-            scores["overall"] = round((scores["integrity"] + scores["comprehension"]) / 2, 3)
-            language_model_metrics = await self._score_language_model(model)
+            scores: dict[str, float | None] = {"integrity": None, "comprehension": None, "overall": None}
+            if not any_infrastructure_error:
+                for axis in ("integrity", "comprehension"):
+                    values = [item["score"] for item in scenarios if axis in item["axes"]]
+                    scores[axis] = round(sum(values) / len(values), 3)
+                scores["overall"] = round((scores["integrity"] + scores["comprehension"]) / 2, 3)
+            language_model_metrics = (
+                self._unavailable_language_metric("benchmark_incomplete")
+                if any_infrastructure_error else await self._score_language_model(model)
+            )
             completed_at = datetime.now(timezone.utc)
             result = {
-                "id": uuid4().hex, "schema_version": "1.1", "suite_version": "Integrity-Comprehension-v3",
+                "id": uuid4().hex, "schema_version": "1.2", "suite_version": "Integrity-Comprehension-v3",
                 "created_at": completed_at.isoformat(), "started_at": started_at.isoformat(),
                 "completed_at": completed_at.isoformat(),
                 "duration_seconds": round(time.perf_counter() - run_started, 3), "suite": suite, "model": model,
@@ -150,16 +169,48 @@ class IntegrityBenchmarkService:
                     "max_output_tokens": 512,
                     "output_limit_purpose": "bound runaway output; expected exact responses are under 100 tokens",
                     "response_timeout_seconds": self.response_timeout_seconds,
-                    "timeout_purpose": "runtime safety; timeouts are recorded as failed attempts",
+                    "timeout_purpose": "runtime safety; timeouts are recorded as infrastructure evidence",
+                    "generation_attempts": GENERATION_ATTEMPTS,
                 },
-                "repetitions": repetitions, "status": "completed_with_failures" if any_failure else "completed",
+                "repetitions": repetitions,
+                "status": "incomplete" if any_infrastructure_error else (
+                    "completed_with_failures" if any_quality_failure else "completed"
+                ),
+                "completion_reason": "infrastructure_error" if any_infrastructure_error else None,
+                "comparable": not any_infrastructure_error,
                 "scores": scores, "language_model_metrics": language_model_metrics, "scenarios": scenarios,
             }
             self._save(result)
             return result
 
-    async def _score_language_model(self, model: str) -> dict:
-        unavailable = {
+    async def _generate(self, model: str, messages: list[dict[str, str]]) -> tuple[str, list[dict], str | None]:
+        attempts = []
+        for attempt in range(1, GENERATION_ATTEMPTS + 1):
+            started = time.perf_counter()
+            try:
+                output = str(await self.generate(model, messages, 0.0))
+            except Exception as error:
+                attempts.append({
+                    "attempt": attempt,
+                    "status": "infrastructure_error",
+                    "error": str(error),
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                })
+                if attempt == GENERATION_ATTEMPTS:
+                    return "", attempts, str(error)
+                continue
+            attempts.append({
+                "attempt": attempt,
+                "status": "completed",
+                "error": None,
+                "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+            })
+            return output, attempts, None
+        raise AssertionError("generation attempt loop did not return")
+
+    @staticmethod
+    def _unavailable_language_metric(reason: str = "teacher_forced_loglikelihood_not_supported") -> dict:
+        return {
             "base_log_perplexity": None,
             "status": "unavailable",
             "comparable": False,
@@ -168,8 +219,11 @@ class IntegrityBenchmarkService:
             "token_count": 0,
             "backend": None,
             "method": BASE_LANGUAGE_METHOD,
-            "unavailable_reason": "teacher_forced_loglikelihood_not_supported",
+            "unavailable_reason": reason,
         }
+
+    async def _score_language_model(self, model: str) -> dict:
+        unavailable = self._unavailable_language_metric()
         if self.score_base_log_perplexity is None:
             return unavailable
         try:
@@ -210,8 +264,14 @@ class IntegrityBenchmarkService:
                     raise ValueError("duplicate_key")
                 result[key] = value
             return result
+        candidate = output.strip()
+        if candidate.startswith("```") or candidate.endswith("```"):
+            fenced = JSON_FENCE.fullmatch(candidate)
+            if fenced is None:
+                return False, "invalid_json"
+            candidate = fenced.group("value")
         try:
-            decoded = json.loads(output, object_pairs_hook=unique_object)
+            decoded = json.loads(candidate, object_pairs_hook=unique_object)
         except (json.JSONDecodeError, ValueError):
             return False, "invalid_json"
         if not IntegrityBenchmarkService._strict_equal(decoded, scenario.expected):
@@ -241,7 +301,15 @@ class IntegrityBenchmarkService:
             return False
         scores = item.get("scores")
         scenarios = item.get("scenarios")
-        if not isinstance(scores, dict) or not all(isinstance(scores.get(key), (int, float)) for key in ("integrity", "comprehension", "overall")):
+        if not isinstance(scores, dict):
+            return False
+        score_values = [scores.get(key) for key in ("integrity", "comprehension", "overall")]
+        if item.get("status") == "incomplete":
+            if item.get("completion_reason") != "infrastructure_error" or item.get("comparable") is not False:
+                return False
+            if any(value is not None for value in score_values):
+                return False
+        elif not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in score_values):
             return False
         if not isinstance(scenarios, list) or not scenarios:
             return False
@@ -259,6 +327,42 @@ class IntegrityBenchmarkService:
             if not all(isinstance(evidence, dict) and {"repetition", "passed", "output", "error"}.issubset(evidence)
                        for evidence in scenario["evidence"]):
                 return False
+            if item.get("schema_version") == "1.2":
+                status = scenario.get("status")
+                completed = scenario.get("completed_attempts")
+                planned = scenario.get("planned_attempts")
+                if status not in {"pass", "fail", "infrastructure_error"}:
+                    return False
+                if not isinstance(completed, int) or isinstance(completed, bool):
+                    return False
+                if not isinstance(planned, int) or isinstance(planned, bool) or planned <= 0 or completed > planned:
+                    return False
+                if status == "infrastructure_error":
+                    if scenario.get("passed") is not None or scenario.get("score") is not None or completed >= planned:
+                        return False
+                elif (not isinstance(scenario.get("passed"), bool)
+                      or not isinstance(scenario.get("score"), (int, float))
+                      or isinstance(scenario.get("score"), bool) or completed != planned):
+                    return False
+                for evidence in scenario["evidence"]:
+                    evidence_status = evidence.get("status")
+                    generation_attempts = evidence.get("generation_attempts")
+                    if evidence_status not in {"pass", "fail", "infrastructure_error"}:
+                        return False
+                    if evidence_status == "infrastructure_error" and evidence.get("passed") is not None:
+                        return False
+                    if evidence_status != "infrastructure_error" and not isinstance(evidence.get("passed"), bool):
+                        return False
+                    if not isinstance(generation_attempts, list) or not generation_attempts:
+                        return False
+                    if not all(
+                        isinstance(attempt, dict)
+                        and isinstance(attempt.get("attempt"), int)
+                        and attempt.get("status") in {"completed", "infrastructure_error"}
+                        and "error" in attempt and "duration_ms" in attempt
+                        for attempt in generation_attempts
+                    ):
+                        return False
         return True
 
     def _save(self, result: dict) -> None:
