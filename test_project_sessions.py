@@ -128,6 +128,19 @@ class ProjectSessionServiceTests(unittest.TestCase):
             self.sessions.get(snapshot.id, self.project.project_id, "owner-2")
         with self.assertRaises(KeyError):
             self.sessions.restore(snapshot.id, other.project_id, "owner-1")
+
+    def test_history_read_rejects_missing_tampered_and_linked_snapshot_content(self):
+        session = self._live_session()
+        snapshot = self.sessions.save(session.id, self.project.project_id, "owner-1", "Parser fix", "fix", [])
+        history = self.sessions.snapshot_directory(snapshot.id, self.project.project_id) / "previous-session-history.md"
+
+        self.assertIn("Parser fix", self.sessions.history(snapshot.id, self.project.project_id, "owner-1"))
+        history.write_text("tampered", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            self.sessions.history(snapshot.id, self.project.project_id, "owner-1")
+        history.unlink()
+        with self.assertRaises(ValueError):
+            self.sessions.history(snapshot.id, self.project.project_id, "owner-1")
         with self.assertRaises(PermissionError):
             self.sessions.save(session.id, self.project.project_id, "owner-2", "Parser fix", "fix", [])
 

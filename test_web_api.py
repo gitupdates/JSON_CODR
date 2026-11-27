@@ -18,8 +18,10 @@ from test_support import authenticated_client
 
 from web_app.app import create_app
 from web_app.app import configure_local_analysis_tools
+from web_app.attachments import AttachmentService
+from web_app.artifacts import ArtifactService
 from cli import parse_response_content
-from web_app.models import ActionSuggestion, ChatMessage, ChatResult, ConversionBundle, GeneratedFile, SkillPack, SkillRecord
+from web_app.models import ActionSuggestion, ChatMessage, ChatResult, ConversionBundle, GeneratedFile, ObjectReference, SkillPack, SkillRecord
 from web_app.ollama_service import ModelOutputError, ModelTimeoutError, OllamaService, OllamaUnavailableError
 from web_app.workspace import WorkspaceService
 from web_app.skills import SkillLibraryService
@@ -270,6 +272,117 @@ class WebApiTests(unittest.TestCase):
             self.assertEqual(unauthenticated.get(f"/api/projects/{project_id}/sessions").status_code, 401)
         finally:
             unauthenticated.close()
+
+    def test_project_history_detail_is_opaque_when_history_is_missing_or_tampered(self):
+        project_root = Path(self.temporary_directory.name) / "unsafe-history-project"
+        project_root.mkdir()
+        project_id = self.client.post("/api/projects/resolve", json={"root": str(project_root)}).json()["project_id"]
+        session_id = self.client.post("/api/sessions", json={"project_id": project_id}).json()["id"]
+        self.workspace.append_message(session_id, ChatMessage(role="user", content="keep this private"))
+        snapshot_id = self.client.post(f"/api/projects/{project_id}/sessions", json={
+            "session_id": session_id, "title": "Safe history", "change_type": "fix",
+        }).json()["snapshot"]["id"]
+        history = self.workspace.data_root / "project-sessions"
+        history = next(history.iterdir()) / "sessions" / snapshot_id / "previous-session-history.md"
+
+        for replacement in ("tampered", None):
+            if replacement is None:
+                history.unlink()
+            else:
+                history.write_text(replacement, encoding="utf-8")
+            response = self.client.get(f"/api/projects/{project_id}/sessions/{snapshot_id}")
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.json(), {"detail": "Project session is incomplete or unsafe"})
+            self.assertNotIn(str(self.workspace.data_root), response.text)
+
+    def test_project_session_save_does_not_depend_on_closed_memory_projection(self):
+        project_root = Path(self.temporary_directory.name) / "projection-history-project"
+        project_root.mkdir()
+        project_id = self.client.post("/api/projects/resolve", json={"root": str(project_root)}).json()["project_id"]
+        session_id = self.client.post("/api/sessions", json={"project_id": project_id}).json()["id"]
+        self.client.app.state.core_memory.close()
+
+        saved = self.client.post(f"/api/projects/{project_id}/sessions", json={
+            "session_id": session_id, "title": "No projection", "change_type": "fix",
+        })
+
+        self.assertEqual(saved.status_code, 200)
+        snapshots = self.client.get(f"/api/projects/{project_id}/sessions").json()["snapshots"]
+        self.assertEqual(len(snapshots), 1)
+
+    def test_project_session_mutation_matrix_keeps_scope_and_restored_references(self):
+        project_root = Path(self.temporary_directory.name) / "matrix-project"
+        project_root.mkdir()
+        source = project_root / "bound.py"
+        source.write_text("bound = True", encoding="utf-8")
+        project_id = self.client.post("/api/projects/resolve", json={"root": str(project_root)}).json()["project_id"]
+        legacy = self.client.post("/api/sessions")
+        self.assertIsNone(legacy.json()["project_id"])
+        self.assertIsNone(legacy.json()["owner_user_id"])
+        for payload, expected in (({"project_id": ""}, 422), ({"project_id": "project:missing"}, 404)):
+            self.assertEqual(self.client.post("/api/sessions", json=payload).status_code, expected)
+
+        session_id = self.client.post("/api/sessions", json={"project_id": project_id}).json()["id"]
+        attachment = AttachmentService(self.workspace).import_text(session_id, "attachment continuity", "note.txt")
+        artifact = ArtifactService(self.workspace).save_conversion(session_id, "note.txt", [GeneratedFile(path="result.txt", content="artifact continuity")])
+        self.workspace.append_message(session_id, ChatMessage(role="assistant", content="references", references=[
+            ObjectReference(id="attachment", kind="attachment", label="note.txt", target=attachment.id),
+            ObjectReference(id="artifact", kind="artifact", label=artifact.filename, target=artifact.filename),
+            ObjectReference(id="project", kind="project_file", label="bound.py", target="bound.py"),
+        ]))
+        snapshot_id = self.client.post(f"/api/projects/{project_id}/sessions", json={
+            "session_id": session_id, "title": "Matrix", "change_type": "feature",
+        }).json()["snapshot"]["id"]
+        before = {path.name for path in self.workspace.sessions_root.iterdir()}
+        for suffix, expected in (("bad", 422), ("0" * 32, 404)):
+            for method in ("get", "post"):
+                path = f"/api/projects/{project_id}/sessions/{suffix}" + ("/restore" if method == "post" else "")
+                response = getattr(self.client, method)(path)
+                self.assertEqual(response.status_code, expected)
+                if expected == 404:
+                    self.assertEqual(response.json(), {"detail": "Project session not found"})
+        self.assertEqual({path.name for path in self.workspace.sessions_root.iterdir()}, before)
+
+        identity = self.client.app.state.identity
+        other = identity.create_user("matrix-other", "Matrix Other", roles=("administrator",))
+        token = identity.issue_credential(other.user_id, "cli", "matrix", ("session.write",)).token
+        foreign = TestClient(self.client.app)
+        foreign.headers["Authorization"] = f"Bearer {token}"
+        try:
+            self.assertEqual(foreign.get(f"/api/projects/{project_id}/sessions").json()["snapshots"], [])
+            for method, path in (("post", f"/api/projects/{project_id}/sessions"), ("get", f"/api/projects/{project_id}/sessions/{snapshot_id}"), ("post", f"/api/projects/{project_id}/sessions/{snapshot_id}/restore")):
+                kwargs = {"json": {"session_id": session_id, "title": "foreign", "change_type": "fix"}} if path.endswith("sessions") else {}
+                response = getattr(foreign, method)(path, **kwargs)
+                self.assertEqual(response.status_code, 404)
+                self.assertEqual(response.json(), {"detail": "Project session not found"})
+        finally:
+            foreign.close()
+
+        restored = self.client.post(f"/api/projects/{project_id}/sessions/{snapshot_id}/restore").json()["session_id"]
+        self.assertEqual(self.client.get(f"/api/sessions/{restored}/references/attachment").content, b"attachment continuity")
+        self.assertTrue(self.client.get(f"/api/sessions/{restored}/references/artifact").content.startswith(b"PK"))
+        self.assertEqual(self.client.get(f"/api/sessions/{restored}/references/project").content, b"bound = True")
+        self.assertIs(self.client.app.state.project_sessions.projects, self.client.app.state.core_project_registry)
+
+    def test_project_session_browser_csrf_and_bearer_matrix(self):
+        project_root = Path(self.temporary_directory.name) / "auth-matrix-project"
+        project_root.mkdir()
+        project_id = self.client.post("/api/projects/resolve", json={"root": str(project_root)}).json()["project_id"]
+        csrf = self.client.headers.pop("X-CSRF-Token")
+        self.assertEqual(self.client.post("/api/sessions", json={"project_id": project_id}).status_code, 403)
+        self.client.headers["X-CSRF-Token"] = csrf
+        identity = self.client.app.state.identity
+        owner = identity.bootstrap_state().administrator_user_id
+        token = identity.issue_credential(owner, "service", "matrix", ("session.write",)).token
+        bearer = TestClient(self.client.app)
+        bearer.headers["Authorization"] = f"Bearer {token}"
+        try:
+            session_id = bearer.post("/api/sessions", json={"project_id": project_id}).json()["id"]
+            snapshot_id = bearer.post(f"/api/projects/{project_id}/sessions", json={"session_id": session_id, "title": "Bearer", "change_type": "fix"}).json()["snapshot"]["id"]
+            self.assertEqual(bearer.get(f"/api/projects/{project_id}/sessions/{snapshot_id}").status_code, 200)
+            self.assertEqual(bearer.post(f"/api/projects/{project_id}/sessions/{snapshot_id}/restore").status_code, 201)
+        finally:
+            bearer.close()
 
     def test_openai_compatible_models_and_chat_routes_use_live_service(self):
         models = self.client.get("/v1/models")

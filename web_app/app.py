@@ -70,7 +70,7 @@ from web_app.core.identity import IdentityService
 from web_app.core.http_identity import MutationAuthorizer
 from web_app.core.context_service import ContextService
 from web_app.core.connection_recovery import ConnectionRecoveryService
-from web_app.core.memory import MemoryDraft, MemoryStore
+from web_app.core.memory import MemoryStore
 from web_app.core.autonomous_update import (
     AgentRuntimeModifier,
     AutonomousUpdateController,
@@ -1735,24 +1735,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="Project session not found") from error
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
-        indexing = {"status": "skipped", "detail": "Collective memory is disabled"}
-        if settings.get().memory.enabled and core_memory is not None:
-            try:
-                core_memory.accept(MemoryDraft(
-                    user_id=principal.user_id,
-                    project_id=project_id,
-                    thread_id=f"project-session:{snapshot.id}",
-                    task_id=snapshot.source_session_id,
-                    kind="previous_session_history",
-                    content=snapshot.summary,
-                    source_refs=(f"previous-session:{snapshot.id}",),
-                    retain_details=False,
-                    idempotency_key=f"previous-session:{snapshot.id}",
-                ))
-                indexing = {"status": "indexed", "source_ref": f"previous-session:{snapshot.id}"}
-            except ValueError as error:
-                indexing = {"status": "skipped", "detail": str(error)}
-        return {"snapshot": snapshot, "indexing": indexing}
+        return {"snapshot": snapshot}
 
     @application.get("/api/projects/{project_id}/sessions")
     async def list_project_sessions(project_id: str, http_request: Request, query: str = ""):
@@ -1772,13 +1755,11 @@ def create_app(
         try:
             service = get_project_sessions()
             snapshot = service.get(snapshot_id, project_id, principal.user_id)
-            history = (service.snapshot_directory(snapshot_id, project_id) / "previous-session-history.md").read_text(
-                encoding="utf-8"
-            )
-        except (KeyError, PermissionError) as error:
+            history = service.history(snapshot_id, project_id, principal.user_id)
+        except KeyError as error:
             raise HTTPException(status_code=404, detail="Project session not found") from error
-        except (OSError, ValueError) as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
+        except (OSError, PermissionError, ValueError, UnicodeError) as error:
+            raise HTTPException(status_code=400, detail="Project session is incomplete or unsafe") from error
         return {"snapshot": snapshot, "history": history}
 
     @application.post("/api/projects/{project_id}/sessions/{snapshot_id}/restore", status_code=201)

@@ -95,6 +95,7 @@ if os.name == "nt":
 
 SNAPSHOT_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 _ALLOWED_TREES = ("originals", "extracted", "artifacts")
+_HISTORY_FILE = "previous-session-history.md"
 _STAGING_PATTERN = re.compile(r"^\.staging-[0-9a-f]{32}$")
 _STORAGE_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _EXTRACTED_PATTERN = re.compile(r"^[0-9a-f]{32}\.txt$")
@@ -450,11 +451,13 @@ class ProjectSessionService:
                     staging.mkdir()
                     with self._pinned_staging_directory(staging) as staging_handle:
                         digests = self._copy_live_session(session, staging)
+                        history = staging / _HISTORY_FILE
+                        self._write_text(history, self._history_markdown(snapshot))
+                        digests[_HISTORY_FILE] = self._digest(history)
                         self._write_json(staging / "snapshot.json", {
                             "snapshot": snapshot.model_dump(mode="json"),
                             "tree_digests": digests,
                         })
-                        self._write_text(staging / "previous-session-history.md", self._history_markdown(snapshot))
                         self._validate_snapshot_tree(staging, digests)
                         self._fsync_tree(staging)
                         self._promote_staging(staging, final, staging_handle)
@@ -494,6 +497,25 @@ class ProjectSessionService:
         if record.project_id != project_id or record.owner_user_id != owner_user_id:
             raise KeyError(snapshot_id)
         return record
+
+    def history(self, snapshot_id: str, project_id: str, owner_user_id: str) -> str:
+        """Read verified compact history through the same no-follow snapshot boundary."""
+        snapshot = self.get(snapshot_id, project_id, owner_user_id)
+        source = self.snapshot_directory(snapshot.id, project_id)
+        payload = self._snapshot_payload(source)
+        digests = payload.get("tree_digests")
+        if not isinstance(digests, dict) or not isinstance(digests.get(_HISTORY_FILE), str):
+            raise ValueError("Snapshot history is incomplete")
+        self._validate_snapshot_tree(source, digests)
+        try:
+            with self._open_copy_source(source / _HISTORY_FILE) as history:
+                content = history.read()
+            actual = "sha256:" + hashlib.sha256(content).hexdigest()
+            if actual != digests[_HISTORY_FILE]:
+                raise ValueError("Snapshot history failed digest validation")
+            return content.decode("utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            raise ValueError("Snapshot history is incomplete") from error
 
     def restore(self, snapshot_id: str, project_id: str, owner_user_id: str) -> ProjectSessionRestoreResult:
         snapshot = self.get(snapshot_id, project_id, owner_user_id)
@@ -648,13 +670,17 @@ class ProjectSessionService:
     def _validate_restored_trees(self, directory: Path, expected: dict[str, object]) -> None:
         self._reject_reparse_tree(directory)
         actual = {key: value for key, value in self._tree_digests(directory).items() if key != "manifest.json"}
-        wanted = {str(key): str(value) for key, value in expected.items() if str(key) != "manifest.json"}
+        wanted = {
+            str(key): str(value)
+            for key, value in expected.items()
+            if str(key) not in {"manifest.json", _HISTORY_FILE}
+        }
         if actual != wanted:
             raise ValueError("Restored files failed digest validation")
 
     def _tree_digests(self, root: Path) -> dict[str, str]:
         output: dict[str, str] = {}
-        for relative in [Path("manifest.json"), *(Path(name) for name in _ALLOWED_TREES)]:
+        for relative in [Path("manifest.json"), Path(_HISTORY_FILE), *(Path(name) for name in _ALLOWED_TREES)]:
             candidate = root / relative
             if candidate.is_file():
                 output[candidate.relative_to(root).as_posix()] = self._digest(candidate)
