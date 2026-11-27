@@ -1138,6 +1138,14 @@ class WebApiTests(unittest.TestCase):
         self.client = authenticated_client(create_app(self.service, self.workspace))
         self._core_clients = [self.client]
 
+    def test_identity_bootstrap_returns_csrf_token_and_administrator_username(self):
+        response = self.client.get("/api/identity/bootstrap")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["administrator_username"], "Administrator")
+        self.assertEqual(payload["csrf_token"], self.client.cookies.get("json_codr_csrf"))
+
     def test_well_known_discovery_does_not_trust_an_arbitrary_host(self):
         response = self.client.get("/.well-known/json-codr", headers={"host": "attacker.example"})
 

@@ -433,13 +433,13 @@
             Development password bypass is active on this direct local connection.
           </div>
           <form id="identity-login-form" class="identity-login-form">
-            <label>Username<input id="identity-username" autocomplete="username" value="Administrator"></label>
+            <label>Username<input id="identity-username" autocomplete="username" placeholder="Loading local administrator…"></label>
             <label>Password<input id="identity-password" type="password" autocomplete="current-password"></label>
             <button class="primary" type="submit">Sign in</button>
           </form>
           <div id="identity-account-panel" hidden>
             <div class="section-heading-row">
-              <div><h3 id="identity-account-name">Administrator</h3><p id="identity-account-roles" class="meta"></p></div>
+              <div><h3 id="identity-account-name">Local administrator</h3><p id="identity-account-roles" class="meta"></p></div>
               <button id="identity-logout" type="button">Sign out</button>
             </div>
             <p class="meta">Roles and capability profiles are server-derived. Tokens are stored only in HTTP-only cookies.</p>
@@ -728,10 +728,32 @@
       <footer><span>Runs entirely on this machine</span><span>127.0.0.1 · Ollama</span></footer>
       </main>
     </div>
+    <script>
+      window.JSONCodrHttpIdentity = window.JSONCodrHttpIdentity || (() => {
+        let primedToken = "";
+        const readCookie = (name) => {
+          const prefix = `${name}=`;
+          const item = document.cookie.split(";").map((value) => value.trim()).find((value) => value.startsWith(prefix));
+          return item ? decodeURIComponent(item.slice(prefix.length)) : "";
+        };
+        const token = () => readCookie("__Host-json_codr_csrf") || readCookie("json_codr_csrf");
+        return {
+          mutationHeaders: (headers = {}) => (primedToken || token()) ? { ...headers, "X-CSRF-Token": primedToken || token() } : { ...headers },
+          websocketCsrfProtocol: () => (primedToken || token()) ? `json-codr-csrf.${primedToken || token()}` : "",
+          prime: async () => {
+            const response = await fetch("/api/identity/bootstrap", { credentials: "same-origin" });
+            if (!response.ok) throw new Error("Unable to initialize request security");
+            const payload = await response.json();
+            primedToken = typeof payload.csrf_token === "string" ? payload.csrf_token : "";
+            return payload;
+          },
+        };
+      })();
+    </script>
     <script src="/static/dependency_install_queue.js?v=1.2.0" defer></script>
     <script src="/static/benchmark_leaderboard.js?v=1.2.0" defer></script>
     <script src="/static/terminal_keyboard.js?v=1.2.0" defer></script>
-    <script src="/static/http_identity.js?v=1.0.0" defer></script>
+    <script src="/static/http_identity.js?v=1.0.1" defer></script>
     <script src="/static/skill_routing.js?v=1.0.0" defer></script>
     <script src="/static/core_client.js?v=1.2.0" defer></script>
     <script src="/static/task_view.js?v=1.2.0" defer></script>
@@ -743,6 +765,6 @@
     <script src="/static/ui_customization.js?v=1.3.2" defer></script>
     <script src="/static/disclosure_groups.js?v=1.3.2" defer></script>
     <script src="/static/navigation_routes.js?v=1.3.2" defer></script>
-    <script src="/static/app.js?v=1.4.5" defer></script>
+    <script src="/static/app.js?v=1.4.10" defer></script>
   </body>
 </html>

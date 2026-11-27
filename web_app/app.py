@@ -1498,9 +1498,17 @@ def create_app(
         )
         state = identity.bootstrap_state()
         bypass = identity.development_bypass()
+        administrator_username = None
+        if state.administrator_user_id:
+            try:
+                administrator_username = identity.get_user(state.administrator_user_id).username
+            except KeyError:
+                administrator_username = None
         return {
             "completed": state.completed,
             "mode": state.mode,
+            "administrator_username": administrator_username,
+            "csrf_token": csrf,
             "credential_policy": (
                 "non-expiring and revocable (development)"
                 if state.mode == "development" and state.credentials_permanent

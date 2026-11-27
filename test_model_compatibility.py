@@ -56,6 +56,14 @@ class ModelCompatibilityLayerTests(unittest.TestCase):
             ("new-coder:latest", "qwen2.5-coder:3b", "qwen2.5-coder:0.5b"),
         )
 
+    def test_auto_selects_first_available_reviewed_model(self):
+        live = self.live("qwen2.5-coder:0.5b")
+
+        self.assertEqual(
+            self.layer.candidates("auto", live),
+            ("qwen2.5-coder:0.5b",),
+        )
+
     def test_quarantined_fallback_is_skipped_but_other_reviewed_fallback_remains(self):
         live = self.live("new-coder:latest", "qwen2.5-coder:3b", "qwen2.5-coder:0.5b")
         digest = live["qwen2.5-coder:3b"]["digest"]

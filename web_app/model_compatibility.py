@@ -220,6 +220,19 @@ class ModelCompatibilityLayer:
         available = self._live_by_name(live)
         if not self._state_valid:
             return (requested,) if requested in available else ()
+        if requested in {"", "auto"}:
+            ordered: list[str] = []
+            for name in (*self.base_fallback_order, *available):
+                item = available.get(name)
+                if (
+                    item is None
+                    or name in ordered
+                    or not self.digest(item)
+                    or self._blocked(name, item)
+                ):
+                    continue
+                ordered.append(name)
+            return tuple(ordered)
         specific_available = [name for name in self._specific_names(requested) if name in available]
         routable_specific = [
             name

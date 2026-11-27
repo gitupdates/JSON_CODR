@@ -165,6 +165,8 @@ async function runScenario(models, selected) {
         javascript = self.client.get("/static/app.js").text
         model_runs = self.client.get("/static/model_runs.js").text
 
+        self.assertIn("window.JSONCodrHttpIdentity.prime()", javascript)
+        self.assertIn('headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" })', javascript)
         self.assertIn("window.JSONCodrLiveSession", javascript)
         self.assertIn("current: () => sessionId || null", javascript)
         self.assertIn("ensure: ensureSession", javascript)
@@ -608,8 +610,9 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
 
     def test_chat_assets_use_current_patch_revision(self):
         html = self.client.get("/").text
+        self.assertIn('/static/http_identity.js?v=1.0.1', html)
         self.assertIn('/static/conversation_view.js?v=1.4.5', html)
-        self.assertIn('/static/app.js?v=1.4.5', html)
+        self.assertIn('/static/app.js?v=1.4.10', html)
 
     def test_runtime_observability_is_progressive_not_a_new_destination(self):
         html = self.client.get("/").text
@@ -1273,7 +1276,7 @@ process.stdout.write(JSON.stringify(flatten(container).map(item=>item.textConten
         self.assertIn("text/html", response.headers["content-type"])
         self.assertNotIn("content-length", response.headers)
         self.assertIn("V1.4.5", response.text)
-        self.assertIn('/static/app.js?v=1.4.5', response.text)
+        self.assertIn('/static/app.js?v=1.4.10', response.text)
         parser = IdCollector()
         parser.feed(response.text)
         self.assertTrue(
@@ -1433,6 +1436,19 @@ process.stdout.write(JSON.stringify(flatten(container).map(item=>item.textConten
         payload = json.loads(output)
         self.assertEqual(payload["headers"], {"X-CSRF-Token": "csrf-value"})
         self.assertEqual(payload["protocol"], "json-codr-csrf.csrf-value")
+
+    def test_browser_mutation_helper_can_prime_from_bootstrap_json(self):
+        output = subprocess.check_output([
+            "node", "-e",
+            "global.document = { cookie: '' };"
+            "global.fetch = async () => ({ok: true, json: async () => ({csrf_token: 'primed-value'})});"
+            "const identity = require('./web/http_identity.js');"
+            "identity.prime().then(() => console.log(JSON.stringify({"
+            "headers: identity.mutationHeaders(), protocol: identity.websocketCsrfProtocol()})));",
+        ], text=True)
+        payload = json.loads(output)
+        self.assertEqual(payload["headers"], {"X-CSRF-Token": "primed-value"})
+        self.assertEqual(payload["protocol"], "json-codr-csrf.primed-value")
 
     def test_auto_attach_control_sends_csrf_authenticated_routing_update(self):
         script = r'''
@@ -1846,7 +1862,9 @@ process.stdout.write(JSON.stringify({infrastructure, quality}));
         self.assertIn("themeRevisionAtStart === themeSaveRevision", javascript)
         self.assertIn("skillsRevisionAtStart === skillsChangeRevision", javascript)
         self.assertIn("navigationRevisionAtStart === navigationChangeRevision", javascript)
-        self.assertIn("loadApplication().then(() => queueSettingsLoad())", javascript)
+        self.assertIn("window.JSONCodrHttpIdentity.prime()", javascript)
+        self.assertIn("await loadApplication()", javascript)
+        self.assertIn("await queueSettingsLoad()", javascript)
         self.assertIn('id="ui-mode" class="setting-select" aria-describedby="ui-mode-help"', html)
         self.assertIn('id="setting-skills-open" type="checkbox" disabled', html)
 
