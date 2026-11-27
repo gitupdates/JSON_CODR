@@ -185,6 +185,36 @@ class FakeIntegrityBenchmark:
 
 
 class WebApiTests(unittest.TestCase):
+    def test_session_delete_requires_same_owner_for_browser_and_bearer_clients(self):
+        owner_bound = self.client.post("/api/sessions", json={})
+        legacy_ownerless = self.client.post("/api/sessions")
+        self.assertEqual((owner_bound.status_code, legacy_ownerless.status_code), (201, 201))
+        owner_session_id = owner_bound.json()["id"]
+        legacy_session_id = legacy_ownerless.json()["id"]
+
+        identity = self.client.app.state.identity
+        foreign_user = identity.create_user(
+            "foreign-session-deleter", "Foreign session deleter", roles=("administrator",)
+        )
+        credential = identity.issue_credential(
+            foreign_user.user_id, "cli", "foreign session delete", ("session.write",)
+        )
+        foreign = TestClient(self.client.app)
+        foreign.headers["Authorization"] = f"Bearer {credential.token}"
+        try:
+            denied = foreign.delete(f"/api/sessions/{owner_session_id}")
+            self.assertEqual(denied.status_code, 404)
+            self.assertEqual(self.client.get(f"/api/sessions/{owner_session_id}").status_code, 200)
+
+            legacy_deleted = foreign.delete(f"/api/sessions/{legacy_session_id}")
+            self.assertEqual(legacy_deleted.status_code, 204)
+        finally:
+            foreign.close()
+
+        owner_deleted = self.client.delete(f"/api/sessions/{owner_session_id}")
+        self.assertEqual(owner_deleted.status_code, 204)
+        self.assertEqual(self.client.get(f"/api/sessions/{owner_session_id}").status_code, 404)
+
     def test_explicit_empty_session_request_is_owner_bound_and_can_be_promoted_on_save(self):
         project_root = Path(self.temporary_directory.name) / "promoted-history-project"
         project_root.mkdir()

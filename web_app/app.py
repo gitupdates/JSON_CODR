@@ -2027,8 +2027,12 @@ def create_app(
             raise HTTPException(status_code=422, detail=str(error)) from error
 
     @application.delete("/api/sessions/{session_id}", status_code=204)
-    async def delete_session(session_id: str):
+    async def delete_session(session_id: str, http_request: Request):
         try:
+            principal = project_session_principal(http_request, mutation=True)
+            session = workspace.get_session(session_id)
+            if session.owner_user_id is not None and session.owner_user_id != principal.user_id:
+                raise KeyError(session_id)
             workspace.delete_session(session_id)
             model_run_store.delete_session(session_id)
         except InvalidSessionId as error:

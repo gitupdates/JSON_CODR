@@ -653,6 +653,292 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         self.assertIn('id="context-project-history-search-run"', context)
         self.assertIn('id="context-project-history-list"', context)
 
+    def test_project_selection_replaces_only_an_empty_unassigned_session_before_first_prompt(self):
+        source = self.client.get("/static/app.js").text
+        start = source.index("async function ensureSession")
+        end = source.index("\nasync function startCleanSession", start)
+        harness = r'''
+const vm = require("vm");
+const code = process.env.APP_CODE;
+function node(value = "") { return {value, disabled:false, textContent:"", hidden:false, href:""}; }
+async function run(messages, dirty) {
+  const oldId = "a".repeat(32); const newId = "b".repeat(32);
+  const calls = [];
+  const elements = {
+    projectSessionRoot:node("C:/work/project"), projectSessionResolve:node(), projectSessionStatus:node(),
+    workspaceProjectRoot:node(), projectSessionSelected:node(), empty:node(),
+    currentSessionIdentity:node(), currentSessionAssignment:node(), currentSessionCount:node(), currentSessionUnsaved:node(),
+    conversationExportMarkdown:node(), conversationExportJson:node(), conversationExportZip:node(),
+  };
+  const context = {
+    elements, sessionId:oldId,
+    currentSession:{id:oldId, owner_user_id:"owner", project_id:null, messages:[...messages]},
+    selectedProject:null, sessionDirty:dirty, restoredConversationSessionId:oldId, sessionGeneration:0,
+    activeCoreTaskId:null, encodeURIComponent, Error, JSON,
+    window:{JSONCodrHttpIdentity:{mutationHeaders:h=>({...h,csrf:"yes"})}},
+    conversationView:{messages:[...messages], reset(id){this.messages=[];this.sessionId=id;}, async restore(){}},
+    async loadProjectHistory(){}, updateConversationExports(){}, updateCurrentSessionPanel(){},
+    detachActiveSessionState(){ throw new Error("unexpected detach"); },
+  };
+  context.fetch = async (url, options = {}) => {
+    calls.push({url, method:options.method || "GET"});
+    if (url === "/api/projects/resolve") return {ok:true, status:200, json:async()=>({project_id:"project-1",root:"C:/work/project"})};
+    if (url === "/api/sessions") return {ok:true, status:201, json:async()=>({id:newId,owner_user_id:"owner",project_id:"project-1",messages:[]})};
+    if (url === `/api/sessions/${oldId}` && options.method === "DELETE") return {ok:true,status:204,json:async()=>({})};
+    throw new Error(`unexpected fetch ${options.method || "GET"} ${url}`);
+  };
+  vm.createContext(context); vm.runInContext(code, context);
+  await context.resolveSelectedProject();
+  return {sessionId:context.sessionId, projectId:context.currentSession?.project_id, selected:context.selectedProject?.project_id, calls};
+}
+(async()=>process.stdout.write(JSON.stringify({empty:await run([],false), nonempty:await run([{role:"user"}],true)})))();
+'''
+        completed = subprocess.run(
+            ["node", "-e", harness], env={"APP_CODE": source[start:end]},
+            text=True, capture_output=True, check=True,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["empty"]["sessionId"], "b" * 32)
+        self.assertEqual(result["empty"]["projectId"], "project-1")
+        self.assertEqual(
+            result["empty"]["calls"],
+            [
+                {"url": "/api/projects/resolve", "method": "POST"},
+                {"url": "/api/sessions", "method": "POST"},
+                {"url": f"/api/sessions/{'a' * 32}", "method": "DELETE"},
+            ],
+        )
+        self.assertEqual(result["nonempty"]["sessionId"], "a" * 32)
+        self.assertIsNone(result["nonempty"]["projectId"])
+        self.assertEqual(result["nonempty"]["calls"], [{"url": "/api/projects/resolve", "method": "POST"}])
+
+    def test_session_transition_clears_old_context_and_restores_copy_context(self):
+        source = self.client.get("/static/app.js").text
+        start = source.index("async function adoptRestoredSession")
+        end = source.index("\nasync function ensureSession", start)
+        harness = r'''
+const vm = require("vm");
+const oldId = "a".repeat(32); const restoredId = "b".repeat(32);
+function node(children = []) { return {
+  children:[...children], textContent:"", hidden:false, href:"", disabled:false, value:"",
+  replaceChildren(...items){this.children=items;}, append(...items){this.children.push(...items);},
+  querySelectorAll(selector){return selector === "[data-attachment-id]" ? this.children.filter(item=>item.dataset?.attachmentId) : [];},
+}; }
+const oldAttachment = {dataset:{attachmentId:"attachment-old"},textContent:"old.txt"};
+const elements = {
+  attachmentList:node([oldAttachment]), attachmentPreview:node([{textContent:"old preview"}]),
+  workspaceFilesList:node([oldAttachment]), workspaceFilesPopoverList:node([oldAttachment]),
+  contextCount:node(), exportArchive:node(), dependencyList:node([{textContent:"old dependency"}]),
+  skillList:node([{textContent:"old skill"}]), skillDetails:node([{textContent:"old details"}]),
+  skillRecommendations:node([{textContent:"old recommendation"}]), attachedSkills:node([{textContent:"old attached skill"}]),
+  skillConversionStatus:node(), skillPreview:node(), skillInstall:node(), skillSave:node(), skillRemovePack:node(),
+  result:node(), error:node(), empty:node(), responseModel:node(),
+  conversationExportMarkdown:node(), conversationExportJson:node(), conversationExportZip:node(),
+  currentSessionIdentity:node(), currentSessionAssignment:node(), currentSessionCount:node(), currentSessionUnsaved:node(),
+};
+const loaded = [];
+const context = {
+  document:{createElement:()=>node()}, elements, sessionId:oldId,
+  currentSession:{id:oldId,project_id:null}, selectedProject:null, sessionDirty:true,
+  restoredConversationSessionId:oldId, activeRequest:null, activeCoreTaskId:null,
+  activeWorkspaceRoute:null, activePlanReview:null, sessionGeneration:0,
+  skillAttachmentId:"attachment-old", editingSkill:{id:"old"}, excludedSkillIds:["old:skill"], skillLoadGeneration:0,
+  conversationView:{messages:[{role:"user"}],reset(id){this.messages=[];this.sessionId=id;},async restore(id){this.messages=[{role:"assistant",content:id}];}},
+  setPending(){}, async loadAttachments(id){loaded.push(id);}, async loadProjectHistory(){},
+  renderWorkspaceFiles(items){elements.workspaceFilesList.replaceChildren(...items);elements.workspaceFilesPopoverList.replaceChildren(...items);},
+  fetch:async url=>({ok:true,json:async()=>({id:restoredId,project_id:"project-1",messages:[]})}),
+  encodeURIComponent, Error,
+};
+vm.createContext(context); vm.runInContext(process.env.APP_CODE, context);
+context.detachActiveSessionState();
+const afterDetach = {
+  attachmentIds:elements.attachmentList.querySelectorAll("[data-attachment-id]").map(item=>item.dataset.attachmentId),
+  workspaceFiles:elements.workspaceFilesList.children.map(item=>item.textContent),
+  preview:elements.attachmentPreview.children.map(item=>item.textContent),
+  dependencies:elements.dependencyList.children.map(item=>item.textContent),
+  skills:elements.attachedSkills.children.map(item=>item.textContent),
+  skillAttachmentId:context.skillAttachmentId,
+};
+(async()=>{
+  await context.adoptRestoredSession(restoredId);
+  process.stdout.write(JSON.stringify({afterDetach,loaded,sessionId:context.sessionId}));
+})();
+'''
+        completed = subprocess.run(
+            ["node", "-e", harness], env={"APP_CODE": source[start:end]},
+            text=True, capture_output=True, check=True,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["afterDetach"]["attachmentIds"], [])
+        self.assertNotIn("old.txt", result["afterDetach"]["workspaceFiles"])
+        self.assertNotIn("old preview", result["afterDetach"]["preview"])
+        self.assertNotIn("old dependency", result["afterDetach"]["dependencies"])
+        self.assertNotIn("old attached skill", result["afterDetach"]["skills"])
+        self.assertIsNone(result["afterDetach"]["skillAttachmentId"])
+        self.assertEqual(result["loaded"], ["b" * 32])
+        self.assertEqual(result["sessionId"], "b" * 32)
+
+    def test_attachment_upload_marks_session_dirty_and_uses_authenticated_mutation_headers(self):
+        source = self.client.get("/static/app.js").text
+        start = source.index("async function uploadFiles")
+        end = source.index("\nasync function uploadSkillFolder", start)
+        harness = r'''
+const vm = require("vm"); let dirty = 0; const calls = [];
+class FormData { constructor(){this.items=[];} append(...items){this.items.push(items);} }
+const context = {
+  FormData, sessionId:"a".repeat(32), async ensureSession(){}, async loadAttachments(){},
+  markSessionDirty(){dirty += 1;}, showError(){},
+  window:{JSONCodrHttpIdentity:{mutationHeaders:h=>({...h,"X-CSRF-Token":"fresh"})}},
+  fetch:async(url,options)=>{calls.push({url,headers:options.headers || {}});return {ok:true,json:async()=>({})};},
+};
+vm.createContext(context);vm.runInContext(process.env.APP_CODE,context);
+(async()=>{await context.uploadFiles([{name:"context.txt",webkitRelativePath:""}]);process.stdout.write(JSON.stringify({dirty,calls}));})();
+'''
+        completed = subprocess.run(
+            ["node", "-e", harness], env={"APP_CODE": source[start:end]},
+            text=True, capture_output=True, check=True,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["dirty"], 1)
+        self.assertEqual(result["calls"][0]["headers"]["X-CSRF-Token"], "fresh")
+
+    def test_pending_direct_and_workspace_submissions_cannot_repopulate_a_reset_session(self):
+        source = self.client.get("/static/app.js").text
+        state_start = source.index("function markSessionDirty")
+        state_end = source.index("\nasync function ensureSession", state_start)
+        submit_start = source.index("async function submitPrompt")
+        submit_end = source.index("\nelements.form.addEventListener", submit_start)
+        harness = r'''
+const vm = require("vm");
+function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
+function node(value=""){return {value,textContent:"",hidden:false,disabled:false,children:[],
+  replaceChildren(...items){this.children=items;},querySelectorAll(){return [];},matches(){return false;},hidePopover(){}};}
+function makeContext(route) {
+  const elements = {
+    prompt:node(route === "direct" ? "direct prompt" : "workspace prompt"), submit:node(), model:node("model-1"),
+    cancel:node(), requestStatus:node(), empty:node(), result:node(), error:node(), responseModel:node(),
+    workspaceAgentSelect:node(route === "direct" ? "direct" : "borg"), workspaceProjectRoot:node("C:/work"),
+    attachmentList:node(), attachmentPreview:node(), workspaceFilesList:node(), workspaceFilesPopoverList:node(),
+    contextCount:node(), exportArchive:node(), dependencyList:node(), skillList:node(), skillDetails:node(),
+    skillRecommendations:node(), attachedSkills:node(), skillConversionStatus:node(), skillPreview:node(),
+    skillInstall:node(), skillSave:node(), skillRemovePack:node(),
+    conversationExportMarkdown:node(), conversationExportJson:node(), conversationExportZip:node(),
+    currentSessionIdentity:node(), currentSessionAssignment:node(), currentSessionCount:node(), currentSessionUnsaved:node(),
+    taskPlanReviewOpen:node(), taskPlanReview:node(), taskRequestedModel:node(), taskEffectiveModel:node(),
+    summary:node(), content:node(),
+  };
+  const begun=[]; const handled=[]; let pending=false; let workspaceOptions=null;
+  const direct = deferred(); const workspace = deferred();
+  const context = {
+    elements, sessionId:"a".repeat(32), currentSession:{project_id:null}, selectedProject:null,
+    sessionDirty:false, restoredConversationSessionId:null, activeRequest:null, activeCoreTaskId:null,
+    activeWorkspaceRoute:null, activePlanReview:null, sessionGeneration:0,
+    skillAttachmentId:null, editingSkill:null, excludedSkillIds:[], skillLoadGeneration:0,
+    setPending(value){pending=value;elements.submit.disabled=value;}, updateConversationExports(){}, updateCurrentSessionPanel(){},
+    renderWorkspaceFiles(items){elements.workspaceFilesList.replaceChildren(...items);elements.workspaceFilesPopoverList.replaceChildren(...items);},
+    conversationView:{messages:[],reset(){this.messages=[];},async appendUser(){return {id:"user-1"};},beginTask(id){begun.push(id);}},
+    async ensureSession(){return context.sessionId;}, markSessionDirty(){context.sessionDirty=true;},
+    coreClient:{submit:async()=>direct.promise}, handleCoreRecord(record){handled.push(record.task_id);},
+    fetch:async(url,options)=>{workspaceOptions=options;return workspace.promise;},
+    responseErrorMessage:async()=>"Workspace task failed", showError(message){elements.error.textContent=message;},
+    renderWorkspaceActivityNotice(){}, showWorkspaceAgentApproval(){return true;},
+    localStorage:{setItem(){}},
+    window:{confirm:()=>true,JSONCodrHttpIdentity:{mutationHeaders:h=>({...h,"X-CSRF-Token":"fresh"})}},
+    AbortController, JSON, encodeURIComponent,
+  };
+  vm.createContext(context);vm.runInContext(process.env.APP_CODE,context);
+  return {context,direct,workspace,begun,handled,get pending(){return pending;},get workspaceOptions(){return workspaceOptions;}};
+}
+(async()=>{
+  const direct = makeContext("direct");
+  const directRun = direct.context.submitPrompt({preventDefault(){}});
+  await new Promise(setImmediate);
+  direct.context.detachActiveSessionState("d".repeat(32));
+  const directPendingAfterReset = direct.pending;
+  direct.direct.resolve({task_id:"old-direct",events:[],status:"running"});
+  await directRun;
+
+  const workspace = makeContext("workspace");
+  const workspaceRun = workspace.context.submitPrompt({preventDefault(){}});
+  await new Promise(setImmediate);
+  workspace.context.detachActiveSessionState("e".repeat(32));
+  const workspacePendingAfterReset = workspace.pending;
+  const signalAborted = Boolean(workspace.workspaceOptions?.signal?.aborted);
+  workspace.workspace.resolve({ok:true,status:200,json:async()=>({task_id:"old-workspace",route:"borg",status:"completed",requested_model:"m",result:{}})});
+  await workspaceRun;
+  process.stdout.write(JSON.stringify({
+    direct:{begun:direct.begun,handled:direct.handled,active:direct.context.activeCoreTaskId,pendingAfterReset:directPendingAfterReset},
+    workspace:{active:workspace.context.activeCoreTaskId,pendingAfterReset:workspacePendingAfterReset,signalAborted,resultHidden:workspace.context.elements.result.hidden},
+  }));
+})();
+'''
+        completed = subprocess.run(
+            ["node", "-e", harness],
+            env={"APP_CODE": source[state_start:state_end] + source[submit_start:submit_end]},
+            text=True, capture_output=True, check=True,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["direct"]["begun"], [])
+        self.assertEqual(result["direct"]["handled"], [])
+        self.assertIsNone(result["direct"]["active"])
+        self.assertFalse(result["direct"]["pendingAfterReset"])
+        self.assertIsNone(result["workspace"]["active"])
+        self.assertFalse(result["workspace"]["pendingAfterReset"])
+        self.assertTrue(result["workspace"]["signalAborted"])
+        self.assertTrue(result["workspace"]["resultHidden"])
+
+    def test_first_run_authentication_failure_recovers_and_retry_starts_task(self):
+        source = self.client.get("/static/app.js").text
+        state_start = source.index("function markSessionDirty")
+        state_end = source.index("\nasync function ensureSession", state_start)
+        submit_start = source.index("async function submitPrompt")
+        submit_end = source.index("\nelements.form.addEventListener", submit_start)
+        harness = r'''
+const vm = require("vm"); let attempts=0; const begun=[];
+function node(value=""){return {value,textContent:"",hidden:false,disabled:false,children:[],replaceChildren(...items){this.children=items;},querySelectorAll(){return [];}};}
+const elements = {
+  prompt:node("first prompt"), submit:node(), model:node("model-1"), cancel:node(), requestStatus:node(),
+  empty:node(), result:node(), error:node(), responseModel:node(), workspaceAgentSelect:node("direct"), workspaceProjectRoot:node("."),
+  attachmentList:node(), attachmentPreview:node(), workspaceFilesList:node(), workspaceFilesPopoverList:node(),
+  contextCount:node(), exportArchive:node(), dependencyList:node(), skillList:node(), skillDetails:node(),
+  skillRecommendations:node(), attachedSkills:node(), skillConversionStatus:node(), skillPreview:node(), skillInstall:node(),
+  skillSave:node(), skillRemovePack:node(), conversationExportMarkdown:node(), conversationExportJson:node(), conversationExportZip:node(),
+  currentSessionIdentity:node(), currentSessionAssignment:node(), currentSessionCount:node(), currentSessionUnsaved:node(),
+};
+const context = {
+  elements, sessionId:null, currentSession:null, selectedProject:null, sessionDirty:false, restoredConversationSessionId:null,
+  activeRequest:null, activeCoreTaskId:null, activeWorkspaceRoute:null, activePlanReview:null, sessionGeneration:0,
+  skillAttachmentId:null, editingSkill:null, excludedSkillIds:[], skillLoadGeneration:0,
+  async ensureSession(){attempts += 1;if(attempts===1)throw new Error("Authentication required. Sign in again in Settings → Users & Access, then retry.");context.sessionId="a".repeat(32);context.currentSession={project_id:null};return context.sessionId;},
+  setPending(value){elements.submit.disabled=value;}, showError(message){elements.error.textContent=message;elements.error.hidden=false;},
+  updateConversationExports(){},updateCurrentSessionPanel(){},renderWorkspaceFiles(){},
+  conversationView:{messages:[],reset(){},async appendUser(){return {id:"user-1"};},beginTask(id){begun.push(id);}},
+  coreClient:{submit:async()=>({task_id:"task-retry",events:[],status:"running"})},handleCoreRecord(){},
+  responseErrorMessage:async()=>"failed",fetch:async()=>{throw new Error("unexpected fetch");},
+  localStorage:{setItem(){}},window:{},JSON,AbortController,encodeURIComponent,
+};
+vm.createContext(context);vm.runInContext(process.env.APP_CODE,context);
+(async()=>{
+  let rejected="";try{await context.submitPrompt({preventDefault(){}});}catch(error){rejected=error.message;}
+  const first={rejected,error:elements.error.textContent,disabled:elements.submit.disabled};
+  elements.prompt.value="retry prompt";
+  await context.submitPrompt({preventDefault(){}});
+  process.stdout.write(JSON.stringify({first,attempts,begun,active:context.activeCoreTaskId}));
+})();
+'''
+        completed = subprocess.run(
+            ["node", "-e", harness],
+            env={"APP_CODE": source[state_start:state_end] + source[submit_start:submit_end]},
+            text=True, capture_output=True, check=True,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["first"]["rejected"], "")
+        self.assertIn("sign in again", result["first"]["error"].lower())
+        self.assertFalse(result["first"]["disabled"])
+        self.assertEqual(result["attempts"], 2)
+        self.assertEqual(result["begun"], ["task-retry"])
+        self.assertEqual(result["active"], "task-retry")
+
     def test_project_history_renderer_uses_text_nodes_and_save_archive_restore_have_distinct_effects(self):
         source = self.client.get("/static/app.js").text
         start = source.index("function projectHistoryNodes")

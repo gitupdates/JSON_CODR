@@ -285,6 +285,7 @@ let sessionId = null;
 let currentSession = null;
 let selectedProject = null;
 let sessionDirty = false;
+let sessionGeneration = 0;
 let terminalId = null;
 let terminalSocket = null;
 let selectedLocalperfEvaluationId = null;
@@ -1340,6 +1341,7 @@ async function adoptRestoredSession(nextSessionId) {
   updateConversationExports();
   updateCurrentSessionPanel();
   elements.empty.hidden = conversationView.messages.length > 0;
+  await loadAttachments(nextSessionId, sessionGeneration);
   await loadProjectHistory();
 }
 
@@ -1364,7 +1366,45 @@ function markSessionDirty() {
   updateCurrentSessionPanel();
 }
 
+function currentAttachmentIds() {
+  return [...elements.attachmentList.querySelectorAll("[data-attachment-id]")]
+    .map((item) => item.dataset.attachmentId);
+}
+
+function sessionStateMatches(expectedSessionId, expectedGeneration) {
+  return sessionId === expectedSessionId && sessionGeneration === expectedGeneration;
+}
+
+function resetSessionBoundContextState() {
+  skillLoadGeneration += 1;
+  skillAttachmentId = null;
+  editingSkill = null;
+  excludedSkillIds = [];
+  renderWorkspaceFiles([]);
+  elements.attachmentList.replaceChildren();
+  elements.attachmentPreview.replaceChildren();
+  elements.attachmentPreview.hidden = true;
+  elements.contextCount.textContent = "0 items";
+  elements.exportArchive.href = "#";
+  elements.dependencyList.replaceChildren();
+  elements.skillList.replaceChildren();
+  elements.skillDetails.replaceChildren();
+  elements.skillDetails.hidden = true;
+  elements.skillRecommendations.replaceChildren();
+  elements.attachedSkills.replaceChildren();
+  elements.attachedSkills.hidden = true;
+  elements.workspaceSkillsList?.replaceChildren();
+  elements.skillsetList?.replaceChildren();
+  if (elements.autoAttachSkills) elements.autoAttachSkills.checked = true;
+  elements.skillConversionStatus.textContent = "";
+  elements.skillPreview.disabled = true;
+  elements.skillInstall.disabled = true;
+  elements.skillSave.disabled = true;
+  elements.skillRemovePack.disabled = true;
+}
+
 function detachActiveSessionState(nextSessionId = null) {
+  sessionGeneration += 1;
   activeRequest?.abort?.();
   activeRequest = null;
   activeCoreTaskId = null;
@@ -1373,7 +1413,10 @@ function detachActiveSessionState(nextSessionId = null) {
   sessionId = nextSessionId;
   currentSession = null;
   restoredConversationSessionId = null;
+  sessionDirty = false;
   conversationView.reset(nextSessionId);
+  resetSessionBoundContextState();
+  setPending(false);
   elements.result.hidden = true;
   elements.error.hidden = true;
   elements.empty.hidden = false;
@@ -1417,6 +1460,50 @@ async function ensureSession() {
   return sessionId;
 }
 
+function canReplaceEmptyUnassignedSession() {
+  return Boolean(
+    sessionId
+    && currentSession?.owner_user_id
+    && !currentSession.project_id
+    && !sessionDirty
+    && conversationView.messages.length === 0
+    && (currentSession.messages || []).length === 0
+    && (currentSession.attachments || []).length === 0
+    && (currentSession.selected_skill_ids || []).length === 0
+    && (currentSession.excluded_skill_ids || []).length === 0
+  );
+}
+
+async function replaceEmptyUnassignedSessionForProject(project) {
+  if (!canReplaceEmptyUnassignedSession()) return false;
+  const previousSessionId = sessionId;
+  const createResponse = await fetch("/api/sessions", {
+    method: "POST",
+    headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ project_id: project.project_id }),
+  });
+  const replacement = await createResponse.json().catch(() => ({}));
+  if (!createResponse.ok || !replacement.id) {
+    throw new Error(replacement.detail || `Unable to create project session (${createResponse.status})`);
+  }
+  const deleteResponse = await fetch(`/api/sessions/${encodeURIComponent(previousSessionId)}`, {
+    method: "DELETE",
+    headers: window.JSONCodrHttpIdentity.mutationHeaders(),
+  });
+  if (!deleteResponse.ok) {
+    throw new Error(await responseErrorMessage(deleteResponse, "Unable to replace the empty unassigned session"));
+  }
+  sessionGeneration += 1;
+  sessionId = replacement.id;
+  currentSession = replacement;
+  restoredConversationSessionId = replacement.id;
+  sessionDirty = false;
+  conversationView.reset(sessionId);
+  updateConversationExports();
+  updateCurrentSessionPanel();
+  return true;
+}
+
 async function resolveSelectedProject() {
   const root = elements.projectSessionRoot.value.trim();
   if (!root) throw new Error("Enter a workspace root to resolve a project");
@@ -1437,6 +1524,7 @@ async function resolveSelectedProject() {
       throw new Error("The current session belongs to another project. Start a New Session before switching projects.");
     }
     selectedProject = project;
+    await replaceEmptyUnassignedSessionForProject(project);
     elements.workspaceProjectRoot.value = project.root;
     elements.projectSessionSelected.textContent = `${project.project_id} · ${project.root}`;
     elements.projectSessionStatus.textContent = "Project selected. Current unassigned work can now be saved here.";
@@ -2588,10 +2676,14 @@ async function searchOptimizedModels() {
   } finally { elements.optimizedModelSearchRun.disabled = false; }
 }
 
-async function loadAttachments() {
-  await ensureSession();
-  elements.exportArchive.href = `/api/sessions/${sessionId}/archive.zip`;
-  const attachments = await fetch(`/api/sessions/${sessionId}/attachments`).then((response) => response.json());
+async function loadAttachments(expectedSessionId = null, expectedGeneration = null) {
+  if (!expectedSessionId) await ensureSession();
+  const loadingSessionId = expectedSessionId || sessionId;
+  const loadingGeneration = expectedGeneration ?? sessionGeneration;
+  if (!sessionStateMatches(loadingSessionId, loadingGeneration)) return;
+  elements.exportArchive.href = `/api/sessions/${loadingSessionId}/archive.zip`;
+  const attachments = await fetch(`/api/sessions/${loadingSessionId}/attachments`).then((response) => response.json());
+  if (!sessionStateMatches(loadingSessionId, loadingGeneration)) return;
   renderWorkspaceFiles(attachments);
   elements.contextCount.textContent = `${attachments.length} item${attachments.length === 1 ? "" : "s"}`;
   elements.attachmentList.replaceChildren();
@@ -2599,11 +2691,13 @@ async function loadAttachments() {
   for (const item of attachments) {
     const row = document.createElement("div");
     row.className = "attachment-row";
+    row.dataset.attachmentId = item.id;
     const label = document.createElement("button");
     label.type = "button";
     label.textContent = `${item.included ? "●" : "○"} ${item.display_name} · ${item.extraction_state}`;
     label.addEventListener("click", async () => {
-      const preview = await fetch(`/api/sessions/${sessionId}/attachments/${item.id}/preview`).then((response) => response.json());
+      const preview = await fetch(`/api/sessions/${loadingSessionId}/attachments/${item.id}/preview`).then((response) => response.json());
+      if (!sessionStateMatches(loadingSessionId, loadingGeneration)) return;
       elements.attachmentPreview.textContent = preview.text;
       elements.attachmentPreview.hidden = false;
     });
@@ -2611,19 +2705,27 @@ async function loadAttachments() {
     remove.type = "button";
     remove.textContent = "Remove";
     remove.addEventListener("click", async () => {
-      await fetch(`/api/sessions/${sessionId}/attachments/${item.id}`, { method: "DELETE" });
+      const response = await fetch(`/api/sessions/${loadingSessionId}/attachments/${item.id}`, {
+        method: "DELETE", headers: window.JSONCodrHttpIdentity.mutationHeaders(),
+      });
+      if (!response.ok) throw new Error(await responseErrorMessage(response, "Unable to remove attachment"));
+      if (!sessionStateMatches(loadingSessionId, loadingGeneration)) return;
+      markSessionDirty();
       await loadAttachments();
     });
     const download = document.createElement("a");
     download.textContent = "Download";
-    download.href = `/api/sessions/${sessionId}/attachments/${item.id}/original`;
+    download.href = `/api/sessions/${loadingSessionId}/attachments/${item.id}/original`;
     download.className = "attachment-action";
     const retry = document.createElement("button");
     retry.type = "button";
     retry.textContent = "Retry";
     retry.addEventListener("click", async () => {
-      const response = await fetch(`/api/sessions/${sessionId}/attachments/${item.id}/retry`, { method: "POST" });
+      const response = await fetch(`/api/sessions/${loadingSessionId}/attachments/${item.id}/retry`, {
+        method: "POST", headers: window.JSONCodrHttpIdentity.mutationHeaders(),
+      });
       if (!response.ok) showError((await response.json()).detail || "Extraction retry failed");
+      else if (sessionStateMatches(loadingSessionId, loadingGeneration)) markSessionDirty();
       await loadAttachments();
     });
     const actions = document.createElement("div");
@@ -2641,16 +2743,20 @@ async function loadAttachments() {
     row.append(label, actions);
     elements.attachmentList.append(row);
   }
-  await loadDependencies();
-  await loadSkills();
+  await loadDependencies(loadingSessionId, loadingGeneration);
+  await loadSkills(loadingSessionId, loadingGeneration);
+  await loadSkillsets(loadingSessionId, loadingGeneration);
 }
 
 async function saveSkillSelection(selected = null) {
   selected = selected || [...elements.skillList.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
   const response = await fetch(`/api/sessions/${sessionId}/skills`, {
-    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ selected }),
+    method: "PATCH",
+    headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ selected }),
   });
   if (!response.ok) throw new Error((await response.json()).detail || "Unable to update skill selection");
+  markSessionDirty();
 }
 
 function showSkillDetails(pack, skill, selected) {
@@ -2673,14 +2779,17 @@ function showSkillDetails(pack, skill, selected) {
   elements.skillDetails.append(title, state, intent, abilities, instructions, download);
 }
 
-async function loadSkills() {
+async function loadSkills(expectedSessionId = null, expectedGeneration = null) {
   const generation = ++skillLoadGeneration;
-  await ensureSession();
+  if (!expectedSessionId) await ensureSession();
+  const loadingSessionId = expectedSessionId || sessionId;
+  const loadingGeneration = expectedGeneration ?? sessionGeneration;
+  if (!sessionStateMatches(loadingSessionId, loadingGeneration)) return;
   const [packs, session] = await Promise.all([
     fetch("/api/skills").then((response) => response.json()),
-    fetch(`/api/sessions/${sessionId}`).then((response) => response.json()),
+    fetch(`/api/sessions/${loadingSessionId}`).then((response) => response.json()),
   ]);
-  if (generation !== skillLoadGeneration) return;
+  if (generation !== skillLoadGeneration || !sessionStateMatches(loadingSessionId, loadingGeneration)) return;
   const selected = new Set(session.selected_skill_ids || []);
   renderWorkspaceSkills(packs, selected);
   const content = document.createDocumentFragment();
@@ -2747,19 +2856,23 @@ async function loadSkills() {
     group.append(summary, packBody);
     content.append(group);
   }
-  if (generation !== skillLoadGeneration) return;
+  if (generation !== skillLoadGeneration || !sessionStateMatches(loadingSessionId, loadingGeneration)) return;
   elements.skillList.replaceChildren(content);
 }
 
-async function loadSkillsets() {
-  await ensureSession();
+async function loadSkillsets(expectedSessionId = null, expectedGeneration = null) {
+  if (!expectedSessionId) await ensureSession();
+  const loadingSessionId = expectedSessionId || sessionId;
+  const loadingGeneration = expectedGeneration ?? sessionGeneration;
+  if (!sessionStateMatches(loadingSessionId, loadingGeneration)) return;
   const [skillsetResponse, sessionResponse] = await Promise.all([
     fetch("/api/skillsets"),
-    fetch(`/api/sessions/${sessionId}`),
+    fetch(`/api/sessions/${loadingSessionId}`),
   ]);
   const skillsets = await skillsetResponse.json();
   const session = await sessionResponse.json();
   if (!skillsetResponse.ok) throw new Error(skillsets.detail || "Unable to load Skillsets");
+  if (!sessionStateMatches(loadingSessionId, loadingGeneration)) return;
   excludedSkillIds = session.excluded_skill_ids || [];
   elements.autoAttachSkills.checked = session.auto_attach_skills !== false;
   elements.skillsetList.replaceChildren();
@@ -2798,6 +2911,7 @@ function renderRecommendations(recommendations) {
           body: JSON.stringify({ excluded_skill_ids: excludedSkillIds }),
         });
         if (!response.ok) return showError((await response.json()).detail || "Unable to dismiss recommendation");
+        markSessionDirty();
         row.remove();
       });
       row.append(button);
@@ -2830,11 +2944,15 @@ function renderAttachedSkills(skills) {
   }
 }
 
-async function loadDependencies() {
-  await ensureSession();
-  const response = await fetch(`/api/sessions/${sessionId}/dependencies`);
+async function loadDependencies(expectedSessionId = null, expectedGeneration = null) {
+  if (!expectedSessionId) await ensureSession();
+  const loadingSessionId = expectedSessionId || sessionId;
+  const loadingGeneration = expectedGeneration ?? sessionGeneration;
+  if (!sessionStateMatches(loadingSessionId, loadingGeneration)) return;
+  const response = await fetch(`/api/sessions/${loadingSessionId}/dependencies`);
   if (!response.ok) throw new Error("Unable to scan dependency manifests");
   const suggestions = await response.json();
+  if (!sessionStateMatches(loadingSessionId, loadingGeneration)) return;
   elements.dependencyList.replaceChildren();
   if (!suggestions.length) {
     elements.dependencyList.innerHTML = '<p class="meta">No supported dependency manifests detected.</p>';
@@ -2961,13 +3079,18 @@ async function scanSkillDirectory(directory = elements.skillScanDirectory.value)
 
 async function uploadFiles(files) {
   await ensureSession();
+  let changed = false;
   for (const file of files) {
     const body = new FormData();
     body.append("file", file);
     if (file.webkitRelativePath) body.append("relative_path", file.webkitRelativePath);
-    const response = await fetch(`/api/sessions/${sessionId}/attachments`, { method: "POST", body });
+    const response = await fetch(`/api/sessions/${sessionId}/attachments`, {
+      method: "POST", headers: window.JSONCodrHttpIdentity.mutationHeaders(), body,
+    });
     if (!response.ok) showError((await response.json()).detail || `Unable to import ${file.name}`);
+    else changed = true;
   }
+  if (changed) markSessionDirty();
   await loadAttachments();
 }
 
@@ -3089,27 +3212,34 @@ async function submitPrompt(event) {
     elements.prompt.focus();
     return;
   }
-  await ensureSession();
   setPending(true);
   elements.error.hidden = true;
+  let submittingSessionId = null;
+  let submittingGeneration = null;
+  let workspaceController = null;
   try {
-    const attachmentIds = [...elements.attachmentList.querySelectorAll("[data-attachment-id]")].map((item) => item.dataset.attachmentId);
+    await ensureSession();
+    submittingSessionId = sessionId;
+    submittingGeneration = sessionGeneration;
+    const attachmentIds = currentAttachmentIds();
     elements.empty.hidden = true;
     elements.prompt.value = "";
     const directModelRun = elements.workspaceAgentSelect.value === "direct"
       && elements.model.value !== "multi-model";
     if (directModelRun) {
       const userMessage = await conversationView.appendUser(prompt, attachmentIds);
+      if (!sessionStateMatches(submittingSessionId, submittingGeneration)) return;
       markSessionDirty();
       const record = await coreClient.submit({
         projectId: currentSession?.project_id || selectedProject?.project_id || "legacy",
-        threadId: `chat:${sessionId}`,
-        sessionId,
+        threadId: `chat:${submittingSessionId}`,
+        sessionId: submittingSessionId,
         model: elements.model.value,
         prompt,
         projectRoot: selectedProject?.root || elements.workspaceProjectRoot.value || ".",
         attachments: attachmentIds,
       });
+      if (!sessionStateMatches(submittingSessionId, submittingGeneration)) return;
       activeCoreTaskId = record.task_id;
       activeWorkspaceRoute = "local-model";
       conversationView.beginTask(record.task_id, {
@@ -3120,21 +3250,27 @@ async function submitPrompt(event) {
       return;
     }
     const userMessage = await conversationView.appendUser(prompt, attachmentIds);
+    if (!sessionStateMatches(submittingSessionId, submittingGeneration)) return;
     markSessionDirty();
+    workspaceController = new AbortController();
+    activeRequest = workspaceController;
     const response = await fetch("/api/workspace/tasks", {
       method: "POST",
       headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
+      signal: workspaceController.signal,
       body: JSON.stringify({
         project_root: elements.workspaceProjectRoot.value || ".",
-        session_id: sessionId,
+        session_id: submittingSessionId,
         engine_id: elements.workspaceAgentSelect.value,
         model_selection: elements.model.value,
         prompt,
         context_references: attachmentIds,
       }),
     });
+    if (!sessionStateMatches(submittingSessionId, submittingGeneration)) return;
     if (!response.ok) throw new Error(await responseErrorMessage(response, "Workspace task failed"));
     const payload = await response.json();
+    if (!sessionStateMatches(submittingSessionId, submittingGeneration)) return;
     if (activeCoreTaskId !== payload.task_id) {
       activePlanReview = null;
       elements.taskPlanReviewOpen.hidden = true;
@@ -3177,8 +3313,14 @@ async function submitPrompt(event) {
     setPending(false);
     elements.cancel.hidden = payload.route !== "multi-model";
   } catch (error) {
+    if (
+      submittingSessionId !== null
+      && !sessionStateMatches(submittingSessionId, submittingGeneration)
+    ) return;
     showError(error.message);
     setPending(false);
+  } finally {
+    if (workspaceController && activeRequest === workspaceController) activeRequest = null;
   }
 }
 
@@ -3310,6 +3452,7 @@ window.JSONCodrSkillRouting.bindAutoAttachControl({
   preview: previewSkillRecommendations,
   showError,
 });
+elements.autoAttachSkills.addEventListener("change", markSessionDirty);
 elements.destructiveSubmit.addEventListener("click", async () => {
   if (!pendingDestructiveAction) return;
   const { proposal, phrase, approveButton } = pendingDestructiveAction;
@@ -3795,7 +3938,13 @@ elements.pasteTextButton.addEventListener("click", async () => {
   await ensureSession();
   const text = await navigator.clipboard.readText();
   if (!text.trim()) return;
-  await fetch(`/api/sessions/${sessionId}/clipboard-text`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+  const response = await fetch(`/api/sessions/${sessionId}/clipboard-text`, {
+    method: "POST",
+    headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ text }),
+  });
+  if (!response.ok) throw new Error(await responseErrorMessage(response, "Unable to attach clipboard text"));
+  markSessionDirty();
   await loadAttachments();
 });
 elements.scanDependencies.addEventListener("click", () => loadDependencies().catch((error) => showError(error.message)));
