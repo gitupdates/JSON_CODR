@@ -238,6 +238,79 @@ class WebApiTests(unittest.TestCase):
         finally:
             foreign.close()
 
+    def test_first_project_prompt_retrieves_history_and_persists_structured_provenance(self):
+        project_root = Path(self.temporary_directory.name) / "retrieval-project"
+        project_root.mkdir()
+        project_id = self.client.post(
+            "/api/projects/resolve", json={"root": str(project_root)}
+        ).json()["project_id"]
+        source_session = self.client.post(
+            "/api/sessions", json={"project_id": project_id}
+        ).json()["id"]
+        self.workspace.append_message(source_session, ChatMessage(
+            role="user", content="Repair src/parser.py token handling"
+        ))
+        saved = self.client.post(f"/api/projects/{project_id}/sessions", json={
+            "session_id": source_session,
+            "title": "Parser token repair",
+            "change_type": "fix",
+            "keywords": ["file:src/parser.py", "component:parser", "token-repair"],
+        })
+        self.assertEqual(saved.status_code, 200, saved.text)
+        snapshot_id = saved.json()["snapshot"]["id"]
+        live_session = self.client.post(
+            "/api/sessions", json={"project_id": project_id}
+        ).json()["id"]
+
+        response = self.client.post("/api/chat", json={
+            "model": "qwen",
+            "prompt": "Explain the parser.py token repair",
+            "session_id": live_session,
+        })
+
+        self.assertEqual(response.status_code, 200, response.text)
+        source_ref = f"previous-session:{snapshot_id}"
+        self.assertIn("PREVIOUS SESSION HISTORY", self.service.last_prompt)
+        self.assertIn(source_ref, self.service.last_prompt)
+        references = response.json()["references"]
+        self.assertEqual([item["id"] for item in references], [source_ref])
+        self.assertEqual(references[0]["kind"], "previous_session")
+        messages = self.workspace.get_session(live_session).messages
+        self.assertEqual(messages[-1].role, "assistant")
+        self.assertEqual([item.id for item in messages[-1].references], [source_ref])
+
+        identity = self.client.app.state.identity
+        other = identity.create_user("history-reader-other", "Other", roles=("administrator",))
+        token = identity.issue_credential(
+            other.user_id, "cli", "history isolation", ("session.write", "agent.launch")
+        ).token
+        foreign = TestClient(self.client.app)
+        foreign.headers["Authorization"] = f"Bearer {token}"
+        try:
+            denied = foreign.post("/api/chat", json={
+                "model": "qwen",
+                "prompt": "Explain the parser.py token repair",
+                "session_id": live_session,
+            })
+            self.assertEqual(denied.status_code, 404)
+        finally:
+            foreign.close()
+
+    def test_history_retrieval_bypasses_unbound_sessions_and_survives_unavailable_memory(self):
+        legacy_session = self.client.post("/api/sessions").json()["id"]
+        response = self.client.post("/api/chat", json={
+            "model": "qwen", "prompt": "parser.py", "session_id": legacy_session,
+        })
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertNotIn("PREVIOUS SESSION HISTORY", self.service.last_prompt)
+        self.assertEqual(response.json()["references"], [])
+
+        self.client.app.state.core_memory.close()
+        response = self.client.post("/api/chat", json={
+            "model": "qwen", "prompt": "parser.py", "session_id": legacy_session,
+        })
+        self.assertEqual(response.status_code, 200, response.text)
+
     def test_project_session_mutations_require_browser_csrf_but_allow_scoped_bearers(self):
         project_root = Path(self.temporary_directory.name) / "csrf-history-project"
         project_root.mkdir()
@@ -1202,6 +1275,61 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(result["attached_skillsets"], ["planning"])
         self.assertEqual(result["attached_skills"][0]["reference"], "rea-agents:reverse-engineer-anything")
 
+    def test_unified_native_task_receives_previous_history_and_structured_provenance(self):
+        project_root = Path(self.temporary_directory.name) / "native-history-project"
+        project_root.mkdir()
+        project_id = self.client.post(
+            "/api/projects/resolve", json={"root": str(project_root)}
+        ).json()["project_id"]
+        source_session = self.client.post(
+            "/api/sessions", json={"project_id": project_id}
+        ).json()["id"]
+        self.workspace.append_message(source_session, ChatMessage(
+            role="user", content="Repair native compatibility parser token"
+        ))
+        snapshot_id = self.client.post(f"/api/projects/{project_id}/sessions", json={
+            "session_id": source_session,
+            "title": "Native compatibility parser repair",
+            "change_type": "fix",
+            "keywords": ["native-parser-token"],
+        }).json()["snapshot"]["id"]
+        live_session = self.client.post(
+            "/api/sessions", json={"project_id": project_id}
+        ).json()["id"]
+
+        response = self.client.post("/api/tasks", json={
+            "schema_version": "1",
+            "command_id": "native-history-command",
+            "task_id": "native-history-task",
+            "thread_id": "native-history-thread",
+            "project_id": project_id,
+            "command_type": "capability.execute",
+            "payload": {
+                "capability_id": "inference.generate",
+                "operation": "generate",
+                "project_root": str(project_root),
+                "mode": "native",
+                "arguments": {
+                    "model": "qwen2.5-coder:7b-instruct-q4_K_M",
+                    "prompt": "Explain the native parser token repair",
+                    "session_id": live_session,
+                    "attachments": [],
+                },
+            },
+        })
+
+        self.assertEqual(response.status_code, 200, response.text)
+        completed = next(
+            event for event in response.json()["events"]
+            if event["event_type"] == "inference.completed"
+        )
+        source_ref = f"previous-session:{snapshot_id}"
+        self.assertIn(source_ref, self.service.last_prompt)
+        self.assertEqual(
+            [item["id"] for item in completed["payload"]["result"]["references"]],
+            [source_ref],
+        )
+
     def test_broker_adapter_runs_non_tool_model_without_native_tool_schema(self):
         class BrokerModelService(FakeService):
             async def chat(self, model, prompt, images=None):
@@ -1437,14 +1565,33 @@ class WebApiTests(unittest.TestCase):
             )],
         )])
         client = self.track_core_client(authenticated_client(create_app(model_service, self.workspace)))
-        session = self.workspace.create_session()
+        project_id = client.post(
+            "/api/projects/resolve", json={"root": str(project)}
+        ).json()["project_id"]
+        source_session = client.post(
+            "/api/sessions", json={"project_id": project_id}
+        ).json()["id"]
+        self.workspace.append_message(source_session, ChatMessage(
+            role="user", content="Inspect parser history token"
+        ))
+        saved = client.post(f"/api/projects/{project_id}/sessions", json={
+            "session_id": source_session,
+            "title": "Workspace parser history",
+            "change_type": "fix",
+            "keywords": ["parser-history-token"],
+        })
+        snapshot_id = saved.json()["snapshot"]["id"]
+        session_id = client.post(
+            "/api/sessions", json={"project_id": project_id}
+        ).json()["id"]
+        session = self.workspace.get_session(session_id)
         session.selected_skill_ids = ["large-agent-context:instructions"]
         self.workspace.save_manifest(session)
         from web_app.attachments import AttachmentService
         AttachmentService(self.workspace).import_text(session.id, "workspace context evidence")
         base = {
             "project_root": str(project), "session_id": session.id,
-            "engine_id": "borg", "prompt": "Inspect the repository",
+            "engine_id": "borg", "prompt": "Inspect parser history token",
         }
 
         explicit = client.post("/api/workspace/tasks", json={**base, "model_selection": "qwen2.5-coder:7b-instruct-q4_K_M"})
@@ -1456,6 +1603,11 @@ class WebApiTests(unittest.TestCase):
         compatibility = client.post("/api/workspace/tasks", json={**base, "model_selection": "qwen2.5-coder:0.5b"})
         missing_project = client.post("/api/workspace/tasks", json={
             **base, "project_root": str(project / "missing"), "model_selection": "auto",
+        })
+        other_project = Path(self.temporary_directory.name) / "other-workspace-project"
+        other_project.mkdir()
+        mismatched_project = client.post("/api/workspace/tasks", json={
+            **base, "project_root": str(other_project), "model_selection": "auto",
         })
 
         self.assertEqual(explicit.status_code, 201, explicit.text)
@@ -1480,7 +1632,18 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(compatibility.json()["route"], "json_planner_compatibility")
         self.assertTrue(any("not verified" in warning for warning in compatibility.json()["warnings"]))
         self.assertTrue(any("workspace context evidence" in prompt for prompt in model_service.prompts))
+        source_ref = f"previous-session:{snapshot_id}"
+        self.assertEqual(
+            [item["id"] for item in explicit.json()["result"]["references"]],
+            [source_ref],
+        )
+        self.assertEqual(
+            [item["id"] for item in explicit.json()["artifact_references"]],
+            [source_ref],
+        )
+        self.assertTrue(any(source_ref in prompt for prompt in model_service.prompts))
         self.assertEqual(missing_project.status_code, 400)
+        self.assertEqual(mismatched_project.status_code, 404)
 
     def test_optimized_connector_catalog_and_install_plans_are_additive(self):
         client = authenticated_client(create_app(self.service, self.workspace, optimized=True))

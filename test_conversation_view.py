@@ -76,6 +76,37 @@ view.appendUser('Hello').then(() => console.log(JSON.stringify(captured)));
         self.assertEqual(result["options"]["headers"]["Content-Type"], "application/json")
         self.assertEqual(result["options"]["headers"]["X-CSRF-Token"], "csrf-test")
 
+    def test_previous_session_reference_renders_safe_metadata_without_download_link(self):
+        result = self.run_node("""
+const elements = [];
+global.document = {
+  createElement(tag) {
+    const node = {
+      tag, children: [], dataset: {}, className: '', textContent: '', href: '', download: undefined,
+      append(...items) { this.children.push(...items); },
+      setAttribute(name, value) { this[name] = value; },
+    };
+    elements.push(node); return node;
+  },
+};
+const view = new ConversationView();
+view.sessionId = 'c'.repeat(32);
+const article = view.renderMessage(view.normalizeMessage({
+  role: 'assistant', content: 'done', references: [{
+    id: 'previous-session:' + 'a'.repeat(32), kind: 'previous_session',
+    label: '<script>alert(1)</script>', target: 'previous-session:' + 'a'.repeat(32),
+    available: false,
+  }],
+}));
+function flatten(node) { return [node, ...(node.children || []).flatMap(flatten)]; }
+console.log(JSON.stringify(flatten(article).map(node => ({ tag: node.tag, text: node.textContent, href: node.href, download: node.download }))));
+""")
+        labels = [item for item in result if item["text"] == "<script>alert(1)</script>"]
+        self.assertEqual(len(labels), 1)
+        self.assertNotEqual(labels[0]["tag"], "a")
+        self.assertFalse(labels[0]["href"])
+        self.assertIsNone(labels[0].get("download"))
+
 
 if __name__ == "__main__":
     unittest.main()

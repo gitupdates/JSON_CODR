@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from web_app.core.memory import MemoryDraft, MemoryPolicyError, MemoryStore
 from web_app.core.project_registry import ProjectRegistry
 from web_app.models import ProjectSessionRestoreResult, ProjectSessionSnapshot, SessionRecord
 from web_app.workspace import SESSION_ID_PATTERN, WorkspaceService
@@ -105,7 +106,13 @@ _EXTRACTED_PATTERN = re.compile(r"^[0-9a-f]{32}\.txt$")
 class ProjectSessionService:
     """Creates immutable, project-bound copies of complete live sessions."""
 
-    def __init__(self, workspace: WorkspaceService, projects: ProjectRegistry) -> None:
+    def __init__(
+        self,
+        workspace: WorkspaceService,
+        projects: ProjectRegistry,
+        *,
+        memory: MemoryStore | None = None,
+    ) -> None:
         self.workspace = workspace
         self.projects = projects
         self.root = self.workspace.data_root / "project-sessions"
@@ -113,6 +120,7 @@ class ProjectSessionService:
         self._project_locks_guard = threading.RLock()
         self._project_locks: dict[str, threading.RLock] = {}
         self._windows_transaction_roots = threading.local()
+        self.memory = memory
 
     @contextmanager
     def _project_lock(self, project_id: str):
@@ -448,13 +456,18 @@ class ProjectSessionService:
             with self._locked_copy_directory(sessions_root):
                 self._sweep_staging(sessions_root)
                 staging = sessions_root / f".staging-{snapshot.id}"
+                indexed_record = None
                 try:
                     staging.mkdir()
                     with self._pinned_staging_directory(staging) as staging_handle:
                         digests = self._copy_live_session(session, staging)
                         history = staging / _HISTORY_FILE
-                        self._write_text(history, self._history_markdown(snapshot))
+                        history_content = self._history_markdown(snapshot)[:65_536]
+                        self._write_text(history, history_content)
                         digests[_HISTORY_FILE] = self._digest(history)
+                        snapshot, indexed_record = self._project_history(
+                            snapshot, history_content
+                        )
                         self._write_json(staging / "snapshot.json", {
                             "snapshot": snapshot.model_dump(mode="json"),
                             "tree_digests": digests,
@@ -465,9 +478,49 @@ class ProjectSessionService:
                         self._promote_staging(staging, final, staging_handle)
                         self._fsync_directory(final.parent)
                 except Exception:
+                    if indexed_record is not None and self.memory is not None:
+                        try:
+                            self.memory.revoke(
+                                indexed_record.memory_id,
+                                user_id=owner_user_id,
+                                project_id=project_id,
+                                reason="snapshot promotion failed",
+                            )
+                        except Exception:
+                            pass
                     self._remove_tree_no_follow(staging)
                     raise
             return snapshot
+
+    def _project_history(self, snapshot: ProjectSessionSnapshot, content: str):
+        if self.memory is None:
+            return snapshot.model_copy(update={
+                "indexing_status": "skipped", "indexed_memory_id": None,
+            }), None
+        draft = MemoryDraft(
+            user_id=snapshot.owner_user_id,
+            project_id=snapshot.project_id,
+            thread_id=snapshot.source_session_id,
+            task_id=snapshot.id,
+            kind="previous_session_history",
+            content=content[:65_536],
+            source_refs=(f"previous-session:{snapshot.id}",),
+            retain_details=False,
+            idempotency_key=f"previous-session:{snapshot.id}",
+        )
+        try:
+            record = self.memory.accept(draft)
+        except (MemoryPolicyError, ValueError):
+            return snapshot.model_copy(update={
+                "indexing_status": "rejected", "indexed_memory_id": None,
+            }), None
+        except Exception:
+            return snapshot.model_copy(update={
+                "indexing_status": "skipped", "indexed_memory_id": None,
+            }), None
+        return snapshot.model_copy(update={
+            "indexing_status": "indexed", "indexed_memory_id": record.memory_id,
+        }), record
 
     def list(self, project_id: str, owner_user_id: str, query: str = "") -> list[ProjectSessionSnapshot]:
         directory = self.project_directory(project_id) / "sessions"

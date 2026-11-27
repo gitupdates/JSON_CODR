@@ -103,6 +103,74 @@ class CollectiveMemoryTests(unittest.TestCase):
         self.assertEqual(old_export.superseded_by, new.memory_id)
         self.assertEqual(self.store.search_collective("administrator", "project-1", "live"), (new,))
 
+    def test_safe_kind_filtered_search_is_scoped_active_and_bounded(self):
+        history = self.store.accept(self.draft(
+            kind="previous_session_history",
+            content="file:src/widget.py component:parser model:qwen task:repair user-keyword",
+            source_refs=("previous-session:" + "a" * 32,),
+            idempotency_key="previous-session:" + "a" * 32,
+        ))
+        self.store.accept(self.draft(
+            kind="verified_outcome",
+            content="file:src/widget.py component:parser",
+            idempotency_key="wrong-kind",
+        ))
+        inactive = self.store.accept(self.draft(
+            kind="previous_session_history",
+            content="file:src/widget.py inactive",
+            idempotency_key="inactive-history",
+        ))
+        self.store.revoke(
+            inactive.memory_id,
+            user_id="administrator",
+            project_id="project-1",
+            reason="inactive",
+        )
+
+        for query in ("src/widget.py", "component:parser", "model:qwen", "task:repair", "user-keyword"):
+            self.assertEqual(
+                self.store.search_collective(
+                    "administrator", "project-1", query,
+                    kind="previous_session_history", limit=500,
+                ),
+                (history,),
+            )
+        self.assertEqual(
+            self.store.search_collective(
+                "administrator", "project-1", "widget",
+                kind="verified_outcome",
+            )[0].kind,
+            "verified_outcome",
+        )
+        self.assertEqual(
+            self.store.search_collective(
+                "other", "project-1", "widget", kind="previous_session_history"
+            ),
+            (),
+        )
+        self.assertEqual(
+            self.store.search_collective(
+                "administrator", "other", "widget", kind="previous_session_history"
+            ),
+            (),
+        )
+
+    def test_search_normalizes_fts_operators_and_punctuation_without_raising(self):
+        self.store.accept(self.draft(
+            kind="previous_session_history",
+            content="parser repair completed",
+            idempotency_key="safe-search",
+        ))
+
+        for query in ('"', "***", "NEAR(", "parser OR", "parser) (repair", "-", ":"):
+            with self.subTest(query=query):
+                result = self.store.search_collective(
+                    "administrator", "project-1", query,
+                    kind="previous_session_history", limit=10_000,
+                )
+                self.assertIsInstance(result, tuple)
+                self.assertLessEqual(len(result), 50)
+
 
 if __name__ == "__main__":
     unittest.main()

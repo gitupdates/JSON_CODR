@@ -212,7 +212,7 @@ class ReasoningTrace(BaseModel):
 
 class ObjectReference(BaseModel):
     id: str = Field(min_length=1, max_length=256)
-    kind: Literal["attachment", "artifact", "project_file", "url", "skill", "task", "command"]
+    kind: Literal["attachment", "artifact", "project_file", "url", "skill", "task", "command", "previous_session"]
     label: str = Field(min_length=1, max_length=500)
     target: str = Field(min_length=1, max_length=2000)
     preview_url: Optional[str] = Field(default=None, max_length=2000)
@@ -398,6 +398,8 @@ class ProjectSessionSnapshot(BaseModel):
     keywords: List[str] = Field(default_factory=list, max_length=128)
     summary: str = Field(max_length=8_000)
     created_at: datetime
+    indexing_status: Literal["indexed", "skipped", "rejected"] = "skipped"
+    indexed_memory_id: Optional[str] = Field(default=None, max_length=128)
 
 
 class ProjectSessionSaveRequest(BaseModel):
@@ -554,6 +556,7 @@ class ContextBuildResult(BaseModel):
     attached_skills: List[AttachedSkill] = Field(default_factory=list)
     skillsets: List[str] = Field(default_factory=list)
     omitted: List[str] = Field(default_factory=list)
+    previous_session_references: List[ObjectReference] = Field(default_factory=list)
 
 
 class SkillRecommendationRequest(BaseModel):

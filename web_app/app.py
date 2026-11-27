@@ -588,6 +588,10 @@ def create_app(
                 ), {
                     "attached_skills": [item.model_dump(mode="json") for item in context_result.attached_skills],
                     "attached_skillsets": context_result.skillsets,
+                    "references": [
+                        item.model_dump(mode="json")
+                        for item in context_result.previous_session_references
+                    ],
                     "skill_recommendations": [
                         item.model_dump(mode="json") for item in recommendation_result.recommendations
                     ],
@@ -832,9 +836,31 @@ def create_app(
         if core_projects is None:
             raise RuntimeError("project registry is unavailable")
         if project_sessions is None:
-            project_sessions = ProjectSessionService(workspace, core_projects)
+            project_sessions = ProjectSessionService(
+                workspace, core_projects, memory=core_memory
+            )
             application.state.project_sessions = project_sessions
         return project_sessions
+
+    def previous_session_history(session, prompt: str):
+        if not session.owner_user_id or not session.project_id or not prompt.strip():
+            return ()
+        try:
+            get_core_runtime()
+            if core_memory is None:
+                return ()
+            records = core_memory.search_collective(
+                session.owner_user_id,
+                session.project_id,
+                prompt,
+                8,
+                kind="previous_session_history",
+            )
+        except Exception:
+            return ()
+        return tuple(record for record in records if record.thread_id != session.id)
+
+    context_assembler.previous_history_provider = previous_session_history
 
     def project_session_principal(request: Request, *, mutation: bool):
         principal = mutation_authorizer.principal(request, "session.write")
@@ -2780,11 +2806,19 @@ def create_app(
 
     @application.post("/api/workspace/tasks", response_model=WorkspaceTaskResponse, status_code=201)
     async def submit_workspace_task(request: WorkspaceTaskRequest, response: Response, http_request: Request):
-        mutation_principal(http_request, "agent.launch")
+        principal = mutation_authorizer.principal(http_request, "agent.launch")
         if request.engine_id != "borg":
             raise HTTPException(status_code=409, detail="Requested engine is not a verified Workspace engine")
         try:
             session = workspace.get_session(request.session_id)
+            if session.owner_user_id is not None and session.owner_user_id != principal.user_id:
+                raise KeyError(request.session_id)
+            get_core_runtime()
+            if core_projects is None:
+                raise RuntimeError("project registry is unavailable")
+            registered = core_projects.register(request.project_root)
+            if session.project_id is not None and session.project_id != registered.project_id:
+                raise KeyError(request.session_id)
             installed = [
                 item for item in await (inference_router.list_models() if inference_router else service.list_models())
                 if is_model_runnable(item)
@@ -2828,9 +2862,6 @@ def create_app(
             recommendation = recommendations.recommend(session, request.prompt)
             assembled = context_assembler.build(session, request.prompt, recommendation)
             core_service, _, _ = get_core_runtime()
-            if core_projects is None:
-                raise RuntimeError("project registry is unavailable")
-            registered = core_projects.register(request.project_root)
             task_id = str(uuid7())
             thread_id = f"workspace:{request.session_id}:{task_id}"
             goal = GoalSpec(
@@ -2871,7 +2902,11 @@ def create_app(
                 result={
                     "project_id": registered.project_id,
                     "task": record.model_dump(mode="json"),
-                }, artifact_references=[],
+                    "references": [
+                        item.model_dump(mode="json")
+                        for item in assembled.previous_session_references
+                    ],
+                }, artifact_references=assembled.previous_session_references,
             )
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Session not found") from error
@@ -3325,6 +3360,12 @@ def create_app(
             recommendation_result = None
             if request.session_id:
                 session = workspace.get_session(request.session_id)
+                principal = mutation_authorizer.principal(http_request, "agent.launch")
+                if (
+                    session.owner_user_id is not None
+                    and session.owner_user_id != principal.user_id
+                ):
+                    raise KeyError(request.session_id)
                 recommendation_result = recommendations.recommend(session, original_prompt)
                 context_result = context_assembler.build(session, original_prompt, recommendation_result)
                 model_prompt = context_result.prompt
@@ -3382,6 +3423,11 @@ def create_app(
                 result.attached_skills = context_result.attached_skills
                 result.attached_skillsets = context_result.skillsets
                 result.skill_recommendations = recommendation_result.recommendations
+            if context_result:
+                references = {item.id: item for item in result.references}
+                for item in context_result.previous_session_references:
+                    references.setdefault(item.id, item)
+                result.references = list(references.values())
             if request.session_id and result.actions:
                 source_skills = [item.reference for item in (context_result.attached_skills if context_result else [])]
                 result.action_proposals = action_proposals.propose(
@@ -3408,6 +3454,9 @@ def create_app(
                         role="assistant",
                         content=result.content,
                         task_id=canonical_run.run_id,
+                        requested_model=result.requested_model or request.model,
+                        effective_model=result.effective_model or result.model,
+                        references=result.references,
                     ),
                 )
             return result

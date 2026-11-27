@@ -10,6 +10,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 from web_app.attachments import AttachmentService
+from web_app.core.memory import MemoryDraft, MemoryStore
 from web_app.core.project_registry import ProjectRegistry
 from web_app.models import ChatMessage, ExtractionState, ObjectReference, ProjectSessionSaveRequest, ReasoningEntry, ReasoningTrace
 from web_app.project_sessions import ProjectSessionService
@@ -116,6 +117,104 @@ class ProjectSessionServiceTests(unittest.TestCase):
         self.assertEqual([m.content for m in live.messages], [m.content for m in self.workspace.get_session(session.id).messages])
         self.assertEqual(len(live.attachments), 1)
         self.assertEqual((self.workspace.sessions_root / restored.session_id / "artifacts" / "result.md").read_text(encoding="utf-8"), "artifact")
+
+    def test_save_projects_compact_history_with_scoped_idempotent_metadata(self):
+        memory = MemoryStore(self.root / "memory.sqlite")
+        try:
+            sessions = ProjectSessionService(self.workspace, self.registry, memory=memory)
+            session = self._live_session()
+
+            snapshot = sessions.save(
+                session.id,
+                self.project.project_id,
+                "owner-1",
+                "Parser compatibility",
+                "fix",
+                ["component:parser", "file:parser.py", "user-search-term"],
+            )
+
+            records = memory.search_collective(
+                "owner-1",
+                self.project.project_id,
+                "parser.py",
+                kind="previous_session_history",
+            )
+            self.assertEqual(len(records), 1)
+            record = records[0]
+            self.assertEqual(record.kind, "previous_session_history")
+            self.assertEqual(record.thread_id, session.id)
+            self.assertEqual(record.task_id, snapshot.id)
+            self.assertEqual(record.source_refs, (f"previous-session:{snapshot.id}",))
+            self.assertFalse(record.retain_details)
+            self.assertEqual(record.idempotency_key, f"previous-session:{snapshot.id}")
+            self.assertLessEqual(len(record.content), 65_536)
+            self.assertEqual(snapshot.indexing_status, "indexed")
+            self.assertEqual(snapshot.indexed_memory_id, record.memory_id)
+            stored = sessions.get(snapshot.id, self.project.project_id, "owner-1")
+            self.assertEqual(stored.indexing_status, "indexed")
+            self.assertEqual(stored.indexed_memory_id, record.memory_id)
+            replay = memory.accept(MemoryDraft(
+                user_id="owner-1",
+                project_id=self.project.project_id,
+                thread_id=session.id,
+                task_id=snapshot.id,
+                kind="previous_session_history",
+                content=record.content,
+                source_refs=(f"previous-session:{snapshot.id}",),
+                retain_details=False,
+                idempotency_key=f"previous-session:{snapshot.id}",
+            ))
+            self.assertEqual(replay.memory_id, record.memory_id)
+        finally:
+            memory.close()
+
+    def test_indexing_rejection_or_unavailability_never_loses_promoted_snapshot(self):
+        class RejectingMemory:
+            def accept(self, draft):
+                raise ValueError("policy rejected")
+
+        session = self._live_session()
+        rejected_service = ProjectSessionService(self.workspace, self.registry, memory=RejectingMemory())
+        rejected = rejected_service.save(
+            session.id, self.project.project_id, "owner-1", "Rejected projection", "fix", []
+        )
+        self.assertEqual(rejected.indexing_status, "rejected")
+        self.assertIsNone(rejected.indexed_memory_id)
+        self.assertEqual(
+            rejected_service.get(rejected.id, self.project.project_id, "owner-1").id,
+            rejected.id,
+        )
+
+        memory = MemoryStore(self.root / "closed-memory.sqlite")
+        memory.close()
+        closed_service = ProjectSessionService(self.workspace, self.registry, memory=memory)
+        closed = closed_service.save(
+            session.id, self.project.project_id, "owner-1", "Closed projection", "fix", []
+        )
+        self.assertEqual(closed.indexing_status, "skipped")
+        self.assertEqual(
+            closed_service.get(closed.id, self.project.project_id, "owner-1").id,
+            closed.id,
+        )
+
+    def test_promotion_failure_revokes_prepared_projection_best_effort(self):
+        memory = MemoryStore(self.root / "rollback-memory.sqlite")
+        try:
+            sessions = ProjectSessionService(self.workspace, self.registry, memory=memory)
+            session = self._live_session()
+            with patch.object(sessions, "_promote_staging", side_effect=OSError("promotion failed")):
+                with self.assertRaisesRegex(OSError, "promotion failed"):
+                    sessions.save(
+                        session.id, self.project.project_id, "owner-1", "Rollback projection", "fix", []
+                    )
+            exported = memory.export_collective(
+                "owner-1", self.project.project_id, include_inactive=True
+            )
+            self.assertEqual(len(exported), 1)
+            self.assertEqual(exported[0].status, "revoked")
+            self.assertEqual(sessions.list(self.project.project_id, "owner-1"), [])
+        finally:
+            memory.close()
 
     def test_owner_and_project_boundaries_deny_snapshot_access(self):
         session = self._live_session()

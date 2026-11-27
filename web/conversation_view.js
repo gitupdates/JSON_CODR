@@ -167,6 +167,13 @@
       if (message.references.length) {
         const references = document.createElement("nav"); references.className = "message-references"; references.setAttribute("aria-label", "Referenced objects");
         for (const reference of message.references) {
+          if (reference.kind === "previous_session" || reference.available === false) {
+            const metadata = document.createElement("span");
+            metadata.className = "message-reference-metadata";
+            metadata.textContent = reference.label || reference.id;
+            references.append(metadata);
+            continue;
+          }
           const link = document.createElement("a");
           link.textContent = reference.label || reference.id;
           link.href = `/api/sessions/${encodeURIComponent(this.sessionId)}/references/${encodeURIComponent(reference.id)}`;

@@ -64,6 +64,10 @@ _SECRET_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"(?im)^\s*(?:password|passwd|token|api[_-]?key|secret)\s*=\s*\S+"),
 )
+_SEARCH_TOKEN = re.compile(r"[A-Za-z0-9_]+")
+_MAX_SEARCH_TOKENS = 24
+_MAX_SEARCH_TOKEN_LENGTH = 64
+_MAX_SEARCH_RESULTS = 50
 
 
 def _looks_detailed(content: str) -> bool:
@@ -241,22 +245,52 @@ class MemoryStore:
         return record
 
     def search_collective(
-        self, user_id: str, project_id: str, query: str, limit: int = 20
+        self,
+        user_id: str,
+        project_id: str,
+        query: str,
+        limit: int = 20,
+        *,
+        kind: str | None = None,
     ) -> tuple[CollectiveMemoryRecord, ...]:
+        bounded_limit = max(1, min(int(limit), _MAX_SEARCH_RESULTS))
+        if kind is not None and (not kind.strip() or len(kind) > 128):
+            return ()
         if not query.strip():
-            return self.export_collective(user_id, project_id)[:limit]
-        fts_query = '"' + query.strip().replace('"', '""') + '"'
-        with self._lock:
-            rows = self._connection.execute(
-                """SELECT records.* FROM collective_memory_fts
-                JOIN collective_memory_records AS records USING(memory_id)
-                WHERE collective_memory_fts MATCH ?
-                  AND collective_memory_fts.user_id = ?
-                  AND collective_memory_fts.project_id = ?
-                  AND records.status = 'active'
-                ORDER BY rank LIMIT ?""",
-                (fts_query, user_id, project_id, limit),
-            ).fetchall()
+            records = self.export_collective(user_id, project_id)
+            if kind is not None:
+                records = tuple(record for record in records if record.kind == kind)
+            return records[:bounded_limit]
+        tokens: list[str] = []
+        for token in _SEARCH_TOKEN.findall(query):
+            normalized = token[:_MAX_SEARCH_TOKEN_LENGTH]
+            if normalized and normalized.casefold() not in {item.casefold() for item in tokens}:
+                tokens.append(normalized)
+            if len(tokens) >= _MAX_SEARCH_TOKENS:
+                break
+        if not tokens:
+            return ()
+        fts_query = " OR ".join('"' + token.replace('"', '""') + '"' for token in tokens)
+        kind_clause = " AND records.kind = ?" if kind is not None else ""
+        arguments: list[object] = [fts_query, user_id, project_id]
+        if kind is not None:
+            arguments.append(kind)
+        arguments.append(bounded_limit)
+        try:
+            with self._lock:
+                rows = self._connection.execute(
+                    """SELECT records.* FROM collective_memory_fts
+                    JOIN collective_memory_records AS records USING(memory_id)
+                    WHERE collective_memory_fts MATCH ?
+                      AND records.user_id = ?
+                      AND records.project_id = ?
+                      AND records.status = 'active'"""
+                    + kind_clause
+                    + " ORDER BY rank, records.created_at, records.memory_id LIMIT ?",
+                    tuple(arguments),
+                ).fetchall()
+        except sqlite3.Error:
+            return ()
         return tuple(self._collective_record(row) for row in rows)
 
     def export_collective(
