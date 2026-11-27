@@ -286,6 +286,7 @@ let currentSession = null;
 let selectedProject = null;
 let sessionDirty = false;
 let sessionGeneration = 0;
+let promptSubmissionGeneration = 0;
 let terminalId = null;
 let terminalSocket = null;
 let selectedLocalperfEvaluationId = null;
@@ -3267,6 +3268,7 @@ async function submitPrompt(event) {
     elements.prompt.focus();
     return;
   }
+  const promptSubmission = ++promptSubmissionGeneration;
   setPending(true);
   elements.error.hidden = true;
   let submittingSessionId = null;
@@ -3275,7 +3277,10 @@ async function submitPrompt(event) {
   try {
     const establishmentGeneration = sessionGeneration;
     const establishedSessionId = await ensureSession(establishmentGeneration);
-    if (!establishedSessionId) return;
+    if (!establishedSessionId) {
+      if (promptSubmission === promptSubmissionGeneration) setPending(false);
+      return;
+    }
     submittingSessionId = establishedSessionId;
     submittingGeneration = sessionGeneration;
     const attachmentIds = currentAttachmentIds();

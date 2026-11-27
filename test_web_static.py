@@ -832,7 +832,7 @@ function makeContext(route) {
   const context = {
     elements, sessionId:"a".repeat(32), currentSession:{project_id:null}, selectedProject:null,
     sessionDirty:false, restoredConversationSessionId:null, activeRequest:null, activeCoreTaskId:null,
-    activeWorkspaceRoute:null, activePlanReview:null, sessionGeneration:0,
+    activeWorkspaceRoute:null, activePlanReview:null, sessionGeneration:0, promptSubmissionGeneration:0,
     skillAttachmentId:null, editingSkill:null, excludedSkillIds:[], skillLoadGeneration:0,
     setPending(value){pending=value;elements.submit.disabled=value;}, updateConversationExports(){}, updateCurrentSessionPanel(){},
     renderWorkspaceFiles(items){elements.workspaceFilesList.replaceChildren(...items);elements.workspaceFilesPopoverList.replaceChildren(...items);},
@@ -914,6 +914,7 @@ function makeContext({route, initialSessionId}) {
     elements, sessionId:initialSessionId, currentSession:initialSessionId ? {id:initialSessionId,project_id:null} : null,
     selectedProject:null, sessionDirty:false, restoredConversationSessionId:initialSessionId,
     activeRequest:null, activeCoreTaskId:null, activeWorkspaceRoute:null, activePlanReview:null, sessionGeneration:0,
+    promptSubmissionGeneration:0,
     skillAttachmentId:null, editingSkill:null, excludedSkillIds:[], skillLoadGeneration:0,
     setPending(value){elements.submit.disabled=value;}, updateConversationExports(){}, updateCurrentSessionPanel(){},
     renderWorkspaceFiles(items){elements.workspaceFilesList.replaceChildren(...items);elements.workspaceFilesPopoverList.replaceChildren(...items);},
@@ -984,6 +985,82 @@ function makeContext({route, initialSessionId}) {
             [{"url": f"/api/sessions/{'c' * 32}", "method": "GET"}],
         )
 
+    def test_project_replacement_recovers_invalidated_submit_before_first_project_prompt(self):
+        source = self.client.get("/static/app.js").text
+        state_start = source.index("function markSessionDirty")
+        state_end = source.index("\nasync function startCleanSession", state_start)
+        submit_start = source.index("function setPending")
+        submit_end = source.index("\nelements.form.addEventListener", submit_start)
+        harness = r'''
+const vm = require("vm");
+function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
+function node(value=""){return {value,textContent:"",hidden:false,disabled:false,children:[],href:"",
+  replaceChildren(...items){this.children=items;},querySelectorAll(){return [];},matches(){return false;},hidePopover(){},focus(){}};}
+const oldId="a".repeat(32); const replacementId="b".repeat(32);
+const oldLookup=deferred(); const begun=[]; const submitted=[]; const calls=[];
+const oldSession={id:oldId,owner_user_id:"owner-1",project_id:null,messages:[],attachments:[],selected_skill_ids:[],excluded_skill_ids:[]};
+const replacement={id:replacementId,owner_user_id:"owner-1",project_id:"project-1",messages:[],attachments:[],selected_skill_ids:[],excluded_skill_ids:[]};
+const elements={
+  prompt:node("stale unassigned prompt"),submit:node(),model:node("model-1"),cancel:node(),requestStatus:node(),
+  empty:node(),result:node(),error:node(),responseModel:node(),workspaceAgentSelect:node("direct"),workspaceProjectRoot:node("C:/project"),
+  attachmentList:node(),conversationExportMarkdown:node(),conversationExportJson:node(),conversationExportZip:node(),
+  currentSessionIdentity:node(),currentSessionAssignment:node(),currentSessionCount:node(),currentSessionUnsaved:node(),
+  projectSessionRoot:node("C:/project"),projectSessionResolve:node(),projectSessionStatus:node(),projectSessionSelected:node(),
+  taskPlanReviewOpen:node(),taskPlanReview:node(),taskRequestedModel:node(),taskEffectiveModel:node(),summary:node(),content:node(),
+};
+const context={
+  elements,sessionId:oldId,currentSession:oldSession,selectedProject:null,sessionDirty:false,restoredConversationSessionId:oldId,
+  sessionGeneration:0,promptSubmissionGeneration:0,activeRequest:null,activeCoreTaskId:null,activeWorkspaceRoute:null,activePlanReview:null,
+  conversationView:{messages:[],reset(id){this.messages=[];this.sessionId=id;},async restore(){return true;},
+    async appendUser(content){this.messages.push({role:"user",content});return {id:"user-1"};},beginTask(id){begun.push(id);}},
+  updateConversationExports(){},updateCurrentSessionPanel(){},async loadProjectHistory(){},
+  coreClient:{async submit(payload){submitted.push(payload);return {task_id:"project-task",events:[],status:"running"};}},
+  handleCoreRecord(){},renderWorkspaceActivityNotice(){},showWorkspaceAgentApproval(){return true;},
+  localStorage:{setItem(){}},window:{JSONCodrHttpIdentity:{mutationHeaders:h=>({...h,"X-CSRF-Token":"fresh"})}},
+  AbortController,JSON,Error,encodeURIComponent,
+};
+context.fetch=async(url,options={})=>{
+  const method=options.method || "GET"; calls.push({url,method});
+  if(url===`/api/sessions/${oldId}` && method==="GET") return oldLookup.promise;
+  if(url==="/api/projects/resolve" && method==="POST") return {ok:true,status:200,json:async()=>({project_id:"project-1",root:"C:/project"})};
+  if(url==="/api/sessions" && method==="POST") return {ok:true,status:201,json:async()=>replacement};
+  if(url===`/api/sessions/${oldId}` && method==="DELETE") return {ok:true,status:204,json:async()=>({})};
+  if(url===`/api/sessions/${replacementId}` && method==="GET") return {ok:true,status:200,json:async()=>replacement};
+  throw new Error(`unexpected ${method} ${url}`);
+};
+vm.createContext(context);vm.runInContext(process.env.APP_CODE,context);
+(async()=>{
+  const invalidatedRun=context.submitPrompt({preventDefault(){}});
+  await new Promise(setImmediate);
+  await context.resolveSelectedProject();
+  oldLookup.resolve({ok:true,status:200,json:async()=>oldSession});
+  await invalidatedRun;
+  const afterReplacement={
+    sessionId:context.sessionId,generation:context.sessionGeneration,
+    submitDisabled:elements.submit.disabled,promptDisabled:elements.prompt.disabled,
+  };
+  elements.prompt.value="first project prompt";
+  await context.submitPrompt({preventDefault(){}});
+  process.stdout.write(JSON.stringify({afterReplacement,begun,submitted,calls}));
+})();
+'''
+        completed = subprocess.run(
+            ["node", "-e", harness],
+            env={"APP_CODE": source[state_start:state_end] + source[submit_start:submit_end]},
+            text=True, capture_output=True, check=True,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["afterReplacement"], {
+            "sessionId": "b" * 32,
+            "generation": 1,
+            "submitDisabled": False,
+            "promptDisabled": False,
+        })
+        self.assertEqual(result["begun"], ["project-task"])
+        self.assertEqual(len(result["submitted"]), 1)
+        self.assertEqual(result["submitted"][0]["sessionId"], "b" * 32)
+        self.assertEqual(result["submitted"][0]["projectId"], "project-1")
+
     def test_first_run_authentication_failure_recovers_and_retry_starts_task(self):
         source = self.client.get("/static/app.js").text
         state_start = source.index("function markSessionDirty")
@@ -1005,6 +1082,7 @@ const elements = {
 const context = {
   elements, sessionId:null, currentSession:null, selectedProject:null, sessionDirty:false, restoredConversationSessionId:null,
   activeRequest:null, activeCoreTaskId:null, activeWorkspaceRoute:null, activePlanReview:null, sessionGeneration:0,
+  promptSubmissionGeneration:0,
   skillAttachmentId:null, editingSkill:null, excludedSkillIds:[], skillLoadGeneration:0,
   async ensureSession(){attempts += 1;if(attempts===1)throw new Error("Authentication required. Sign in again in Settings → Users & Access, then retry.");context.sessionId="a".repeat(32);context.currentSession={project_id:null};return context.sessionId;},
   setPending(value){elements.submit.disabled=value;}, showError(message){elements.error.textContent=message;elements.error.hidden=false;},
