@@ -2,6 +2,7 @@ import unittest
 import json
 import subprocess
 from html.parser import HTMLParser
+from html import unescape
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -617,6 +618,184 @@ const { checkAndMaybeUpdate, checkBuild } = require("./web/source_control_update
         self.assertIn('id="workspace-activity-panel"', html)
         self.assertIn('/api/runtime/status', script)
         self.assertNotIn('data-destination="runtime"', html)
+
+    def test_workspace_exposes_clean_project_and_session_lifecycle_controls(self):
+        html = self.client.get("/").text
+        script = self.client.get("/static/app.js").text
+        parser = IdCollector()
+        parser.feed(html)
+
+        expected = {
+            "workspace-project-sessions", "projects-sessions-panel", "project-session-root",
+            "project-session-resolve", "project-session-selected", "current-session-identity",
+            "current-session-assignment", "current-session-count", "current-session-unsaved",
+            "session-new", "session-backup", "session-save", "session-archive",
+            "session-restore", "session-clear", "session-save-title", "session-change-type",
+            "session-keywords", "project-history-search", "project-history-list",
+        }
+        self.assertTrue(expected.issubset(parser.ids), expected - parser.ids)
+        for label in (
+            "New Session", "Backup Session", "Save Session", "Archive to Context & Files",
+            "Restore Session", "Clear/Reset", "Previous Session History",
+        ):
+            self.assertIn(label, unescape(html))
+        self.assertNotIn("json_codr_session", script)
+        self.assertIn('body: JSON.stringify(selectedProject ? { project_id: selectedProject.project_id } : {})', script)
+
+    def test_context_and_files_exposes_synchronized_previous_session_history(self):
+        html = unescape(self.client.get("/").text)
+        context_start = html.index('id="context-panel"')
+        context_end = html.index("</aside>", context_start)
+        context = html[context_start:context_end]
+
+        self.assertIn("Previous Session History", context)
+        self.assertIn('id="context-project-history-search"', context)
+        self.assertIn('id="context-project-history-search-run"', context)
+        self.assertIn('id="context-project-history-list"', context)
+
+    def test_project_history_renderer_uses_text_nodes_and_save_archive_restore_have_distinct_effects(self):
+        source = self.client.get("/static/app.js").text
+        start = source.index("function projectHistoryNodes")
+        end = source.index("\nasync function loadProjectHistory", start)
+        action_start = source.index("async function saveProjectSessionAction")
+        action_end = source.index("\nfunction projectSessionFields", action_start)
+        restore_start = source.index("async function restoreProjectSessionAction")
+        restore_end = source.index("\nasync function adoptRestoredSession", restore_start)
+        harness = r'''
+const vm = require("vm");
+const source = process.env.APP_SOURCE;
+const renderer = source.slice(Number(process.env.RENDER_START), Number(process.env.RENDER_END));
+const actions = source.slice(Number(process.env.ACTION_START), Number(process.env.ACTION_END));
+const restore = source.slice(Number(process.env.RESTORE_START), Number(process.env.RESTORE_END));
+function node(tag) {
+  return { tag, children: [], className: "", textContent: "", value: "", dataset: {},
+    append(...items) { this.children.push(...items); }, addEventListener() {} };
+}
+const document = { createElement: node };
+const context = { document, encodeURIComponent, Error, JSON };
+vm.createContext(context); vm.runInContext(renderer + actions + restore, context);
+const malicious = '<img src=x onerror=alert(1)>';
+const nodes = context.projectHistoryNodes([{
+  id: 'a'.repeat(32), source_session_id: 'b'.repeat(32), title: malicious,
+  change_type: 'fix', keywords: ['file:app.js'], summary: malicious,
+  created_at: '2026-11-27T12:00:00Z', indexing_status: 'indexed',
+}]);
+function flatten(value) { return [value, ...(value.children || []).flatMap(flatten)]; }
+const rendered = nodes.flatMap(flatten);
+const calls = []; let resets = 0; let refreshes = 0; let adopted = null;
+const fetchImpl = async (url, options) => {
+  calls.push({url, options});
+  if (url.endsWith('/restore')) return {ok:true, status:201, json:async()=>({session_id:'c'.repeat(32)})};
+  return {ok:true, status:200, json:async()=>({snapshot:{id:'a'.repeat(32)}})};
+};
+(async () => {
+  const base = {projectId:'project-1', sessionId:'b'.repeat(32), title:'Release fix', changeType:'fix',
+    keywords:['file:app.js'], fetchImpl, mutationHeaders:h=>({...h, csrf:'yes'}),
+    refreshHistory:async()=>{refreshes += 1;}, resetSession:async()=>{resets += 1;}};
+  await context.saveProjectSessionAction({...base, archive:false});
+  await context.saveProjectSessionAction({...base, archive:true});
+  await context.restoreProjectSessionAction({projectId:'project-1', snapshotId:'a'.repeat(32), fetchImpl,
+    mutationHeaders:h=>({...h, csrf:'yes'}), adoptSession:async id=>{adopted=id;}});
+  process.stdout.write(JSON.stringify({
+    maliciousTextCount: rendered.filter(item=>String(item.textContent).includes(malicious)).length,
+    tags: rendered.filter(item=>String(item.textContent).includes(malicious)).map(item=>item.tag),
+    resets, refreshes, adopted, calls,
+  }));
+})();
+'''
+        completed = subprocess.run(
+            ["node", "-e", harness],
+            env={
+                "APP_SOURCE": source,
+                "RENDER_START": str(start), "RENDER_END": str(end),
+                "ACTION_START": str(action_start), "ACTION_END": str(action_end),
+                "RESTORE_START": str(restore_start), "RESTORE_END": str(restore_end),
+            },
+            text=True, capture_output=True, check=True,
+        )
+        result = json.loads(completed.stdout)
+        self.assertGreaterEqual(result["maliciousTextCount"], 2)
+        self.assertTrue(all(tag != "script" for tag in result["tags"]))
+        self.assertEqual(result["resets"], 1)
+        self.assertEqual(result["refreshes"], 2)
+        self.assertEqual(result["adopted"], "c" * 32)
+        self.assertTrue(all(call["options"]["headers"]["csrf"] == "yes" for call in result["calls"]))
+
+    def test_settings_hardware_mutations_use_identity_headers_and_restore_control_recovers(self):
+        source = self.client.get("/static/app.js").text
+        persist_start = source.index("async function persistSettings")
+        persist_end = source.index("\nfunction saveSettings", persist_start)
+        restore_start = source.index("async function restoreCpuBackend")
+        restore_end = source.index("\nconst SVG_NAMESPACE", restore_start)
+        harness = r'''
+const vm = require("vm");
+const source = process.env.APP_SOURCE;
+const code = source.slice(Number(process.env.PERSIST_START), Number(process.env.PERSIST_END))
+  + source.slice(Number(process.env.RESTORE_START), Number(process.env.RESTORE_END));
+const calls = [];
+const button = {disabled:false}; const status = {textContent:''};
+const context = {
+  fetch: async (url, options) => { calls.push({url,options}); return url === '/api/settings'
+    ? {ok:true, json:async()=>({ui:{theme:'light'}})}
+    : {ok:false, status:403, json:async()=>({detail:'CSRF validation failed'}), text:async()=>JSON.stringify({detail:'CSRF validation failed'})}; },
+  window: {JSONCodrHttpIdentity:{mutationHeaders:h=>({...h,'X-CSRF-Token':'fresh'})}},
+  elements: {hardwareRestoreCpu:button, hardwareProfileStatus:status},
+  settingsState:null, persistedThemeMode:null,
+  normalizeThemeMode:value=>value, renderApprovedDirectories(){}, loadHardwareStatus:async()=>{},
+  responseErrorMessage:async(response,fallback)=>(await response.json()).detail || fallback,
+};
+vm.createContext(context); vm.runInContext(code, context);
+(async()=>{
+  await context.persistSettings({memory:{enabled:true}});
+  let error=''; try { await context.restoreCpuBackend(); } catch (value) { error=value.message; }
+  process.stdout.write(JSON.stringify({calls,disabled:button.disabled,status:status.textContent,error}));
+})();
+'''
+        completed = subprocess.run(
+            ["node", "-e", harness],
+            env={
+                "APP_SOURCE": source, "PERSIST_START": str(persist_start), "PERSIST_END": str(persist_end),
+                "RESTORE_START": str(restore_start), "RESTORE_END": str(restore_end),
+            },
+            text=True, capture_output=True, check=True,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["calls"][0]["options"]["headers"]["X-CSRF-Token"], "fresh")
+        self.assertEqual(result["calls"][1]["options"]["headers"]["X-CSRF-Token"], "fresh")
+        self.assertFalse(result["disabled"])
+        self.assertIn("CSRF validation failed", result["status"])
+        self.assertIn("sign in", result["error"].lower())
+
+    def test_runtime_diagnostics_separate_current_and_timestamped_history_with_safe_dom(self):
+        source = self.client.get("/static/app.js").text
+        start = source.index("function formatRuntimeObservedAt")
+        end = source.index("\nasync function loadRuntimeDiagnostics", start)
+        harness = r'''
+const vm = require("vm");
+const source = process.env.APP_SOURCE;
+function node(tag) { return {tag,children:[],className:'',textContent:'', append(...items){this.children.push(...items);}, replaceChildren(...items){this.children=items;}}; }
+const document = {createElement:node};
+const context = {document, Date, JSON};
+vm.createContext(context); vm.runInContext(source.slice(Number(process.env.START), Number(process.env.END)), context);
+const container = node('div');
+context.renderRuntimeDiagnostics(container, {
+  local_only:true, health:'healthy', management_state:'managed', management_source:'stable-launcher',
+  current_process:{runtime_id:'web',status:'ready',pid:77700,stale:false},
+  historical_heartbeats:[{runtime_id:'old',status:'failed',pid:1,stale:true,observed_at:'2026-11-21T01:02:03Z'}],
+  telemetry:[{kind:'runtime.recovery_exhausted',payload:{message:'<img onerror=alert(1)>'},observed_at:'2026-11-22T01:02:03Z'}],
+});
+function flatten(value){return [value,...(value.children||[]).flatMap(flatten)];}
+process.stdout.write(JSON.stringify(flatten(container).map(item=>item.textContent).filter(Boolean)));
+'''
+        completed = subprocess.run(
+            ["node", "-e", harness],
+            env={"APP_SOURCE": source, "START": str(start), "END": str(end)},
+            text=True, capture_output=True, check=True,
+        )
+        text_items = json.loads(completed.stdout)
+        self.assertLess(text_items.index("Current runtime"), text_items.index("Historical runtime evidence"))
+        self.assertTrue(any("Nov" in item and "2026" in item for item in text_items))
+        self.assertTrue(any("<img onerror=alert(1)>" in item for item in text_items))
 
     def test_new_terminal_process_resets_the_replay_cursor(self):
         script = self.client.get("/static/app.js").text

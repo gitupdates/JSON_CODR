@@ -25,6 +25,33 @@ const elements = {
   conversationExportMarkdown: document.querySelector("#conversation-export-markdown"),
   conversationExportJson: document.querySelector("#conversation-export-json"),
   conversationExportZip: document.querySelector("#conversation-export-zip"),
+  projectsSessionsNav: document.querySelector("#projects-sessions-nav"),
+  projectsSessionsPanel: document.querySelector("#projects-sessions-panel"),
+  projectSessionRoot: document.querySelector("#project-session-root"),
+  projectSessionResolve: document.querySelector("#project-session-resolve"),
+  projectSessionSelected: document.querySelector("#project-session-selected"),
+  currentSessionIdentity: document.querySelector("#current-session-identity"),
+  currentSessionAssignment: document.querySelector("#current-session-assignment"),
+  currentSessionCount: document.querySelector("#current-session-count"),
+  currentSessionUnsaved: document.querySelector("#current-session-unsaved"),
+  sessionSaveTitle: document.querySelector("#session-save-title"),
+  sessionChangeType: document.querySelector("#session-change-type"),
+  sessionKeywords: document.querySelector("#session-keywords"),
+  sessionNew: document.querySelector("#session-new"),
+  sessionBackup: document.querySelector("#session-backup"),
+  sessionSave: document.querySelector("#session-save"),
+  sessionArchive: document.querySelector("#session-archive"),
+  sessionRestore: document.querySelector("#session-restore"),
+  sessionClear: document.querySelector("#session-clear"),
+  projectSessionStatus: document.querySelector("#project-session-status"),
+  projectHistorySearch: document.querySelector("#project-history-search"),
+  projectHistorySearchRun: document.querySelector("#project-history-search-run"),
+  projectHistorySelect: document.querySelector("#project-history-select"),
+  projectHistoryList: document.querySelector("#project-history-list"),
+  contextProjectHistoryProject: document.querySelector("#context-project-history-project"),
+  contextProjectHistorySearch: document.querySelector("#context-project-history-search"),
+  contextProjectHistorySearchRun: document.querySelector("#context-project-history-search-run"),
+  contextProjectHistoryList: document.querySelector("#context-project-history-list"),
   appSidebar: document.querySelector("#app-sidebar"),
   sidebarCollapse: document.querySelector("#sidebar-collapse"),
   sidebarResizeHandle: document.querySelector("#sidebar-resize-handle"),
@@ -254,7 +281,10 @@ function isModelRunnable(model) {
   return Boolean(model.installed) && model.runnable !== false;
 }
 let activeRequest = null;
-let sessionId = localStorage.getItem("json_codr_session");
+let sessionId = null;
+let currentSession = null;
+let selectedProject = null;
+let sessionDirty = false;
 let terminalId = null;
 let terminalSocket = null;
 let selectedLocalperfEvaluationId = null;
@@ -374,6 +404,7 @@ function handleCoreRecord(record) {
   const latestEvent = (record.events || []).at(-1);
   renderWorkspaceActivityNotice(latestEvent?.event_type || record.status, record.status);
   const message = conversationView.apply(record);
+  updateCurrentSessionPanel();
   const completion = [...(record.events || [])].reverse().find((item) => item.event_type === "inference.completed");
   if (completion) {
     const payload = completion.payload.result;
@@ -523,33 +554,77 @@ function renderWorkspaceActivityNotice(message = "Ready", status = "idle") {
   }
 }
 
+function formatRuntimeObservedAt(value) {
+  if (!value) return "current request";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "timestamp unavailable";
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium", timeStyle: "long",
+  }).format(date);
+}
+
+function runtimeEvidenceRow(titleText, detailText, observedAt) {
+  const row = document.createElement("article"); row.className = "dependency-item";
+  const title = document.createElement("strong"); title.textContent = titleText;
+  const detail = document.createElement("p"); detail.className = "meta"; detail.textContent = detailText;
+  const observed = document.createElement("time"); observed.className = "meta";
+  observed.textContent = `Observed: ${formatRuntimeObservedAt(observedAt)}`;
+  if (observedAt) observed.dateTime = observedAt;
+  row.append(title, detail, observed);
+  return row;
+}
+
+function renderRuntimeDiagnostics(container, status) {
+  container.replaceChildren();
+  const locality = document.createElement("p"); locality.className = "meta";
+  locality.textContent = `${status.local_only ? "Local only" : "External routes enabled"} · ${status.health}`;
+  const currentHeading = document.createElement("h3"); currentHeading.textContent = "Current runtime";
+  const management = document.createElement("p"); management.className = "meta";
+  management.textContent = `Management: ${status.management_state || "unknown"}${status.management_source ? ` · ${status.management_source}` : ""}`;
+  container.append(locality, currentHeading, management);
+  const current = status.current_process;
+  if (current) {
+    container.append(runtimeEvidenceRow(
+      current.runtime_id || "web",
+      `${current.status || "unknown"} · PID ${current.pid ?? "unknown"}${current.stale ? " · stale" : ""}`,
+      current.observed_at,
+    ));
+  }
+  const historicalHeading = document.createElement("h3"); historicalHeading.textContent = "Historical runtime evidence";
+  const historicalNote = document.createElement("p"); historicalNote.className = "meta";
+  historicalNote.textContent = "Retained audit history. These records do not describe current process health.";
+  container.append(historicalHeading, historicalNote);
+  for (const heartbeat of status.historical_heartbeats || []) {
+    container.append(runtimeEvidenceRow(
+      heartbeat.runtime_id || "runtime",
+      heartbeat.stale
+        ? `${heartbeat.status || "unknown"} · PID ${heartbeat.pid ?? "unknown"} · historical heartbeat is stale`
+        : `${heartbeat.status || "unknown"} · PID ${heartbeat.pid ?? "unknown"}`,
+      heartbeat.observed_at,
+    ));
+  }
+  for (const item of (status.telemetry || []).slice(-20).reverse()) {
+    container.append(runtimeEvidenceRow(
+      item.kind || "runtime.telemetry",
+      JSON.stringify(item.payload ?? {}),
+      item.observed_at,
+    ));
+  }
+}
+
 async function loadRuntimeDiagnostics() {
   if (!elements.runtimeDiagnostics) return;
-  elements.runtimeDiagnostics.innerHTML = '<p class="meta">Reading local runtime evidence…</p>';
+  elements.runtimeDiagnostics.replaceChildren();
+  const loading = document.createElement("p"); loading.className = "meta"; loading.textContent = "Reading local runtime evidence…";
+  elements.runtimeDiagnostics.append(loading);
   try {
     const response = await fetch("/api/runtime/status");
     if (!response.ok) throw new Error(await responseErrorMessage(response, "Runtime diagnostics failed"));
-    const status = await response.json();
-    elements.runtimeDiagnostics.replaceChildren();
-    const locality = document.createElement("p"); locality.className = "meta";
-    locality.textContent = `${status.local_only ? "Local only" : "External routes enabled"} · ${status.health}`;
-    elements.runtimeDiagnostics.append(locality);
-    for (const heartbeat of status.heartbeats || []) {
-      const row = document.createElement("article"); row.className = "dependency-item";
-      const title = document.createElement("strong"); title.textContent = heartbeat.runtime_id;
-      const detail = document.createElement("p"); detail.className = "meta";
-      detail.textContent = heartbeat.stale ? "Heartbeat stale · restart or inspect the supervisor" : `${heartbeat.status} · PID ${heartbeat.pid}`;
-      row.append(title, detail); elements.runtimeDiagnostics.append(row);
-    }
-    for (const item of (status.telemetry || []).slice(-20).reverse()) {
-      const row = document.createElement("article"); row.className = "dependency-item";
-      const title = document.createElement("strong"); title.textContent = item.kind;
-      const detail = document.createElement("p"); detail.className = "meta";
-      detail.textContent = JSON.stringify(item.payload);
-      row.append(title, detail); elements.runtimeDiagnostics.append(row);
-    }
+    renderRuntimeDiagnostics(elements.runtimeDiagnostics, await response.json());
   } catch (error) {
-    elements.runtimeDiagnostics.innerHTML = `<p class="error">${error.message}</p>`;
+    elements.runtimeDiagnostics.replaceChildren();
+    const message = document.createElement("p"); message.className = "error"; message.textContent = error.message;
+    elements.runtimeDiagnostics.append(message);
   }
 }
 
@@ -1148,28 +1223,302 @@ async function runTerminalCommand(command = null) {
   if (fromInput) elements.terminalInput.value = "";
 }
 
+function projectHistoryNodes(snapshots) {
+  return snapshots.map((snapshot) => {
+    const article = document.createElement("article"); article.className = "project-history-item";
+    const title = document.createElement("strong"); title.textContent = snapshot.title || "Untitled saved session";
+    const date = document.createElement("time");
+    date.textContent = snapshot.created_at ? new Date(snapshot.created_at).toLocaleString() : "Date unavailable";
+    if (snapshot.created_at) date.dateTime = snapshot.created_at;
+    const change = document.createElement("p"); change.className = "meta";
+    change.textContent = `Change type: ${snapshot.change_type || "unspecified"} · Index: ${snapshot.indexing_status || "unknown"}`;
+    const identity = document.createElement("p"); identity.className = "meta";
+    identity.textContent = `Snapshot ${snapshot.id || "unknown"} · Session ${snapshot.source_session_id || "unknown"}`;
+    const keywords = document.createElement("p"); keywords.className = "meta";
+    keywords.textContent = `Keywords: ${(snapshot.keywords || []).join(", ") || "none"}`;
+    const summary = document.createElement("p"); summary.className = "project-history-summary";
+    summary.textContent = `Model / message summary: ${snapshot.summary || "No compact summary available."}`;
+    article.append(title, date, change, identity, keywords, summary);
+    return article;
+  });
+}
+
+async function loadProjectHistory(query = elements.projectHistorySearch.value.trim()) {
+  elements.projectHistorySearch.value = query;
+  elements.contextProjectHistorySearch.value = query;
+  elements.projectHistoryList.replaceChildren();
+  elements.contextProjectHistoryList.replaceChildren();
+  elements.projectHistorySelect.replaceChildren();
+  const placeholder = document.createElement("option"); placeholder.value = "";
+  if (!selectedProject) {
+    placeholder.textContent = "No project selected"; elements.projectHistorySelect.append(placeholder);
+    elements.contextProjectHistoryProject.textContent = "No project selected";
+    for (const container of [elements.projectHistoryList, elements.contextProjectHistoryList]) {
+      const empty = document.createElement("p"); empty.className = "meta";
+      empty.textContent = "Select a project to search saved sessions."; container.append(empty);
+    }
+    return [];
+  }
+  elements.contextProjectHistoryProject.textContent = `${selectedProject.project_id} · ${selectedProject.root}`;
+  const response = await fetch(`/api/projects/${encodeURIComponent(selectedProject.project_id)}/sessions?query=${encodeURIComponent(query)}`);
+  if (!response.ok) throw new Error(await responseErrorMessage(response, "Unable to load Previous Session History"));
+  const snapshots = (await response.json()).snapshots || [];
+  placeholder.textContent = snapshots.length ? "Choose a saved session" : "No saved sessions";
+  elements.projectHistorySelect.append(placeholder);
+  for (const snapshot of snapshots) {
+    const option = document.createElement("option"); option.value = snapshot.id;
+    option.textContent = `${snapshot.title} · ${snapshot.change_type} · ${new Date(snapshot.created_at).toLocaleString()}`;
+    elements.projectHistorySelect.append(option);
+  }
+  if (!snapshots.length) {
+    for (const container of [elements.projectHistoryList, elements.contextProjectHistoryList]) {
+      const empty = document.createElement("p"); empty.className = "meta";
+      empty.textContent = query ? "No saved sessions match this search." : "No sessions have been saved to this project.";
+      container.append(empty);
+    }
+  } else {
+    elements.projectHistoryList.append(...projectHistoryNodes(snapshots));
+    elements.contextProjectHistoryList.append(...projectHistoryNodes(snapshots));
+  }
+  return snapshots;
+}
+
+async function saveProjectSessionAction({
+  archive, projectId, sessionId: liveSessionId, title, changeType, keywords,
+  fetchImpl, mutationHeaders, refreshHistory, resetSession,
+}) {
+  const response = await fetchImpl(`/api/projects/${encodeURIComponent(projectId)}/sessions`, {
+    method: "POST",
+    headers: mutationHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ session_id: liveSessionId, title, change_type: changeType, keywords }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = payload.detail || `Unable to save session (${response.status})`;
+    const guidance = [401, 403].includes(response.status) ? " Sign in again in Settings → Users & Access, then retry." : "";
+    throw new Error(`${detail}.${guidance}`.replace("..", "."));
+  }
+  await refreshHistory();
+  if (archive) await resetSession();
+  return payload.snapshot;
+}
+
+function projectSessionFields() {
+  return {
+    title: elements.sessionSaveTitle.value.trim(),
+    changeType: elements.sessionChangeType.value.trim(),
+    keywords: elements.sessionKeywords.value.split(",").map((value) => value.trim()).filter(Boolean),
+  };
+}
+
+async function restoreProjectSessionAction({
+  projectId, snapshotId, fetchImpl, mutationHeaders, adoptSession,
+}) {
+  const response = await fetchImpl(
+    `/api/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(snapshotId)}/restore`,
+    { method: "POST", headers: mutationHeaders() },
+  );
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = payload.detail || `Unable to restore session (${response.status})`;
+    const guidance = [401, 403].includes(response.status) ? " Sign in again in Settings → Users & Access, then retry." : "";
+    throw new Error(`${detail}.${guidance}`.replace("..", "."));
+  }
+  if (!payload.session_id) throw new Error("Restore did not return a new live session");
+  await adoptSession(payload.session_id);
+  return payload;
+}
+
+async function adoptRestoredSession(nextSessionId) {
+  detachActiveSessionState(nextSessionId);
+  await conversationView.restore(nextSessionId);
+  restoredConversationSessionId = nextSessionId;
+  const response = await fetch(`/api/sessions/${encodeURIComponent(nextSessionId)}`);
+  if (!response.ok) throw new Error("Unable to load the restored session copy");
+  currentSession = await response.json();
+  sessionDirty = false;
+  updateConversationExports();
+  updateCurrentSessionPanel();
+  elements.empty.hidden = conversationView.messages.length > 0;
+  await loadProjectHistory();
+}
+
+function updateConversationExports() {
+  const base = sessionId ? `/api/sessions/${encodeURIComponent(sessionId)}/conversation/export` : null;
+  elements.conversationExportMarkdown.href = base ? `${base}?format=markdown` : "#";
+  elements.conversationExportJson.href = base ? `${base}?format=json` : "#";
+  elements.conversationExportZip.href = base ? `${base}?format=zip&include_binaries=true` : "#";
+}
+
+function updateCurrentSessionPanel() {
+  elements.currentSessionIdentity.textContent = sessionId || "Not started (created when needed)";
+  elements.currentSessionAssignment.textContent = currentSession?.project_id
+    ? `Project ${currentSession.project_id}` : "Authenticated unassigned session";
+  const active = activeCoreTaskId ? "1 active task" : "no active task";
+  elements.currentSessionCount.textContent = `${conversationView.messages.length} messages · ${active}`;
+  elements.currentSessionUnsaved.textContent = sessionDirty ? "Unsaved changes" : "Clean";
+}
+
+function markSessionDirty() {
+  sessionDirty = true;
+  updateCurrentSessionPanel();
+}
+
+function detachActiveSessionState(nextSessionId = null) {
+  activeRequest?.abort?.();
+  activeRequest = null;
+  activeCoreTaskId = null;
+  activeWorkspaceRoute = null;
+  activePlanReview = null;
+  sessionId = nextSessionId;
+  currentSession = null;
+  restoredConversationSessionId = null;
+  conversationView.reset(nextSessionId);
+  elements.result.hidden = true;
+  elements.error.hidden = true;
+  elements.empty.hidden = false;
+  elements.responseModel.textContent = "Awaiting prompt";
+  updateConversationExports();
+  updateCurrentSessionPanel();
+}
+
 async function ensureSession() {
-  if (!sessionId || !(await fetch(`/api/sessions/${sessionId}`)).ok) {
+  if (sessionId) {
+    const existing = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
+    if (existing.ok) currentSession = await existing.json();
+    else detachActiveSessionState();
+  }
+  if (currentSession?.project_id && selectedProject && currentSession.project_id !== selectedProject.project_id) {
+    throw new Error("The current session belongs to another project. Start a New Session before switching projects.");
+  }
+  if (!sessionId) {
     const response = await fetch("/api/sessions", {
       method: "POST",
-      headers: window.JSONCodrHttpIdentity.mutationHeaders(),
+      headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(selectedProject ? { project_id: selectedProject.project_id } : {}),
     });
-    const session = await response.json();
-    if (!response.ok) throw new Error(session.detail || `Unable to create session (${response.status})`);
-    if (!session || typeof session.id !== "string" || !session.id) throw new Error("Unable to create session");
+    const session = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const guidance = [401, 403].includes(response.status) ? " Sign in again in Settings → Users & Access, then retry." : "";
+      throw new Error(`${session.detail || `Unable to create session (${response.status})`}.${guidance}`.replace("..", "."));
+    }
+    if (typeof session.id !== "string" || !session.id) throw new Error("Unable to create session");
     sessionId = session.id;
-    localStorage.setItem("json_codr_session", sessionId);
+    currentSession = session;
+    conversationView.reset(sessionId);
   }
   if (restoredConversationSessionId !== sessionId) {
     await conversationView.restore(sessionId);
     restoredConversationSessionId = sessionId;
     elements.empty.hidden = conversationView.messages.length > 0;
   }
-  const base = `/api/sessions/${encodeURIComponent(sessionId)}/conversation/export`;
-  elements.conversationExportMarkdown.href = `${base}?format=markdown`;
-  elements.conversationExportJson.href = `${base}?format=json`;
-  elements.conversationExportZip.href = `${base}?format=zip&include_binaries=true`;
+  updateConversationExports();
+  updateCurrentSessionPanel();
   return sessionId;
+}
+
+async function resolveSelectedProject() {
+  const root = elements.projectSessionRoot.value.trim();
+  if (!root) throw new Error("Enter a workspace root to resolve a project");
+  elements.projectSessionResolve.disabled = true;
+  elements.projectSessionStatus.textContent = "Resolving project…";
+  try {
+    const response = await fetch("/api/projects/resolve", {
+      method: "POST",
+      headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ root }),
+    });
+    const project = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const guidance = [401, 403].includes(response.status) ? " Sign in again in Settings → Users & Access, then retry." : "";
+      throw new Error(`${project.detail || "Unable to resolve project"}.${guidance}`.replace("..", "."));
+    }
+    if (currentSession?.project_id && currentSession.project_id !== project.project_id) {
+      throw new Error("The current session belongs to another project. Start a New Session before switching projects.");
+    }
+    selectedProject = project;
+    elements.workspaceProjectRoot.value = project.root;
+    elements.projectSessionSelected.textContent = `${project.project_id} · ${project.root}`;
+    elements.projectSessionStatus.textContent = "Project selected. Current unassigned work can now be saved here.";
+    await loadProjectHistory();
+    updateCurrentSessionPanel();
+    return project;
+  } finally {
+    elements.projectSessionResolve.disabled = false;
+  }
+}
+
+async function startCleanSession({ clear = false, warn = true } = {}) {
+  if (warn && sessionDirty && !window.confirm("This session has unsaved content. Continue with a clean session?")) return false;
+  const previousSessionId = sessionId;
+  if (clear && previousSessionId) {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(previousSessionId)}`, {
+      method: "DELETE", headers: window.JSONCodrHttpIdentity.mutationHeaders(),
+    });
+    if (!response.ok) throw new Error(await responseErrorMessage(response, "Unable to clear the current session"));
+  }
+  detachActiveSessionState();
+  sessionDirty = false;
+  await ensureSession();
+  await loadProjectHistory();
+  elements.projectSessionStatus.textContent = clear ? "Session cleared and reset." : "Clean session started.";
+  return true;
+}
+
+async function saveCurrentProjectSession(archive = false) {
+  if (!selectedProject) throw new Error("Resolve or select a project before saving this session");
+  await ensureSession();
+  const fields = projectSessionFields();
+  if (!fields.title || !fields.changeType) throw new Error("Title and change type are required to save a session");
+  const control = archive ? elements.sessionArchive : elements.sessionSave;
+  control.disabled = true;
+  elements.projectSessionStatus.textContent = archive ? "Archiving session…" : "Saving session…";
+  try {
+    const snapshot = await saveProjectSessionAction({
+      archive, projectId: selectedProject.project_id, sessionId, ...fields, fetchImpl: fetch,
+      mutationHeaders: (headers = {}) => window.JSONCodrHttpIdentity.mutationHeaders(headers),
+      refreshHistory: loadProjectHistory,
+      resetSession: () => startCleanSession({ clear: false, warn: false }),
+    });
+    if (!archive) {
+      currentSession = { ...currentSession, project_id: selectedProject.project_id };
+      sessionDirty = false;
+      updateCurrentSessionPanel();
+      elements.projectSessionStatus.textContent = `Session saved as ${snapshot.id}.`;
+    } else {
+      elements.projectSessionStatus.textContent = `Session archived as ${snapshot.id}; a clean session is active.`;
+    }
+    return snapshot;
+  } finally {
+    control.disabled = false;
+  }
+}
+
+async function restoreSelectedProjectSession() {
+  if (!selectedProject) throw new Error("Select a project before restoring a session");
+  const snapshotId = elements.projectHistorySelect.value;
+  if (!snapshotId) throw new Error("Choose a saved session to restore");
+  elements.sessionRestore.disabled = true;
+  elements.projectSessionStatus.textContent = "Restoring an independent session copy…";
+  try {
+    const restored = await restoreProjectSessionAction({
+      projectId: selectedProject.project_id, snapshotId, fetchImpl: fetch,
+      mutationHeaders: (headers = {}) => window.JSONCodrHttpIdentity.mutationHeaders(headers),
+      adoptSession: adoptRestoredSession,
+    });
+    elements.projectSessionStatus.textContent = `Restored snapshot ${restored.snapshot_id} as live session ${restored.session_id}.`;
+  } finally {
+    elements.sessionRestore.disabled = false;
+  }
+}
+
+async function backupCurrentSession() {
+  await ensureSession();
+  const link = document.createElement("a");
+  link.href = `/api/sessions/${encodeURIComponent(sessionId)}/conversation/export?format=zip&include_binaries=true`;
+  link.download = `json-codr-session-${sessionId}.zip`;
+  link.click();
+  elements.projectSessionStatus.textContent = "Session backup download started. No project snapshot was created.";
 }
 
 window.JSONCodrLiveSession = {
@@ -1290,10 +1639,16 @@ async function approveWorkspaceAgentAction() {
 
 async function persistSettings(update) {
   const response = await fetch("/api/settings", {
-    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(update),
+    method: "PATCH",
+    headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(update),
   });
-  if (!response.ok) throw new Error((await response.json()).detail || "Unable to save settings");
-  settingsState = await response.json();
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const guidance = [401, 403].includes(response.status) ? " Sign in again in Settings → Users & Access, then retry." : "";
+    throw new Error(`${payload.detail || "Unable to save settings"}.${guidance}`.replace("..", "."));
+  }
+  settingsState = payload;
   persistedThemeMode = normalizeThemeMode(settingsState.ui.theme);
   renderApprovedDirectories();
 }
@@ -1381,14 +1736,15 @@ async function saveGpuProfile(reset = false) {
   if (target === "__default__") update.default_profile = profile;
   else if (reset) delete update.model_profiles[target];
   else update.model_profiles[target] = profile;
-  elements.hardwareProfileSave.disabled = true;
+  const control = reset ? elements.hardwareProfileReset : elements.hardwareProfileSave;
+  control.disabled = true;
   elements.hardwareProfileStatus.textContent = "Saving…";
   try {
     await saveSettings({ gpu_optimization: update });
     elements.hardwareProfileStatus.textContent = reset ? "Automatic profile restored" : "Profile saved";
     renderGpuProfileControls();
   } finally {
-    elements.hardwareProfileSave.disabled = false;
+    control.disabled = false;
   }
 }
 
@@ -1654,10 +2010,25 @@ async function runHardwareDetection() {
 }
 
 async function restoreCpuBackend() {
-  const response = await fetch("/api/hardware/restore-cpu", { method: "POST" });
-  if (!response.ok) throw new Error((await response.json()).detail || "Unable to restore CPU mode");
-  await loadHardwareStatus();
-  elements.hardwareStatus.textContent += " · restart Ollama to activate";
+  elements.hardwareRestoreCpu.disabled = true;
+  elements.hardwareProfileStatus.textContent = "Restoring CPU mode…";
+  try {
+    const response = await fetch("/api/hardware/restore-cpu", {
+      method: "POST", headers: window.JSONCodrHttpIdentity.mutationHeaders(),
+    });
+    if (!response.ok) {
+      const detail = await responseErrorMessage(response, "Unable to restore CPU mode");
+      const guidance = [401, 403].includes(response.status) ? " Sign in again in Settings → Users & Access, then retry." : "";
+      throw new Error(`${detail}.${guidance}`.replace("..", "."));
+    }
+    await loadHardwareStatus();
+    elements.hardwareProfileStatus.textContent = "CPU mode restored · restart Ollama to activate";
+  } catch (error) {
+    elements.hardwareProfileStatus.textContent = error.message;
+    throw error;
+  } finally {
+    elements.hardwareRestoreCpu.disabled = false;
+  }
 }
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
@@ -2729,13 +3100,14 @@ async function submitPrompt(event) {
       && elements.model.value !== "multi-model";
     if (directModelRun) {
       const userMessage = await conversationView.appendUser(prompt, attachmentIds);
+      markSessionDirty();
       const record = await coreClient.submit({
-        projectId: "legacy",
+        projectId: currentSession?.project_id || selectedProject?.project_id || "legacy",
         threadId: `chat:${sessionId}`,
         sessionId,
         model: elements.model.value,
         prompt,
-        projectRoot: elements.workspaceProjectRoot.value || ".",
+        projectRoot: selectedProject?.root || elements.workspaceProjectRoot.value || ".",
         attachments: attachmentIds,
       });
       activeCoreTaskId = record.task_id;
@@ -2748,6 +3120,7 @@ async function submitPrompt(event) {
       return;
     }
     const userMessage = await conversationView.appendUser(prompt, attachmentIds);
+    markSessionDirty();
     const response = await fetch("/api/workspace/tasks", {
       method: "POST",
       headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
@@ -2810,10 +3183,59 @@ async function submitPrompt(event) {
 }
 
 elements.form.addEventListener("submit", submitPrompt);
+elements.projectsSessionsNav.addEventListener("click", () => {
+  elements.projectsSessionsPanel.open = !elements.projectsSessionsPanel.open;
+  elements.projectsSessionsNav.setAttribute("aria-expanded", String(elements.projectsSessionsPanel.open));
+  if (elements.projectsSessionsPanel.open) elements.projectsSessionsPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+elements.projectsSessionsPanel.addEventListener("toggle", () => {
+  elements.projectsSessionsNav.setAttribute("aria-expanded", String(elements.projectsSessionsPanel.open));
+});
+elements.projectSessionResolve.addEventListener("click", () => resolveSelectedProject().catch((error) => {
+  elements.projectSessionStatus.textContent = error.message;
+}));
+elements.projectHistorySearchRun.addEventListener("click", () => loadProjectHistory().catch((error) => {
+  elements.projectSessionStatus.textContent = error.message;
+}));
+elements.contextProjectHistorySearchRun.addEventListener("click", () => loadProjectHistory(elements.contextProjectHistorySearch.value.trim()).catch((error) => {
+  elements.projectSessionStatus.textContent = error.message;
+}));
+elements.contextProjectHistorySearch.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  loadProjectHistory(elements.contextProjectHistorySearch.value.trim()).catch((error) => {
+    elements.projectSessionStatus.textContent = error.message;
+  });
+});
+elements.projectHistorySearch.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  loadProjectHistory().catch((error) => { elements.projectSessionStatus.textContent = error.message; });
+});
+elements.sessionNew.addEventListener("click", () => startCleanSession().catch((error) => {
+  elements.projectSessionStatus.textContent = error.message;
+}));
+elements.sessionClear.addEventListener("click", () => startCleanSession({ clear: true }).catch((error) => {
+  elements.projectSessionStatus.textContent = error.message;
+}));
+elements.sessionBackup.addEventListener("click", () => backupCurrentSession().catch((error) => {
+  elements.projectSessionStatus.textContent = error.message;
+}));
+elements.sessionSave.addEventListener("click", () => saveCurrentProjectSession(false).catch((error) => {
+  elements.projectSessionStatus.textContent = error.message;
+}));
+elements.sessionArchive.addEventListener("click", () => saveCurrentProjectSession(true).catch((error) => {
+  elements.projectSessionStatus.textContent = error.message;
+}));
+elements.sessionRestore.addEventListener("click", () => restoreSelectedProjectSession().catch((error) => {
+  elements.projectSessionStatus.textContent = error.message;
+}));
 elements.cancel.addEventListener("click", () => {
   if (!activeCoreTaskId) return;
   if (activeWorkspaceRoute === "multi-model") {
-    fetch(`/api/model-runs/${encodeURIComponent(activeCoreTaskId)}/cancel`, { method: "POST" })
+    fetch(`/api/model-runs/${encodeURIComponent(activeCoreTaskId)}/cancel`, {
+      method: "POST", headers: window.JSONCodrHttpIdentity.mutationHeaders(),
+    })
       .then((response) => { if (!response.ok) throw new Error("Unable to cancel multi-model run"); elements.cancel.hidden = true; })
       .catch((error) => showError(error.message));
     return;
@@ -3544,11 +3966,14 @@ for (const button of document.querySelectorAll("[data-manage-destination]")) {
 applyWorkspaceViewport();
 initializeXterm();
 elements.workspaceProjectRoot.value = localStorage.getItem("json_codr_workspace_project_root") || ".";
+elements.projectSessionRoot.value = elements.workspaceProjectRoot.value;
+updateConversationExports();
+updateCurrentSessionPanel();
+loadProjectHistory().catch((error) => { elements.projectSessionStatus.textContent = error.message; });
 window.addEventListener("beforeunload", persistTerminalSessions);
 restoreTerminalSessions().catch(() => localStorage.removeItem(TERMINAL_SESSIONS_KEY));
 loadApplication().then(() => queueSettingsLoad()).then(() => loadComponents()).catch((error) => showError(error.message));
 loadHardwareStatus().catch((error) => showError(error.message));
-loadAttachments().catch((error) => showError(error.message));
 loadSkillsets().catch((error) => showError(error.message));
 
 let pendingComponentPlan = null;

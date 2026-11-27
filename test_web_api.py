@@ -185,6 +185,34 @@ class FakeIntegrityBenchmark:
 
 
 class WebApiTests(unittest.TestCase):
+    def test_explicit_empty_session_request_is_owner_bound_and_can_be_promoted_on_save(self):
+        project_root = Path(self.temporary_directory.name) / "promoted-history-project"
+        project_root.mkdir()
+        project_id = self.client.post("/api/projects/resolve", json={"root": str(project_root)}).json()["project_id"]
+
+        legacy = self.client.post("/api/sessions")
+        unassigned = self.client.post("/api/sessions", json={})
+
+        self.assertEqual(legacy.status_code, 201)
+        self.assertIsNone(legacy.json()["owner_user_id"])
+        self.assertIsNone(legacy.json()["project_id"])
+        self.assertEqual(unassigned.status_code, 201)
+        self.assertEqual(
+            unassigned.json()["owner_user_id"],
+            self.client.app.state.identity.bootstrap_state().administrator_user_id,
+        )
+        self.assertIsNone(unassigned.json()["project_id"])
+
+        saved = self.client.post(f"/api/projects/{project_id}/sessions", json={
+            "session_id": unassigned.json()["id"],
+            "title": "Promoted browser session",
+            "change_type": "feature",
+            "keywords": ["session-promotion"],
+        })
+        self.assertEqual(saved.status_code, 200, saved.text)
+        promoted = self.client.get(f"/api/sessions/{unassigned.json()['id']}").json()
+        self.assertEqual(promoted["project_id"], project_id)
+
     def test_project_session_api_binds_sessions_and_hides_foreign_snapshots(self):
         project_root = Path(self.temporary_directory.name) / "history-project"
         project_root.mkdir()

@@ -33,6 +33,9 @@
         </div>
         <div class="sidebar-destinations">
           <button class="sidebar-destination is-active" type="button" data-destination="workspace" aria-current="page" title="Workspace"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-chat"/></svg><span>Workspace</span></button>
+          <div id="workspace-project-sessions" class="sidebar-subnavigation workspace-subnavigation">
+            <button id="projects-sessions-nav" type="button" aria-controls="projects-sessions-panel" aria-expanded="false">Projects &amp; Sessions</button>
+          </div>
           <button class="sidebar-destination" type="button" data-destination="context" title="Context &amp; files"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-context"/></svg><span>Context &amp; files</span></button>
           <button class="sidebar-destination" type="button" data-destination="skills" title="Skills"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-skills"/></svg><span>Skills</span></button>
           <button class="sidebar-destination" type="button" data-destination="hardware" title="Hardware"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><use href="#icon-hardware"/></svg><span>Hardware</span></button>
@@ -99,6 +102,56 @@
         </div>
         <div id="model-detail" class="model-detail">Waiting for Ollama model metadata.</div>
       </header>
+      <details id="projects-sessions-panel" class="projects-sessions-panel">
+        <summary>Projects &amp; Sessions</summary>
+        <div class="project-session-grid">
+          <section aria-labelledby="project-session-projects-heading">
+            <p class="eyebrow">PROJECTS</p>
+            <h2 id="project-session-projects-heading">Project storage</h2>
+            <label for="project-session-root">Workspace root</label>
+            <div class="project-session-inline">
+              <input id="project-session-root" type="text" value="." autocomplete="off" spellcheck="false" />
+              <button id="project-session-resolve" class="secondary" type="button">Resolve / Select Project</button>
+            </div>
+            <p id="project-session-selected" class="meta" role="status" aria-live="polite">No project selected. Prompts run in an authenticated unassigned session.</p>
+          </section>
+          <section aria-labelledby="project-session-current-heading">
+            <p class="eyebrow">SESSIONS</p>
+            <h2 id="project-session-current-heading">Current Session</h2>
+            <dl class="current-session-facts">
+              <div><dt>Identity</dt><dd id="current-session-identity">Not started</dd></div>
+              <div><dt>Assignment</dt><dd id="current-session-assignment">Unassigned</dd></div>
+              <div><dt>Activity</dt><dd id="current-session-count">0 messages · no active task</dd></div>
+              <div><dt>Save state</dt><dd id="current-session-unsaved">Clean</dd></div>
+            </dl>
+            <div class="project-session-fields">
+              <label for="session-save-title">Title<input id="session-save-title" type="text" maxlength="500" placeholder="What changed in this session" /></label>
+              <label for="session-change-type">Change type<select id="session-change-type"><option value="feature">Feature</option><option value="fix">Fix</option><option value="enhancement">Enhancement</option><option value="review">Review</option><option value="documentation">Documentation</option></select></label>
+              <label for="session-keywords">Keywords<input id="session-keywords" type="text" placeholder="file:changed-file, csrf, sessions" /></label>
+            </div>
+            <div class="project-session-actions">
+              <button id="session-new" class="secondary" type="button">New Session</button>
+              <button id="session-backup" class="secondary" type="button">Backup Session</button>
+              <button id="session-save" class="primary" type="button">Save Session</button>
+              <button id="session-archive" class="secondary" type="button">Archive to Context &amp; Files</button>
+              <button id="session-restore" class="secondary" type="button">Restore Session</button>
+              <button id="session-clear" class="secondary" type="button">Clear/Reset</button>
+            </div>
+            <p id="project-session-status" class="meta" role="status" aria-live="polite">Ready.</p>
+          </section>
+          <section class="project-history" aria-labelledby="project-history-heading">
+            <p class="eyebrow">CONTEXT &amp; FILES / RAG</p>
+            <h2 id="project-history-heading">Previous Session History</h2>
+            <div class="project-session-inline">
+              <input id="project-history-search" type="search" placeholder="Search title, change, file, model, or keyword" />
+              <button id="project-history-search-run" class="secondary" type="button">Search History</button>
+            </div>
+            <label for="project-history-select">Snapshot to restore</label>
+            <select id="project-history-select"><option value="">No saved sessions</option></select>
+            <div id="project-history-list" class="project-history-list" aria-live="polite"><p class="meta">Select a project to search saved sessions.</p></div>
+          </section>
+        </div>
+      </details>
       <div class="workspace-regions">
         <aside id="workspace-left-dock" class="workspace-dock workspace-left-dock" aria-label="Project tools" hidden></aside>
         <div class="workspace-separator workspace-separator-left" role="separator" aria-label="Resize project tools" aria-orientation="vertical" aria-valuemin="180" aria-valuemax="420" aria-valuenow="260" tabindex="0" hidden></div>
@@ -274,6 +327,17 @@
             <button id="scan-dependencies" class="secondary" type="button">Scan</button>
           </div>
           <div id="dependency-list" class="dependency-list"><p class="meta">Import a requirements.txt or package.json file to detect dependencies.</p></div>
+        </section>
+        <section id="context-project-history" class="dependency-review" aria-labelledby="context-project-history-heading">
+          <div class="dependency-head">
+            <div><span class="eyebrow">PROJECT HISTORY / RAG</span><strong id="context-project-history-heading">Previous Session History</strong></div>
+            <span id="context-project-history-project" class="meta">No project selected</span>
+          </div>
+          <div class="project-session-inline">
+            <input id="context-project-history-search" type="search" placeholder="Search title, change, file, model, or keyword" />
+            <button id="context-project-history-search-run" class="secondary" type="button">Search History</button>
+          </div>
+          <div id="context-project-history-list" class="project-history-list" aria-live="polite"><p class="meta">Select a project from Workspace → Projects &amp; Sessions.</p></div>
         </section>
       </aside>
 

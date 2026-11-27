@@ -134,7 +134,7 @@ class ProjectResolveRequest(BaseModel):
 
 class SessionCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    project_id: str = Field(min_length=1, max_length=256)
+    project_id: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class UpdateReasonRequest(BaseModel):
@@ -1901,7 +1901,8 @@ def create_app(
         principal = project_session_principal(http_request, mutation=True)
         if request is None:
             return workspace.create_session()
-        project_session_project(request.project_id)
+        if request.project_id is not None:
+            project_session_project(request.project_id)
         return workspace.create_session(principal.user_id, request.project_id)
 
     @application.get("/api/sessions/{session_id}")

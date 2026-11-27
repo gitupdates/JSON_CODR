@@ -107,6 +107,36 @@ console.log(JSON.stringify(flatten(article).map(node => ({ tag: node.tag, text: 
         self.assertFalse(labels[0]["href"])
         self.assertIsNone(labels[0].get("download"))
 
+    def test_reset_clears_timeline_binding_and_rejects_late_task_events(self):
+        result = self.run_node("""
+const timeline = {
+  children: ['old'], scrollTop: 10, scrollHeight: 20,
+  replaceChildren(...items) { this.children = items; },
+  append(item) { this.children.push(item); },
+};
+const view = new ConversationView({ timeline, fetchImpl: null });
+view.sessionId = 'a'.repeat(32);
+view.restoreMessages([{ role: 'user', content: 'old conversation' }]);
+view.beginTask('old-task', { requestedModel: 'old-model' });
+view.reset('b'.repeat(32));
+const late = view.apply({ task_id: 'old-task', status: 'completed', events: [
+  { sequence: 1, event_type: 'inference.content.delta', payload: { text: 'late data' } },
+] });
+console.log(JSON.stringify({
+  snapshot: view.snapshot(), sessionId: view.sessionId,
+  taskCount: view.taskMessages.size, sequenceCount: view.sequences.size,
+  timelineChildren: timeline.children.length, late,
+}));
+""")
+        self.assertEqual(result, {
+            "snapshot": [],
+            "sessionId": "b" * 32,
+            "taskCount": 0,
+            "sequenceCount": 0,
+            "timelineChildren": 0,
+            "late": None,
+        })
+
 
 if __name__ == "__main__":
     unittest.main()

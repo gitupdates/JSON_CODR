@@ -437,7 +437,6 @@ class ProjectSessionService:
         self.projects.resolve(project_id)
         with self.workspace.session_lock(session_id):
             session = self.workspace.get_session(session_id)
-            self._require_live_identity(session, project_id, owner_user_id)
             snapshot_id = uuid.uuid4().hex
             snapshot = ProjectSessionSnapshot(
                 id=snapshot_id,
@@ -452,48 +451,55 @@ class ProjectSessionService:
             )
             if not snapshot.title or not snapshot.change_type:
                 raise ValueError("Snapshot title and change type are required")
-            final = self.snapshot_directory(snapshot.id, project_id)
-            sessions_root = final.parent
-            sessions_root.mkdir(parents=True, exist_ok=True)
-            self._check_chain(sessions_root)
-            with self._locked_copy_directory(sessions_root):
-                self._sweep_staging(sessions_root)
-                staging = sessions_root / f".staging-{snapshot.id}"
-                indexed_record = None
-                try:
-                    staging.mkdir()
-                    with self._pinned_staging_directory(staging) as staging_handle:
-                        digests = self._copy_live_session(session, staging)
-                        history = staging / _HISTORY_FILE
-                        history_content = self._history_markdown(snapshot)[:65_536]
-                        self._write_text(history, history_content)
-                        digests[_HISTORY_FILE] = self._digest(history)
-                        snapshot, indexed_record = self._project_history(
-                            snapshot, history_content
-                        )
-                        self._write_json(staging / "snapshot.json", {
-                            "snapshot": snapshot.model_dump(mode="json"),
-                            "tree_digests": digests,
-                            "history_digest_version": _HISTORY_DIGEST_VERSION,
-                        })
-                        self._validate_snapshot_tree(staging, digests)
-                        self._fsync_tree(staging)
-                        self._promote_staging(staging, final, staging_handle)
-                        self._fsync_directory(final.parent)
-                except Exception:
-                    if indexed_record is not None and self.memory is not None:
-                        try:
-                            self.memory.revoke(
-                                indexed_record.memory_id,
-                                user_id=owner_user_id,
-                                project_id=project_id,
-                                reason="snapshot promotion failed",
+            newly_bound = self._bind_live_identity_for_save(session, project_id, owner_user_id)
+            try:
+                final = self.snapshot_directory(snapshot.id, project_id)
+                sessions_root = final.parent
+                sessions_root.mkdir(parents=True, exist_ok=True)
+                self._check_chain(sessions_root)
+                with self._locked_copy_directory(sessions_root):
+                    self._sweep_staging(sessions_root)
+                    staging = sessions_root / f".staging-{snapshot.id}"
+                    indexed_record = None
+                    try:
+                        staging.mkdir()
+                        with self._pinned_staging_directory(staging) as staging_handle:
+                            digests = self._copy_live_session(session, staging)
+                            history = staging / _HISTORY_FILE
+                            history_content = self._history_markdown(snapshot)[:65_536]
+                            self._write_text(history, history_content)
+                            digests[_HISTORY_FILE] = self._digest(history)
+                            snapshot, indexed_record = self._project_history(
+                                snapshot, history_content
                             )
-                        except Exception:
-                            pass
-                    self._remove_tree_no_follow(staging)
-                    raise
-            return snapshot
+                            self._write_json(staging / "snapshot.json", {
+                                "snapshot": snapshot.model_dump(mode="json"),
+                                "tree_digests": digests,
+                                "history_digest_version": _HISTORY_DIGEST_VERSION,
+                            })
+                            self._validate_snapshot_tree(staging, digests)
+                            self._fsync_tree(staging)
+                            self._promote_staging(staging, final, staging_handle)
+                            self._fsync_directory(final.parent)
+                    except Exception:
+                        if indexed_record is not None and self.memory is not None:
+                            try:
+                                self.memory.revoke(
+                                    indexed_record.memory_id,
+                                    user_id=owner_user_id,
+                                    project_id=project_id,
+                                    reason="snapshot promotion failed",
+                                )
+                            except Exception:
+                                pass
+                        self._remove_tree_no_follow(staging)
+                        raise
+                return snapshot
+            except Exception:
+                if newly_bound:
+                    session.project_id = None
+                    self.workspace.save_manifest(session)
+                raise
 
     def _project_history(self, snapshot: ProjectSessionSnapshot, content: str):
         try:
@@ -637,6 +643,18 @@ class ProjectSessionService:
     def _require_live_identity(self, session: SessionRecord, project_id: str, owner_user_id: str) -> None:
         if session.project_id != project_id or session.owner_user_id != owner_user_id:
             raise PermissionError("Live session is not available to this owner or project")
+
+    def _bind_live_identity_for_save(
+        self, session: SessionRecord, project_id: str, owner_user_id: str
+    ) -> bool:
+        if not session.owner_user_id or session.owner_user_id != owner_user_id:
+            raise PermissionError("Live session is not available to this owner or project")
+        if session.project_id is None:
+            session.project_id = project_id
+            self.workspace.save_manifest(session)
+            return True
+        self._require_live_identity(session, project_id, owner_user_id)
+        return False
 
     def _copy_live_session(self, session: SessionRecord, destination: Path) -> dict[str, str]:
         source = self.workspace._session_directory(session.id)

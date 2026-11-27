@@ -13,6 +13,17 @@
       return JSON.parse(JSON.stringify(this.messages));
     }
 
+    reset(sessionId = null) {
+      this.messages = [];
+      this.taskMessages.clear();
+      this.sequences.clear();
+      this.sessionId = sessionId;
+      if (this.timeline) {
+        this.timeline.replaceChildren();
+        this.timeline.scrollTop = 0;
+      }
+    }
+
     async restore(sessionId) {
       this.sessionId = sessionId;
       const response = await this.fetch(`/api/sessions/${encodeURIComponent(sessionId)}/conversation`);

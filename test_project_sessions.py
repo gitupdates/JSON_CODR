@@ -261,6 +261,48 @@ class ProjectSessionServiceTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             self.sessions.restore(snapshot.id, other.project_id, "owner-1")
 
+    def test_save_promotes_same_owner_unassigned_session_to_project_once(self):
+        session = self.workspace.create_session("owner-1", None)
+        self.workspace.append_message(session.id, ChatMessage(role="user", content="Promote this work"))
+
+        snapshot = self.sessions.save(
+            session.id, self.project.project_id, "owner-1", "Promoted session", "feature", ["promotion"]
+        )
+
+        promoted = self.workspace.get_session(session.id)
+        self.assertEqual(promoted.owner_user_id, "owner-1")
+        self.assertEqual(promoted.project_id, self.project.project_id)
+        self.assertEqual(snapshot.source_session_id, session.id)
+
+        other_root = self.root / "promotion-other-project"
+        other_root.mkdir()
+        other = self.registry.register(other_root)
+        with self.assertRaises(PermissionError):
+            self.sessions.save(session.id, other.project_id, "owner-1", "Move again", "fix", [])
+
+    def test_save_refuses_ownerless_or_foreign_unassigned_session_promotion(self):
+        ownerless = self.workspace.create_session()
+        foreign = self.workspace.create_session("owner-2", None)
+
+        with self.assertRaises(PermissionError):
+            self.sessions.save(ownerless.id, self.project.project_id, "owner-1", "Ownerless", "fix", [])
+        with self.assertRaises(PermissionError):
+            self.sessions.save(foreign.id, self.project.project_id, "owner-1", "Foreign", "fix", [])
+
+    def test_failed_save_rolls_back_new_unassigned_project_binding(self):
+        invalid = self.workspace.create_session("owner-1", None)
+        with self.assertRaises(ValueError):
+            self.sessions.save(invalid.id, self.project.project_id, "owner-1", "   ", "fix", [])
+        self.assertIsNone(self.workspace.get_session(invalid.id).project_id)
+
+        failed = self.workspace.create_session("owner-1", None)
+        with patch.object(self.sessions, "_promote_staging", side_effect=OSError("promotion failed")):
+            with self.assertRaisesRegex(OSError, "promotion failed"):
+                self.sessions.save(
+                    failed.id, self.project.project_id, "owner-1", "Failed promotion", "fix", []
+                )
+        self.assertIsNone(self.workspace.get_session(failed.id).project_id)
+
     def test_history_read_rejects_missing_tampered_and_linked_snapshot_content(self):
         session = self._live_session()
         snapshot = self.sessions.save(session.id, self.project.project_id, "owner-1", "Parser fix", "fix", [])
