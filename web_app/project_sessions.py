@@ -295,12 +295,17 @@ class ProjectSessionService:
                     self._windows_close(handle)
 
         @staticmethod
-        def _windows_promote_directory(handle, destination: Path) -> None:
-            encoded = str(destination.absolute()).encode("utf-16-le")
+        def _windows_rename_handle(
+            handle,
+            destination: Path | str,
+            *,
+            replace: bool = False,
+        ) -> None:
+            encoded = str(Path(destination).absolute()).encode("utf-16-le")
             size = _FileRenameInformation.FileName.offset + len(encoded) + ctypes.sizeof(wintypes.WCHAR)
             buffer = ctypes.create_string_buffer(size)
             information = ctypes.cast(buffer, ctypes.POINTER(_FileRenameInformation))
-            information.contents.Flags = 0
+            information.contents.Flags = int(replace)
             information.contents.RootDirectory = None
             information.contents.FileNameLength = len(encoded)
             ctypes.memmove(
@@ -313,22 +318,34 @@ class ProjectSessionService:
             ):
                 raise ctypes.WinError(ctypes.get_last_error())
 
+        @staticmethod
+        def _windows_promote_directory(handle, destination: Path) -> None:
+            ProjectSessionService._windows_rename_handle(handle, destination)
+
     @contextmanager
     def _locked_copy_directory(self, path: Path):
         if os.name == "nt":
             with self._windows_locked_chain(path):
-                yield
+                yield None
             return
-        self._check_chain(path)
+        trusted = self.workspace.data_root.resolve()
+        absolute = path.absolute()
+        if absolute != trusted and trusted not in absolute.parents:
+            raise ValueError("Snapshot path escapes the data root")
         flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(path, flags)
+        descriptors = [os.open(trusted, flags)]
         try:
-            details = os.fstat(descriptor)
-            if not stat.S_ISDIR(details.st_mode):
-                raise ValueError("Snapshot path ancestor is not a directory")
-            yield
+            for part in absolute.relative_to(trusted).parts:
+                descriptor = os.open(part, flags, dir_fd=descriptors[-1])
+                details = os.fstat(descriptor)
+                if not stat.S_ISDIR(details.st_mode):
+                    os.close(descriptor)
+                    raise ValueError("Snapshot path ancestor is not a directory")
+                descriptors.append(descriptor)
+            yield descriptors[-1]
         finally:
-            os.close(descriptor)
+            for descriptor in reversed(descriptors):
+                os.close(descriptor)
 
     @contextmanager
     def _open_copy_source(self, source: Path):
@@ -417,8 +434,133 @@ class ProjectSessionService:
             with self._windows_pinned_transaction_directory(staging) as handle:
                 yield handle
             return
-        with self._locked_copy_directory(staging):
-            yield None
+        with self._locked_copy_directory(staging) as descriptor:
+            yield descriptor
+
+    @contextmanager
+    def _open_projection_rewrite_destination(
+        self, directory: Path, pinned_directory, name: str
+    ):
+        if os.name == "nt":
+            with self._open_copy_destination(directory / name) as destination:
+                yield destination
+            return
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(name, flags, 0o600, dir_fd=pinned_directory)
+        try:
+            details = os.fstat(descriptor)
+            if not stat.S_ISREG(details.st_mode):
+                raise ValueError("Snapshot metadata destination is not a regular file")
+            with os.fdopen(descriptor, "wb", closefd=False) as destination:
+                yield destination
+        finally:
+            os.close(descriptor)
+
+    def _pinned_directory_identity(self, pinned_directory) -> tuple[int, int]:
+        if os.name == "nt":
+            details = self._windows_information(pinned_directory)
+            return (
+                details.dwVolumeSerialNumber,
+                (details.nFileIndexHigh << 32) | details.nFileIndexLow,
+            )
+        details = os.fstat(pinned_directory)
+        return details.st_dev, details.st_ino
+
+    def _verify_pinned_directory_identity(
+        self, directory: Path, expected: tuple[int, int]
+    ) -> None:
+        if os.name == "nt":
+            with self._windows_locked_chain(directory.parent):
+                handle = self._windows_handle(
+                    directory,
+                    _FILE_READ_ATTRIBUTES,
+                    _OPEN_EXISTING,
+                    _FILE_FLAG_BACKUP_SEMANTICS,
+                )
+                try:
+                    details = self._windows_information(handle)
+                    if details.dwFileAttributes & _FILE_ATTRIBUTE_REPARSE_POINT:
+                        raise ValueError("Snapshot path contains a link or reparse point")
+                    actual = (
+                        details.dwVolumeSerialNumber,
+                        (details.nFileIndexHigh << 32) | details.nFileIndexLow,
+                    )
+                finally:
+                    self._windows_close(handle)
+        else:
+            with self._locked_copy_directory(directory) as descriptor:
+                details = os.fstat(descriptor)
+                actual = details.st_dev, details.st_ino
+        if actual != expected:
+            raise ValueError("Promoted snapshot directory identity changed")
+
+    def _remove_changed_projection_entry(
+        self, directory: Path, expected: tuple[int, int]
+    ) -> None:
+        if os.name == "nt":
+            try:
+                details = directory.lstat()
+            except FileNotFoundError:
+                return
+            actual = details.st_dev, details.st_ino
+            if actual != expected and self._is_reparse_point(directory):
+                self._remove_tree_no_follow(directory)
+            return
+        try:
+            with self._locked_copy_directory(directory.parent) as parent_descriptor:
+                details = os.stat(
+                    directory.name,
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+                actual = details.st_dev, details.st_ino
+                if actual != expected and stat.S_ISLNK(details.st_mode):
+                    os.unlink(directory.name, dir_fd=parent_descriptor)
+        except FileNotFoundError:
+            return
+
+    def _replace_projection_snapshot(
+        self, directory: Path, pinned_directory, temporary_name: str
+    ) -> None:
+        if os.name == "nt":
+            handle = self._windows_handle(
+                directory / temporary_name,
+                _DELETE | _FILE_READ_ATTRIBUTES,
+                _OPEN_EXISTING,
+                _FILE_ATTRIBUTE_NORMAL,
+            )
+            try:
+                details = self._windows_information(handle)
+                if details.dwFileAttributes & (
+                    _FILE_ATTRIBUTE_REPARSE_POINT | _FILE_ATTRIBUTE_DIRECTORY
+                ):
+                    raise ValueError("Snapshot metadata temporary is not a regular file")
+                self._windows_rename_handle(
+                    handle,
+                    directory / "snapshot.json",
+                    replace=True,
+                )
+            finally:
+                self._windows_close(handle)
+            return
+        os.replace(
+            temporary_name,
+            "snapshot.json",
+            src_dir_fd=pinned_directory,
+            dst_dir_fd=pinned_directory,
+        )
+
+    @staticmethod
+    def _unlink_projection_temporary(
+        directory: Path, pinned_directory, temporary_name: str
+    ) -> None:
+        try:
+            if os.name == "nt":
+                (directory / temporary_name).unlink()
+            else:
+                os.unlink(temporary_name, dir_fd=pinned_directory)
+        except FileNotFoundError:
+            pass
 
     def _promote_staging(self, staging: Path, final: Path, handle) -> None:
         if os.name == "nt":
@@ -660,17 +802,38 @@ class ProjectSessionService:
             "indexing_status": "skipped",
             "indexed_memory_id": None,
         })
-        temporary = directory / f".snapshot-{uuid.uuid4().hex}.tmp"
-        try:
-            self._write_json(temporary, {
-                "snapshot": downgraded.model_dump(mode="json"),
-                "tree_digests": digests,
-                "history_digest_version": _HISTORY_DIGEST_VERSION,
-            })
-            os.replace(temporary, directory / "snapshot.json")
-            self._fsync_directory(directory)
-        finally:
-            temporary.unlink(missing_ok=True)
+        payload = {
+            "snapshot": downgraded.model_dump(mode="json"),
+            "tree_digests": digests,
+            "history_digest_version": _HISTORY_DIGEST_VERSION,
+        }
+        temporary_name = f".snapshot-{uuid.uuid4().hex}.tmp"
+        with self._pinned_staging_directory(directory) as pinned_directory:
+            identity = self._pinned_directory_identity(pinned_directory)
+            try:
+                with self._open_projection_rewrite_destination(
+                    directory, pinned_directory, temporary_name
+                ) as destination:
+                    destination.write(
+                        (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+                    )
+                    destination.flush()
+                    os.fsync(destination.fileno())
+                self._replace_projection_snapshot(
+                    directory, pinned_directory, temporary_name
+                )
+                if os.name == "nt":
+                    self._fsync_directory(directory)
+                else:
+                    os.fsync(pinned_directory)
+                self._verify_pinned_directory_identity(directory, identity)
+            except Exception:
+                self._remove_changed_projection_entry(directory, identity)
+                raise
+            finally:
+                self._unlink_projection_temporary(
+                    directory, pinned_directory, temporary_name
+                )
         if self.memory is not None:
             try:
                 self.memory.revoke(

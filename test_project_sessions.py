@@ -406,6 +406,75 @@ class ProjectSessionServiceTests(unittest.TestCase):
             save_thread.join(3)
             memory.close()
 
+    def test_post_promotion_downgrade_rejects_final_root_swap_without_external_write(self):
+        memory = MemoryStore(self.root / "projection-downgrade-swap-memory.sqlite")
+        external = self.root / "external-projection-downgrade"
+        external.mkdir()
+        sentinel = external / "sentinel.txt"
+        sentinel.write_text("external data", encoding="utf-8")
+
+        class SwapAtDowngradeWrite(ProjectSessionService):
+            attacked = False
+            final = None
+            parked = None
+
+            @contextmanager
+            def _open_projection_rewrite_destination(
+                swap_self, directory, pinned_directory, name
+            ):
+                swap_self.attacked = True
+                swap_self.final = directory
+                swap_self.parked = directory.with_name(f".{directory.name}.parked")
+                directory.replace(swap_self.parked)
+                os.symlink(external, directory, target_is_directory=True)
+                with super()._open_projection_rewrite_destination(
+                    directory, pinned_directory, name
+                ) as destination:
+                    yield destination
+
+        sessions = SwapAtDowngradeWrite(self.workspace, self.registry, memory=memory)
+        session = self._live_session()
+        try:
+            with patch.object(sessions, "valid_history_projection", return_value=False):
+                with self.assertRaises((OSError, ValueError)):
+                    sessions.save(
+                        session.id,
+                        self.project.project_id,
+                        "owner-1",
+                        "Downgrade root swap",
+                        "fix",
+                        ["downgrade-root-swap-token"],
+                    )
+
+            self.assertTrue(sessions.attacked)
+            self.assertEqual("external data", sentinel.read_text(encoding="utf-8"))
+            self.assertEqual([sentinel], list(external.iterdir()))
+            self.assertIsNotNone(sessions.final)
+            self.assertFalse(sessions.final.is_symlink())
+
+            records = memory.export_collective(
+                "owner-1", self.project.project_id, include_inactive=True
+            )
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0].status, "revoked")
+            self.assertFalse(sessions.valid_history_projection(records[0]))
+
+            retained = sessions.final if sessions.final.is_dir() else sessions.parked
+            self.assertIsNotNone(retained)
+            self.assertTrue(retained.is_dir())
+            payload = json.loads((retained / "snapshot.json").read_text(encoding="utf-8"))
+            expected_status = "indexed" if retained == sessions.final else "skipped"
+            self.assertEqual(payload["snapshot"]["indexing_status"], expected_status)
+            self.assertFalse(any(path.is_symlink() for path in retained.parent.iterdir()))
+            self.assertFalse(
+                any(path.name.startswith(".snapshot-") for path in retained.iterdir())
+            )
+        finally:
+            for candidate in (sessions.final, sessions.parked):
+                if candidate is not None:
+                    sessions._remove_tree_no_follow(candidate)
+            memory.close()
+
     def test_owner_and_project_boundaries_deny_snapshot_access(self):
         session = self._live_session()
         snapshot = self.sessions.save(session.id, self.project.project_id, "owner-1", "Parser fix", "fix", [])
