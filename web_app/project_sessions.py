@@ -96,6 +96,7 @@ if os.name == "nt":
 SNAPSHOT_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 _ALLOWED_TREES = ("originals", "extracted", "artifacts")
 _HISTORY_FILE = "previous-session-history.md"
+_HISTORY_DIGEST_VERSION = 1
 _STAGING_PATTERN = re.compile(r"^\.staging-[0-9a-f]{32}$")
 _STORAGE_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _EXTRACTED_PATTERN = re.compile(r"^[0-9a-f]{32}\.txt$")
@@ -457,6 +458,7 @@ class ProjectSessionService:
                         self._write_json(staging / "snapshot.json", {
                             "snapshot": snapshot.model_dump(mode="json"),
                             "tree_digests": digests,
+                            "history_digest_version": _HISTORY_DIGEST_VERSION,
                         })
                         self._validate_snapshot_tree(staging, digests)
                         self._fsync_tree(staging)
@@ -503,10 +505,22 @@ class ProjectSessionService:
         snapshot = self.get(snapshot_id, project_id, owner_user_id)
         source = self.snapshot_directory(snapshot.id, project_id)
         payload = self._snapshot_payload(source)
+        return self._validated_history(snapshot, source, payload)
+
+    def _validated_history(
+        self, snapshot: ProjectSessionSnapshot, source: Path, payload: dict[str, object]
+    ) -> str:
         digests = payload.get("tree_digests")
         if not isinstance(digests, dict):
             raise ValueError("Snapshot history is incomplete")
-        legacy = snapshot.schema_version == 1 and _HISTORY_FILE not in digests
+        history_version = payload.get("history_digest_version")
+        if history_version not in (None, _HISTORY_DIGEST_VERSION):
+            raise ValueError("Snapshot history version is invalid")
+        legacy = (
+            history_version is None
+            and snapshot.schema_version == 1
+            and _HISTORY_FILE not in digests
+        )
         if not legacy and not isinstance(digests.get(_HISTORY_FILE), str):
             raise ValueError("Snapshot history is incomplete")
         self._validate_snapshot_tree(source, digests, exclude_history=legacy)
@@ -532,8 +546,7 @@ class ProjectSessionService:
         digests = payload.get("tree_digests")
         if not isinstance(digests, dict):
             raise ValueError("Snapshot digest manifest is invalid")
-        legacy = snapshot.schema_version == 1 and _HISTORY_FILE not in digests
-        self._validate_snapshot_tree(source, digests, exclude_history=legacy)
+        self._validated_history(snapshot, source, payload)
         source_manifest = source / "manifest.json"
         restored_manifest = SessionRecord.model_validate(json.loads(self._read_copy_text(source_manifest)))
         self._validate_attachment_sources(restored_manifest, source)

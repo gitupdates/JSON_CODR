@@ -320,6 +320,8 @@ class WebApiTests(unittest.TestCase):
         }).json()["snapshot"]["id"]
         snapshot = next((self.workspace.data_root / "project-sessions").iterdir()) / "sessions" / snapshot_id / "snapshot.json"
         payload = json.loads(snapshot.read_text(encoding="utf-8"))
+        self.assertEqual(payload.get("history_digest_version"), 1)
+        payload.pop("history_digest_version")
         payload["tree_digests"].pop("previous-session-history.md")
         snapshot.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -329,6 +331,28 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(detail.status_code, 200)
         self.assertIn("Title: Legacy", detail.json()["history"])
         self.assertEqual(restored.status_code, 201)
+
+    def test_project_history_api_rejects_modern_snapshot_without_required_digest_before_restore(self):
+        project_root = Path(self.temporary_directory.name) / "modern-history-project"
+        project_root.mkdir()
+        project_id = self.client.post("/api/projects/resolve", json={"root": str(project_root)}).json()["project_id"]
+        session_id = self.client.post("/api/sessions", json={"project_id": project_id}).json()["id"]
+        snapshot_id = self.client.post(f"/api/projects/{project_id}/sessions", json={
+            "session_id": session_id, "title": "Modern", "change_type": "fix",
+        }).json()["snapshot"]["id"]
+        snapshot = next((self.workspace.data_root / "project-sessions").iterdir()) / "sessions" / snapshot_id / "snapshot.json"
+        payload = json.loads(snapshot.read_text(encoding="utf-8"))
+        self.assertEqual(payload.get("history_digest_version"), 1)
+        payload["tree_digests"].pop("previous-session-history.md")
+        snapshot.write_text(json.dumps(payload), encoding="utf-8")
+        before = {path.name for path in self.workspace.sessions_root.iterdir()}
+
+        detail = self.client.get(f"/api/projects/{project_id}/sessions/{snapshot_id}")
+        restored = self.client.post(f"/api/projects/{project_id}/sessions/{snapshot_id}/restore")
+
+        self.assertEqual(detail.status_code, 400)
+        self.assertEqual(restored.status_code, 400)
+        self.assertEqual({path.name for path in self.workspace.sessions_root.iterdir()}, before)
 
     def test_project_session_mutation_matrix_keeps_scope_and_restored_references(self):
         project_root = Path(self.temporary_directory.name) / "matrix-project"

@@ -150,6 +150,8 @@ class ProjectSessionServiceTests(unittest.TestCase):
         directory = self.sessions.snapshot_directory(snapshot.id, self.project.project_id)
         manifest = directory / "snapshot.json"
         payload = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(payload.get("history_digest_version"), 1)
+        payload.pop("history_digest_version")
         payload["tree_digests"].pop("previous-session-history.md")
         manifest.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -158,6 +160,69 @@ class ProjectSessionServiceTests(unittest.TestCase):
 
         self.assertIn("Title: Parser fix", history)
         self.assertEqual(self.workspace.get_session(restored.session_id).project_id, self.project.project_id)
+
+    def test_legacy_restore_rejects_invalid_history_before_session_allocation(self):
+        session = self._live_session()
+        snapshot = self.sessions.save(session.id, self.project.project_id, "owner-1", "Parser fix", "fix", [])
+        directory = self.sessions.snapshot_directory(snapshot.id, self.project.project_id)
+        manifest = directory / "snapshot.json"
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(payload.get("history_digest_version"), 1)
+        payload.pop("history_digest_version")
+        payload["tree_digests"].pop("previous-session-history.md")
+        manifest.write_text(json.dumps(payload), encoding="utf-8")
+        history = directory / "previous-session-history.md"
+
+        for invalid_history in ("tampered", None):
+            with self.subTest(invalid_history=invalid_history):
+                if invalid_history is None:
+                    history.unlink()
+                else:
+                    history.write_text(invalid_history, encoding="utf-8")
+                before = {path.name for path in self.workspace.sessions_root.iterdir()}
+                with self.assertRaises(ValueError):
+                    self.sessions.restore(snapshot.id, self.project.project_id, "owner-1")
+                self.assertEqual({path.name for path in self.workspace.sessions_root.iterdir()}, before)
+                if invalid_history is not None:
+                    history.write_text(self.sessions._history_markdown(snapshot), encoding="utf-8")
+
+    def test_legacy_restore_rejects_linked_history_before_session_allocation(self):
+        session = self._live_session()
+        snapshot = self.sessions.save(session.id, self.project.project_id, "owner-1", "Parser fix", "fix", [])
+        directory = self.sessions.snapshot_directory(snapshot.id, self.project.project_id)
+        manifest = directory / "snapshot.json"
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(payload.get("history_digest_version"), 1)
+        payload.pop("history_digest_version")
+        payload["tree_digests"].pop("previous-session-history.md")
+        manifest.write_text(json.dumps(payload), encoding="utf-8")
+        history = directory / "previous-session-history.md"
+        external = self.root / "external-history.md"
+        external.write_text(self.sessions._history_markdown(snapshot), encoding="utf-8")
+        history.unlink()
+        os.symlink(external, history)
+
+        before = {path.name for path in self.workspace.sessions_root.iterdir()}
+        with self.assertRaises(ValueError):
+            self.sessions.restore(snapshot.id, self.project.project_id, "owner-1")
+        self.assertEqual({path.name for path in self.workspace.sessions_root.iterdir()}, before)
+
+    def test_modern_snapshot_without_required_history_digest_rejects_before_session_allocation(self):
+        session = self._live_session()
+        snapshot = self.sessions.save(session.id, self.project.project_id, "owner-1", "Parser fix", "fix", [])
+        directory = self.sessions.snapshot_directory(snapshot.id, self.project.project_id)
+        manifest = directory / "snapshot.json"
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        self.assertEqual(payload.get("history_digest_version"), 1)
+        payload["tree_digests"].pop("previous-session-history.md")
+        manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+        before = {path.name for path in self.workspace.sessions_root.iterdir()}
+        with self.assertRaises(ValueError):
+            self.sessions.history(snapshot.id, self.project.project_id, "owner-1")
+        with self.assertRaises(ValueError):
+            self.sessions.restore(snapshot.id, self.project.project_id, "owner-1")
+        self.assertEqual({path.name for path in self.workspace.sessions_root.iterdir()}, before)
 
     def test_unsafe_or_partial_allowed_source_rejects_save_and_cleans_staging(self):
         session = self._live_session()
