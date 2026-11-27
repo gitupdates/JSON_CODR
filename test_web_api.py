@@ -310,6 +310,26 @@ class WebApiTests(unittest.TestCase):
         snapshots = self.client.get(f"/api/projects/{project_id}/sessions").json()["snapshots"]
         self.assertEqual(len(snapshots), 1)
 
+    def test_project_history_api_reads_exact_prior_format_snapshot(self):
+        project_root = Path(self.temporary_directory.name) / "legacy-history-project"
+        project_root.mkdir()
+        project_id = self.client.post("/api/projects/resolve", json={"root": str(project_root)}).json()["project_id"]
+        session_id = self.client.post("/api/sessions", json={"project_id": project_id}).json()["id"]
+        snapshot_id = self.client.post(f"/api/projects/{project_id}/sessions", json={
+            "session_id": session_id, "title": "Legacy", "change_type": "fix",
+        }).json()["snapshot"]["id"]
+        snapshot = next((self.workspace.data_root / "project-sessions").iterdir()) / "sessions" / snapshot_id / "snapshot.json"
+        payload = json.loads(snapshot.read_text(encoding="utf-8"))
+        payload["tree_digests"].pop("previous-session-history.md")
+        snapshot.write_text(json.dumps(payload), encoding="utf-8")
+
+        detail = self.client.get(f"/api/projects/{project_id}/sessions/{snapshot_id}")
+        restored = self.client.post(f"/api/projects/{project_id}/sessions/{snapshot_id}/restore")
+
+        self.assertEqual(detail.status_code, 200)
+        self.assertIn("Title: Legacy", detail.json()["history"])
+        self.assertEqual(restored.status_code, 201)
+
     def test_project_session_mutation_matrix_keeps_scope_and_restored_references(self):
         project_root = Path(self.temporary_directory.name) / "matrix-project"
         project_root.mkdir()

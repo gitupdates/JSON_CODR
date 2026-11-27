@@ -144,6 +144,21 @@ class ProjectSessionServiceTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             self.sessions.save(session.id, self.project.project_id, "owner-2", "Parser fix", "fix", [])
 
+    def test_exact_prior_format_snapshot_restores_and_derives_canonical_history(self):
+        session = self._live_session()
+        snapshot = self.sessions.save(session.id, self.project.project_id, "owner-1", "Parser fix", "fix", [])
+        directory = self.sessions.snapshot_directory(snapshot.id, self.project.project_id)
+        manifest = directory / "snapshot.json"
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        payload["tree_digests"].pop("previous-session-history.md")
+        manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+        history = self.sessions.history(snapshot.id, self.project.project_id, "owner-1")
+        restored = self.sessions.restore(snapshot.id, self.project.project_id, "owner-1")
+
+        self.assertIn("Title: Parser fix", history)
+        self.assertEqual(self.workspace.get_session(restored.session_id).project_id, self.project.project_id)
+
     def test_unsafe_or_partial_allowed_source_rejects_save_and_cleans_staging(self):
         session = self._live_session()
         attachment = self.workspace.get_session(session.id).attachments[0]

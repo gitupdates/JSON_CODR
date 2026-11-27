@@ -504,12 +504,20 @@ class ProjectSessionService:
         source = self.snapshot_directory(snapshot.id, project_id)
         payload = self._snapshot_payload(source)
         digests = payload.get("tree_digests")
-        if not isinstance(digests, dict) or not isinstance(digests.get(_HISTORY_FILE), str):
+        if not isinstance(digests, dict):
             raise ValueError("Snapshot history is incomplete")
-        self._validate_snapshot_tree(source, digests)
+        legacy = snapshot.schema_version == 1 and _HISTORY_FILE not in digests
+        if not legacy and not isinstance(digests.get(_HISTORY_FILE), str):
+            raise ValueError("Snapshot history is incomplete")
+        self._validate_snapshot_tree(source, digests, exclude_history=legacy)
         try:
             with self._open_copy_source(source / _HISTORY_FILE) as history:
                 content = history.read()
+            if legacy:
+                canonical = self._history_markdown(snapshot).encode("utf-8")
+                if content != canonical:
+                    raise ValueError("Snapshot history failed canonical validation")
+                return canonical.decode("utf-8")
             actual = "sha256:" + hashlib.sha256(content).hexdigest()
             if actual != digests[_HISTORY_FILE]:
                 raise ValueError("Snapshot history failed digest validation")
@@ -524,7 +532,8 @@ class ProjectSessionService:
         digests = payload.get("tree_digests")
         if not isinstance(digests, dict):
             raise ValueError("Snapshot digest manifest is invalid")
-        self._validate_snapshot_tree(source, digests)
+        legacy = snapshot.schema_version == 1 and _HISTORY_FILE not in digests
+        self._validate_snapshot_tree(source, digests, exclude_history=legacy)
         source_manifest = source / "manifest.json"
         restored_manifest = SessionRecord.model_validate(json.loads(self._read_copy_text(source_manifest)))
         self._validate_attachment_sources(restored_manifest, source)
@@ -660,10 +669,15 @@ class ProjectSessionService:
             writer.flush()
             os.fsync(writer.fileno())
 
-    def _validate_snapshot_tree(self, directory: Path, expected: dict[str, object]) -> None:
+    def _validate_snapshot_tree(
+        self, directory: Path, expected: dict[str, object], *, exclude_history: bool = False
+    ) -> None:
         self._reject_reparse_tree(directory)
         actual = self._tree_digests(directory)
         wanted = {str(key): str(value) for key, value in expected.items()}
+        if exclude_history:
+            actual.pop(_HISTORY_FILE, None)
+            wanted.pop(_HISTORY_FILE, None)
         if actual != wanted:
             raise ValueError("Snapshot files failed digest validation")
 
