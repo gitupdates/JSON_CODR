@@ -308,6 +308,104 @@ class ProjectSessionServiceTests(unittest.TestCase):
         finally:
             restarted_memory.close()
 
+    def test_concurrent_projection_validation_waits_for_promotion_and_keeps_indexed_record_active(self):
+        memory = MemoryStore(self.root / "projection-overlap-memory.sqlite")
+        sessions = ProjectSessionService(self.workspace, self.registry, memory=memory)
+        session = self._live_session()
+        accepted = threading.Event()
+        release_promotion = threading.Event()
+        accepted_record = {}
+        original_project_history = sessions._project_history
+
+        def pause_after_acceptance(snapshot, content):
+            projected_snapshot, record = original_project_history(snapshot, content)
+            accepted_record["record"] = record
+            accepted.set()
+            self.assertTrue(release_promotion.wait(3))
+            return projected_snapshot, record
+
+        save_result, filter_result, reconcile_result = {}, {}, {}
+        save_thread = threading.Thread(
+            target=self._run_worker,
+            args=(save_result, lambda: sessions.save(
+                session.id,
+                self.project.project_id,
+                "owner-1",
+                "Concurrent parser projection",
+                "fix",
+                ["concurrent-parser-token"],
+            )),
+        )
+        try:
+            with patch.object(
+                sessions, "_project_history", side_effect=pause_after_acceptance
+            ):
+                save_thread.start()
+                self.assertTrue(accepted.wait(1))
+                record = accepted_record["record"]
+                self.assertIsNotNone(record)
+                candidates = memory.search_collective(
+                    "owner-1",
+                    self.project.project_id,
+                    "concurrent parser token",
+                    kind="previous_session_history",
+                )
+                self.assertEqual([item.memory_id for item in candidates], [record.memory_id])
+
+                filter_thread = threading.Thread(
+                    target=self._run_worker,
+                    args=(
+                        filter_result,
+                        lambda: sessions.filter_history_projections(candidates),
+                    ),
+                )
+                reconcile_thread = threading.Thread(
+                    target=self._run_worker,
+                    args=(
+                        reconcile_result,
+                        lambda: ProjectSessionService(
+                            self.workspace, self.registry, memory=memory
+                        ),
+                    ),
+                )
+                filter_thread.start()
+                reconcile_thread.start()
+                filter_thread.join(0.25)
+                reconcile_thread.join(0.25)
+                release_promotion.set()
+                save_thread.join(3)
+                filter_thread.join(3)
+                reconcile_thread.join(3)
+
+            self.assertFalse(save_thread.is_alive())
+            self.assertFalse(filter_thread.is_alive())
+            self.assertFalse(reconcile_thread.is_alive())
+            self.assertNotIn("error", save_result)
+            self.assertNotIn("error", filter_result)
+            self.assertNotIn("error", reconcile_result)
+            saved = save_result["result"]
+            persisted = sessions.get(saved.id, self.project.project_id, "owner-1")
+            self.assertEqual(saved.indexing_status, "indexed")
+            self.assertEqual(persisted.indexing_status, "indexed")
+            self.assertEqual(saved.indexed_memory_id, record.memory_id)
+            self.assertEqual(persisted.indexed_memory_id, record.memory_id)
+            active = memory.search_collective(
+                "owner-1",
+                self.project.project_id,
+                "concurrent parser token",
+                kind="previous_session_history",
+            )
+            self.assertEqual([item.memory_id for item in active], [record.memory_id])
+            self.assertEqual(active[0].status, "active")
+            self.assertEqual(
+                [item.memory_id for item in filter_result["result"]],
+                [record.memory_id],
+            )
+        finally:
+            release_promotion.set()
+            save_thread.join(3)
+            memory.close()
+
     def test_owner_and_project_boundaries_deny_snapshot_access(self):
         session = self._live_session()
         snapshot = self.sessions.save(session.id, self.project.project_id, "owner-1", "Parser fix", "fix", [])

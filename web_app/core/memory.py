@@ -364,6 +364,12 @@ class MemoryStore:
             ).fetchall()
         return tuple(self._collective_record(row) for row in rows)
 
+    def get_collective(
+        self, memory_id: str, *, user_id: str, project_id: str
+    ) -> CollectiveMemoryRecord:
+        with self._lock:
+            return self._scoped_collective(memory_id, user_id, project_id)
+
     def revoke(
         self, memory_id: str, *, user_id: str, project_id: str, reason: str
     ) -> CollectiveMemoryRecord:

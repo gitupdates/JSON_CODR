@@ -9,6 +9,7 @@ import shutil
 import stat
 import threading
 import uuid
+import weakref
 from contextlib import contextmanager
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -107,6 +108,8 @@ _HISTORY_DIGEST_VERSION = 1
 _STAGING_PATTERN = re.compile(r"^\.staging-[0-9a-f]{32}$")
 _STORAGE_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _EXTRACTED_PATTERN = re.compile(r"^[0-9a-f]{32}\.txt$")
+_SHARED_PROJECT_LOCKS_GUARD = threading.RLock()
+_SHARED_PROJECT_LOCKS = weakref.WeakValueDictionary()
 
 
 class ProjectSessionService:
@@ -124,7 +127,6 @@ class ProjectSessionService:
         self.projects = projects
         self.root = self.workspace.data_root / "project-sessions"
         self.root.mkdir(parents=True, exist_ok=True)
-        self._project_locks_guard = threading.RLock()
         self._project_locks: dict[str, threading.RLock] = {}
         self._windows_transaction_roots = threading.local()
         self.memory = memory
@@ -133,8 +135,13 @@ class ProjectSessionService:
 
     @contextmanager
     def _project_lock(self, project_id: str):
-        with self._project_locks_guard:
-            lock = self._project_locks.setdefault(project_id, threading.RLock())
+        key = (os.path.normcase(str(self.root.resolve())), project_id)
+        with _SHARED_PROJECT_LOCKS_GUARD:
+            lock = _SHARED_PROJECT_LOCKS.get(key)
+            if lock is None:
+                lock = threading.RLock()
+                _SHARED_PROJECT_LOCKS[key] = lock
+            self._project_locks[project_id] = lock
         with lock:
             yield
 
@@ -487,6 +494,12 @@ class ProjectSessionService:
                             self._fsync_tree(staging)
                             self._promote_staging(staging, final, staging_handle)
                             self._fsync_directory(final.parent)
+                        if indexed_record is not None and not self.valid_history_projection(
+                            indexed_record
+                        ):
+                            snapshot = self._downgrade_snapshot_projection(
+                                snapshot, final, digests, indexed_record
+                            )
                     except Exception:
                         if indexed_record is not None and self.memory is not None:
                             try:
@@ -581,6 +594,19 @@ class ProjectSessionService:
 
     def valid_history_projection(self, record: CollectiveMemoryRecord) -> bool:
         """Return whether a derived history record still has one authoritative snapshot."""
+        with self._project_lock(record.project_id):
+            return self._valid_history_projection_locked(record)
+
+    def _valid_history_projection_locked(self, record: CollectiveMemoryRecord) -> bool:
+        if self.memory is not None:
+            try:
+                record = self.memory.get_collective(
+                    record.memory_id,
+                    user_id=record.user_id,
+                    project_id=record.project_id,
+                )
+            except Exception:
+                return False
         if record.kind != "previous_session_history" or record.status != "active":
             return False
         source = f"previous-session:{record.task_id}"
@@ -607,20 +633,55 @@ class ProjectSessionService:
     ) -> tuple[CollectiveMemoryRecord, ...]:
         valid: list[CollectiveMemoryRecord] = []
         for record in records:
-            if self.valid_history_projection(record):
-                valid.append(record)
-                continue
-            if self.memory is not None:
-                try:
-                    self.memory.revoke(
-                        record.memory_id,
-                        user_id=record.user_id,
-                        project_id=record.project_id,
-                        reason="authoritative snapshot is unavailable",
-                    )
-                except Exception:
-                    pass
+            with self._project_lock(record.project_id):
+                if self._valid_history_projection_locked(record):
+                    valid.append(record)
+                    continue
+                if self.memory is not None:
+                    try:
+                        self.memory.revoke(
+                            record.memory_id,
+                            user_id=record.user_id,
+                            project_id=record.project_id,
+                            reason="authoritative snapshot is unavailable",
+                        )
+                    except Exception:
+                        pass
         return tuple(valid)
+
+    def _downgrade_snapshot_projection(
+        self,
+        snapshot: ProjectSessionSnapshot,
+        directory: Path,
+        digests: dict[str, str],
+        record: CollectiveMemoryRecord,
+    ) -> ProjectSessionSnapshot:
+        downgraded = snapshot.model_copy(update={
+            "indexing_status": "skipped",
+            "indexed_memory_id": None,
+        })
+        temporary = directory / f".snapshot-{uuid.uuid4().hex}.tmp"
+        try:
+            self._write_json(temporary, {
+                "snapshot": downgraded.model_dump(mode="json"),
+                "tree_digests": digests,
+                "history_digest_version": _HISTORY_DIGEST_VERSION,
+            })
+            os.replace(temporary, directory / "snapshot.json")
+            self._fsync_directory(directory)
+        finally:
+            temporary.unlink(missing_ok=True)
+        if self.memory is not None:
+            try:
+                self.memory.revoke(
+                    record.memory_id,
+                    user_id=record.user_id,
+                    project_id=record.project_id,
+                    reason="projection validation failed after snapshot promotion",
+                )
+            except Exception:
+                pass
+        return downgraded
 
     def reconcile_history_projections(self) -> tuple[str, ...]:
         if self.memory is None:
