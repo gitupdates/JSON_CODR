@@ -371,6 +371,90 @@ class WebApiTests(unittest.TestCase):
         finally:
             foreign.close()
 
+    def test_foreign_task_retry_cannot_trust_raw_principal_or_reach_session_history(self):
+        project_root = Path(self.temporary_directory.name) / "retry-history-project"
+        project_root.mkdir()
+        project_id = self.client.post(
+            "/api/projects/resolve", json={"root": str(project_root)}
+        ).json()["project_id"]
+        source_session = self.client.post(
+            "/api/sessions", json={"project_id": project_id}
+        ).json()["id"]
+        self.workspace.append_message(
+            source_session,
+            ChatMessage(role="user", content="Repair private-retry-parser-token"),
+        )
+        snapshot_id = self.client.post(f"/api/projects/{project_id}/sessions", json={
+            "session_id": source_session,
+            "title": "Private retry parser repair",
+            "change_type": "fix",
+            "keywords": ["private-retry-parser-token"],
+        }).json()["snapshot"]["id"]
+        live_session = self.client.post(
+            "/api/sessions", json={"project_id": project_id}
+        ).json()["id"]
+        owner_id = self.workspace.get_session(live_session).owner_user_id
+
+        def command(task_id, prompt, *, parent_task_id=None):
+            body = {
+                "schema_version": "1",
+                "command_id": f"command-{task_id}",
+                "task_id": task_id,
+                "thread_id": "retry-history-thread",
+                "project_id": project_id,
+                "command_type": "capability.execute",
+                "payload": {
+                    "capability_id": "inference.generate",
+                    "operation": "generate",
+                    "project_root": str(project_root),
+                    "mode": "native",
+                    "arguments": {
+                        "model": "qwen2.5-coder:7b-instruct-q4_K_M",
+                        "prompt": prompt,
+                        "session_id": live_session,
+                    },
+                },
+            }
+            if parent_task_id is not None:
+                body["parent_task_id"] = parent_task_id
+            return body
+
+        parent_id = "owner-retry-parent"
+        parent = self.client.post(
+            "/api/tasks",
+            json=command(parent_id, "Explain private-retry-parser-token"),
+        )
+        self.assertEqual(parent.status_code, 200, parent.text)
+        self.assertIn(f"previous-session:{snapshot_id}", self.service.last_prompt)
+
+        identity = self.client.app.state.identity
+        foreign_user = identity.create_user(
+            "foreign-retry-user", "Foreign retry", roles=("administrator",)
+        )
+        foreign_token = identity.issue_credential(
+            foreign_user.user_id,
+            "cli",
+            "foreign retry test",
+            ("agent.launch",),
+        ).token
+        foreign = TestClient(self.client.app)
+        foreign.headers.update({
+            "Authorization": f"Bearer {foreign_token}",
+            "X-JSON-CODR-Principal": owner_id,
+        })
+        try:
+            attack_prompt = "FOREIGN RETRY MUST NOT REACH MODEL private-retry-parser-token"
+            denied = foreign.post(
+                f"/api/tasks/{parent_id}/retry",
+                json=command("foreign-retry-child", attack_prompt, parent_task_id=parent_id),
+            )
+
+            self.assertEqual(denied.status_code, 404)
+            self.assertNotIn(attack_prompt, self.service.last_prompt)
+            self.assertNotIn("previous-session", denied.text)
+        finally:
+            foreign.close()
+
     def test_live_memory_disable_skips_retrieval_after_services_are_constructed(self):
         project_root = Path(self.temporary_directory.name) / "disabled-retrieval-project"
         project_root.mkdir()

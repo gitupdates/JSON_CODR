@@ -409,8 +409,18 @@ class CoreService:
     def subscribe(self, task_id: str, after_sequence: int = -1) -> tuple[TaskEvent, ...]:
         return self._tasks.events(task_id, after_sequence)
 
-    async def retry(self, command: TaskCommand, *, principal: str = "user") -> TaskRecord:
-        return await self.submit(command, principal=principal)
+    async def retry(
+        self,
+        command: TaskCommand,
+        *,
+        principal: str = "user",
+        principal_scopes: tuple[str, ...] = (),
+    ) -> TaskRecord:
+        return await self.submit(
+            command,
+            principal=principal,
+            principal_scopes=principal_scopes,
+        )
 
     def restore(self, checkpoint_id: str) -> None:
         if self._restore_checkpoint is None:

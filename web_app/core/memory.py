@@ -106,6 +106,19 @@ def _safe_search_tokens(query: str) -> tuple[str, ...]:
     return tuple(tokens)
 
 
+def _has_strong_token_phrase(
+    query_tokens: tuple[str, ...],
+    content_tokens: tuple[str, ...],
+) -> bool:
+    if len(query_tokens) < 2 or len(content_tokens) < 2:
+        return False
+    content_pairs = set(zip(content_tokens, content_tokens[1:]))
+    return any(
+        pair in content_pairs
+        for pair in zip(query_tokens, query_tokens[1:])
+    )
+
+
 def _looks_detailed(content: str) -> bool:
     lowered = content.lower()
     return "raw transcript:" in lowered or ("\nuser:" in lowered and "\nassistant:" in lowered)
@@ -322,14 +335,19 @@ class MemoryStore:
                 ).fetchall()
         except sqlite3.Error:
             return ()
-        required_matches = 1 if len(tokens) == 1 else max(2, (len(tokens) + 1) // 2)
         relevant = []
-        folded_tokens = {token.casefold() for token in tokens}
+        query_tokens = tuple(token.casefold() for token in tokens)
+        folded_tokens = set(query_tokens)
         for row in rows:
-            content_tokens = {
+            content_tokens = tuple(
                 token.casefold() for token in _SEARCH_TOKEN.findall(str(row["content"]))
-            }
-            if len(folded_tokens & content_tokens) >= required_matches:
+            )
+            overlap = len(folded_tokens & set(content_tokens))
+            if (
+                (len(query_tokens) == 1 and overlap == 1)
+                or _has_strong_token_phrase(query_tokens, content_tokens)
+                or overlap >= 3
+            ):
                 relevant.append(self._collective_record(row))
             if len(relevant) >= bounded_limit:
                 break

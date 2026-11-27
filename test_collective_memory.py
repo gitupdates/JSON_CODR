@@ -199,6 +199,47 @@ class CollectiveMemoryTests(unittest.TestCase):
             (relevant,),
         )
 
+    def test_verbose_prompt_keeps_strong_parser_token_repair_phrase_relevant(self):
+        history = self.store.accept(self.draft(
+            kind="previous_session_history",
+            content=(
+                "Title: Parser token repair\n"
+                "Keywords: component:parser task:token-repair model:qwen-coder"
+            ),
+            source_refs=("previous-session:" + "c" * 32,),
+            idempotency_key="parser-token-repair-history",
+        ))
+
+        verbose = (
+            "Please revisit the parser token repair while planning new release regression "
+            "validation and explain expected behavior"
+        )
+        unrelated = (
+            "Please revisit release planning regression validation and explain expected behavior"
+        )
+
+        self.assertEqual(
+            self.store.search_collective(
+                "administrator", "project-1", verbose,
+                kind="previous_session_history",
+            ),
+            (history,),
+        )
+        self.assertEqual(
+            self.store.search_collective(
+                "administrator", "project-1", unrelated,
+                kind="previous_session_history",
+            ),
+            (),
+        )
+        self.assertEqual(
+            self.store.search_collective(
+                "administrator", "project-1", "parser NEAR(",
+                kind="previous_session_history",
+            ),
+            (),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

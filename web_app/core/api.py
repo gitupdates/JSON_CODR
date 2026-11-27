@@ -410,11 +410,28 @@ def create_core_router(
     async def retry_task(
         task_id: str,
         command: TaskCommand,
-        principal: Annotated[str, Header(alias="X-JSON-CODR-Principal")] = "user",
+        http_request: Request,
     ):
         if command.parent_task_id != task_id:
             raise HTTPException(status_code=409, detail="retry must reference the original task")
-        return await runtime()[0].retry(command, principal=principal)
+        principal = require_agent_mutation(http_request)
+        service = runtime()[0]
+        if command.command_type != "agent.run":
+            project_root = command.payload.get("project_root")
+            if isinstance(project_root, str):
+                command = command.model_copy(update={
+                    "project_id": service.register_project_root(command.project_id, project_root),
+                })
+        if task_session_authorizer is not None:
+            try:
+                task_session_authorizer(command, principal.user_id)
+            except (KeyError, PermissionError) as error:
+                raise HTTPException(status_code=404, detail="Session not found") from error
+        return await service.retry(
+            command,
+            principal=principal.user_id,
+            principal_scopes=principal.scopes,
+        )
 
     @router.post("/api/tasks/{task_id}/restore")
     def restore_task(task_id: str, request: RestoreRequest):
