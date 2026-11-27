@@ -10,6 +10,7 @@ import stat
 import threading
 import uuid
 from contextlib import contextmanager
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -112,6 +113,7 @@ class ProjectSessionService:
         projects: ProjectRegistry,
         *,
         memory: MemoryStore | None = None,
+        memory_enabled: Callable[[], bool] | None = None,
     ) -> None:
         self.workspace = workspace
         self.projects = projects
@@ -121,6 +123,7 @@ class ProjectSessionService:
         self._project_locks: dict[str, threading.RLock] = {}
         self._windows_transaction_roots = threading.local()
         self.memory = memory
+        self.memory_enabled = memory_enabled or (lambda: True)
 
     @contextmanager
     def _project_lock(self, project_id: str):
@@ -493,7 +496,11 @@ class ProjectSessionService:
             return snapshot
 
     def _project_history(self, snapshot: ProjectSessionSnapshot, content: str):
-        if self.memory is None:
+        try:
+            enabled = self.memory_enabled()
+        except Exception:
+            enabled = False
+        if self.memory is None or not enabled:
             return snapshot.model_copy(update={
                 "indexing_status": "skipped", "indexed_memory_id": None,
             }), None

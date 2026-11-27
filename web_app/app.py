@@ -571,14 +571,19 @@ def create_app(
             core_tasks = TaskStore(core_root / "tasks.sqlite")
             core_terminal_adapter = TerminalAdapter(terminals)
             core_project_adapter = ProjectAdapter(core_root / "project-state")
-            def prepare_inference_prompt(call, prompt):
+            def prepare_inference_prompt(call, prompt, execution_context):
                 model = call.arguments.get("model")
                 if not isinstance(model, str):
                     raise ValueError("inference generation requires model")
                 session_id = call.arguments.get("session_id")
                 if not isinstance(session_id, str):
                     return capability_inference_prompt(model=model, task=prompt), {}
-                session = workspace.get_session(session_id)
+                session = require_inference_session(
+                    session_id,
+                    execution_context.principal,
+                    execution_context.project_id,
+                    call.project_root,
+                )
                 recommendation_result = recommendations.recommend(session, prompt)
                 context_result = context_assembler.build(session, prompt, recommendation_result)
                 return capability_inference_prompt(
@@ -837,7 +842,10 @@ def create_app(
             raise RuntimeError("project registry is unavailable")
         if project_sessions is None:
             project_sessions = ProjectSessionService(
-                workspace, core_projects, memory=core_memory
+                workspace,
+                core_projects,
+                memory=core_memory,
+                memory_enabled=lambda: settings.get().memory.enabled,
             )
             application.state.project_sessions = project_sessions
         return project_sessions
@@ -846,6 +854,8 @@ def create_app(
         if not session.owner_user_id or not session.project_id or not prompt.strip():
             return ()
         try:
+            if not settings.get().memory.enabled:
+                return ()
             get_core_runtime()
             if core_memory is None:
                 return ()
@@ -858,9 +868,62 @@ def create_app(
             )
         except Exception:
             return ()
-        return tuple(record for record in records if record.thread_id != session.id)
+        restored_source = (
+            f"previous-session:{session.restored_from_snapshot_id}"
+            if session.restored_from_snapshot_id is not None
+            else None
+        )
+        return tuple(
+            record
+            for record in records
+            if record.thread_id != session.id and restored_source not in record.source_refs
+        )
 
     context_assembler.previous_history_provider = previous_session_history
+
+    def require_inference_session(
+        session_id: str,
+        principal_id: str,
+        project_id: str,
+        project_root: str,
+    ):
+        session = workspace.get_session(session_id)
+        if session.owner_user_id is not None and session.owner_user_id != principal_id:
+            raise KeyError(session_id)
+        if session.project_id is not None:
+            get_core_runtime()
+            if core_projects is None or session.project_id != project_id:
+                raise KeyError(session_id)
+            registered_root = core_projects.resolve(session.project_id)
+            try:
+                supplied_root = Path(project_root).resolve(strict=True)
+            except OSError as error:
+                raise KeyError(session_id) from error
+            if supplied_root != registered_root:
+                raise KeyError(session_id)
+        return session
+
+    def authorize_core_task_session(command: TaskCommand, principal_id: str) -> None:
+        if command.command_type == "agent.run":
+            return
+        payload = command.payload
+        if payload.get("capability_id") != "inference.generate":
+            return
+        arguments = payload.get("arguments")
+        if not isinstance(arguments, dict):
+            return
+        session_id = arguments.get("session_id")
+        if not isinstance(session_id, str):
+            return
+        project_root = payload.get("project_root")
+        if not isinstance(project_root, str):
+            raise KeyError(session_id)
+        require_inference_session(
+            session_id,
+            principal_id,
+            command.project_id,
+            project_root,
+        )
 
     def project_session_principal(request: Request, *, mutation: bool):
         principal = mutation_authorizer.principal(request, "session.write")
@@ -919,6 +982,7 @@ def create_app(
             memory_store=lambda: core_memory if get_core_runtime() else None,
             memory_settings=lambda: settings.get().memory,
             mutation_authorizer=mutation_authorizer,
+            task_session_authorizer=authorize_core_task_session,
         )
     )
     action_proposals = ActionProposalService()
@@ -1301,10 +1365,27 @@ def create_app(
         except OllamaUnavailableError as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
 
+    def require_model_run_session(session_id: str, http_request: Request):
+        principal = mutation_authorizer.principal(http_request, "agent.launch")
+        session = workspace.get_session(session_id)
+        if session.owner_user_id is not None and session.owner_user_id != principal.user_id:
+            raise KeyError(session_id)
+        if session.project_id is not None:
+            get_core_runtime()
+            if core_projects is None:
+                raise KeyError(session_id)
+            core_projects.resolve(session.project_id)
+        return session
+
+    def require_model_run(run_id: str, http_request: Request):
+        run = model_runs.get(run_id)
+        require_model_run_session(run.session_id, http_request)
+        return run
+
     @application.post("/api/model-runs", status_code=201)
-    async def create_model_run(request: ModelRunCreateRequest):
+    async def create_model_run(request: ModelRunCreateRequest, http_request: Request):
         try:
-            workspace.get_session(request.session_id)
+            require_model_run_session(request.session_id, http_request)
             run = await model_runs.create(request)
             task = asyncio.create_task(model_runs.run(run.run_id))
             model_run_tasks.add(task)
@@ -1316,31 +1397,39 @@ def create_app(
             raise HTTPException(status_code=404, detail="Session not found") from error
 
     @application.get("/api/model-runs/{run_id}")
-    async def get_model_run(run_id: str):
+    async def get_model_run(run_id: str, http_request: Request):
         try:
-            return model_runs.get(run_id)
+            return require_model_run(run_id, http_request)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Run not found") from error
 
     @application.get("/api/model-runs/{run_id}/results/{result_id}/original")
-    async def get_model_run_original(run_id: str, result_id: str, x_json_codr: str | None = Header(None)):
+    async def get_model_run_original(
+        run_id: str,
+        result_id: str,
+        http_request: Request,
+        x_json_codr: str | None = Header(None),
+    ):
         if x_json_codr != "1":
             raise HTTPException(status_code=403, detail="Local authorization required")
         try:
+            require_model_run(run_id, http_request)
             return model_run_store.get_original(run_id, result_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Original output not found") from error
 
     @application.post("/api/model-runs/{run_id}/cancel")
-    async def cancel_model_run(run_id: str):
+    async def cancel_model_run(run_id: str, http_request: Request):
         try:
+            require_model_run(run_id, http_request)
             return model_runs.cancel(run_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Run not found") from error
 
     @application.get("/api/model-runs/{run_id}/export")
-    async def export_model_run(run_id: str, format: str = "json"):
+    async def export_model_run(run_id: str, http_request: Request, format: str = "json"):
         try:
+            require_model_run(run_id, http_request)
             media_type, content = model_runs.export(run_id, format)
             return Response(content=content, media_type=media_type)
         except KeyError as error:
@@ -1349,8 +1438,9 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     @application.get("/api/model-runs/{run_id}/search")
-    async def search_model_run(run_id: str, q: str):
+    async def search_model_run(run_id: str, http_request: Request, q: str):
         try:
+            require_model_run(run_id, http_request)
             return model_runs.search(run_id, q)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Run not found") from error
@@ -3213,12 +3303,23 @@ def create_app(
         images: list[Path],
         thread_id: str,
         session_id: str | None = None,
+        principal_id: str = "user",
+        principal_scopes: tuple[str, ...] = (),
     ) -> ChatResult:
         core_service, _, _ = get_core_runtime()
+        task_project_id = application.state.core_default_project_id
+        task_project_root = Path(__file__).resolve().parent.parent
+        if session_id is not None:
+            session = workspace.get_session(session_id)
+            if session.project_id is not None:
+                if core_projects is None:
+                    raise KeyError(session_id)
+                task_project_id = session.project_id
+                task_project_root = core_projects.resolve(session.project_id)
         call = CapabilityCall(
             capability_id="inference.generate",
             operation="generate",
-            project_root=str(Path(__file__).resolve().parent.parent),
+            project_root=str(task_project_root),
             arguments={
                 "model": model,
                 "prompt": prompt,
@@ -3231,10 +3332,10 @@ def create_app(
             command_id=str(uuid7()),
             task_id=task_id,
             thread_id=thread_id,
-            project_id=application.state.core_default_project_id,
+            project_id=task_project_id,
             command_type="inference.generate",
             payload=call.model_dump(mode="json"),
-        ))
+        ), principal=principal_id, principal_scopes=principal_scopes)
         if record.status is not TaskStatus.completed:
             failure = record.events[-1].payload
             code = failure.get("code")
@@ -3358,6 +3459,7 @@ def create_app(
             model_images = []
             context_result = None
             recommendation_result = None
+            principal = None
             if request.session_id:
                 session = workspace.get_session(request.session_id)
                 principal = mutation_authorizer.principal(http_request, "agent.launch")
@@ -3366,9 +3468,6 @@ def create_app(
                     and session.owner_user_id != principal.user_id
                 ):
                     raise KeyError(request.session_id)
-                recommendation_result = recommendations.recommend(session, original_prompt)
-                context_result = context_assembler.build(session, original_prompt, recommendation_result)
-                model_prompt = context_result.prompt
                 if await service.supports_vision(request.model):
                     model_images = context_assembler.image_paths(session)
             conversion_words = ("convert", "save", "archive")
@@ -3381,6 +3480,11 @@ def create_app(
                 None,
             )
             if wants_conversion and source_archive:
+                recommendation_result = recommendations.recommend(session, original_prompt)
+                context_result = context_assembler.build(
+                    session, original_prompt, recommendation_result
+                )
+                model_prompt = context_result.prompt
                 model_prompt = canonical_model_prompt(
                     model=request.model,
                     task=original_prompt,
@@ -3418,6 +3522,8 @@ def create_app(
                     model_images,
                     request.session_id or f"chat:{uuid7()}",
                     request.session_id,
+                    principal.user_id if principal is not None else "user",
+                    tuple(principal.scopes) if principal is not None else (),
                 )
             if context_result and recommendation_result:
                 result.attached_skills = context_result.attached_skills
@@ -3429,7 +3535,14 @@ def create_app(
                     references.setdefault(item.id, item)
                 result.references = list(references.values())
             if request.session_id and result.actions:
-                source_skills = [item.reference for item in (context_result.attached_skills if context_result else [])]
+                source_skills = [
+                    item.reference
+                    for item in (
+                        context_result.attached_skills
+                        if context_result is not None
+                        else result.attached_skills
+                    )
+                ]
                 result.action_proposals = action_proposals.propose(
                     request.session_id,
                     result.actions,

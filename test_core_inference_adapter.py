@@ -119,8 +119,9 @@ class InferenceAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_session_context_is_injected_and_reported_in_result(self):
         backend = RecordingBackend()
 
-        def prepare_prompt(call, prompt):
+        def prepare_prompt(call, prompt, context):
             self.assertEqual(call.arguments["session_id"], "a" * 32)
+            self.assertEqual(context.principal, "user")
             return (
                 f"ATTACHED SKILL rea-agents:reverse-engineer-anything\n{prompt}",
                 {

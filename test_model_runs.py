@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from web_app.model_run_store import ModelRunStore
-from web_app.models import ChatResult, ModelRunCreateRequest, SessionRecord
+from web_app.models import ChatResult, ContextBuildResult, ModelRunCreateRequest, ObjectReference, SessionRecord
 
 
 class FakeWorkspace:
@@ -35,6 +35,19 @@ class FakeContext:
             "omitted_modalities": [],
             "adaptations": [suffix],
         }
+
+    def build_for_model_context(self, session, prompt, supports_vision):
+        assembled, images, manifest = self.build_for_model(session, prompt, supports_vision)
+        reference = ObjectReference(
+            id="previous-session:" + "e" * 32,
+            kind="previous_session",
+            label="Prior repair",
+            target="previous-session:" + "e" * 32,
+        )
+        return ContextBuildResult(
+            prompt=assembled,
+            previous_session_references=[reference],
+        ), images, manifest
 
 
 class FakeInference:
@@ -193,6 +206,15 @@ class ModelRunServiceTests(unittest.IsolatedAsyncioTestCase):
         results = {item.requested_model: item for item in self.service.get(run.run_id).results}
         self.assertEqual(results["model-b"].input_manifest.image_sources, ["image.png"])
         self.assertEqual(results["model-a"].input_manifest.text_sources, ["image.png:ocr"])
+
+    async def test_all_model_results_preserve_exact_previous_session_references(self):
+        run = await self.create()
+
+        await self.service.run(run.run_id)
+
+        expected = "previous-session:" + "e" * 32
+        results = self.service.get(run.run_id).results
+        self.assertTrue(all([item.id for item in result.references] == [expected] for result in results))
 
     async def test_each_model_receives_the_same_delimited_contract_with_its_exact_identifier(self):
         run = await self.create()

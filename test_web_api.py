@@ -22,6 +22,7 @@ from web_app.attachments import AttachmentService
 from web_app.artifacts import ArtifactService
 from cli import parse_response_content
 from web_app.models import ActionSuggestion, ChatMessage, ChatResult, ConversionBundle, GeneratedFile, ObjectReference, SkillPack, SkillRecord
+from web_app.core.memory import MemoryDraft
 from web_app.ollama_service import ModelOutputError, ModelTimeoutError, OllamaService, OllamaUnavailableError
 from web_app.workspace import WorkspaceService
 from web_app.skills import SkillLibraryService
@@ -295,6 +296,168 @@ class WebApiTests(unittest.TestCase):
             self.assertEqual(denied.status_code, 404)
         finally:
             foreign.close()
+
+    def test_foreign_principal_cannot_use_session_in_native_or_model_run_lifecycle(self):
+        project_root = Path(self.temporary_directory.name) / "foreign-inference-project"
+        project_root.mkdir()
+        project_id = self.client.post(
+            "/api/projects/resolve", json={"root": str(project_root)}
+        ).json()["project_id"]
+        session_id = self.client.post(
+            "/api/sessions", json={"project_id": project_id}
+        ).json()["id"]
+
+        owner_run = self.client.post("/api/model-runs", json={
+            "session_id": session_id,
+            "prompt": "owner-only model run",
+            "profile": "general",
+        })
+        self.assertEqual(owner_run.status_code, 201, owner_run.text)
+        run_id = owner_run.json()["run_id"]
+        result_id = owner_run.json()["results"][0]["result_id"]
+
+        identity = self.client.app.state.identity
+        foreign_user = identity.create_user(
+            "foreign-inference-user", "Foreign inference", roles=("administrator",)
+        )
+        token = identity.issue_credential(
+            foreign_user.user_id,
+            "cli",
+            "foreign inference test",
+            ("agent.launch", "session.write"),
+        ).token
+        foreign = TestClient(self.client.app)
+        foreign.headers["Authorization"] = f"Bearer {token}"
+        try:
+            native = foreign.post("/api/tasks", json={
+                "schema_version": "1",
+                "command_id": "foreign-native-command",
+                "task_id": "foreign-native-task",
+                "thread_id": "foreign-native-thread",
+                "project_id": project_id,
+                "command_type": "capability.execute",
+                "payload": {
+                    "capability_id": "inference.generate",
+                    "operation": "generate",
+                    "project_root": str(project_root),
+                    "mode": "native",
+                    "arguments": {
+                        "model": "qwen2.5-coder:7b-instruct-q4_K_M",
+                        "prompt": "disclose owner history",
+                        "session_id": session_id,
+                    },
+                },
+            })
+            self.assertEqual(native.status_code, 404)
+            self.assertEqual(
+                foreign.post("/api/model-runs", json={
+                    "session_id": session_id,
+                    "prompt": "disclose owner history",
+                    "profile": "general",
+                }).status_code,
+                404,
+            )
+            lifecycle = (
+                foreign.get(f"/api/model-runs/{run_id}"),
+                foreign.get(
+                    f"/api/model-runs/{run_id}/results/{result_id}/original",
+                    headers={"X-JSON-CODR": "1"},
+                ),
+                foreign.post(f"/api/model-runs/{run_id}/cancel"),
+                foreign.get(f"/api/model-runs/{run_id}/export", params={"format": "json"}),
+                foreign.get(f"/api/model-runs/{run_id}/search", params={"q": "owner"}),
+            )
+            self.assertEqual([response.status_code for response in lifecycle], [404] * 5)
+        finally:
+            foreign.close()
+
+    def test_live_memory_disable_skips_retrieval_after_services_are_constructed(self):
+        project_root = Path(self.temporary_directory.name) / "disabled-retrieval-project"
+        project_root.mkdir()
+        project_id = self.client.post(
+            "/api/projects/resolve", json={"root": str(project_root)}
+        ).json()["project_id"]
+        source_session = self.client.post(
+            "/api/sessions", json={"project_id": project_id}
+        ).json()["id"]
+        self.workspace.append_message(
+            source_session, ChatMessage(role="user", content="Repair disabled-memory-token")
+        )
+        saved = self.client.post(f"/api/projects/{project_id}/sessions", json={
+            "session_id": source_session,
+            "title": "Disabled memory retrieval",
+            "change_type": "fix",
+            "keywords": ["disabled-memory-token"],
+        })
+        self.assertEqual(saved.status_code, 200, saved.text)
+        live_session = self.client.post(
+            "/api/sessions", json={"project_id": project_id}
+        ).json()["id"]
+
+        disabled = self.client.patch("/api/settings", json={
+            "memory": {
+                "enabled": False,
+                "detailed_retention_enabled": False,
+                "search_limit": 20,
+            }
+        })
+        self.assertEqual(disabled.status_code, 200, disabled.text)
+        response = self.client.post("/api/chat", json={
+            "model": "qwen",
+            "prompt": "Explain disabled-memory-token",
+            "session_id": live_session,
+        })
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertNotIn("PREVIOUS SESSION HISTORY", self.service.last_prompt)
+        self.assertEqual(response.json()["references"], [])
+
+    def test_direct_chat_assembles_previous_history_once_and_preserves_exact_provenance(self):
+        project_root = Path(self.temporary_directory.name) / "single-build-project"
+        project_root.mkdir()
+        project_id = self.client.post(
+            "/api/projects/resolve", json={"root": str(project_root)}
+        ).json()["project_id"]
+        session_id = self.client.post(
+            "/api/sessions", json={"project_id": project_id}
+        ).json()["id"]
+        owner = self.workspace.get_session(session_id).owner_user_id
+        record = self.client.app.state.core_memory.accept(MemoryDraft(
+            user_id=owner,
+            project_id=project_id,
+            thread_id="older-session",
+            task_id="f" * 32,
+            kind="previous_session_history",
+            content="Title: Single build\nKeywords: single-build-token",
+            source_refs=("previous-session:" + "f" * 32,),
+            idempotency_key="previous-session:" + "f" * 32,
+        ))
+        calls = []
+
+        def changing_search(*_args, **_kwargs):
+            calls.append(len(calls) + 1)
+            return (record,) if len(calls) == 1 else ()
+
+        with patch.object(
+            self.client.app.state.core_memory,
+            "search_collective",
+            side_effect=changing_search,
+        ):
+            response = self.client.post("/api/chat", json={
+                "model": "qwen",
+                "prompt": "single-build-token",
+                "session_id": session_id,
+            })
+
+        source = "previous-session:" + "f" * 32
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(calls, [1])
+        self.assertIn(source, self.service.last_prompt)
+        self.assertEqual([item["id"] for item in response.json()["references"]], [source])
+        self.assertEqual(
+            [item.id for item in self.workspace.get_session(session_id).messages[-1].references],
+            [source],
+        )
 
     def test_history_retrieval_bypasses_unbound_sessions_and_survives_unavailable_memory(self):
         legacy_session = self.client.post("/api/sessions").json()["id"]

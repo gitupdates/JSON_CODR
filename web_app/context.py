@@ -243,12 +243,19 @@ class ContextAssembler:
             )
             if source is None:
                 continue
+            if (
+                session.restored_from_snapshot_id is not None
+                and source == f"previous-session:{session.restored_from_snapshot_id}"
+            ):
+                continue
             prefix = f"\n\nSOURCE: {source}\n--- BEGIN PREVIOUS SESSION RECORD ---\n"
             suffix = "\n--- END PREVIOUS SESSION RECORD ---"
             available = budget - len(section) - len(prefix) - len(suffix)
             if available <= 0:
                 break
-            content = record.content[:available]
+            content = "\n".join(
+                f"DATA: {line}" for line in record.content.splitlines()
+            )[:available]
             if not content:
                 continue
             section += prefix + content + suffix
@@ -291,6 +298,17 @@ class ContextAssembler:
         prompt: str,
         supports_vision: bool,
     ) -> tuple[str, list, ModelInputManifest]:
+        built, images, manifest = self.build_for_model_context(
+            session, prompt, supports_vision
+        )
+        return built.prompt, images, manifest
+
+    def build_for_model_context(
+        self,
+        session: SessionRecord,
+        prompt: str,
+        supports_vision: bool,
+    ) -> tuple[ContextBuildResult, list, ModelInputManifest]:
         built = self.build(session, prompt)
         images = self.image_paths(session)
         image_names = [path.name for path in images]
@@ -310,4 +328,4 @@ class ContextAssembler:
             omitted_modalities=warnings,
             adaptations=["original images supplied"] if selected_images else (["extracted text/OCR supplied"] if ready_text else []),
         )
-        return built.prompt, selected_images, manifest
+        return built, selected_images, manifest

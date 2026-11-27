@@ -168,6 +168,39 @@ class ProjectSessionServiceTests(unittest.TestCase):
         finally:
             memory.close()
 
+    def test_live_memory_disable_skips_projection_without_losing_snapshot(self):
+        memory = MemoryStore(self.root / "live-policy-memory.sqlite")
+        enabled = {"value": False}
+        try:
+            sessions = ProjectSessionService(
+                self.workspace,
+                self.registry,
+                memory=memory,
+                memory_enabled=lambda: enabled["value"],
+            )
+            session = self._live_session()
+
+            disabled = sessions.save(
+                session.id, self.project.project_id, "owner-1", "Disabled memory", "fix", []
+            )
+            self.assertEqual(disabled.indexing_status, "skipped")
+            self.assertEqual(
+                memory.export_collective("owner-1", self.project.project_id),
+                (),
+            )
+
+            enabled["value"] = True
+            indexed = sessions.save(
+                session.id, self.project.project_id, "owner-1", "Enabled memory", "fix", []
+            )
+            self.assertEqual(indexed.indexing_status, "indexed")
+            self.assertEqual(
+                len(memory.export_collective("owner-1", self.project.project_id)),
+                1,
+            )
+        finally:
+            memory.close()
+
     def test_indexing_rejection_or_unavailability_never_loses_promoted_snapshot(self):
         class RejectingMemory:
             def accept(self, draft):

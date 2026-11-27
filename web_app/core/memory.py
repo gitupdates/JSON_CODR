@@ -68,6 +68,42 @@ _SEARCH_TOKEN = re.compile(r"[A-Za-z0-9_]+")
 _MAX_SEARCH_TOKENS = 24
 _MAX_SEARCH_TOKEN_LENGTH = 64
 _MAX_SEARCH_RESULTS = 50
+_MAX_SEARCH_CANDIDATES = 200
+_SEARCH_STOP_WORDS = frozenset({
+    "about", "after", "again", "also", "and", "are", "can", "could", "describe",
+    "explain", "for", "from", "have", "into", "please", "show", "that", "the",
+    "their", "this", "through", "use", "using", "what", "when", "where", "with",
+    "would", "you", "your",
+})
+_MALFORMED_FTS = re.compile(
+    r"(?i)\bNEAR\s*\(|(?:^|\s)(?:AND|OR|NOT)\s*(?:$|[()])|[\x00-\x08\x0b\x0c\x0e-\x1f]"
+)
+
+
+def _safe_search_tokens(query: str) -> tuple[str, ...]:
+    if (
+        _MALFORMED_FTS.search(query)
+        or query.count('"') % 2
+        or query.count("(") != query.count(")")
+    ):
+        return ()
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for token in _SEARCH_TOKEN.findall(query):
+        normalized = token[:_MAX_SEARCH_TOKEN_LENGTH]
+        folded = normalized.casefold()
+        if (
+            not normalized
+            or folded in seen
+            or folded in _SEARCH_STOP_WORDS
+            or (len(folded) < 3 and not any(character.isdigit() for character in folded))
+        ):
+            continue
+        tokens.append(normalized)
+        seen.add(folded)
+        if len(tokens) >= _MAX_SEARCH_TOKENS:
+            break
+    return tuple(tokens)
 
 
 def _looks_detailed(content: str) -> bool:
@@ -261,13 +297,7 @@ class MemoryStore:
             if kind is not None:
                 records = tuple(record for record in records if record.kind == kind)
             return records[:bounded_limit]
-        tokens: list[str] = []
-        for token in _SEARCH_TOKEN.findall(query):
-            normalized = token[:_MAX_SEARCH_TOKEN_LENGTH]
-            if normalized and normalized.casefold() not in {item.casefold() for item in tokens}:
-                tokens.append(normalized)
-            if len(tokens) >= _MAX_SEARCH_TOKENS:
-                break
+        tokens = _safe_search_tokens(query)
         if not tokens:
             return ()
         fts_query = " OR ".join('"' + token.replace('"', '""') + '"' for token in tokens)
@@ -275,7 +305,8 @@ class MemoryStore:
         arguments: list[object] = [fts_query, user_id, project_id]
         if kind is not None:
             arguments.append(kind)
-        arguments.append(bounded_limit)
+        candidate_limit = min(_MAX_SEARCH_CANDIDATES, max(bounded_limit, bounded_limit * 8))
+        arguments.append(candidate_limit)
         try:
             with self._lock:
                 rows = self._connection.execute(
@@ -291,7 +322,18 @@ class MemoryStore:
                 ).fetchall()
         except sqlite3.Error:
             return ()
-        return tuple(self._collective_record(row) for row in rows)
+        required_matches = 1 if len(tokens) == 1 else max(2, (len(tokens) + 1) // 2)
+        relevant = []
+        folded_tokens = {token.casefold() for token in tokens}
+        for row in rows:
+            content_tokens = {
+                token.casefold() for token in _SEARCH_TOKEN.findall(str(row["content"]))
+            }
+            if len(folded_tokens & content_tokens) >= required_matches:
+                relevant.append(self._collective_record(row))
+            if len(relevant) >= bounded_limit:
+                break
+        return tuple(relevant)
 
     def export_collective(
         self, user_id: str, project_id: str, *, include_inactive: bool = False

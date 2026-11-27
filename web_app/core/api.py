@@ -90,6 +90,7 @@ def create_core_router(
     memory_store: Callable[[], MemoryStore] | None = None,
     memory_settings: Callable[[], MemorySettings] = MemorySettings,
     mutation_authorizer: MutationAuthorizer | None = None,
+    task_session_authorizer: Callable[[TaskCommand, str], None] | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -218,6 +219,11 @@ def create_core_router(
                 command = command.model_copy(update={
                     "project_id": service.register_project_root(command.project_id, project_root),
                 })
+        if task_session_authorizer is not None:
+            try:
+                task_session_authorizer(command, principal.user_id)
+            except (KeyError, PermissionError) as error:
+                raise HTTPException(status_code=404, detail="Session not found") from error
         record = await service.submit(
             command,
             principal=principal.user_id,
@@ -240,6 +246,11 @@ def create_core_router(
                 command = command.model_copy(update={
                     "project_id": service.register_project_root(command.project_id, project_root),
                 })
+        if task_session_authorizer is not None:
+            try:
+                task_session_authorizer(command, principal.user_id)
+            except (KeyError, PermissionError) as error:
+                raise HTTPException(status_code=404, detail="Session not found") from error
         return await service.start(
             command,
             principal=principal.user_id,

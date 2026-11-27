@@ -171,6 +171,34 @@ class CollectiveMemoryTests(unittest.TestCase):
                 self.assertIsInstance(result, tuple)
                 self.assertLessEqual(len(result), 50)
 
+    def test_malformed_fts_and_broad_common_words_do_not_return_irrelevant_history(self):
+        relevant = self.store.accept(self.draft(
+            kind="previous_session_history",
+            content="Title: Billing migration\nKeywords: component:invoice task:billing-migration",
+            source_refs=("previous-session:" + "a" * 32,),
+            idempotency_key="billing-history",
+        ))
+        self.store.accept(self.draft(
+            kind="previous_session_history",
+            content="Title: Weather deployment\nPlease explain the weather deployment checklist",
+            source_refs=("previous-session:" + "b" * 32,),
+            idempotency_key="weather-history",
+        ))
+
+        self.assertEqual(
+            self.store.search_collective(
+                "administrator", "project-1", "NEAR(", kind="previous_session_history"
+            ),
+            (),
+        )
+        self.assertEqual(
+            self.store.search_collective(
+                "administrator", "project-1", "Please explain billing migration",
+                kind="previous_session_history",
+            ),
+            (relevant,),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

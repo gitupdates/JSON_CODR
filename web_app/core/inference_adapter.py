@@ -15,7 +15,10 @@ class InferenceAdapter:
         self,
         backend,
         *,
-        prepare_prompt: Callable[[CapabilityCall, str], tuple[str, Mapping[str, Any]]] | None = None,
+        prepare_prompt: Callable[
+            [CapabilityCall, str, ExecutionContext],
+            tuple[str, Mapping[str, Any]],
+        ] | None = None,
         model_registry: ModelTagRegistry | None = None,
     ) -> None:
         self._backend = backend
@@ -31,7 +34,7 @@ class InferenceAdapter:
         model, model_options = await self._resolve_model(requested_model)
         metadata: Mapping[str, Any] = {}
         if self._prepare_prompt is not None:
-            prompt, metadata = self._prepare_prompt(call, prompt)
+            prompt, metadata = self._prepare_prompt(call, prompt, context)
         stream_chat = getattr(self._backend, "stream_chat", None)
         if callable(stream_chat):
             try:

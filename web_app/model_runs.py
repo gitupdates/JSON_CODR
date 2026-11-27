@@ -196,7 +196,16 @@ class ModelRunService:
             try:
                 session = self.workspace.get_session(run.session_id)
                 vision = await self.inference.supports_vision(queued.requested_model)
-                prompt, images, manifest = self.context.build_for_model(session, run.prompt, vision)
+                build_with_context = getattr(self.context, "build_for_model_context", None)
+                if callable(build_with_context):
+                    built, images, manifest = build_with_context(session, run.prompt, vision)
+                    prompt = built.prompt
+                    context_references = list(built.previous_session_references)
+                else:
+                    prompt, images, manifest = self.context.build_for_model(
+                        session, run.prompt, vision
+                    )
+                    context_references = []
                 if not isinstance(manifest, ModelInputManifest):
                     manifest = ModelInputManifest.model_validate(manifest)
                 prompt = canonical_model_prompt(
@@ -316,6 +325,10 @@ class ModelRunService:
                     "result_id": queued.result_id,
                     "requested_model": queued.requested_model,
                     "input_manifest": manifest,
+                    "references": list({
+                        item.id: item
+                        for item in [*result.references, *context_references]
+                    }.values()),
                 })
                 self.store.update_result(run.run_id, normalized)
             except Exception as error:
