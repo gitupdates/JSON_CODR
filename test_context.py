@@ -224,6 +224,37 @@ class ContextAssemblerTests(unittest.TestCase):
         self.assertEqual(result.prompt, "request")
         self.assertEqual(result.previous_session_references, [])
 
+    def test_previous_history_validator_drops_orphan_before_prompt_and_structured_reference(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = WorkspaceService(root)
+            session = workspace.create_session("owner-1", "project-1")
+            memory = MemoryStore(root / "memory.sqlite")
+            try:
+                orphan = memory.accept(MemoryDraft(
+                    user_id="owner-1",
+                    project_id="project-1",
+                    thread_id="interrupted-session",
+                    task_id="e" * 32,
+                    kind="previous_session_history",
+                    content="Title: Orphan parser history\nKeywords: orphan-parser-token",
+                    source_refs=("previous-session:" + "e" * 32,),
+                    idempotency_key="previous-session:" + "e" * 32,
+                ))
+                result = ContextAssembler(
+                    AttachmentService(workspace),
+                    previous_history_validator=lambda _session, _record: False,
+                ).build(
+                    session,
+                    "Explain orphan parser token",
+                    previous_history=(orphan,),
+                )
+            finally:
+                memory.close()
+
+        self.assertEqual(result.prompt, "Explain orphan parser token")
+        self.assertEqual(result.previous_session_references, [])
+
     def test_restored_session_omits_the_snapshot_it_was_restored_from(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

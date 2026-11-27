@@ -86,6 +86,44 @@ class CollectiveMemoryTests(unittest.TestCase):
         self.assertEqual(exported[0].memory_id, record.memory_id)
         self.assertEqual(exported[0].status, "revoked")
 
+    def test_reconciliation_revokes_invalid_active_projection_without_dropping_valid_record(self):
+        valid = self.store.accept(self.draft(
+            task_id="a" * 32,
+            kind="previous_session_history",
+            content="Title: Valid parser history\nKeywords: valid-parser-token",
+            source_refs=("previous-session:" + "a" * 32,),
+            idempotency_key="previous-session:" + "a" * 32,
+        ))
+        orphan = self.store.accept(self.draft(
+            task_id="b" * 32,
+            kind="previous_session_history",
+            content="Title: Orphan parser history\nKeywords: orphan-parser-token",
+            source_refs=("previous-session:" + "b" * 32,),
+            idempotency_key="previous-session:" + "b" * 32,
+        ))
+
+        revoked = self.store.reconcile_collective(
+            "previous_session_history",
+            lambda record: record.memory_id == valid.memory_id,
+            reason="authoritative snapshot is unavailable",
+        )
+
+        self.assertEqual(revoked, (orphan.memory_id,))
+        self.assertEqual(
+            self.store.search_collective(
+                "administrator", "project-1", "valid parser token",
+                kind="previous_session_history",
+            ),
+            (valid,),
+        )
+        self.assertEqual(
+            self.store.search_collective(
+                "administrator", "project-1", "orphan parser token",
+                kind="previous_session_history",
+            ),
+            (),
+        )
+
     def test_supersede_links_old_and_new_records(self):
         old = self.store.accept(self.draft())
         new = self.store.supersede(

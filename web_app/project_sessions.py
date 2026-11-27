@@ -14,7 +14,12 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
-from web_app.core.memory import MemoryDraft, MemoryPolicyError, MemoryStore
+from web_app.core.memory import (
+    CollectiveMemoryRecord,
+    MemoryDraft,
+    MemoryPolicyError,
+    MemoryStore,
+)
 from web_app.core.project_registry import ProjectRegistry
 from web_app.models import ProjectSessionRestoreResult, ProjectSessionSnapshot, SessionRecord
 from web_app.workspace import SESSION_ID_PATTERN, WorkspaceService
@@ -124,6 +129,7 @@ class ProjectSessionService:
         self._windows_transaction_roots = threading.local()
         self.memory = memory
         self.memory_enabled = memory_enabled or (lambda: True)
+        self.reconcile_history_projections()
 
     @contextmanager
     def _project_lock(self, project_id: str):
@@ -572,6 +578,61 @@ class ProjectSessionService:
         source = self.snapshot_directory(snapshot.id, project_id)
         payload = self._snapshot_payload(source)
         return self._validated_history(snapshot, source, payload)
+
+    def valid_history_projection(self, record: CollectiveMemoryRecord) -> bool:
+        """Return whether a derived history record still has one authoritative snapshot."""
+        if record.kind != "previous_session_history" or record.status != "active":
+            return False
+        source = f"previous-session:{record.task_id}"
+        if (
+            not SNAPSHOT_ID_PATTERN.fullmatch(record.task_id)
+            or record.source_refs != (source,)
+            or record.idempotency_key != source
+        ):
+            return False
+        try:
+            snapshot = self.get(record.task_id, record.project_id, record.user_id)
+            if (
+                snapshot.source_session_id != record.thread_id
+                or snapshot.indexing_status != "indexed"
+                or snapshot.indexed_memory_id != record.memory_id
+            ):
+                return False
+            return self.history(snapshot.id, record.project_id, record.user_id) == record.content
+        except (KeyError, OSError, PermissionError, ValueError, UnicodeError, json.JSONDecodeError):
+            return False
+
+    def filter_history_projections(
+        self, records: tuple[CollectiveMemoryRecord, ...] | list[CollectiveMemoryRecord]
+    ) -> tuple[CollectiveMemoryRecord, ...]:
+        valid: list[CollectiveMemoryRecord] = []
+        for record in records:
+            if self.valid_history_projection(record):
+                valid.append(record)
+                continue
+            if self.memory is not None:
+                try:
+                    self.memory.revoke(
+                        record.memory_id,
+                        user_id=record.user_id,
+                        project_id=record.project_id,
+                        reason="authoritative snapshot is unavailable",
+                    )
+                except Exception:
+                    pass
+        return tuple(valid)
+
+    def reconcile_history_projections(self) -> tuple[str, ...]:
+        if self.memory is None:
+            return ()
+        try:
+            return self.memory.reconcile_collective(
+                "previous_session_history",
+                self.valid_history_projection,
+                reason="authoritative snapshot is unavailable",
+            )
+        except Exception:
+            return ()
 
     def _validated_history(
         self, snapshot: ProjectSessionSnapshot, source: Path, payload: dict[str, object]

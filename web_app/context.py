@@ -47,11 +47,13 @@ class ContextAssembler:
         max_characters: int = 20_000,
         skills: SkillLibraryService | None = None,
         previous_history_provider: Callable[[SessionRecord, str], Sequence[CollectiveMemoryRecord]] | None = None,
+        previous_history_validator: Callable[[SessionRecord, CollectiveMemoryRecord], bool] | None = None,
     ) -> None:
         self.attachments = attachments
         self.max_characters = max_characters
         self.skills = skills
         self.previous_history_provider = previous_history_provider
+        self.previous_history_validator = previous_history_validator
 
     def build(
         self,
@@ -66,6 +68,15 @@ class ContextAssembler:
             except Exception:
                 previous_history = ()
         previous_history = previous_history or ()
+        if self.previous_history_validator is not None:
+            valid_history = []
+            for record in previous_history:
+                try:
+                    if self.previous_history_validator(session, record):
+                        valid_history.append(record)
+                except Exception:
+                    continue
+            previous_history = tuple(valid_history)
         ready_attachments = [
             item for item in session.attachments
             if item.included and item.extraction_state.value == "ready"

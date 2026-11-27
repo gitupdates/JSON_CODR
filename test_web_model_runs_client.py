@@ -31,19 +31,21 @@ class ModelRunsClientTests(unittest.TestCase):
         harness = r"""
 const vm = require("vm");
 const source = process.env.APP_SOURCE;
-const start = source.indexOf("async function ensureSession()");
+const start = source.indexOf("function sessionStateMatches(");
 const end = source.indexOf("\nfunction selectWorkspaceMode", start);
 const provider = source.slice(start, end);
 const requests = [];
 const elements = { conversationExportMarkdown: {}, conversationExportJson: {}, conversationExportZip: {}, empty: {} };
 const context = {
-  sessionId: null, restoredConversationSessionId: null, elements,
-  conversationView: { messages: [], async restore() {} },
+  sessionId: null, currentSession: null, restoredConversationSessionId: null,
+  sessionGeneration: 0, sessionDirty: false, selectedProject: null, elements,
+  conversationView: { messages: [], reset() {}, async restore() {} },
   localStorage: { setItem() {} },
   window: { JSONCodrHttpIdentity: { mutationHeaders() { return {"X-CSRF-Token": "csrf-1"}; } } },
+  updateConversationExports() {}, updateCurrentSessionPanel() {},
   fetch: async (url, options = {}) => {
     requests.push({url, options});
-    return {ok: true, status: 201, json: async () => ({id: "created-session"})};
+    return {ok: true, status: 201, json: async () => ({id: "created-session", owner_user_id: "owner-1", project_id: null})};
   },
 };
 vm.runInNewContext(provider, context);
@@ -58,22 +60,28 @@ vm.runInNewContext(provider, context);
         self.assertEqual(result["sessionId"], "created-session")
         self.assertEqual(result["request"], {
             "url": "/api/sessions",
-            "options": {"method": "POST", "headers": {"X-CSRF-Token": "csrf-1"}},
+            "options": {
+                "method": "POST",
+                "headers": {"X-CSRF-Token": "csrf-1"},
+                "body": "{}",
+            },
         })
 
     def test_live_session_provider_rejects_failed_creation_with_server_detail(self):
         harness = r"""
 const vm = require("vm");
 const source = process.env.APP_SOURCE;
-const start = source.indexOf("async function ensureSession()");
+const start = source.indexOf("function sessionStateMatches(");
 const end = source.indexOf("\nfunction selectWorkspaceMode", start);
 const provider = source.slice(start, end);
 const context = {
-  sessionId: null, restoredConversationSessionId: null,
+  sessionId: null, currentSession: null, restoredConversationSessionId: null,
+  sessionGeneration: 0, sessionDirty: false, selectedProject: null,
   elements: { conversationExportMarkdown: {}, conversationExportJson: {}, conversationExportZip: {}, empty: {} },
-  conversationView: { messages: [], async restore() { throw new Error("must not restore"); } },
+  conversationView: { messages: [], reset() {}, async restore() { throw new Error("must not restore"); } },
   localStorage: { setItem() {} },
   window: { JSONCodrHttpIdentity: { mutationHeaders() { return {"X-CSRF-Token": "csrf-1"}; } } },
+  updateConversationExports() {}, updateCurrentSessionPanel() {},
   fetch: async () => ({ok: false, status: 403, json: async () => ({detail: "CSRF validation failed"})}),
 };
 vm.runInNewContext(provider, context);
@@ -85,7 +93,10 @@ vm.runInNewContext(provider, context);
 
         result = self.run_live_session_provider(harness)
 
-        self.assertEqual(result, {"message": "CSRF validation failed", "current": None})
+        self.assertEqual(result, {
+            "message": "CSRF validation failed. Sign in again in Settings → Users & Access, then retry.",
+            "current": None,
+        })
 
     def test_start_uses_page_live_session_and_mutation_headers(self):
         harness = r"""

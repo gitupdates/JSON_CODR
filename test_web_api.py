@@ -185,6 +185,145 @@ class FakeIntegrityBenchmark:
 
 
 class WebApiTests(unittest.TestCase):
+    def test_owner_bound_session_route_families_enforce_one_authority_boundary(self):
+        session_id = self.client.post("/api/sessions", json={}).json()["id"]
+        attachment = AttachmentService(self.workspace).import_text(
+            session_id, "authority evidence", "authority.txt"
+        )
+        artifact = ArtifactService(self.workspace).save_conversion(
+            session_id,
+            "authority.txt",
+            [GeneratedFile(path="authority.txt", content="authority artifact")],
+        )
+        self.workspace.append_message(session_id, ChatMessage(
+            role="assistant",
+            content="owner evidence",
+            references=[ObjectReference(
+                id="authority-reference",
+                kind="attachment",
+                label="authority.txt",
+                target=attachment.id,
+            )],
+        ))
+        proposal_response = self.client.post(
+            f"/api/sessions/{session_id}/hardware/openvino/install-proposal"
+        )
+        self.assertEqual(proposal_response.status_code, 200, proposal_response.text)
+        proposal_id = proposal_response.json()[0]["id"]
+
+        identity = self.client.app.state.identity
+        foreign_user = identity.create_user(
+            "session-route-foreign", "Session route foreign", roles=("administrator",)
+        )
+        foreign_browser_credential = identity.issue_credential(
+            foreign_user.user_id,
+            "browser_session",
+            "foreign browser session routes",
+            identity.browser_session_scopes(foreign_user.user_id),
+        )
+        foreign_browser = TestClient(self.client.app)
+        foreign_browser.cookies.set("json_codr_session", foreign_browser_credential.token)
+        self.assertEqual(foreign_browser.get("/api/identity/bootstrap").status_code, 200)
+        foreign_browser.headers["X-CSRF-Token"] = foreign_browser.cookies.get("json_codr_csrf")
+        foreign_bearer_credential = identity.issue_credential(
+            foreign_user.user_id,
+            "cli",
+            "foreign bearer session routes",
+            ("session.write", "terminal.write"),
+        )
+        foreign_bearer = TestClient(self.client.app)
+        foreign_bearer.headers["Authorization"] = f"Bearer {foreign_bearer_credential.token}"
+        foreign_wrong_scope_credential = identity.issue_credential(
+            foreign_user.user_id,
+            "cli",
+            "foreign bearer wrong scope session routes",
+            ("git.read",),
+        )
+        foreign_wrong_scope = TestClient(self.client.app)
+        foreign_wrong_scope.headers["Authorization"] = (
+            f"Bearer {foreign_wrong_scope_credential.token}"
+        )
+        anonymous = TestClient(self.client.app)
+        try:
+            read_paths = (
+                f"/api/sessions/{session_id}",
+                f"/api/sessions/{session_id}/conversation",
+                f"/api/sessions/{session_id}/conversation/export?format=json",
+                f"/api/sessions/{session_id}/references/authority-reference",
+                f"/api/sessions/{session_id}/attachments",
+                f"/api/sessions/{session_id}/artifacts/{artifact.filename}",
+            )
+            for path in read_paths:
+                with self.subTest(family="read", path=path):
+                    self.assertEqual(self.client.get(path).status_code, 200)
+                    self.assertEqual(foreign_browser.get(path).status_code, 404)
+                    self.assertEqual(foreign_bearer.get(path).status_code, 404)
+                    self.assertEqual(foreign_wrong_scope.get(path).status_code, 404)
+                    self.assertEqual(anonymous.get(path).status_code, 404)
+
+            mutations = (
+                ("post", f"/api/sessions/{session_id}/conversation", {
+                    "role": "assistant", "content": "owner-only append",
+                }, 201),
+                ("post", f"/api/sessions/{session_id}/clipboard-text", {
+                    "text": "owner-only clipboard",
+                }, 201),
+                ("patch", f"/api/sessions/{session_id}/skill-routing", {
+                    "auto_attach_skills": False,
+                }, 200),
+                ("patch", f"/api/sessions/{session_id}/skills", {
+                    "selected": [],
+                }, 200),
+                ("post", f"/api/sessions/{session_id}/action-proposals/{proposal_id}/reject", None, 200),
+            )
+            for method, path, payload, owner_status in mutations:
+                with self.subTest(family="mutation", path=path):
+                    kwargs = {"json": payload} if payload is not None else {}
+                    self.assertEqual(getattr(self.client, method)(path, **kwargs).status_code, owner_status)
+                    self.assertEqual(getattr(foreign_browser, method)(path, **kwargs).status_code, 404)
+                    self.assertEqual(getattr(foreign_bearer, method)(path, **kwargs).status_code, 404)
+                    self.assertEqual(
+                        getattr(foreign_wrong_scope, method)(path, **kwargs).status_code,
+                        404,
+                    )
+                    self.assertEqual(getattr(anonymous, method)(path, **kwargs).status_code, 401)
+
+            contents = [
+                message.content for message in self.workspace.get_session(session_id).messages
+            ]
+            self.assertNotIn("FOREIGN_INJECTION", contents)
+        finally:
+            anonymous.close()
+            foreign_wrong_scope.close()
+            foreign_bearer.close()
+            foreign_browser.close()
+
+    def test_legacy_ownerless_session_routes_keep_explicit_compatibility_branch(self):
+        session_id = self.client.post("/api/sessions").json()["id"]
+        identity = self.client.app.state.identity
+        foreign_user = identity.create_user(
+            "legacy-session-writer", "Legacy session writer", roles=("administrator",)
+        )
+        credential = identity.issue_credential(
+            foreign_user.user_id, "cli", "legacy session compatibility", ("session.write",)
+        )
+        bearer = TestClient(self.client.app)
+        bearer.headers["Authorization"] = f"Bearer {credential.token}"
+        anonymous = TestClient(self.client.app)
+        try:
+            self.assertEqual(anonymous.get(f"/api/sessions/{session_id}").status_code, 200)
+            self.assertEqual(
+                anonymous.get(f"/api/sessions/{session_id}/conversation").status_code,
+                200,
+            )
+            appended = bearer.post(f"/api/sessions/{session_id}/conversation", json={
+                "role": "assistant", "content": "legacy scoped writer",
+            })
+            self.assertEqual(appended.status_code, 201, appended.text)
+        finally:
+            anonymous.close()
+            bearer.close()
+
     def test_session_delete_requires_same_owner_for_browser_and_bearer_clients(self):
         owner_bound = self.client.post("/api/sessions", json={})
         legacy_ownerless = self.client.post("/api/sessions")
@@ -354,6 +493,69 @@ class WebApiTests(unittest.TestCase):
             self.assertEqual(denied.status_code, 404)
         finally:
             foreign.close()
+
+    def test_orphan_previous_session_projection_never_reaches_direct_or_native_model_context(self):
+        project_root = Path(self.temporary_directory.name) / "orphan-history-project"
+        project_root.mkdir()
+        project_id = self.client.post(
+            "/api/projects/resolve", json={"root": str(project_root)}
+        ).json()["project_id"]
+        session_id = self.client.post(
+            "/api/sessions", json={"project_id": project_id}
+        ).json()["id"]
+        owner_id = self.workspace.get_session(session_id).owner_user_id
+        orphan_id = "e" * 32
+        source_ref = f"previous-session:{orphan_id}"
+        self.client.app.state.core_memory.accept(MemoryDraft(
+            user_id=owner_id,
+            project_id=project_id,
+            thread_id="interrupted-source-session",
+            task_id=orphan_id,
+            kind="previous_session_history",
+            content="Title: Orphan parser token\nKeywords: orphan-parser-token",
+            source_refs=(source_ref,),
+            idempotency_key=source_ref,
+        ))
+
+        direct = self.client.post("/api/chat", json={
+            "model": "qwen",
+            "prompt": "Explain orphan parser token",
+            "session_id": session_id,
+        })
+        self.assertEqual(direct.status_code, 200, direct.text)
+        self.assertNotIn(source_ref, self.service.last_prompt)
+        self.assertEqual(direct.json()["references"], [])
+
+        native = self.client.post("/api/tasks", json={
+            "schema_version": "1",
+            "command_id": "orphan-history-native-command",
+            "task_id": "orphan-history-native-task",
+            "thread_id": "orphan-history-native-thread",
+            "project_id": project_id,
+            "command_type": "capability.execute",
+            "payload": {
+                "capability_id": "inference.generate",
+                "operation": "generate",
+                "project_root": str(project_root),
+                "mode": "native",
+                "arguments": {
+                    "model": "qwen2.5-coder:7b-instruct-q4_K_M",
+                    "prompt": "Explain orphan parser token",
+                    "session_id": session_id,
+                },
+            },
+        })
+        self.assertEqual(native.status_code, 200, native.text)
+        self.assertNotIn(source_ref, self.service.last_prompt)
+        self.assertEqual(
+            self.client.app.state.core_memory.search_collective(
+                owner_id,
+                project_id,
+                "orphan parser token",
+                kind="previous_session_history",
+            ),
+            (),
+        )
 
     def test_foreign_principal_cannot_use_session_in_native_or_model_run_lifecycle(self):
         project_root = Path(self.temporary_directory.name) / "foreign-inference-project"
@@ -560,20 +762,30 @@ class WebApiTests(unittest.TestCase):
         project_id = self.client.post(
             "/api/projects/resolve", json={"root": str(project_root)}
         ).json()["project_id"]
+        source_session = self.client.post(
+            "/api/sessions", json={"project_id": project_id}
+        ).json()["id"]
+        self.workspace.append_message(source_session, ChatMessage(
+            role="user", content="single-build-token"
+        ))
+        saved = self.client.post(f"/api/projects/{project_id}/sessions", json={
+            "session_id": source_session,
+            "title": "Single build",
+            "change_type": "fix",
+            "keywords": ["single-build-token"],
+        })
+        self.assertEqual(saved.status_code, 200, saved.text)
+        snapshot_id = saved.json()["snapshot"]["id"]
         session_id = self.client.post(
             "/api/sessions", json={"project_id": project_id}
         ).json()["id"]
         owner = self.workspace.get_session(session_id).owner_user_id
-        record = self.client.app.state.core_memory.accept(MemoryDraft(
-            user_id=owner,
-            project_id=project_id,
-            thread_id="older-session",
-            task_id="f" * 32,
+        record = self.client.app.state.core_memory.search_collective(
+            owner,
+            project_id,
+            "single build token",
             kind="previous_session_history",
-            content="Title: Single build\nKeywords: single-build-token",
-            source_refs=("previous-session:" + "f" * 32,),
-            idempotency_key="previous-session:" + "f" * 32,
-        ))
+        )[0]
         calls = []
 
         def changing_search(*_args, **_kwargs):
@@ -591,7 +803,7 @@ class WebApiTests(unittest.TestCase):
                 "session_id": session_id,
             })
 
-        source = "previous-session:" + "f" * 32
+        source = f"previous-session:{snapshot_id}"
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(calls, [1])
         self.assertIn(source, self.service.last_prompt)

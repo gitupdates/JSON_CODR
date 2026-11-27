@@ -362,6 +362,23 @@ def create_app(
         principal = mutation_authorizer.principal(request, scope)
         mutation_authorizer.csrf(request)
         return principal
+
+    def live_session_authority(request: Request, session_id: str):
+        session = workspace.get_session(session_id)
+        if session.owner_user_id is None:
+            return session
+        try:
+            principal = mutation_authorizer.authenticated_principal(request)
+        except HTTPException as error:
+            raise HTTPException(status_code=404, detail="Session not found") from error
+        if principal.user_id != session.owner_user_id:
+            raise HTTPException(status_code=404, detail="Session not found")
+        return session
+
+    def request_has_identity(request: Request) -> bool:
+        session_name, _, _ = identity_cookie_names(request)
+        return bool(request.headers.get("authorization") or request.cookies.get(session_name))
+
     application.include_router(create_mcp_http_router(
         lambda request: McpServer(BorgClient(str(request.base_url).rstrip("/"))),
         authorize=lambda request: mutation_principal(request, "agent.launch"),
@@ -376,18 +393,29 @@ def create_app(
                 request.url.scheme,
             )
             method = request.method.upper()
-            if method in {"POST", "PUT", "PATCH", "DELETE"}:
-                for route in application.router.routes:
-                    match, _child_scope = route.matches(request.scope)
-                    if getattr(match, "name", "") != "FULL":
-                        continue
+            for route in application.router.routes:
+                match, child_scope = route.matches(request.scope)
+                if getattr(match, "name", "") != "FULL":
+                    continue
+                route_path = str(getattr(route, "path", ""))
+                session_id = child_scope.get("path_params", {}).get("session_id")
+                if route_path.startswith("/api/sessions/{session_id}") and session_id:
+                    session = workspace.get_session(session_id)
+                    if session.owner_user_id is not None and (
+                        method not in {"POST", "PUT", "PATCH", "DELETE"}
+                        or request_has_identity(request)
+                    ):
+                        live_session_authority(request, session_id)
+                if method in {"POST", "PUT", "PATCH", "DELETE"}:
                     policy = getattr(route, "mutation_policies", {}).get(method)
                     if policy is not None:
                         if policy.path == "/api/identity/login":
                             require_csrf(request)
                         elif policy.scope is not None:
                             mutation_principal(request, policy.scope)
-                    break
+                break
+        except KeyError:
+            return JSONResponse(status_code=404, content={"detail": "Session not found"})
         except (HTTPException, ValueError, PermissionError) as error:
             status_code = error.status_code if isinstance(error, HTTPException) else (403 if isinstance(error, PermissionError) else 400)
             detail = error.detail if isinstance(error, HTTPException) else str(error)
@@ -866,6 +894,7 @@ def create_app(
                 8,
                 kind="previous_session_history",
             )
+            records = get_project_sessions().filter_history_projections(records)
         except Exception:
             return ()
         restored_source = (
@@ -880,6 +909,9 @@ def create_app(
         )
 
     context_assembler.previous_history_provider = previous_session_history
+    context_assembler.previous_history_validator = (
+        lambda _session, record: get_project_sessions().valid_history_projection(record)
+    )
 
     def require_inference_session(
         session_id: str,

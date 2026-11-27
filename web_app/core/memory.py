@@ -5,6 +5,7 @@ import json
 import re
 import sqlite3
 import threading
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -369,6 +370,46 @@ class MemoryStore:
         return self._set_inactive(
             memory_id, user_id=user_id, project_id=project_id, status="revoked", reason=reason
         )
+
+    def reconcile_collective(
+        self,
+        kind: str,
+        validator: Callable[[CollectiveMemoryRecord], bool],
+        *,
+        reason: str,
+    ) -> tuple[str, ...]:
+        """Revoke active derived records whose authoritative source no longer validates."""
+        if not kind.strip() or len(kind) > 128:
+            return ()
+        with self._lock:
+            rows = self._connection.execute(
+                """SELECT * FROM collective_memory_records
+                WHERE kind = ? AND status = 'active'
+                ORDER BY rowid""",
+                (kind,),
+            ).fetchall()
+        records = tuple(self._collective_record(row) for row in rows)
+        invalid: list[CollectiveMemoryRecord] = []
+        for record in records:
+            try:
+                valid = bool(validator(record))
+            except Exception:
+                valid = False
+            if not valid:
+                invalid.append(record)
+        revoked: list[str] = []
+        for record in invalid:
+            try:
+                self.revoke(
+                    record.memory_id,
+                    user_id=record.user_id,
+                    project_id=record.project_id,
+                    reason=reason,
+                )
+            except (KeyError, sqlite3.Error):
+                continue
+            revoked.append(record.memory_id)
+        return tuple(revoked)
 
     def supersede(self, memory_id: str, replacement: MemoryDraft) -> CollectiveMemoryRecord:
         with self._lock:

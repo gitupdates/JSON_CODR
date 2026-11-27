@@ -32,6 +32,30 @@ class MutationAuthorizer:
             raise HTTPException(status_code=401, detail="Authentication required")
         return self._resolve(token, "browser_session", scope)
 
+    def authenticated_principal(self, request: Request) -> AuthenticatedPrincipal:
+        """Resolve an allowed browser or bearer identity without imposing a route scope."""
+        authorization = request.headers.get("authorization", "")
+        scheme, separator, token = authorization.partition(" ")
+        if authorization:
+            if not separator or scheme.casefold() != "bearer" or not token.strip():
+                raise HTTPException(status_code=401, detail="Authentication required")
+            try:
+                credential = self._identity.resolve_credential(token.strip())
+            except PermissionError as error:
+                raise HTTPException(status_code=401, detail="Authentication required") from error
+            if credential.credential_kind not in {"service", "cli"}:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            return credential
+
+        session_name, _, _ = self._cookie_names(request)
+        token = request.cookies.get(session_name)
+        if not token:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        try:
+            return self._identity.resolve_credential(token, required_kind="browser_session")
+        except PermissionError as error:
+            raise HTTPException(status_code=401, detail="Authentication required") from error
+
     def csrf(self, request: Request) -> None:
         if request.headers.get("authorization"):
             return

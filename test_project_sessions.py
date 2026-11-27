@@ -249,6 +249,65 @@ class ProjectSessionServiceTests(unittest.TestCase):
         finally:
             memory.close()
 
+    def test_process_interruption_projection_is_revoked_during_restart_reconciliation(self):
+        class SimulatedProcessInterruption(BaseException):
+            pass
+
+        memory_path = self.root / "interrupted-promotion-memory.sqlite"
+        memory = MemoryStore(memory_path)
+        session = self._live_session()
+        sessions = ProjectSessionService(self.workspace, self.registry, memory=memory)
+        try:
+            with patch.object(
+                sessions,
+                "_promote_staging",
+                side_effect=SimulatedProcessInterruption("process terminated"),
+            ):
+                with self.assertRaisesRegex(SimulatedProcessInterruption, "process terminated"):
+                    sessions.save(
+                        session.id,
+                        self.project.project_id,
+                        "owner-1",
+                        "Interrupted parser projection",
+                        "fix",
+                        ["orphan-parser-token"],
+                    )
+            active_before_restart = memory.search_collective(
+                "owner-1",
+                self.project.project_id,
+                "orphan parser token",
+                kind="previous_session_history",
+            )
+            self.assertEqual(len(active_before_restart), 1)
+        finally:
+            memory.close()
+
+        restarted_memory = MemoryStore(memory_path)
+        try:
+            restarted_sessions = ProjectSessionService(
+                self.workspace, self.registry, memory=restarted_memory
+            )
+            self.assertEqual(
+                restarted_memory.search_collective(
+                    "owner-1",
+                    self.project.project_id,
+                    "orphan parser token",
+                    kind="previous_session_history",
+                ),
+                (),
+            )
+            inactive = restarted_memory.export_collective(
+                "owner-1", self.project.project_id, include_inactive=True
+            )
+            self.assertEqual(len(inactive), 1)
+            self.assertEqual(inactive[0].status, "revoked")
+            self.assertEqual(
+                restarted_sessions.list(self.project.project_id, "owner-1"),
+                [],
+            )
+        finally:
+            restarted_memory.close()
+
     def test_owner_and_project_boundaries_deny_snapshot_access(self):
         session = self._live_session()
         snapshot = self.sessions.save(session.id, self.project.project_id, "owner-1", "Parser fix", "fix", [])
