@@ -887,6 +887,103 @@ function makeContext(route) {
         self.assertTrue(result["workspace"]["signalAborted"])
         self.assertTrue(result["workspace"]["resultHidden"])
 
+    def test_deferred_session_post_and_get_cannot_overwrite_reset_before_submission(self):
+        source = self.client.get("/static/app.js").text
+        state_start = source.index("function markSessionDirty")
+        state_end = source.index("\nasync function startCleanSession", state_start)
+        submit_start = source.index("async function submitPrompt")
+        submit_end = source.index("\nelements.form.addEventListener", submit_start)
+        harness = r'''
+const vm = require("vm");
+function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
+function node(value=""){return {value,textContent:"",hidden:false,disabled:false,children:[],href:"",
+  replaceChildren(...items){this.children=items;},querySelectorAll(){return [];},matches(){return false;},hidePopover(){}};}
+function makeContext({route, initialSessionId}) {
+  const elements = {
+    prompt:node(`${route} stale prompt`), submit:node(), model:node("model-1"), cancel:node(), requestStatus:node(),
+    empty:node(), result:node(), error:node(), responseModel:node(), workspaceAgentSelect:node(route), workspaceProjectRoot:node("C:/work"),
+    attachmentList:node(), attachmentPreview:node(), workspaceFilesList:node(), workspaceFilesPopoverList:node(),
+    contextCount:node(), exportArchive:node(), dependencyList:node(), skillList:node(), skillDetails:node(),
+    skillRecommendations:node(), attachedSkills:node(), skillConversionStatus:node(), skillPreview:node(), skillInstall:node(),
+    skillSave:node(), skillRemovePack:node(), conversationExportMarkdown:node(), conversationExportJson:node(), conversationExportZip:node(),
+    currentSessionIdentity:node(), currentSessionAssignment:node(), currentSessionCount:node(), currentSessionUnsaved:node(),
+    taskPlanReviewOpen:node(), taskPlanReview:node(), taskRequestedModel:node(), taskEffectiveModel:node(), summary:node(), content:node(),
+  };
+  const pendingSession = deferred(); const calls=[]; const begun=[]; const handled=[];
+  const context = {
+    elements, sessionId:initialSessionId, currentSession:initialSessionId ? {id:initialSessionId,project_id:null} : null,
+    selectedProject:null, sessionDirty:false, restoredConversationSessionId:initialSessionId,
+    activeRequest:null, activeCoreTaskId:null, activeWorkspaceRoute:null, activePlanReview:null, sessionGeneration:0,
+    skillAttachmentId:null, editingSkill:null, excludedSkillIds:[], skillLoadGeneration:0,
+    setPending(value){elements.submit.disabled=value;}, updateConversationExports(){}, updateCurrentSessionPanel(){},
+    renderWorkspaceFiles(items){elements.workspaceFilesList.replaceChildren(...items);elements.workspaceFilesPopoverList.replaceChildren(...items);},
+    async loadProjectHistory(){}, responseErrorMessage:async()=>"failed",
+    conversationView:{messages:[],reset(id){this.messages=[];this.sessionId=id;},async restore(){},async appendUser(){return {id:"user-1"};},beginTask(id){begun.push(id);}},
+    coreClient:{submit:async()=>({task_id:"old-task",events:[],status:"running"})},handleCoreRecord(record){handled.push(record.task_id);},
+    showError(message){elements.error.textContent=message;},renderWorkspaceActivityNotice(){},showWorkspaceAgentApproval(){return true;},
+    localStorage:{setItem(){}},window:{JSONCodrHttpIdentity:{mutationHeaders:h=>({...h,"X-CSRF-Token":"fresh"})}},
+    AbortController,JSON,Error,encodeURIComponent,
+  };
+  context.fetch = async (url, options={}) => {
+    calls.push({url,method:options.method || "GET"});
+    if ((url === "/api/sessions" && options.method === "POST") || (initialSessionId && url === `/api/sessions/${initialSessionId}` && !options.method)) {
+      return pendingSession.promise;
+    }
+    if (url === `/api/sessions/${"a".repeat(32)}` && options.method === "DELETE") return {ok:true,status:204,json:async()=>({})};
+    if (url === "/api/workspace/tasks") return {ok:true,status:200,json:async()=>({task_id:"old-workspace",route:"borg",status:"completed",requested_model:"m",result:{}})};
+    throw new Error(`unexpected ${options.method || "GET"} ${url}`);
+  };
+  vm.createContext(context);vm.runInContext(process.env.APP_CODE,context);
+  return {context,pendingSession,calls,begun,handled};
+}
+(async()=>{
+  const direct = makeContext({route:"direct",initialSessionId:null});
+  const directRun = direct.context.submitPrompt({preventDefault(){}});
+  await new Promise(setImmediate);
+  direct.context.detachActiveSessionState("b".repeat(32));
+  direct.context.currentSession={id:"b".repeat(32),project_id:"project-new"};
+  direct.context.restoredConversationSessionId="b".repeat(32);
+  direct.pendingSession.resolve({ok:true,status:201,json:async()=>({id:"a".repeat(32),owner_user_id:"owner",project_id:null,messages:[]})});
+  await directRun;
+
+  const existingId="c".repeat(32);
+  const workspace = makeContext({route:"borg",initialSessionId:existingId});
+  const workspaceRun = workspace.context.submitPrompt({preventDefault(){}});
+  await new Promise(setImmediate);
+  workspace.context.detachActiveSessionState("d".repeat(32));
+  workspace.context.currentSession={id:"d".repeat(32),project_id:"project-new"};
+  workspace.context.restoredConversationSessionId="d".repeat(32);
+  workspace.pendingSession.resolve({ok:true,status:200,json:async()=>({id:existingId,owner_user_id:"owner",project_id:null,messages:[]})});
+  await workspaceRun;
+  process.stdout.write(JSON.stringify({
+    direct:{sessionId:direct.context.sessionId,begun:direct.begun,handled:direct.handled,calls:direct.calls},
+    workspace:{sessionId:workspace.context.sessionId,active:workspace.context.activeCoreTaskId,calls:workspace.calls},
+  }));
+})();
+'''
+        completed = subprocess.run(
+            ["node", "-e", harness],
+            env={"APP_CODE": source[state_start:state_end] + source[submit_start:submit_end]},
+            text=True, capture_output=True, check=True,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["direct"]["sessionId"], "b" * 32)
+        self.assertEqual(result["direct"]["begun"], [])
+        self.assertEqual(result["direct"]["handled"], [])
+        self.assertEqual(
+            result["direct"]["calls"],
+            [
+                {"url": "/api/sessions", "method": "POST"},
+                {"url": f"/api/sessions/{'a' * 32}", "method": "DELETE"},
+            ],
+        )
+        self.assertEqual(result["workspace"]["sessionId"], "d" * 32)
+        self.assertIsNone(result["workspace"]["active"])
+        self.assertEqual(
+            result["workspace"]["calls"],
+            [{"url": f"/api/sessions/{'c' * 32}", "method": "GET"}],
+        )
+
     def test_first_run_authentication_failure_recovers_and_retry_starts_task(self):
         source = self.client.get("/static/app.js").text
         state_start = source.index("function markSessionDirty")

@@ -1425,22 +1425,69 @@ function detachActiveSessionState(nextSessionId = null) {
   updateCurrentSessionPanel();
 }
 
-async function ensureSession() {
-  if (sessionId) {
-    const existing = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
-    if (existing.ok) currentSession = await existing.json();
-    else detachActiveSessionState();
+async function discardInvalidatedCreatedSession(session) {
+  const createdSessionId = typeof session?.id === "string" ? session.id : null;
+  if (!createdSessionId || !session.owner_user_id || createdSessionId === sessionId) return;
+  try {
+    await fetch(`/api/sessions/${encodeURIComponent(createdSessionId)}`, {
+      method: "DELETE",
+      headers: window.JSONCodrHttpIdentity.mutationHeaders(),
+    });
+  } catch (_error) {
+    // The stale session is owner-scoped and disposable; cleanup is best effort.
   }
+}
+
+async function ensureSession(expectedGeneration = sessionGeneration) {
+  let operationGeneration = expectedGeneration;
+  let operationSessionId = sessionId;
+  if (!sessionStateMatches(operationSessionId, operationGeneration)) return null;
+  if (operationSessionId) {
+    let existing;
+    try {
+      existing = await fetch(`/api/sessions/${encodeURIComponent(operationSessionId)}`);
+    } catch (error) {
+      if (!sessionStateMatches(operationSessionId, operationGeneration)) return null;
+      throw error;
+    }
+    if (!sessionStateMatches(operationSessionId, operationGeneration)) return null;
+    if (existing.ok) {
+      let loadedSession;
+      try {
+        loadedSession = await existing.json();
+      } catch (error) {
+        if (!sessionStateMatches(operationSessionId, operationGeneration)) return null;
+        throw error;
+      }
+      if (!sessionStateMatches(operationSessionId, operationGeneration)) return null;
+      currentSession = loadedSession;
+    } else {
+      detachActiveSessionState();
+      operationGeneration = sessionGeneration;
+      operationSessionId = sessionId;
+    }
+  }
+  if (!sessionStateMatches(operationSessionId, operationGeneration)) return null;
   if (currentSession?.project_id && selectedProject && currentSession.project_id !== selectedProject.project_id) {
     throw new Error("The current session belongs to another project. Start a New Session before switching projects.");
   }
-  if (!sessionId) {
-    const response = await fetch("/api/sessions", {
-      method: "POST",
-      headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify(selectedProject ? { project_id: selectedProject.project_id } : {}),
-    });
+  if (!operationSessionId) {
+    let response;
+    try {
+      response = await fetch("/api/sessions", {
+        method: "POST",
+        headers: window.JSONCodrHttpIdentity.mutationHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(selectedProject ? { project_id: selectedProject.project_id } : {}),
+      });
+    } catch (error) {
+      if (!sessionStateMatches(operationSessionId, operationGeneration)) return null;
+      throw error;
+    }
     const session = await response.json().catch(() => ({}));
+    if (!sessionStateMatches(operationSessionId, operationGeneration)) {
+      await discardInvalidatedCreatedSession(session);
+      return null;
+    }
     if (!response.ok) {
       const guidance = [401, 403].includes(response.status) ? " Sign in again in Settings → Users & Access, then retry." : "";
       throw new Error(`${session.detail || `Unable to create session (${response.status})`}.${guidance}`.replace("..", "."));
@@ -1449,15 +1496,23 @@ async function ensureSession() {
     sessionId = session.id;
     currentSession = session;
     conversationView.reset(sessionId);
-  }
-  if (restoredConversationSessionId !== sessionId) {
-    await conversationView.restore(sessionId);
+    operationSessionId = sessionId;
     restoredConversationSessionId = sessionId;
+  }
+  if (!sessionStateMatches(operationSessionId, operationGeneration)) return null;
+  if (restoredConversationSessionId !== operationSessionId) {
+    const restored = await conversationView.restore(
+      operationSessionId,
+      () => sessionStateMatches(operationSessionId, operationGeneration),
+    );
+    if (!restored || !sessionStateMatches(operationSessionId, operationGeneration)) return null;
+    restoredConversationSessionId = operationSessionId;
     elements.empty.hidden = conversationView.messages.length > 0;
   }
+  if (!sessionStateMatches(operationSessionId, operationGeneration)) return null;
   updateConversationExports();
   updateCurrentSessionPanel();
-  return sessionId;
+  return operationSessionId;
 }
 
 function canReplaceEmptyUnassignedSession() {
@@ -3218,8 +3273,10 @@ async function submitPrompt(event) {
   let submittingGeneration = null;
   let workspaceController = null;
   try {
-    await ensureSession();
-    submittingSessionId = sessionId;
+    const establishmentGeneration = sessionGeneration;
+    const establishedSessionId = await ensureSession(establishmentGeneration);
+    if (!establishedSessionId) return;
+    submittingSessionId = establishedSessionId;
     submittingGeneration = sessionGeneration;
     const attachmentIds = currentAttachmentIds();
     elements.empty.hidden = true;

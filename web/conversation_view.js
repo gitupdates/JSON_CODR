@@ -24,11 +24,27 @@
       }
     }
 
-    async restore(sessionId) {
+    async restore(sessionId, isCurrent = () => this.sessionId === sessionId) {
       this.sessionId = sessionId;
-      const response = await this.fetch(`/api/sessions/${encodeURIComponent(sessionId)}/conversation`);
+      let response;
+      try {
+        response = await this.fetch(`/api/sessions/${encodeURIComponent(sessionId)}/conversation`);
+      } catch (error) {
+        if (this.sessionId !== sessionId || !isCurrent()) return false;
+        throw error;
+      }
+      if (this.sessionId !== sessionId || !isCurrent()) return false;
       if (!response.ok) throw new Error("Unable to restore conversation");
-      this.restoreMessages(await response.json());
+      let messages;
+      try {
+        messages = await response.json();
+      } catch (error) {
+        if (this.sessionId !== sessionId || !isCurrent()) return false;
+        throw error;
+      }
+      if (this.sessionId !== sessionId || !isCurrent()) return false;
+      this.restoreMessages(messages);
+      return true;
     }
 
     restoreMessages(messages) {

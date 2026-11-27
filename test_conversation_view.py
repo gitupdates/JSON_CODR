@@ -137,6 +137,29 @@ console.log(JSON.stringify({
             "late": None,
         })
 
+    def test_late_restore_response_cannot_repopulate_a_reset_session(self):
+        result = self.run_node("""
+let resolveResponse;
+const pendingResponse = new Promise(resolve => { resolveResponse = resolve; });
+const view = new ConversationView({ fetchImpl: async () => pendingResponse });
+const oldSessionId = 'a'.repeat(32);
+const newSessionId = 'b'.repeat(32);
+const restore = view.restore(oldSessionId);
+view.reset(newSessionId);
+resolveResponse({
+  ok: true,
+  json: async () => [{ role: 'assistant', content: 'stale conversation' }],
+});
+restore.then(restored => console.log(JSON.stringify({
+  restored, sessionId: view.sessionId, snapshot: view.snapshot(),
+})));
+""")
+        self.assertEqual(result, {
+            "restored": False,
+            "sessionId": "b" * 32,
+            "snapshot": [],
+        })
+
 
 if __name__ == "__main__":
     unittest.main()
