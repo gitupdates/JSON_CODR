@@ -209,6 +209,15 @@ class CollectiveMemoryTests(unittest.TestCase):
             source_refs=("previous-session:" + "c" * 32,),
             idempotency_key="parser-token-repair-history",
         ))
+        self.store.accept(self.draft(
+            kind="previous_session_history",
+            content=(
+                "Title: Travel preferences\n"
+                "Summary: New release expected behavior was mentioned incidentally."
+            ),
+            source_refs=("previous-session:" + "d" * 32,),
+            idempotency_key="incidental-travel-history",
+        ))
 
         verbose = (
             "Please revisit the parser token repair while planning new release regression "
@@ -221,6 +230,13 @@ class CollectiveMemoryTests(unittest.TestCase):
         self.assertEqual(
             self.store.search_collective(
                 "administrator", "project-1", verbose,
+                kind="previous_session_history",
+            ),
+            (history,),
+        )
+        self.assertEqual(
+            self.store.search_collective(
+                "administrator", "project-1", "token repair",
                 kind="previous_session_history",
             ),
             (history,),

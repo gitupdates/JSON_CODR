@@ -106,16 +106,20 @@ def _safe_search_tokens(query: str) -> tuple[str, ...]:
     return tuple(tokens)
 
 
-def _has_strong_token_phrase(
+def _has_specific_token_phrase(
     query_tokens: tuple[str, ...],
     content_tokens: tuple[str, ...],
 ) -> bool:
-    if len(query_tokens) < 2 or len(content_tokens) < 2:
+    phrase_length = min(3, len(query_tokens))
+    if phrase_length == 0 or len(content_tokens) < phrase_length:
         return False
-    content_pairs = set(zip(content_tokens, content_tokens[1:]))
+    content_phrases = {
+        content_tokens[index:index + phrase_length]
+        for index in range(len(content_tokens) - phrase_length + 1)
+    }
     return any(
-        pair in content_pairs
-        for pair in zip(query_tokens, query_tokens[1:])
+        query_tokens[index:index + phrase_length] in content_phrases
+        for index in range(len(query_tokens) - phrase_length + 1)
     )
 
 
@@ -337,17 +341,11 @@ class MemoryStore:
             return ()
         relevant = []
         query_tokens = tuple(token.casefold() for token in tokens)
-        folded_tokens = set(query_tokens)
         for row in rows:
             content_tokens = tuple(
                 token.casefold() for token in _SEARCH_TOKEN.findall(str(row["content"]))
             )
-            overlap = len(folded_tokens & set(content_tokens))
-            if (
-                (len(query_tokens) == 1 and overlap == 1)
-                or _has_strong_token_phrase(query_tokens, content_tokens)
-                or overlap >= 3
-            ):
+            if _has_specific_token_phrase(query_tokens, content_tokens):
                 relevant.append(self._collective_record(row))
             if len(relevant) >= bounded_limit:
                 break
